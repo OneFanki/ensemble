@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ensemble deliberately stays small. Features that turn it into a test
+        management platform, a fingerprint browser, or a script runner are out of
+        scope — see the non-goals in the README.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that is awkward or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: A concrete description of the behavior you want.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Browser launching / CDP
+        - Login fill and extra fields
+        - Credentials and security
+        - Scenes and layout
+        - UI and i18n
+        - Packaging and platforms
+        - Other
+    validations:
+      required: true

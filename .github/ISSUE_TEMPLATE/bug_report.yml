@@ -1,0 +1,70 @@
+name: Bug report
+description: Something broke or behaved unexpectedly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not paste real credentials, internal URLs,
+        cookies or browser profile data into an issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behavior, including any error message shown.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create an environment pointing at ...
+        2. Launch identity ...
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Ensemble version
+      description: Shown in Settings → About, or the installer file name.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: engine
+    attributes:
+      label: Browser engine
+      description: For example Edge 155.0.4283.62 or Firefox 157.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or details about the site's login form.
+    validations:
+      required: false

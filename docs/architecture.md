@@ -20,7 +20,7 @@
 │  cdp/          DevToolsActivePort、目标发现、Runtime.evaluate、窗口定位   │
 │  launch/       参数构造、spawn、CDP 连接、停止与回收                     │
 │  credentials/  safeStorage 抽象、凭据库、继承解析                        │
-│  layout/       网格布局计算                                              │
+│  layout/       预设解析与窗口矩形计算                                     │
 │  processes/    自有 profile 进程发现与清理、workspace 数据结构            │
 │  service.ts    用例编排：环境 / 身份 / 场景 / 登录态                      │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -77,20 +77,44 @@ Firefox 走外部模式：`-profile <dir> -no-remote -new-instance <url>`，不�
 Environment  1 ── N Identity
 Environment  1 ── N Scene
 Scene        N ── N Identity（只引用，不复制）
+Scene        N ── 1 LayoutPreset（内置或用户自定义）
 ```
 
 - 身份只属于一个环境。同一账号要测两个环境时创建两个身份，因为不同主机名的
   Cookie 域不同，复用 profile 会串环境。
+- 环境没有单独的「类型」字段：生产环境靠名称识别（`isProductionName`），
+  命中才在启动前二次确认。少一个字段就少一次填写和一次维护。
 - 凭据：身份存自定义密码，环境存默认密码，应用层不维护「账号库」。
   解析顺序是身份自定义 → 环境默认 → 报错。
 - Profile 目录用 UUID，显示名可随时改；引擎绑定在身份上，换引擎是复制身份
   生成新 profile，而不是迁移目录。
 
+## 窗口布局
+
+内置预设定义在 `src/shared/layouts.ts`，槽位坐标是相对工作区的比例（0–1），
+与显示器分辨率解耦：
+
+| 预设 | 说明 |
+| --- | --- |
+| `free` | 无布局。每个窗口都铺满工作区，互相重叠，用任务栏 / Alt+Tab 切换 |
+| `1x1` / `2x1` / `1x2` / `2x2` / `3x1` | 等分网格，边到边，无外边距 |
+
+- 预设是**铺满的**：`computeSlots` 直接用比例乘工作区，不加 padding 与 gap。
+  旧实现的 8px 外边距在小屏幕上正好是浪费掉的可视面积。
+- 用户可以保存自己的预设（`LayoutPreset`，坐标经 `clampSlot` 收敛），
+  场景按 id 引用；删除预设时引用它的场景回落到 `2x2`。
+- 场景可以把成员拖到指定槽位（`Scene.slotAssignments: identityId → slotIndex`），
+  未指定的成员按成员顺序补空槽位（`resolveSlotAssignments`）。启动、单独重开、
+  拖拽换位都按这份映射排窗口。
+- 实例在内存里记录 `layoutId` 与 `slotIndex`，后续重排只影响同一预设的窗口，
+  单独启动一个身份不会打乱已经排好的场景。
+- 单个身份单独启动（当前没有任何窗口）仍居中放大打开，而不是塞进第一个槽位。
+
 ## 存储
 
 | 文件 | 内容 | 位置 |
 | --- | --- | --- |
-| `workspace.json` | 环境、身份、场景、手动引擎路径 | Electron `userData` |
+| `workspace.json` | 环境、身份、场景、布局预设、手动引擎路径 | Electron `userData` |
 | `settings.json` | 主题、语言、布局、上次视图 | Electron `userData` |
 | `vault.json` | 加密后的凭据 | Electron `userData` |
 | `profiles/` | 每个身份的浏览器 profile | Electron `userData` |

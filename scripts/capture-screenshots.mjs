@@ -32,8 +32,19 @@ const DEMO = {
     environmentId: "11111111-1111-4111-8111-111111111111",
     environment: {
       name: "订单服务-测试环境",
-      kind: "测试",
     },
+    extraEnvironments: [
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        name: "支付服务-联调",
+        baseUrl: "http://localhost:8080",
+      },
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        name: "会员服务-预发",
+        baseUrl: "https://staging.example.test",
+      },
+    ],
     identities: [
       ["管理员 · 主账号", "admin@example.test", "admin", "amber"],
       ["审核员", "reviewer@example.test", "reviewer", "teal"],
@@ -46,8 +57,19 @@ const DEMO = {
     environmentId: "11111111-1111-4111-8111-111111111111",
     environment: {
       name: "Order service — test",
-      kind: "QA",
     },
+    extraEnvironments: [
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        name: "Payments — integration",
+        baseUrl: "http://localhost:8080",
+      },
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        name: "Membership — staging",
+        baseUrl: "https://staging.example.test",
+      },
+    ],
     identities: [
       ["Admin · primary", "admin@example.test", "admin", "amber"],
       ["Reviewer", "reviewer@example.test", "reviewer", "teal"],
@@ -59,6 +81,8 @@ const DEMO = {
 };
 
 const SHOTS = [
+  { name: "environments", locale: "zh", view: "environments" },
+  { name: "environments-en", locale: "en", view: "environments" },
   { name: "identities", locale: "zh", view: "identities" },
   { name: "identities-en", locale: "en", view: "identities" },
   { name: "scenes", locale: "zh", view: "scenes" },
@@ -67,6 +91,20 @@ const SHOTS = [
   { name: "settings-en", locale: "en", view: "settings" },
   { name: "light", locale: "zh", view: "identities", theme: "light" },
   { name: "light-en", locale: "en", view: "identities", theme: "light" },
+  { name: "env-menu", locale: "zh", view: "identities", clicks: [".env-switch"] },
+  {
+    name: "env-dialog",
+    locale: "zh",
+    view: "environments",
+    clicks: [".head-actions .btn.primary"],
+  },
+  {
+    name: "env-dialog-hover",
+    locale: "zh",
+    view: "environments",
+    clicks: [".head-actions .btn.primary"],
+    hover: ".foot .btn.primary",
+  },
 ];
 
 function uuid(index) {
@@ -104,12 +142,20 @@ async function seed(userData, locale, theme = "dark") {
             baseUrl: "http://localhost:5173",
             loginPath: "/login",
             authCheckPath: "/api/me",
-            kind: demo.environment.kind,
             autoSubmit: false,
             extraFields: [{ label: locale === "zh" ? "租户名" : "tenant", value: "acme" }],
             createdAt: now,
             updatedAt: now,
           },
+          ...demo.extraEnvironments.map((environment) => ({
+            id: environment.id,
+            name: environment.name,
+            baseUrl: environment.baseUrl,
+            loginPath: "/login",
+            autoSubmit: false,
+            createdAt: now,
+            updatedAt: now,
+          })),
         ],
         identities,
         scenes: [
@@ -118,7 +164,8 @@ async function seed(userData, locale, theme = "dark") {
             environmentId: demo.environmentId,
             name: demo.scene,
             identityIds: identities.slice(0, 3).map((identity) => identity.id),
-            layout: "3x1",
+            layoutId: "3x1",
+            slotAssignments: {},
             paths: {},
             createdAt: now,
             updatedAt: now,
@@ -126,6 +173,7 @@ async function seed(userData, locale, theme = "dark") {
         ],
         instances: [],
         manualEngines: [],
+        layoutPresets: [],
       },
       null,
       2,
@@ -216,6 +264,29 @@ async function capture(shot) {
         `(() => { const el = document.querySelector('[data-nav="${shot.view}"]'); if (el) el.click(); return Boolean(el); })()`,
       );
       await wait(900);
+    }
+
+    for (const selector of shot.clicks ?? []) {
+      await client.evaluate(
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) el.click(); return Boolean(el); })()`,
+      );
+      await wait(700);
+    }
+
+    // Hover states are part of the UI too, and a gray "primary" button on hover
+    // was exactly the kind of regression a static screenshot would miss.
+    if (shot.hover) {
+      const rect = await client.evaluate(
+        `(() => { const el = document.querySelector(${JSON.stringify(shot.hover)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+      );
+      if (rect?.result?.value) {
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: Math.round(rect.result.value.x),
+          y: Math.round(rect.result.value.y),
+        });
+        await wait(400);
+      }
     }
 
     const screenshot = await client.send("Page.captureScreenshot", {

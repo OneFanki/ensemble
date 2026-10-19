@@ -25,18 +25,26 @@ Ensemble turns those windows into a stage you can arrange: every account gets it
 | **Identity** | One account plus one dedicated browser profile | Yes, fully |
 | **Scene** | A group of identities and a window layout to launch together | No — it is orchestration |
 
-Environment 1—N identities, environment 1—N scenes, scene N—N identities. Testing one account against two environments means two identities.
+Environment 1—N identities, environment 1—N scenes, scene N—N identities. Testing one account against two environments means two identities. Switching environments switches both the identities and scenes views — the clearest signal of the isolation boundary — so the rail lists environments as the first entry:
+
+<p align="center">
+  <img src="docs/screenshots/environments-en.png" alt="Environment management" width="900" />
+</p>
 
 ## Features
 
 - **Fill on launch**: credentials are typed in as soon as the login form appears; the app names any input still unconfigured
 - **Fields beyond username and password**: tenant or company codes are matched by label, defined per environment and overridable per identity
 - **Real browser isolation**: each identity has its own profile, so sessions, cookies and extensions never mix
-- **Scene orchestration**: launch a group and tile windows with `1x1 / 2x1 / 2x2 / 3x1` layouts
+- **Scene orchestration**: launch a group of identities, tiled edge to edge with no wasted margin
+- **Place windows by role**: drag a member onto a slot to decide who sits where; open windows move with it
+- **Custom layouts**: built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`, plus a drag-and-drop editor for your own saved presets
+- **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
+- **Reopen a single member**: closed one account by mistake? Reopen just that window from the scene detail instead of relaunching the whole scene
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
 - **Clean sessions**: throwaway windows that never log in and are deleted on close
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
-- **One entry per job**: the rail navigates identities / scenes / settings; switching and creating environments live in the top environment menu
+- **One entry per job**: the rail navigates environments / identities / scenes / settings; the title bar only switches environments
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />
@@ -46,6 +54,12 @@ The scenes view is a list on the left and a detail pane on the right: select a s
 
 <p align="center">
   <img src="docs/screenshots/scenes-en.png" alt="Scene orchestration and window layout" width="900" />
+</p>
+
+Environment switching lives in a single title-bar menu: it only changes the current scope, while managing and creating environments lives on the environments page.
+
+<p align="center">
+  <img src="docs/screenshots/env-menu.png" alt="Environment switcher" width="640" />
 </p>
 
 The light theme matches the dark one, down to the native title-bar buttons:

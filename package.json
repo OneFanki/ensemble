@@ -23,7 +23,8 @@
     "format": "biome format --write .",
     "dist": "node scripts/make-icon.mjs && electron-vite build && electron-builder",
     "verify": "node scripts/verify.mjs",
-    "icon": "node scripts/make-icon.mjs"
+    "icon": "node scripts/make-icon.mjs",
+    "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
     "@vueuse/core": "15.0.0",

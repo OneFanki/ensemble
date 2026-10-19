@@ -26,6 +26,7 @@ pnpm verify           # 全量校验：类型 + 单测 + 结构契约 + 构建�
 pnpm test             # 核心层单元测试
 pnpm typecheck        # Node 侧 + 渲染层类型检查
 pnpm build            # 构建 out/
+pnpm screenshots      # 重新生成 README 截图（需先 build）
 pnpm dist             # 打包安装程序与便携版到 release/
 ```
 
@@ -75,6 +76,7 @@ pnpm dist             # 打包安装程序与便携版到 release/
 | 遇到报错或反常行为 | `docs/engineering/踩坑库.md` |
 | 做架构取舍 | `docs/architecture/adr/` 现有决策，先看是否已被否 |
 | 打包、发布、升级 Electron | `docs/engineering/release.md` |
+| 改动管理台界面、更新 README 截图 | `.agents/skills/screenshot-refresh/SKILL.md` |
 | 新增依赖 | 先确认是否真需要；UI 层禁止引入 Element Plus 一类带视觉主张的组件库 |
 
 ## 文档落点

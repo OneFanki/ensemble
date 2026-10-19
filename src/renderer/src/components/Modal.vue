@@ -26,7 +26,7 @@ const emit = defineEmits<{ close: [] }>();
               {{ description }}
             </DialogDescription>
           </div>
-          <DialogClose class="close" aria-label="关闭">
+          <DialogClose class="close" :aria-label="$t('app.close')">
             <X :size="14" />
           </DialogClose>
         </header>
@@ -36,7 +36,7 @@ const emit = defineEmits<{ close: [] }>();
         <footer class="foot">
           <slot name="footer" />
         </footer>
-        <DialogClose class="sr-only">关闭</DialogClose>
+        <DialogClose class="sr-only">{{ $t("app.close") }}</DialogClose>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

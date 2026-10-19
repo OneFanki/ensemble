@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { Download, Monitor, Plus, RefreshCw, ShieldCheck, ShieldAlert } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 
@@ -9,14 +10,66 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const { t } = useI18n();
 
 const scanning = computed(() => store.busy === "scan");
 const engines = computed(() => store.engines);
 
+const unlockPassword = ref("");
+const masterForm = ref<"set" | "change" | null>(null);
+const currentPassword = ref("");
+const nextPassword = ref("");
+const confirmPassword = ref("");
+const masterError = ref<string | null>(null);
+
+const canSubmitMaster = computed(
+  () =>
+    nextPassword.value.length >= 8 &&
+    nextPassword.value === confirmPassword.value &&
+    (masterForm.value === "set" || currentPassword.value.length > 0),
+);
+
 function statusLabel(status: string): string {
-  if (status === "ready") return "可用";
-  if (status === "blocked") return "不可用";
-  return "未验证";
+  if (status === "ready") return t("app.available");
+  if (status === "blocked") return t("app.unavailable");
+  return t("app.unverified");
+}
+
+async function submitUnlock() {
+  const unlocked = await store.unlockVault(unlockPassword.value);
+  if (unlocked) unlockPassword.value = "";
+}
+
+function toggleMasterForm(mode: "set" | "change") {
+  masterForm.value = masterForm.value === mode ? null : mode;
+  currentPassword.value = "";
+  nextPassword.value = "";
+  confirmPassword.value = "";
+  masterError.value = null;
+}
+
+function resetMasterForm() {
+  masterForm.value = null;
+  currentPassword.value = "";
+  nextPassword.value = "";
+  confirmPassword.value = "";
+  masterError.value = null;
+}
+
+async function submitMaster() {
+  masterError.value = null;
+  if (nextPassword.value !== confirmPassword.value) {
+    masterError.value = t("app.masterMismatch");
+    return;
+  }
+  if (masterForm.value === "set") {
+    await store.setMasterPassword(nextPassword.value);
+    resetMasterForm();
+    return;
+  }
+  const changed = await store.changeMasterPassword(currentPassword.value, nextPassword.value);
+  if (changed) resetMasterForm();
+  else masterError.value = t("app.wrongMaster");
 }
 </script>
 
@@ -25,7 +78,7 @@ function statusLabel(status: string): string {
     <header class="head">
       <div>
         <h1>{{ $t("app.settings") }}</h1>
-        <p class="head-note">引擎扫描 · 外观 · 凭据存储</p>
+        <p class="head-note">{{ $t("app.settingsSubtitle") }}</p>
       </div>
     </header>
 
@@ -43,17 +96,17 @@ function statusLabel(status: string): string {
             </button>
             <button class="btn" type="button" :disabled="scanning" @click="store.scanEngines()">
               <RefreshCw :size="12" :class="{ spin: scanning }" />
-              {{ scanning ? "扫描中" : $t("app.scanAgain") }}
+              {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
             </button>
           </div>
         </div>
 
         <div class="engine-table">
           <div class="engine-head">
-            <span>浏览器</span>
-            <span>版本</span>
-            <span>能力</span>
-            <span>来源</span>
+            <span>{{ $t("app.tableBrowser") }}</span>
+            <span>{{ $t("app.tableVersion") }}</span>
+            <span>{{ $t("app.tableCapability") }}</span>
+            <span>{{ $t("app.tableSource") }}</span>
             <span></span>
           </div>
           <div v-for="engine in engines" :key="engine.id" class="engine-row">
@@ -81,11 +134,11 @@ function statusLabel(status: string): string {
           </div>
           <div v-if="!engines.length && !store.enginesReady" class="engine-empty">
             <RefreshCw :size="18" class="spin" />
-            <span>正在扫描系统中已安装的浏览器…</span>
+            <span>{{ $t("app.scanningInstalled") }}</span>
           </div>
           <div v-else-if="!engines.length" class="engine-empty">
             <Monitor :size="18" />
-            <span>没有发现浏览器。请安装 Chrome、Edge、Brave 或 Firefox，或手动指定可执行文件。</span>
+            <span>{{ $t("app.noBrowsersHint") }}</span>
             <div class="links">
               <a href="https://www.google.com/chrome/" target="_blank" rel="noreferrer">
                 <Download :size="11" /> Chrome
@@ -101,16 +154,15 @@ function statusLabel(status: string): string {
         </div>
 
         <p class="fineprint">
-          只有 CDP 引擎支持自动填充、登录态检测与窗口平铺。Firefox 使用外部模式：可多开、可复制密码，但不接管页面。
-          Safari 不支持多账号隔离。
+          {{ $t("app.engineCapabilityNote") }}
         </p>
       </section>
 
       <section class="block">
         <div class="block-head">
           <div>
-            <h2>外观</h2>
-            <p>深色适合长时间盯着控制台；浅色适合核对凭据和阅读。</p>
+            <h2>{{ $t("app.appearanceTitle") }}</h2>
+            <p>{{ $t("app.appearanceNote") }}</p>
           </div>
         </div>
         <div class="option-row">
@@ -151,7 +203,7 @@ function statusLabel(status: string): string {
               :class="{ on: store.settings.locale === 'zh' }"
               @click="emit('locale', 'zh')"
             >
-              中文
+              {{ $t("app.languageZh") }}
             </button>
             <button
               type="button"
@@ -163,13 +215,37 @@ function statusLabel(status: string): string {
             </button>
           </div>
         </div>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.autoFillOnLaunch }"
+              @click="store.saveSettings({ autoFillOnLaunch: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.autoFillOnLaunch }"
+              @click="store.saveSettings({ autoFillOnLaunch: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">
+          {{ $t("app.autoFillLaunchNote") }}
+        </p>
       </section>
 
       <section class="block">
         <div class="block-head">
           <div>
-            <h2>凭据存储</h2>
-            <p>密码只在主进程内解密，用于在登录页填充；不会发送到界面进程。</p>
+            <h2>{{ $t("app.vaultTitle") }}</h2>
+            <p>{{ $t("app.vaultNote") }}</p>
           </div>
         </div>
         <div class="vault-row">
@@ -185,18 +261,85 @@ function statusLabel(status: string): string {
             {{ store.credentials.warning }}
           </span>
         </div>
+
+        <div v-if="store.credentials?.locked" class="vault-unlock">
+          <input
+            v-model="unlockPassword"
+            type="password"
+            class="input mono"
+            :placeholder="$t('app.vaultUnlockPlaceholder')"
+            autocomplete="current-password"
+            @keyup.enter="submitUnlock"
+          />
+          <button class="btn primary" type="button" :disabled="!unlockPassword" @click="submitUnlock">
+            {{ $t("app.unlock") }}
+          </button>
+        </div>
+
+        <div v-else-if="store.credentials?.mode === 'master'" class="vault-actions">
+          <button class="btn" type="button" @click="toggleMasterForm('change')">{{ $t("app.changeMaster") }}</button>
+          <button class="btn" type="button" @click="store.lockVault()">{{ $t("app.lockNow") }}</button>
+          <button
+            v-if="store.credentials.canManageMaster"
+            class="btn"
+            type="button"
+            @click="store.removeMasterPassword()"
+          >
+            {{ $t("app.backToKeychain") }}
+          </button>
+        </div>
+
+        <div v-else-if="store.credentials?.canManageMaster" class="vault-actions">
+          <button class="btn" type="button" @click="toggleMasterForm('set')">{{ $t("app.setMaster") }}</button>
+        </div>
+
+        <div v-if="masterForm" class="master-form">
+          <input
+            v-if="masterForm === 'change'"
+            v-model="currentPassword"
+            type="password"
+            class="input mono"
+            :placeholder="$t('app.currentMaster')"
+            autocomplete="current-password"
+          />
+          <input
+            v-model="nextPassword"
+            type="password"
+            class="input mono"
+            :placeholder="masterForm === 'set' ? $t('app.setMasterPlaceholder') : $t('app.newMaster')"
+            autocomplete="new-password"
+          />
+          <input
+            v-model="confirmPassword"
+            type="password"
+            class="input mono"
+            :placeholder="$t('app.repeatPassword')"
+            autocomplete="new-password"
+          />
+          <div class="vault-actions">
+            <button class="btn primary" type="button" :disabled="!canSubmitMaster" @click="submitMaster">
+              {{ masterForm === "set" ? $t("app.enableMaster") : $t("app.saveNewMaster") }}
+            </button>
+            <button class="btn" type="button" @click="resetMasterForm">{{ $t("app.cancel") }}</button>
+          </div>
+          <p v-if="masterError" class="error" role="alert">{{ masterError }}</p>
+        </div>
+
+        <p class="fineprint">
+          {{ $t("app.vaultExplainer") }}
+        </p>
       </section>
 
       <section class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.about") }}</h2>
-            <p>多个身份，同一个舞台。</p>
+            <p>{{ $t("app.aboutTagline") }}</p>
           </div>
         </div>
         <dl class="about">
           <div><dt>{{ $t("app.version") }}</dt><dd class="mono">{{ store.snapshot?.appVersion }}</dd></div>
-          <div><dt>平台</dt><dd class="mono">{{ store.snapshot?.platform }}</dd></div>
+          <div><dt>{{ $t("app.platform") }}</dt><dd class="mono">{{ store.snapshot?.platform }}</dd></div>
           <div><dt>{{ $t("app.dataDir") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}</dd></div>
           <div><dt>{{ $t("app.profileRoot") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}\profiles</dd></div>
         </dl>
@@ -505,6 +648,51 @@ function statusLabel(status: string): string {
   font-size: 11px;
   line-height: 1.5;
   color: var(--accent);
+}
+
+.vault-unlock,
+.vault-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.vault-unlock .input {
+  flex: 1 1 220px;
+}
+
+.master-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 10px 12px;
+}
+
+.master-form .input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 6px 9px;
+  font-size: 11px;
+  color: var(--text);
+  outline: 0;
+}
+
+.master-form .input:focus {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
+.error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--red);
 }
 
 .about {

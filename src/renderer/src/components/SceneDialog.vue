@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import type { Identity, LayoutKey, SceneDraft } from "@shared/types";
@@ -16,6 +17,7 @@ const emit = defineEmits<{
 }>();
 
 const form = reactive<SceneDraft>({ ...props.draft, identityIds: [...props.draft.identityIds] });
+const { t } = useI18n();
 const error = reactive<{ message: string | null }>({ message: null });
 
 watch(
@@ -41,11 +43,11 @@ function toggle(id: string) {
 function submit() {
   error.message = null;
   if (!form.name.trim()) {
-    error.message = "请填写场景名称";
+    error.message = t("app.errSceneName");
     return;
   }
   if (form.identityIds.length === 0) {
-    error.message = "至少选择一个身份";
+    error.message = t("app.errSceneMember");
     return;
   }
   emit("save", { ...form, name: form.name.trim() });
@@ -55,19 +57,19 @@ function submit() {
 <template>
   <Modal
     :open="true"
-    :title="form.id ? '编辑场景' : '新建场景'"
-    description="场景把常一起测试的身份编成一组，启动时按布局平铺窗口。"
+    :title="form.id ? $t('app.editSceneTitle') : $t('app.newSceneTitle')"
+    :description="$t('app.sceneDialogDesc')"
     width="580px"
     @close="emit('close')"
   >
     <div class="form">
       <label class="field">
-        <span class="label">场景名称</span>
-        <input v-model="form.name" class="input" placeholder="例如：权限矩阵 · 主流程" />
+        <span class="label">{{ $t("app.sceneNameLabel") }}</span>
+        <input v-model="form.name" class="input" :placeholder="$t('app.sceneNameExample')" />
       </label>
 
       <div class="field">
-        <span class="label">成员（至少一个）</span>
+        <span class="label">{{ $t("app.sceneMembersLabel") }}</span>
         <div class="members">
           <button
             v-for="identity in identities"
@@ -88,11 +90,11 @@ function submit() {
             </span>
           </button>
         </div>
-        <p v-if="!identities.length" class="note">当前环境还没有身份，请先创建身份。</p>
+        <p v-if="!identities.length" class="note">{{ $t("app.sceneNoIdentities") }}</p>
       </div>
 
       <div class="field">
-        <span class="label">窗口布局</span>
+        <span class="label">{{ $t("app.windowLayout") }}</span>
         <div class="layouts">
           <button
             v-for="option in layoutOptions"
@@ -107,7 +109,7 @@ function submit() {
         </div>
       </div>
 
-      <p class="note">启动顺序按选择顺序执行，间隔约 350ms，避免设备瞬时过载。</p>
+      <p class="note">{{ $t("app.sceneOrderNote") }}</p>
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
     </div>
 

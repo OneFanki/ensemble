@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import type {
   AppSettings,
   AuthCheckResult,
+  AutoFillReport,
   Engine,
   Environment,
   EnvironmentDraft,
@@ -16,6 +17,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import type { EnsembleApi } from "@shared/ipc";
+import { tr } from "../i18n";
 
 declare global {
   interface Window {
@@ -54,9 +56,27 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     try {
       apply(await window.ensemble.getWorkspace());
       window.ensemble.onWorkspaceChanged((next) => apply(next));
+      window.ensemble.onAutoFilled((report) => announceAutoFill(report));
     } finally {
       loading.value = false;
     }
+  }
+
+  function announceAutoFill(report: AutoFillReport) {
+    if (report.skipped === "cross-origin") {
+      notify(tr("app.toastCrossOrigin", { name: report.label }), "error");
+      return;
+    }
+    if (!report.filled) return;
+    const separator = tr("app.listSeparator");
+    const notes = [tr("app.toastAutoFilled", { name: report.label })];
+    if (report.missingFields.length > 0) {
+      notes.push(tr("app.toastMissingFields", { fields: report.missingFields.join(separator) }));
+    }
+    if (report.unmatchedFields.length > 0) {
+      notes.push(tr("app.toastUnmatchedFields", { fields: report.unmatchedFields.join(separator) }));
+    }
+    notify(notes.join(" · "), report.missingFields.length > 0 ? "info" : "success");
   }
 
   function notify(text: string, tone: ToastMessage["tone"] = "info") {
@@ -93,6 +113,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         locale: "zh",
         lastView: "identities",
         layout: "2x2",
+        autoFillOnLaunch: true,
       },
   );
   const instances = computed(() => snapshot.value?.instances ?? []);
@@ -151,7 +172,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveEnvironment(draft: EnvironmentDraft) {
-    return run("environment", () => window.ensemble.saveEnvironment(toPlain(draft)), "环境已保存");
+    return run("environment", () => window.ensemble.saveEnvironment(toPlain(draft)), tr("app.toastEnvSaved"));
   }
 
   async function deleteEnvironment(id: string) {
@@ -159,7 +180,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveIdentity(draft: IdentityDraft) {
-    return run("identity", () => window.ensemble.saveIdentity(toPlain(draft)), "身份已保存");
+    return run("identity", () => window.ensemble.saveIdentity(toPlain(draft)), tr("app.toastIdentitySaved"));
   }
 
   async function deleteIdentity(id: string) {
@@ -170,12 +191,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run(
       "identity",
       () => window.ensemble.rebuildIdentityProfile(id),
-      "Profile 已清除，下次启动为全新未登录状态",
+      tr("app.toastProfileCleared"),
     );
   }
 
   async function saveScene(draft: SceneDraft) {
-    return run("scene", () => window.ensemble.saveScene(toPlain(draft)), "场景已保存");
+    return run("scene", () => window.ensemble.saveScene(toPlain(draft)), tr("app.toastSceneSaved"));
   }
 
   async function deleteScene(id: string) {
@@ -185,7 +206,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function scanEngines() {
     return run("scan", async () => {
       const engines = await window.ensemble.scanEngines();
-      notify(`扫描完成，发现 ${engines.length} 个浏览器`, "success");
+      notify(tr("app.toastScanDone", { count: engines.length }), "success");
       return engines;
     });
   }
@@ -193,7 +214,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function addManualEngine() {
     return run("scan", async () => {
       const engines = await window.ensemble.addManualEngine();
-      notify("已添加手动指定的浏览器", "success");
+      notify(tr("app.toastManualAdded"), "success");
       return engines;
     });
   }
@@ -207,18 +228,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function launchScene(sceneId: string) {
-    return run("launch", () => window.ensemble.launchScene(sceneId), "场景已启动");
+    return run("launch", () => window.ensemble.launchScene(sceneId), tr("app.toastSceneStarted"));
   }
 
   async function launchCleanSession() {
     const envId = activeEnvironment.value?.id;
     if (!envId) {
-      notify("请先创建环境", "error");
+      notify(tr("app.toastNeedEnvironment"), "error");
       return;
     }
     return run("launch", async () => {
       const result = await window.ensemble.launchCleanSession(envId);
-      notify("已打开干净会话", "success");
+      notify(tr("app.toastCleanOpened"), "success");
       return result;
     });
   }
@@ -230,7 +251,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function stopAll() {
     return run("stop", async () => {
       await window.ensemble.stopAll();
-      notify("已关闭全部实例", "success");
+      notify(tr("app.toastAllClosed"), "success");
     });
   }
 
@@ -245,13 +266,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function fillLogin(identityId: string): Promise<AuthCheckResult | undefined> {
     return run("auth", async () => {
       const result = await window.ensemble.fillLogin(identityId);
-      notify(result.detail ?? "已填充", "success");
+      notify(result.detail ?? tr("app.toastFilled"), "success");
       return result;
     });
   }
 
   async function setPassword(owner: PasswordOwner, password: string) {
-    return run("password", () => window.ensemble.setPassword(owner, password), "密码已保存");
+    return run("password", () => window.ensemble.setPassword(owner, password), tr("app.toastPasswordSaved"));
   }
 
   async function clearPassword(owner: PasswordOwner) {
@@ -260,7 +281,51 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function copyPassword(owner: PasswordOwner) {
     const copied = await window.ensemble.copyPassword(owner);
-    notify(copied ? "已复制，30 秒后清除剪贴板" : "没有可复制的密码", copied ? "success" : "error");
+    notify(
+      copied ? tr("app.toastCopied") : tr("app.toastNothingToCopy"),
+      copied ? "success" : "error",
+    );
+  }
+
+  async function unlockVault(password: string): Promise<boolean> {
+    const unlocked = await window.ensemble.unlockVault(password);
+    notify(
+      unlocked ? tr("app.toastVaultUnlocked") : tr("app.toastWrongMaster"),
+      unlocked ? "success" : "error",
+    );
+    return unlocked;
+  }
+
+  async function lockVault() {
+    return run("password", async () => {
+      apply(await window.ensemble.lockVault());
+      notify(tr("app.toastVaultLocked"), "success");
+    });
+  }
+
+  async function setMasterPassword(password: string) {
+    return run("password", async () => {
+      const next = await window.ensemble.setMasterPassword(password);
+      apply(next);
+      notify(tr("app.toastMasterEnabled"), "success");
+    });
+  }
+
+  async function removeMasterPassword() {
+    return run("password", async () => {
+      const next = await window.ensemble.removeMasterPassword();
+      apply(next);
+      notify(tr("app.toastMasterRemoved"), "success");
+    });
+  }
+
+  async function changeMasterPassword(current: string, next: string): Promise<boolean> {
+    const changed = await window.ensemble.changeMasterPassword(current, next);
+    notify(
+      changed ? tr("app.toastMasterChanged") : tr("app.toastWrongMaster"),
+      changed ? "success" : "error",
+    );
+    return changed;
   }
 
   async function saveSettings(patch: SettingsPatch) {
@@ -316,6 +381,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     setPassword,
     clearPassword,
     copyPassword,
+    unlockVault,
+    lockVault,
+    setMasterPassword,
+    removeMasterPassword,
+    changeMasterPassword,
     saveSettings,
     setLayout,
   };

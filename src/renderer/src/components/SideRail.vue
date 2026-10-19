@@ -32,7 +32,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 <template>
   <aside class="rail">
     <div class="rail-head">
-      <span class="rail-title">环境</span>
+      <span class="rail-title">{{ $t("app.railEnvironment") }}</span>
       <div class="rail-tools">
         <button
           class="tool"
@@ -63,7 +63,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 
       <button v-if="!store.environments.length" type="button" class="empty-env" @click="emit('newEnvironment')">
         <Plus :size="12" />
-        新建环境
+        {{ $t("app.newEnvironment") }}
       </button>
     </div>
 
@@ -74,13 +74,13 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
       @click="emit('editEnvironment')"
     >
       <Pencil :size="11" />
-      编辑当前环境
+      {{ $t("app.editEnvironment") }}
     </button>
 
     <div class="rail-sep"></div>
 
     <div class="rail-head">
-      <span class="rail-title">导航</span>
+      <span class="rail-title">{{ $t("app.nav") }}</span>
     </div>
 
     <nav class="nav">
@@ -119,7 +119,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
     <div class="rail-sep"></div>
 
     <div class="rail-head">
-      <span class="rail-title">场景</span>
+      <span class="rail-title">{{ $t("app.railScenes") }}</span>
       <button
         class="tool"
         type="button"
@@ -143,13 +143,13 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
         <span class="scene-name">{{ scene.name }}</span>
         <span class="scene-count mono">{{ scene.identityIds.length }}</span>
       </button>
-      <span v-if="!store.environmentScenes.length" class="scene-empty">还没有场景</span>
+      <span v-if="!store.environmentScenes.length" class="scene-empty">{{ $t("app.noScenesYet") }}</span>
     </div>
 
     <div class="rail-foot">
       <button class="engine-row" type="button" @click="emit('navigate', 'settings')">
         <Settings2 :size="12" />
-        <span>引擎</span>
+        <span>{{ $t("app.enginesLabel") }}</span>
         <span class="led" :class="{ idle: !store.defaultEngine }"></span>
         <span class="tail mono">{{ store.engines.length }}</span>
       </button>

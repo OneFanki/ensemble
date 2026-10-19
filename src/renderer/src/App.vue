@@ -12,7 +12,7 @@ import EnvironmentDialog from "./components/EnvironmentDialog.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import SceneDialog from "./components/SceneDialog.vue";
 import { useWorkspaceStore } from "./stores/workspace";
-import { setLocale, type Locale } from "./i18n";
+import { setLocale, tr, type Locale } from "./i18n";
 import type { EnvironmentDraft, IdentityDraft, SceneDraft } from "@shared/types";
 
 type View = "identities" | "scenes" | "settings";
@@ -58,6 +58,7 @@ function openNewEnvironment() {
     kind: "local",
     defaultEngineId: store.defaultEngine?.id,
     autoSubmit: false,
+    extraFields: [],
   };
 }
 
@@ -73,13 +74,14 @@ function openEditEnvironment() {
     kind: env.kind,
     defaultEngineId: env.defaultEngineId,
     autoSubmit: env.autoSubmit,
+    extraFields: env.extraFields ? env.extraFields.map((field) => ({ ...field })) : [],
   };
 }
 
 function openNewIdentity() {
   const env = store.activeEnvironment;
   if (!env) {
-    store.notify("请先创建环境", "error");
+    store.notify(tr("app.toastNeedEnvironment"), "error");
     return;
   }
   identityDraft.value = {
@@ -90,6 +92,7 @@ function openNewIdentity() {
     color: "amber",
     passwordMode: "inherit",
     startPath: "/",
+    extraFields: [],
   };
 }
 
@@ -106,6 +109,7 @@ function openEditIdentity(identityId: string) {
     engineId: identity.engineId,
     startPath: identity.startPath,
     passwordMode: identity.passwordMode,
+    extraFields: identity.extraFields ? identity.extraFields.map((field) => ({ ...field })) : [],
     note: identity.note,
   };
 }
@@ -113,7 +117,7 @@ function openEditIdentity(identityId: string) {
 function openNewScene() {
   const env = store.activeEnvironment;
   if (!env) {
-    store.notify("请先创建环境", "error");
+    store.notify(tr("app.toastNeedEnvironment"), "error");
     return;
   }
   sceneDraft.value = {
@@ -182,7 +186,7 @@ async function handleLocale(locale: "zh" | "en") {
       <Logo :size="30" />
       <span class="boot-copy">
         <span class="boot-name">Ensemble</span>
-        <span class="boot-hint">正在准备工作区…</span>
+        <span class="boot-hint">{{ $t("app.bootHint") }}</span>
       </span>
     </div>
 
@@ -219,18 +223,18 @@ async function handleLocale(locale: "zh" | "en") {
     <footer class="statusbar mono">
       <span class="status-group">
         <span class="led" :class="{ idle: !store.instances.length }"></span>
-        {{ store.instances.length ? "CDP 已连接" : "待命" }}
+        {{ store.instances.length ? $t("app.statusConnected") : $t("app.statusReady") }}
       </span>
-      <span>{{ store.instances.length }} 个实例</span>
+      <span>{{ $t("app.instancesCount", { count: store.instances.length }) }}</span>
       <span class="status-engines">
         <template v-for="(engine, index) in store.engines.slice(0, 4)" :key="engine.id">
           <span v-if="index > 0" class="sep">·</span>
           {{ engine.brand }} {{ engine.version ?? "" }}
         </template>
-        <span v-if="!store.engines.length">未发现浏览器</span>
+        <span v-if="!store.engines.length">{{ $t("app.noBrowserFound") }}</span>
       </span>
       <span class="status-right">
-        <span>127.0.0.1 · 单用户</span>
+        <span>{{ $t("app.singleUser") }}</span>
         <span>v{{ store.snapshot?.appVersion ?? "0.1.0" }}</span>
       </span>
     </footer>

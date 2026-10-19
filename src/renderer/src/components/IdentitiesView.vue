@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   Globe,
   Play,
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
 
@@ -43,27 +45,27 @@ const expiredCount = computed(() => store.environmentIdentities.filter((i) => i.
 const isProd = computed(() => store.activeEnvironment?.kind === "prod");
 
 const statusLabel = (identity: Identity): string => {
-  if (store.instanceFor(identity.id)) return "运行中";
-  if (identity.status === "expired") return "已过期";
+  if (store.instanceFor(identity.id)) return t("app.statusRunning");
+  if (identity.status === "expired") return t("app.statusExpired");
   if (identity.status === "signed-in") return formatRelative(identity.lastCheckedAt);
-  return "未检查";
+  return t("app.statusUnchecked");
 };
 
 function formatRelative(iso?: string): string {
-  if (!iso) return "未检查";
+  if (!iso) return t("app.statusUnchecked");
   const delta = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(delta / 60_000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 1) return t("app.justNow");
+  if (minutes < 60) return t("app.minutesAgo", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
+  if (hours < 24) return t("app.hoursAgo", { count: hours });
+  return t("app.daysAgo", { count: Math.floor(hours / 24) });
 }
 
 async function launch(identity: Identity) {
   if (isProd.value) {
     const confirmed = window.confirm(
-      `${store.activeEnvironment?.name} 是生产环境，确定要启动「${identity.name}」吗？`,
+      t("app.prodConfirm", { env: store.activeEnvironment?.name, name: identity.name }),
     );
     if (!confirmed) return;
   }
@@ -82,7 +84,9 @@ async function relogin(identity: Identity) {
     return;
   }
   const launched = await store.launchIdentity(identity.id, store.activeEnvironment?.loginPath);
-  if (launched) await store.fillLogin(identity.id);
+  // A launch already fills on its own when the setting is on; filling again here
+  // would type the same credentials twice and submit the form twice.
+  if (launched && !store.settings.autoFillOnLaunch) await store.fillLogin(identity.id);
 }
 
 async function checkAuth(identity: Identity) {
@@ -90,8 +94,8 @@ async function checkAuth(identity: Identity) {
 }
 
 function passwordLabel(identity: Identity): string {
-  if (!store.identityPasswordSet(identity)) return "未设置";
-  return identity.passwordMode === "custom" ? "自定义密码" : "继承环境默认";
+  if (!store.identityPasswordSet(identity)) return t("app.passwordNotSet");
+  return identity.passwordMode === "custom" ? t("app.passwordCustom") : t("app.passwordInherit");
 }
 </script>
 
@@ -102,8 +106,8 @@ function passwordLabel(identity: Identity): string {
         <h1>{{ $t("app.identities") }}</h1>
         <p class="mono">
           {{ store.activeEnvironment?.baseUrl ?? "—" }} ·
-          {{ store.environmentIdentities.length }} 个身份
-          <template v-if="runningCount"> · {{ runningCount }} 个运行中</template>
+          {{ $t("app.identityCount", { count: store.environmentIdentities.length }) }}
+          <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
         </p>
       </div>
       <div class="head-actions">
@@ -119,7 +123,7 @@ function passwordLabel(identity: Identity): string {
     </header>
 
     <div v-if="isProd" class="prod-banner">
-      生产环境：启动与自动填充前请确认操作可回滚。
+      {{ $t("app.prodBanner") }}
     </div>
 
     <div v-if="store.credentials?.warning" class="vault-banner">
@@ -136,7 +140,7 @@ function passwordLabel(identity: Identity): string {
           :aria-selected="filter === 'all'"
           @click="filter = 'all'"
         >
-          全部 <span class="num mono">{{ store.environmentIdentities.length }}</span>
+          {{ $t("app.filterAll") }} <span class="num mono">{{ store.environmentIdentities.length }}</span>
         </button>
         <button
           type="button"
@@ -146,7 +150,7 @@ function passwordLabel(identity: Identity): string {
           :aria-selected="filter === 'running'"
           @click="filter = 'running'"
         >
-          运行中 <span class="num mono">{{ runningCount }}</span>
+          {{ $t("app.filterRunning") }} <span class="num mono">{{ runningCount }}</span>
         </button>
         <button
           type="button"
@@ -156,7 +160,7 @@ function passwordLabel(identity: Identity): string {
           :aria-selected="filter === 'expired'"
           @click="filter = 'expired'"
         >
-          已过期 <span class="num mono">{{ expiredCount }}</span>
+          {{ $t("app.filterExpired") }} <span class="num mono">{{ expiredCount }}</span>
         </button>
       </div>
       <label class="search">
@@ -216,7 +220,7 @@ function passwordLabel(identity: Identity): string {
       </button>
 
       <div v-if="!visibleIdentities.length" class="empty">
-        <p>{{ store.environmentIdentities.length ? "没有符合条件的身份" : $t("app.empty") }}</p>
+        <p>{{ store.environmentIdentities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
         <button class="btn primary" type="button" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}

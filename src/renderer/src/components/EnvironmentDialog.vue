@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { reactive, watch } from "vue";
+import { computed, reactive, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
+import ExtraLoginFields from "./ExtraLoginFields.vue";
 import type { Engine, EnvironmentDraft, EnvironmentKind } from "@shared/types";
 
 const props = defineProps<{
@@ -16,6 +18,7 @@ const emit = defineEmits<{
 }>();
 
 const form = reactive<EnvironmentDraft>({ ...props.draft });
+const { t } = useI18n();
 const error = reactive<{ message: string | null }>({ message: null });
 
 watch(
@@ -26,29 +29,30 @@ watch(
 function submit() {
   error.message = null;
   if (!form.name.trim()) {
-    error.message = "请填写环境名称";
+    error.message = t("app.errEnvName");
     return;
   }
   if (!/^https?:\/\/[^\s]+$/i.test(form.baseUrl.trim())) {
-    error.message = "站点地址必须是 http(s) 开头";
+    error.message = t("app.errEnvUrl");
     return;
   }
   if (!form.loginPath.startsWith("/")) {
-    error.message = "登录入口必须以 / 开头";
+    error.message = t("app.errLoginPath");
     return;
   }
   if (form.authCheckPath && !form.authCheckPath.startsWith("/")) {
-    error.message = "检测地址必须以 / 开头";
+    error.message = t("app.errCheckPath");
     return;
   }
   emit("save", { ...form, name: form.name.trim(), baseUrl: form.baseUrl.trim() });
 }
 
-const kinds: Array<{ value: EnvironmentKind; label: string; hint: string }> = [
-  { value: "local", label: "本地", hint: "开发机上的服务" },
-  { value: "staging", label: "预发布", hint: "共享测试环境" },
-  { value: "prod", label: "生产", hint: "启动前会二次确认" },
-];
+// Reactive so the segmented labels follow a runtime language switch.
+const kinds = computed<Array<{ value: EnvironmentKind; label: string; hint: string }>>(() => [
+  { value: "local", label: t("app.kindLocal"), hint: t("app.kindLocalHint") },
+  { value: "staging", label: t("app.kindStaging"), hint: t("app.kindStagingHint") },
+  { value: "prod", label: t("app.kindProd"), hint: t("app.kindProdHint") },
+]);
 
 function normalizePath(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -64,18 +68,18 @@ function normalizePath(event: Event) {
 <template>
   <Modal
     :open="true"
-    :title="form.id ? '编辑环境' : '新建环境'"
-    description="环境是被测目标的作用域：站点地址、登录入口与默认凭据。"
+    :title="form.id ? $t('app.editEnvironmentTitle') : $t('app.newEnvironmentTitle')"
+    :description="$t('app.envDialogDesc')"
     @close="emit('close')"
   >
     <div class="form">
       <div class="row">
         <label class="field grow">
-          <span class="label">名称</span>
-          <input v-model="form.name" class="input" placeholder="例如：本地开发环境" />
+          <span class="label">{{ $t("app.envNameLabel") }}</span>
+          <input v-model="form.name" class="input" :placeholder="$t('app.envNameExample')" />
         </label>
         <fieldset class="field">
-          <legend class="label">类型</legend>
+          <legend class="label">{{ $t("app.kind") }}</legend>
           <div class="segmented">
             <button
               v-for="kind in kinds"
@@ -93,13 +97,13 @@ function normalizePath(event: Event) {
       </div>
 
       <label class="field">
-        <span class="label">站点地址</span>
+        <span class="label">{{ $t("app.envUrlLabel") }}</span>
         <input v-model="form.baseUrl" class="input mono" placeholder="http://localhost:5173" />
       </label>
 
       <div class="row">
         <label class="field grow">
-          <span class="label">登录入口</span>
+          <span class="label">{{ $t("app.loginEntry") }}</span>
           <input
             v-model="form.loginPath"
             class="input mono"
@@ -109,7 +113,7 @@ function normalizePath(event: Event) {
           />
         </label>
         <label class="field grow">
-          <span class="label">登录检测地址（可选）</span>
+          <span class="label">{{ $t("app.loginCheckOptional") }}</span>
           <input
             v-model="form.authCheckPath"
             class="input mono"
@@ -121,21 +125,26 @@ function normalizePath(event: Event) {
       </div>
 
       <label class="field">
-        <span class="label">默认引擎</span>
+        <span class="label">{{ $t("app.defaultEngine") }}</span>
         <select v-model="form.defaultEngineId" class="input">
-          <option :value="undefined">自动选择第一个可用的 CDP 引擎</option>
+          <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
           <option v-for="engine in engines" :key="engine.id" :value="engine.id">
             {{ engine.brand }} {{ engine.version ?? "" }}
-            <template v-if="engine.status === 'blocked'">（不可用）</template>
-            <template v-else-if="!engine.cdp">（仅外部模式）</template>
+            <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
+            <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
           </option>
         </select>
       </label>
 
       <label class="check">
         <input v-model="form.autoSubmit" type="checkbox" />
-        <span>重新登录时填充后自动提交（双因素验证码仍需手动完成）</span>
+        <span>{{ $t("app.autoSubmitNote") }}</span>
       </label>
+
+      <ExtraLoginFields
+        v-model="form.extraFields"
+        :scope-hint="$t('app.envFieldsScope')"
+      />
 
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
     </div>

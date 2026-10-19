@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Copy, KeyRound, Play, Plus, Square, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { RoleColor } from "@shared/types";
 
 const emit = defineEmits<{ newScene: [] }>();
 const store = useWorkspaceStore();
+const { t } = useI18n();
 
 const roleVar = (color: RoleColor) => `var(--role-${color})`;
 const featuredScene = computed(() => store.environmentScenes[0]);
 
 function identityName(identityId?: string): string {
-  if (!identityId) return "干净会话";
-  return store.identities.find((identity) => identity.id === identityId)?.name ?? "未知身份";
+  if (!identityId) return t("app.cleanSessionName");
+  return store.identities.find((identity) => identity.id === identityId)?.name ?? t("app.unknownIdentity");
 }
 
 function identityColor(identityId?: string): string {
@@ -51,7 +53,7 @@ async function openProfile(instanceId: string, identityId?: string) {
         <button
           class="run-btn"
           type="button"
-          :aria-label="`复制 ${instance.label} 的密码`"
+          :aria-label="$t('app.copyPasswordFor', { label: instance.label })"
           :disabled="!instance.identityId"
           @click="openProfile(instance.id, instance.identityId)"
         >
@@ -68,7 +70,7 @@ async function openProfile(instanceId: string, identityId?: string) {
       </div>
 
       <div v-if="!store.instances.length" class="empty">
-        没有运行中的身份，点击卡片即可启动。
+        {{ $t("app.noRunningIdentity") }}
       </div>
     </div>
 
@@ -78,7 +80,7 @@ async function openProfile(instanceId: string, identityId?: string) {
       <div class="kicker mono">Scene 01</div>
       <div class="scene-name">{{ featuredScene.name }}</div>
       <div class="scene-sub mono">
-        {{ featuredScene.identityIds.length }} 个身份 · 布局 {{ featuredScene.layout.replace("x", " × ") }}
+        {{ $t("app.identityCount", { count: featuredScene.identityIds.length }) }} · {{ $t("app.layoutLabel", { layout: featuredScene.layout.replace("x", " × ") }) }}
       </div>
       <div class="scene-members">
         <span
@@ -103,8 +105,8 @@ async function openProfile(instanceId: string, identityId?: string) {
     </div>
 
     <div v-else class="scene-card empty-scene">
-      <div class="scene-name">还没有场景</div>
-      <div class="scene-sub">把常一起测的身份编排成一幕。</div>
+      <div class="scene-name">{{ $t("app.noScenesDock") }}</div>
+      <div class="scene-sub">{{ $t("app.noScenesDockHint") }}</div>
       <button class="btn" type="button" @click="emit('newScene')">
         <Plus :size="12" />
         {{ $t("app.newScene") }}
@@ -114,13 +116,13 @@ async function openProfile(instanceId: string, identityId?: string) {
     <div class="hint">
       <KeyRound :size="12" />
       <span>
-        密码只保存在主进程，通过系统密钥环加密；自动填充不会写入日志。
+        {{ $t("app.passwordSafetyNote") }}
       </span>
     </div>
 
     <div class="dock-foot mono">
-      <span>{{ store.engines.length }} 个引擎</span>
-      <span class="right">{{ store.instances.length }} 个实例</span>
+      <span>{{ $t("app.enginesCount", { count: store.engines.length }) }}</span>
+      <span class="right">{{ $t("app.instancesShort", { count: store.instances.length }) }}</span>
     </div>
   </aside>
 </template>

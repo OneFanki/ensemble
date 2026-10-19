@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Layers, Pencil, Play, Plus, Square } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { LayoutKey, Scene } from "@shared/types";
@@ -10,6 +11,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const { t } = useI18n();
 
 const layoutLabel: Record<LayoutKey, string> = {
   "1x1": "1 × 1",
@@ -37,8 +39,8 @@ function isSceneRunning(scene: Scene): boolean {
 
 function sceneStatus(scene: Scene): string {
   const running = scene.identityIds.filter((id) => store.instanceFor(id)).length;
-  if (running === 0) return "未启动";
-  if (running === scene.identityIds.length) return "运行中";
+  if (running === 0) return t("app.notStarted");
+  if (running === scene.identityIds.length) return t("app.statusRunning");
   return `${running} / ${scene.identityIds.length}`;
 }
 
@@ -53,7 +55,7 @@ const slots = computed(() => {
     <header class="head">
       <div class="head-copy">
         <h1>{{ $t("app.scenes") }}</h1>
-        <p class="head-note">一键拉起一组身份 · 自动平铺 · 关闭即回收</p>
+        <p class="head-note">{{ $t("app.scenesSubtitle") }}</p>
       </div>
       <div class="head-actions">
         <button class="btn" type="button" @click="store.launchCleanSession()">
@@ -68,9 +70,9 @@ const slots = computed(() => {
 
     <div class="scene-head">
       <span>#</span>
-      <span>场景</span>
-      <span>成员</span>
-      <span>布局</span>
+      <span>{{ $t("app.sceneColumnName") }}</span>
+      <span>{{ $t("app.sceneColumnMembers") }}</span>
+      <span>{{ $t("app.sceneColumnLayout") }}</span>
       <span></span>
     </div>
 
@@ -130,7 +132,7 @@ const slots = computed(() => {
 
     <div class="layout-section">
       <div class="section-head">
-        <span class="section-title">窗口布局</span>
+        <span class="section-title">{{ $t("app.windowLayout") }}</span>
         <div class="layout-picker">
           <button
             v-for="layout in (['2x2', '2x1', '3x1', '1x1'] as LayoutKey[])"
@@ -162,7 +164,7 @@ const slots = computed(() => {
             ></span>
             {{ store.instances[index]?.label }}
           </template>
-          <span v-else>空闲槽位</span>
+          <span v-else>{{ $t("app.idleSlot") }}</span>
         </div>
       </div>
     </div>

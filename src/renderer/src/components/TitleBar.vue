@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { ChevronDown, Minus, Settings2, Square, X } from "lucide-vue-next";
 import Logo from "./Logo.vue";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -12,12 +13,13 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const { t } = useI18n();
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 const engineLabel = computed(() => {
-  if (!store.enginesReady) return "正在扫描浏览器…";
+  if (!store.enginesReady) return t("app.scanningEngines");
   const engine = store.defaultEngine;
-  if (!engine) return "未发现浏览器";
+  if (!engine) return t("app.noBrowserFound");
   return `${engine.brand} ${engine.version ?? ""}`.trim();
 });
 const kindLabel = computed(() => {
@@ -36,13 +38,13 @@ const kindLabel = computed(() => {
 
     <button class="env-switch no-drag" type="button" @click="emit('openEnvironment')">
       <span class="dot" :class="store.activeEnvironment?.kind"></span>
-      <span class="env-name">{{ store.activeEnvironment?.name ?? "未配置环境" }}</span>
+      <span class="env-name">{{ store.activeEnvironment?.name ?? $t("app.notConfiguredEnv") }}</span>
       <span class="env-kind mono">{{ store.activeEnvironment ? kindLabel : "—" }}</span>
       <ChevronDown :size="11" />
     </button>
 
     <span v-if="store.activeEnvironment?.kind === 'prod'" class="prod-badge no-drag mono">
-      生产环境
+      {{ $t("app.prod") }}
     </span>
 
     <div class="right no-drag">
@@ -62,7 +64,7 @@ const kindLabel = computed(() => {
         <button
           class="win-btn"
           type="button"
-          aria-label="最小化"
+          :aria-label="$t('app.minimize')"
           @click="store.api.minimizeWindow()"
         >
           <Minus :size="12" />
@@ -70,7 +72,7 @@ const kindLabel = computed(() => {
         <button
           class="win-btn"
           type="button"
-          aria-label="最大化"
+          :aria-label="$t('app.maximize')"
           @click="store.api.toggleMaximizeWindow()"
         >
           <Square :size="10" />
@@ -78,7 +80,7 @@ const kindLabel = computed(() => {
         <button
           class="win-btn close"
           type="button"
-          aria-label="关闭"
+          :aria-label="$t('app.close')"
           @click="store.api.closeWindow()"
         >
           <X :size="12" />

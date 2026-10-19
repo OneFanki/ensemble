@@ -60,11 +60,16 @@ src/renderer/   Vue 3 管理台界面
 ```bash
 pnpm install
 pnpm dev        # 启动开发模式
+pnpm verify     # 全量校验：类型 + 单测 + 结构契约 + 构建
 pnpm test       # 核心层单元测试
 pnpm typecheck  # 类型检查
 pnpm build      # 构建
-pnpm dist       # 打包安装程序
+pnpm dist       # 打包安装程序与便携版到 release/
 ```
+
+`pnpm dist` 产出 `release/Ensemble-<version>-win-x64-setup.exe`（安装版）与
+`...-portable.exe`（便携版）。**日常请用安装版**：便携版每次启动都要把运行时解压到临时
+目录，冷启动会明显慢一些。
 
 首次安装 Electron 需要访问外网。国内网络请先配置代理，例如：
 

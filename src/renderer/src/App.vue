@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import TitleBar from "./components/TitleBar.vue";
+import Logo from "./components/Logo.vue";
 import SideRail from "./components/SideRail.vue";
 import IdentitiesView from "./components/IdentitiesView.vue";
 import ScenesView from "./components/ScenesView.vue";
@@ -178,8 +179,11 @@ async function handleLocale(locale: "zh" | "en") {
     />
 
     <div v-if="store.loading" class="boot">
-      <span class="boot-mark">e</span>
-      <span class="mono">Ensemble</span>
+      <Logo :size="30" />
+      <span class="boot-copy">
+        <span class="boot-name">Ensemble</span>
+        <span class="boot-hint mono">正在准备工作区…</span>
+      </span>
     </div>
 
     <div v-else class="app-body" :class="{ 'settings-mode': view === 'settings' }">
@@ -278,20 +282,26 @@ async function handleLocale(locale: "zh" | "en") {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.boot-mark {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--accent-foreground);
-  font: 500 12px/1 var(--font-mono);
+.boot-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.boot-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.boot-hint {
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .app-body {
@@ -320,7 +330,7 @@ async function handleLocale(locale: "zh" | "en") {
   border-top: 1px solid var(--line-soft);
   background: color-mix(in srgb, var(--bg) 88%, black);
   color: var(--faint);
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;

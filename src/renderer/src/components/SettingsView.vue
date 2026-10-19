@@ -79,7 +79,11 @@ function statusLabel(status: string): string {
               </button>
             </span>
           </div>
-          <div v-if="!engines.length" class="engine-empty">
+          <div v-if="!engines.length && !store.enginesReady" class="engine-empty">
+            <RefreshCw :size="18" class="spin" />
+            <span>正在扫描系统中已安装的浏览器…</span>
+          </div>
+          <div v-else-if="!engines.length" class="engine-empty">
             <Monitor :size="18" />
             <span>没有发现浏览器。请安装 Chrome、Edge、Brave 或 Firefox，或手动指定可执行文件。</span>
             <div class="links">
@@ -220,7 +224,7 @@ function statusLabel(status: string): string {
 
 .head p {
   margin: 6px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
 }
 
@@ -255,7 +259,7 @@ function statusLabel(status: string): string {
 
 .block-head p {
   margin: 5px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
   line-height: 1.55;
   max-width: 620px;
@@ -312,7 +316,7 @@ function statusLabel(status: string): string {
 }
 
 .engine-head {
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--faint);
@@ -358,12 +362,12 @@ function statusLabel(status: string): string {
 
 .e-version,
 .e-source {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .cap {
-  font-size: 9px;
+  font-size: 10.5px;
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 2px 5px;
@@ -390,7 +394,7 @@ function statusLabel(status: string): string {
 
 .link {
   color: var(--faint);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .link:hover {
@@ -417,12 +421,12 @@ function statusLabel(status: string): string {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .fineprint {
   margin: 10px 0 0;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--faint);
 }
@@ -491,14 +495,14 @@ function statusLabel(status: string): string {
 }
 
 .vault-backend {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
 }
 
 .vault-warning {
   margin-left: auto;
   max-width: 55%;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--accent);
 }
@@ -518,7 +522,7 @@ function statusLabel(status: string): string {
 }
 
 .about dt {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   letter-spacing: 0.06em;
   min-width: 70px;
@@ -526,7 +530,7 @@ function statusLabel(status: string): string {
 
 .about dd {
   margin: 0;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;

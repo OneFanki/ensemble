@@ -177,7 +177,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 }
 
 .rail-title {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
@@ -250,7 +250,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 
 .env-kind {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   letter-spacing: 0.06em;
 }
@@ -280,7 +280,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
   padding: 4px 6px;
   border-radius: 4px;
   color: var(--faint);
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-align: left;
 }
 
@@ -326,7 +326,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 
 .nav-tail {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 
@@ -360,7 +360,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 
 .scene-count {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -370,7 +370,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 
 .scene-empty {
   padding: 6px 8px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
 }
 
@@ -412,7 +412,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 }
 
 .tail {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 </style>

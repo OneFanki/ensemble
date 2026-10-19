@@ -5,31 +5,33 @@
   --bg-elevated: #0d1014;
   --surface: #12151a;
   --surface-2: #171b21;
-  --surface-3: #1a1f26;
-  --line: #272d36;
-  --line-soft: #1b2027;
-  --text: #e7e9ed;
-  --text-secondary: #b6bec9;
-  --muted: #8d95a3;
-  --dim: #5f6877;
-  --faint: #4f5866;
+  --surface-3: #1d232b;
+  --line: #303844;
+  --line-soft: #232a33;
+
+  /* Text scale: every level stays above 4.5:1 on --bg and --surface. */
+  --text: #eef0f3;
+  --text-secondary: #c9ced6;
+  --muted: #a3abb8;
+  --dim: #8b93a1;
+  --faint: #828c9a;
 
   --accent: #e0a44e;
   --accent-strong: #eab35f;
   --accent-foreground: #1a1305;
-  --green: #5fbf9f;
+  --green: #6ccfae;
   --amber: #e0a44e;
-  --violet: #8b7cf0;
-  --rose: #d9778a;
-  --blue: #6d94e8;
-  --red: #d4675f;
+  --violet: #a396ff;
+  --rose: #e88a9d;
+  --blue: #85a8f0;
+  --red: #e37f76;
 
   --role-amber: #e0a44e;
-  --role-teal: #4fb8a8;
-  --role-violet: #8b7cf0;
-  --role-rose: #d9778a;
-  --role-blue: #6d94e8;
-  --role-slate: #7c8798;
+  --role-teal: #5cc8b6;
+  --role-violet: #a396ff;
+  --role-rose: #e88a9d;
+  --role-blue: #85a8f0;
+  --role-slate: #98a2b0;
 
   --radius-sm: 5px;
   --radius: 7px;
@@ -53,29 +55,30 @@
   --bg-elevated: #f7f3ea;
   --surface: #faf7f0;
   --surface-2: #f5f1e8;
-  --surface-3: #ece6d9;
-  --line: #d8d0c0;
-  --line-soft: #e6dfd2;
-  --text: #1e1c18;
-  --text-secondary: #3d3830;
-  --muted: #6f695d;
-  --dim: #8a8274;
-  --faint: #a49c8c;
+  --surface-3: #ebe4d6;
+  --line: #c9bfae;
+  --line-soft: #ddd4c4;
+
+  --text: #1b1915;
+  --text-secondary: #38332b;
+  --muted: #565049;
+  --dim: #645d51;
+  --faint: #625a4d;
 
   --accent: #b0472f;
   --accent-strong: #c2543a;
   --accent-foreground: #fff8f2;
   --green: #2f7268;
-  --amber: #9a7427;
-  --violet: #6b5aa8;
-  --rose: #a8455c;
-  --blue: #3a5f96;
-  --red: #b0472f;
+  --amber: #8a6720;
+  --violet: #5f4f9c;
+  --rose: #96394f;
+  --blue: #335c8f;
+  --red: #a8402c;
 
-  --role-amber: #9a7427;
+  --role-amber: #8a6720;
   --role-teal: #2f7268;
-  --role-violet: #6b5aa8;
-  --role-rose: #a8455c;
-  --role-blue: #3a5f96;
-  --role-slate: #8a8274;
+  --role-violet: #5f4f9c;
+  --role-rose: #96394f;
+  --role-blue: #335c8f;
+  --role-slate: #6b6459;
 }

@@ -24,3 +24,8 @@ Thumbs.db
 .idea/
 .vscode/
 .temp/
+.temp-*
+
+# Ad-hoc verification artifacts (screenshots, one-off scripts) live at the repo root.
+.temp*.mjs
+.temp*.png

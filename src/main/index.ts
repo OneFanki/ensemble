@@ -99,7 +99,10 @@ async function createWindow(): Promise<void> {
     height: 860,
     minWidth: 960,
     minHeight: 640,
-    show: false,
+    // Show immediately: a dark window frame appears in well under a second and the
+    // first paint lands right after. Waiting for ready-to-show makes startup feel
+    // several hundred milliseconds slower than it is.
+    show: true,
     backgroundColor: "#0b0d10",
     title: "Ensemble",
     titleBarStyle: "hidden",
@@ -123,8 +126,6 @@ async function createWindow(): Promise<void> {
   });
 
   Menu.setApplicationMenu(null);
-
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -355,9 +356,13 @@ app.whenReady().then(async () => {
   setCoreLocale(service.settingsSnapshot().locale);
   applyTheme(service.settingsSnapshot().theme);
 
+  // initialize() only reads local JSON and the engine cache, so the window can
+  // appear right away. Orphan sweeping and engine scanning run afterwards.
   await service.initialize();
   registerIpc(service);
   await createWindow();
+
+  void service.startBackgroundMaintenance();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();

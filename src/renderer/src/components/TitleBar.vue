@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { ChevronDown, Minus, Settings2, Square, X } from "lucide-vue-next";
+import Logo from "./Logo.vue";
 import { useWorkspaceStore } from "../stores/workspace";
 
 defineProps<{ view: "identities" | "scenes" | "settings" }>();
@@ -14,6 +15,7 @@ const store = useWorkspaceStore();
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 const engineLabel = computed(() => {
+  if (!store.enginesReady) return "正在扫描浏览器…";
   const engine = store.defaultEngine;
   if (!engine) return "未发现浏览器";
   return `${engine.brand} ${engine.version ?? ""}`.trim();
@@ -27,7 +29,7 @@ const kindLabel = computed(() => {
 <template>
   <header class="titlebar drag-region" :data-platform="platform">
     <div class="brand no-drag">
-      <span class="mark">e</span>
+      <Logo :size="22" />
       <span class="name">Ensemble</span>
       <span class="version mono">0.1</span>
     </div>
@@ -45,7 +47,7 @@ const kindLabel = computed(() => {
 
     <div class="right no-drag">
       <span class="engine-pill mono" :title="engineLabel">
-        <span class="led" :class="{ idle: !store.defaultEngine }"></span>
+        <span class="led" :class="{ idle: !store.enginesReady || !store.defaultEngine }"></span>
         <span class="engine-label">{{ engineLabel }}</span>
       </span>
       <button
@@ -110,20 +112,9 @@ const kindLabel = computed(() => {
   letter-spacing: 0.02em;
 }
 
-.mark {
-  width: 21px;
-  height: 21px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  background: linear-gradient(145deg, var(--accent-strong), color-mix(in srgb, var(--accent) 82%, black));
-  color: var(--accent-foreground);
-  font: 500 12px/1 var(--font-mono);
-}
-
 .version {
-  font-size: 9.5px;
-  color: var(--faint);
+  font-size: 10px;
+  color: var(--dim);
   letter-spacing: 0.06em;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -173,12 +164,12 @@ const kindLabel = computed(() => {
 
 .env-kind {
   color: var(--faint);
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.08em;
 }
 
 .prod-badge {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   color: var(--red);
   border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line));
@@ -197,7 +188,7 @@ const kindLabel = computed(() => {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 6px;

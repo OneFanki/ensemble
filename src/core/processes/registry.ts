@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Environment, Identity, Scene } from "@shared/types";
+import type { Environment, Engine, Identity, Scene } from "@shared/types";
 
 export interface StoredInstance {
   id: string;
@@ -145,6 +145,12 @@ export interface WorkspaceData {
   scenes: Scene[];
   instances: StoredInstance[];
   manualEngines: string[];
+}
+
+export interface EngineCache {
+  version: 1;
+  scannedAt: string;
+  engines: Engine[];
 }
 
 export function emptyWorkspace(): WorkspaceData {

@@ -262,7 +262,7 @@ async function copyDefaultPassword() {
 }
 
 .label {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--faint);
@@ -362,7 +362,7 @@ async function copyDefaultPassword() {
 
 .note {
   margin: 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.55;
   color: var(--faint);
 }

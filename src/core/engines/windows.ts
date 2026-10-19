@@ -1,10 +1,38 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 import type { EngineChannel } from "@shared/types";
-import { parseVersionOutput, type EngineCandidate, versionFromExecutablePath } from "./shared";
+import {
+  compareVersions,
+  parseVersionOutput,
+  type EngineCandidate,
+  versionFromExecutablePath,
+} from "./shared";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Chromium vendors keep every installed version as a sibling folder and launch the
+ * newest one. Reading folder names is far cheaper than probing the binary, and
+ * `msedge.exe --version` writes nothing on Windows.
+ */
+export function versionFromSiblingFolders(exePath: string): string | undefined {
+  const parent = dirname(exePath);
+  if (!existsSync(parent)) return undefined;
+  try {
+    const versions = readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) => /^\d+\.\d+\.\d+(\.\d+)?$/.test(name));
+    if (versions.length === 0) return undefined;
+    return versions.reduce((newest, candidate) =>
+      compareVersions(candidate, newest) > 0 ? candidate : newest,
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 interface WindowsApp {
   relPath: string;
@@ -137,8 +165,12 @@ export async function scanWindows(env: NodeJS.ProcessEnv = process.env): Promise
     }
   }
 
-  for (const entry of REGISTRY_EXES) {
-    const exePath = await queryAppPath(entry.exe);
+  // Registry lookups spawn a process each; run them together.
+  const registryHits = await Promise.all(
+    REGISTRY_EXES.map(async (entry) => ({ entry, exePath: await queryAppPath(entry.exe) })),
+  );
+
+  for (const { entry, exePath } of registryHits) {
     if (!exePath) continue;
     if (candidates.some((candidate) => candidate.exePath.toLowerCase() === exePath.toLowerCase())) {
       continue;
@@ -154,18 +186,58 @@ export async function scanWindows(env: NodeJS.ProcessEnv = process.env): Promise
     });
   }
 
+  // Edge and Chrome on Windows keep the executable at a fixed path, with installed
+  // versions as sibling folders. The newest folder is what the launcher starts.
+  // Firefox writes no output for `--version` here either, so fall back to the
+  // Windows file metadata via one batched PowerShell call.
+  const unresolved: EngineCandidate[] = [];
+  for (const candidate of candidates) {
+    if (candidate.version) continue;
+    candidate.version = versionFromSiblingFolders(candidate.exePath);
+    if (!candidate.version) unresolved.push(candidate);
+  }
+
+  if (unresolved.length > 0) {
+    const versions = await probeFileVersions(unresolved.map((candidate) => candidate.exePath));
+    for (const candidate of unresolved) {
+      const version = versions.get(candidate.exePath.toLowerCase());
+      if (version) candidate.version = version;
+    }
+  }
+
   return candidates;
 }
 
-/** Fallback version probe for engines whose install path does not contain a version. */
-export async function probeWindowsVersion(exePath: string): Promise<string | undefined> {
+/** Reads Windows PE file versions for several executables in one PowerShell call. */
+export async function probeFileVersions(paths: string[]): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (paths.length === 0) return result;
+
+  const list = paths.map((path) => `'${path.replace(/'/g, "''")}'`).join(",");
   try {
-    const { stdout, stderr } = await execFileAsync(exePath, ["--version"], {
-      timeout: 4000,
-      windowsHide: true,
-    });
-    return parseVersionOutput(`${stdout}\n${stderr}`);
+    const { stdout } = await execFileAsync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-Item ${list} -ErrorAction SilentlyContinue | Select-Object FullName,@{n='V';e={$_.VersionInfo.ProductVersion}} | ConvertTo-Json -Compress`,
+      ],
+      { timeout: 8_000, windowsHide: true, maxBuffer: 1024 * 1024 },
+    );
+    const trimmed = stdout.trim();
+    if (!trimmed) return result;
+    const parsed = JSON.parse(trimmed) as
+      | { FullName?: string; V?: string }
+      | Array<{ FullName?: string; V?: string }>;
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    for (const row of rows) {
+      if (!row.FullName || !row.V) continue;
+      const version = parseVersionOutput(row.V);
+      if (version) result.set(row.FullName.toLowerCase(), version);
+    }
   } catch {
-    return undefined;
+    // Version display is cosmetic; a failed probe must not break scanning.
   }
+  return result;
 }

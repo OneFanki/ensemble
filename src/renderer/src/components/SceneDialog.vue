@@ -137,7 +137,7 @@ function submit() {
 }
 
 .label {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--faint);
@@ -198,7 +198,7 @@ function submit() {
   place-items: center;
   background: var(--role);
   color: var(--accent-foreground);
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 500;
 }
 
@@ -218,13 +218,13 @@ function submit() {
 }
 
 .m-acct {
-  font-size: 8.5px;
+  font-size: 10px;
   color: var(--faint);
 }
 
 .order {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--role);
   border: 1px solid color-mix(in srgb, var(--role) 40%, var(--line));
   border-radius: 999px;
@@ -245,7 +245,7 @@ function submit() {
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--faint);
-  font-size: 9.5px;
+  font-size: 11px;
   padding: 5px 8px;
 }
 
@@ -258,7 +258,7 @@ function submit() {
 
 .note {
   margin: 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.55;
   color: var(--faint);
 }

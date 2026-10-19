@@ -35,6 +35,7 @@ import {
   emptyWorkspace,
   findOwnedBrowserProcesses,
   sanitizeWorkspace,
+  type EngineCache,
   type WorkspaceData,
 } from "./processes/registry";
 import { JsonStore } from "./storage/json-store";
@@ -55,10 +56,13 @@ export interface WorkspaceServiceOptions {
 export class WorkspaceService {
   private readonly store: JsonStore<WorkspaceData>;
   private readonly settingsStore: JsonStore<AppSettings>;
+  private readonly engineCacheStore: JsonStore<EngineCache>;
   private readonly vault: CredentialVault;
   private data: WorkspaceData;
   private settings: AppSettings;
   private engines: Engine[] = [];
+  private enginesReady = false;
+  private needsOrphanSweep = false;
   private readonly liveInstances = new Map<string, RunningInstance>();
 
   constructor(private readonly options: WorkspaceServiceOptions) {
@@ -66,6 +70,10 @@ export class WorkspaceService {
     this.settingsStore = new JsonStore(
       join(options.userDataDir, "settings.json"),
       () => ({ ...DEFAULT_SETTINGS }),
+    );
+    this.engineCacheStore = new JsonStore<EngineCache>(
+      join(options.userDataDir, "engines.json"),
+      () => ({ version: 1, scannedAt: "", engines: [] }),
     );
     this.data = sanitizeWorkspace(this.store.read());
     this.settings = { ...DEFAULT_SETTINGS, ...this.settingsStore.read() };
@@ -80,11 +88,45 @@ export class WorkspaceService {
 
   async initialize(): Promise<void> {
     // Anything recorded as running from a previous session is stale: the app owns
-    // browser lifetimes, so no instance can survive a restart.
+    // browser lifetimes, so no instance can survive a restart. A non-empty list
+    // means the last shutdown was not graceful, so browsers may still be alive.
+    this.needsOrphanSweep = this.data.instances.length > 0;
     this.data.instances = [];
     this.persist();
-    await this.reapOrphans();
+    // Use the cached engine list so the first paint is not blocked by scanning.
+    const cached = this.cachedEngines();
+    this.engines = mergeManualEngines(cached, this.data.manualEngines);
+    this.enginesReady = cached.length > 0;
+  }
+
+  /**
+   * Slow startup work that must not block the window: reclaim orphaned browsers
+   * from a previous crash, then refresh the engine list in the background.
+   */
+  async startBackgroundMaintenance(): Promise<void> {
+    if (this.needsOrphanSweep) {
+      await this.reapOrphans();
+    }
     await this.scanAvailableEngines();
+    this.emit();
+  }
+
+  private cachedEngines(): Engine[] {
+    try {
+      const cache = this.engineCacheStore.read();
+      if (cache.version !== 1 || !Array.isArray(cache.engines)) return [];
+      return cache.engines.filter((engine) => existsSync(engine.exePath));
+    } catch {
+      return [];
+    }
+  }
+
+  private writeEngineCache(): void {
+    this.engineCacheStore.write({
+      version: 1,
+      scannedAt: new Date().toISOString(),
+      engines: this.engines,
+    });
   }
 
   get profileRoot(): string {
@@ -102,6 +144,8 @@ export class WorkspaceService {
   async scanAvailableEngines(): Promise<Engine[]> {
     const scanned = await scanEngines(this.options.platform);
     this.engines = mergeManualEngines(scanned, this.data.manualEngines);
+    this.enginesReady = true;
+    this.writeEngineCache();
     return this.engines;
   }
 
@@ -127,6 +171,7 @@ export class WorkspaceService {
       identities: this.data.identities,
       scenes: this.data.scenes,
       engines: this.engines,
+      enginesReady: this.enginesReady,
       instances: [...this.liveInstances.values()],
       settings: this.settingsSnapshot(),
       credentials: this.credentialPresence(),

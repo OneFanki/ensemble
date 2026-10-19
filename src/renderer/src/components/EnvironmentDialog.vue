@@ -179,7 +179,7 @@ function normalizePath(event: Event) {
 }
 
 .label {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--faint);

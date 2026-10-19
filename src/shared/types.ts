@@ -120,6 +120,8 @@ export interface WorkspaceSnapshot {
   identities: Identity[];
   scenes: Scene[];
   engines: Engine[];
+  /** False while the background engine scan is still running. */
+  enginesReady: boolean;
   instances: RunningInstance[];
   settings: AppSettings;
   credentials: CredentialPresence;

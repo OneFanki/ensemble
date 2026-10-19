@@ -72,24 +72,25 @@ export async function readMacBundleVersion(executable: string): Promise<string |
 export async function scanMac(env: NodeJS.ProcessEnv = process.env): Promise<EngineCandidate[]> {
   const home = env.HOME ?? "";
   const appDirs = ["/Applications", ...(home ? [join(home, "Applications")] : [])];
-  const candidates: EngineCandidate[] = [];
+  const found: Array<{ app: MacApp; exePath: string }> = [];
 
   for (const appDir of appDirs) {
     for (const app of APPS) {
       const exePath = macAppExecutable(appDir, app.name);
-      if (!existsSync(exePath)) continue;
-      candidates.push({
-        family: app.family,
-        brand: app.brand,
-        channel: app.channel,
-        exePath,
-        source: "standard",
-        cdp: app.cdp,
-        version: await readMacBundleVersion(exePath),
-        ...(app.status ? { status: app.status, blockReason: app.blockReason } : {}),
-      });
+      if (existsSync(exePath)) found.push({ app, exePath });
     }
   }
 
-  return candidates;
+  return Promise.all(
+    found.map(async ({ app, exePath }) => ({
+      family: app.family,
+      brand: app.brand,
+      channel: app.channel,
+      exePath,
+      source: "standard" as const,
+      cdp: app.cdp,
+      version: await readMacBundleVersion(exePath),
+      ...(app.status ? { status: app.status, blockReason: app.blockReason } : {}),
+    })),
+  );
 }

@@ -256,7 +256,7 @@ h1 {
 
 .head-copy p {
   margin: 6px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -358,7 +358,7 @@ h1 {
 }
 
 .num {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
 }
 
@@ -475,7 +475,7 @@ h1 {
 }
 
 .acct {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
@@ -487,7 +487,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
 }
@@ -524,7 +524,7 @@ h1 {
 }
 
 .tag {
-  font-size: 9px;
+  font-size: 10.5px;
   letter-spacing: 0.04em;
   border: 1px solid color-mix(in srgb, var(--role) 30%, var(--line));
   border-radius: 3px;
@@ -554,21 +554,21 @@ h1 {
 }
 
 .dots {
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.18em;
   color: var(--muted);
 }
 
 .inherit {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
 }
 
 .card-actions {
   display: flex;
   gap: 12px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--muted);
 }
 

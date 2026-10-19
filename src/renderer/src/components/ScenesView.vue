@@ -195,7 +195,7 @@ h1 {
 
 .head-copy p {
   margin: 6px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
 }
 
@@ -250,7 +250,7 @@ h1 {
 
 .scene-head {
   padding: 12px 12px 6px;
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--faint);
@@ -284,7 +284,7 @@ h1 {
 }
 
 .idx {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 
@@ -304,7 +304,7 @@ h1 {
 }
 
 .scene-sub {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
@@ -327,7 +327,7 @@ h1 {
   border: 1px solid var(--line-soft);
   border-radius: 999px;
   padding: 3px 7px 3px 4px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--muted);
   background: var(--bg-elevated);
   white-space: nowrap;
@@ -347,12 +347,12 @@ h1 {
   place-items: center;
   background: var(--role);
   color: var(--accent-foreground);
-  font-size: 7px;
+  font-size: 9px;
   font-weight: 500;
 }
 
 .layout {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -378,7 +378,7 @@ h1 {
 }
 
 .state {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   width: 42px;
   text-align: right;
@@ -415,7 +415,7 @@ h1 {
 }
 
 .section-title {
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--faint);
@@ -432,7 +432,7 @@ h1 {
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--faint);
-  font-size: 9px;
+  font-size: 10.5px;
   padding: 4px 7px;
 }
 
@@ -474,7 +474,7 @@ h1 {
   align-items: center;
   gap: 7px;
   padding: 8px;
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   overflow: hidden;
   white-space: nowrap;

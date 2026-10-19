@@ -113,21 +113,19 @@ async function scanFlatpak(home: string): Promise<EngineCandidate[]> {
 export async function scanLinux(env: NodeJS.ProcessEnv = process.env): Promise<EngineCandidate[]> {
   const pathValue = env.PATH;
   const home = env.HOME ?? homedir();
-  const candidates: EngineCandidate[] = [];
+  const found: Array<Omit<EngineCandidate, "version">> = [];
   const seen = new Set<string>();
 
   for (const binary of BINARIES) {
     const exePath = findExecutableInPath(binary.name, pathValue);
     if (!exePath || seen.has(exePath)) continue;
     seen.add(exePath);
-    const version = await probeLinuxVersion(exePath);
-    candidates.push({
+    found.push({
       family: binary.family,
       brand: binary.brand,
       channel: binary.channel,
       exePath,
       source: "path",
-      version,
       cdp: binary.family === "chromium",
     });
   }
@@ -135,7 +133,7 @@ export async function scanLinux(env: NodeJS.ProcessEnv = process.env): Promise<E
   const snapChromium = "/snap/bin/chromium";
   if (isExecutableFile(snapChromium) && !seen.has(snapChromium)) {
     seen.add(snapChromium);
-    candidates.push({
+    found.push({
       family: "chromium",
       brand: "Chromium (Snap)",
       channel: "stable",
@@ -143,14 +141,13 @@ export async function scanLinux(env: NodeJS.ProcessEnv = process.env): Promise<E
       source: "snap",
       profileBase: join(home, "snap", "chromium", "common", "ensemble"),
       cdp: true,
-      version: await probeLinuxVersion(snapChromium),
     });
   }
 
   const snapFirefox = "/snap/bin/firefox";
   if (isExecutableFile(snapFirefox) && !seen.has(snapFirefox)) {
     seen.add(snapFirefox);
-    candidates.push({
+    found.push({
       family: "firefox",
       brand: "Firefox (Snap)",
       channel: "stable",
@@ -158,10 +155,19 @@ export async function scanLinux(env: NodeJS.ProcessEnv = process.env): Promise<E
       source: "snap",
       profileBase: join(home, "snap", "firefox", "common", "ensemble"),
       cdp: false,
-      version: await probeLinuxVersion(snapFirefox),
     });
   }
 
-  candidates.push(...(await scanFlatpak(home)));
-  return candidates;
+  const flatpak = await scanFlatpak(home);
+
+  // Version probes spawn a process each; run them together so a machine with six
+  // browsers does not spend six sequential timeouts on startup.
+  const withVersions = await Promise.all(
+    found.map(async (candidate) => ({
+      ...candidate,
+      version: await probeLinuxVersion(candidate.exePath, candidate.launchArgs),
+    })),
+  );
+
+  return [...withVersions, ...flatpak];
 }

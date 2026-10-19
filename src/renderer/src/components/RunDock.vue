@@ -150,7 +150,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 }
 
 .count {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--accent-foreground);
   background: var(--accent);
   border-radius: 999px;
@@ -164,7 +164,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 
 .close-all {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--faint);
 }
 
@@ -210,7 +210,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 
 .run-mode {
   margin-left: auto;
-  font-size: 8.5px;
+  font-size: 10px;
   color: var(--faint);
   border: 1px solid var(--line-soft);
   border-radius: 3px;
@@ -242,7 +242,7 @@ async function openProfile(instanceId: string, identityId?: string) {
   border-radius: var(--radius);
   padding: 16px 10px;
   text-align: center;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
 }
 
@@ -264,7 +264,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 }
 
 .kicker {
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--accent);
@@ -276,7 +276,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 }
 
 .scene-sub {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--faint);
   line-height: 1.5;
 }
@@ -293,7 +293,7 @@ async function openProfile(instanceId: string, identityId?: string) {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 500;
   color: var(--accent-foreground);
   border: 2px solid var(--surface);
@@ -335,7 +335,7 @@ async function openProfile(instanceId: string, identityId?: string) {
   padding: 8px;
   border: 1px dashed var(--line);
   border-radius: var(--radius);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.55;
   color: var(--faint);
   flex: 0 0 auto;
@@ -350,7 +350,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 .dock-foot {
   margin-top: auto;
   display: flex;
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--faint);
   flex: 0 0 auto;
 }

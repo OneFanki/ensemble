@@ -14,6 +14,10 @@ pnpm dist
 | `Ensemble-<version>-win-x64-portable.exe` | 免安装便携版 |
 | `win-unpacked/` | 解压后的完整目录，排查问题时直接运行 |
 
+**启动速度与产物形态强相关。** 便携版每次启动都要把 Electron 运行时解压到临时目录，
+冷启动会多等一到两秒；安装版与 `win-unpacked` 直接读盘。日常使用请装安装版，便携版
+只用于临时试用或拷给别人。
+
 图标由 `scripts/make-icon.mjs` 生成，不依赖任何图像库；`build/icon.ico` 供 Windows、
 `build/icon.png` 供 Linux/macOS。改图标只需改这个脚本。
 

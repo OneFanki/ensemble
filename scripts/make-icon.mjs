@@ -1,17 +1,23 @@
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 
-// Generates the Ensemble app icon without any image dependency: a dark rounded
-// square with an amber "stage" mark made of three bars plus one solid dot.
-const SIZE = 256;
+// Generates the Ensemble mark without any image dependency:
+// an amber rounded square with three descending bars and one solid dot.
+// The same geometry is mirrored by src/renderer/src/components/Logo.vue.
+const SIZES = [16, 24, 32, 48, 64, 128, 256];
 
-const palette = {
-  bg: [11, 13, 16, 255],
-  bgEdge: [26, 31, 38, 255],
-  amber: [224, 164, 78, 255],
-  amberSoft: [224, 164, 78, 150],
-  transparent: [0, 0, 0, 0],
-};
+const BG_TOP = [240, 189, 111, 255];
+const BG_BOTTOM = [207, 140, 51, 255];
+const INK = [26, 19, 5, 255];
+
+function blend(top, bottom, t) {
+  return [
+    Math.round(top[0] + (bottom[0] - top[0]) * t),
+    Math.round(top[1] + (bottom[1] - top[1]) * t),
+    Math.round(top[2] + (bottom[2] - top[2]) * t),
+    Math.round(top[3] + (bottom[3] - top[3]) * t),
+  ];
+}
 
 function createCanvas(size) {
   const pixels = Buffer.alloc(size * size * 4);
@@ -26,21 +32,21 @@ function createCanvas(size) {
   return { pixels, set, size };
 }
 
-function roundedRect(canvas, x, y, w, h, radius, color) {
-  for (let py = y; py < y + h; py += 1) {
-    for (let px = x; px < x + w; px += 1) {
+function roundedRect(canvas, x, y, w, h, radius, colorFor) {
+  for (let py = Math.floor(y); py < Math.ceil(y + h); py += 1) {
+    for (let px = Math.floor(x); px < Math.ceil(x + w); px += 1) {
       const dx = Math.max(x + radius - px, px - (x + w - radius), 0);
       const dy = Math.max(y + radius - py, py - (y + h - radius), 0);
       if (dx * dx + dy * dy <= radius * radius) {
-        canvas.set(px, py, color);
+        canvas.set(px, py, colorFor(px, py));
       }
     }
   }
 }
 
 function circle(canvas, cx, cy, r, color) {
-  for (let py = cy - r; py <= cy + r; py += 1) {
-    for (let px = cx - r; px <= cx + r; px += 1) {
+  for (let py = Math.floor(cy - r); py <= Math.ceil(cy + r); py += 1) {
+    for (let px = Math.floor(cx - r); px <= Math.ceil(cx + r); px += 1) {
       const dx = px - cx;
       const dy = py - cy;
       if (dx * dx + dy * dy <= r * r) canvas.set(px, py, color);
@@ -48,23 +54,33 @@ function circle(canvas, cx, cy, r, color) {
   }
 }
 
-function makeIcon() {
-  const canvas = createCanvas(SIZE);
-  roundedRect(canvas, 8, 8, SIZE - 16, SIZE - 16, 56, palette.bgEdge);
-  roundedRect(canvas, 12, 12, SIZE - 24, SIZE - 24, 52, palette.bg);
+function drawMark(size) {
+  const canvas = createCanvas(size);
+  const k = size / 32;
 
-  // Three stage bars of decreasing width: the ensemble members.
+  // Amber plate with a subtle vertical gradient.
+  roundedRect(
+    canvas,
+    0,
+    0,
+    size,
+    size,
+    8 * k,
+    (_px, py) => blend(BG_TOP, BG_BOTTOM, Math.min(1, Math.max(0, py / size))),
+  );
+
+  // Three descending bars: the ensemble members.
   const bars = [
-    { x: 58, y: 78, w: 140, h: 22 },
-    { x: 58, y: 116, w: 104, h: 22 },
-    { x: 58, y: 154, w: 68, h: 22 },
+    { x: 6.5, y: 8.4, w: 19, h: 3.8 },
+    { x: 6.5, y: 14.2, w: 13.5, h: 3.8 },
+    { x: 6.5, y: 20, w: 8, h: 3.8 },
   ];
   for (const bar of bars) {
-    roundedRect(canvas, bar.x, bar.y, bar.w, bar.h, 11, palette.amberSoft);
+    roundedRect(canvas, bar.x * k, bar.y * k, bar.w * k, bar.h * k, 1.9 * k, () => INK);
   }
 
-  // The focused identity.
-  circle(canvas, 192, 165, 22, palette.amber);
+  // The focused identity, aligned under the second bar's right edge.
+  circle(canvas, 21.6 * k, 21.9 * k, 2.9 * k, INK);
   return canvas;
 }
 
@@ -89,10 +105,11 @@ function chunk(type, data) {
 }
 
 function encodePng(canvas) {
-  const raw = Buffer.alloc((canvas.size * 4 + 1) * canvas.size);
+  const stride = canvas.size * 4 + 1;
+  const raw = Buffer.alloc(stride * canvas.size);
   for (let y = 0; y < canvas.size; y += 1) {
-    raw[y * (canvas.size * 4 + 1)] = 0;
-    canvas.pixels.copy(raw, y * (canvas.size * 4 + 1) + 1, y * canvas.size * 4, (y + 1) * canvas.size * 4);
+    raw[y * stride] = 0;
+    canvas.pixels.copy(raw, y * stride + 1, y * canvas.size * 4, (y + 1) * canvas.size * 4);
   }
 
   const ihdr = Buffer.alloc(13);
@@ -100,9 +117,6 @@ function encodePng(canvas) {
   ihdr.writeUInt32BE(canvas.size, 4);
   ihdr[8] = 8;
   ihdr[9] = 6;
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
 
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -112,29 +126,32 @@ function encodePng(canvas) {
   ]);
 }
 
-function encodeIco(png) {
+function encodeIco(entries) {
   const header = Buffer.alloc(6);
   header.writeUInt16LE(0, 0);
   header.writeUInt16LE(1, 2);
-  header.writeUInt16LE(1, 4);
+  header.writeUInt16LE(entries.length, 4);
 
-  const entry = Buffer.alloc(16);
-  entry[0] = 0;
-  entry[1] = 0;
-  entry[2] = 0;
-  entry[3] = 0;
-  entry.writeUInt16LE(1, 4);
-  entry.writeUInt16LE(32, 6);
-  entry.writeUInt32LE(png.length, 8);
-  entry.writeUInt32LE(22, 12);
+  const directory = Buffer.alloc(16 * entries.length);
+  let offset = 6 + directory.length;
+  entries.forEach((entry, index) => {
+    const base = index * 16;
+    directory[base] = entry.size >= 256 ? 0 : entry.size;
+    directory[base + 1] = entry.size >= 256 ? 0 : entry.size;
+    directory.writeUInt16LE(1, base + 4);
+    directory.writeUInt16LE(32, base + 6);
+    directory.writeUInt32LE(entry.png.length, base + 8);
+    directory.writeUInt32LE(offset, base + 12);
+    offset += entry.png.length;
+  });
 
-  return Buffer.concat([header, entry, png]);
+  return Buffer.concat([header, directory, ...entries.map((entry) => entry.png)]);
 }
 
-const canvas = makeIcon();
-const png = encodePng(canvas);
 mkdirSync("build", { recursive: true });
-writeFileSync("build/icon.png", png);
-writeFileSync("build/icon.ico", encodeIco(png));
-// Linux/macOS packaging reads icon.png; Windows reads icon.ico.
-console.log(`icon.png ${png.length} bytes, icon.ico ${png.length + 22} bytes`);
+
+const pngs = SIZES.map((size) => ({ size, png: encodePng(drawMark(size)) }));
+const largest = pngs[pngs.length - 1];
+writeFileSync("build/icon.png", largest.png);
+writeFileSync("build/icon.ico", encodeIco(pngs.filter((entry) => entry.size <= 256)));
+console.log(`icon.png ${largest.png.length} bytes; icon.ico ${pngs.length} sizes`);

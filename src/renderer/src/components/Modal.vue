@@ -89,7 +89,7 @@ const emit = defineEmits<{ close: [] }>();
 
 .description {
   margin: 5px 0 0;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--faint);
   line-height: 1.5;
 }

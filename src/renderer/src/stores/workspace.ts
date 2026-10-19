@@ -85,6 +85,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
   const scenes = computed<Scene[]>(() => snapshot.value?.scenes ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
+  const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
   const settings = computed<AppSettings>(
     () =>
       snapshot.value?.settings ?? {
@@ -264,6 +265,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     identities,
     scenes,
     engines,
+    enginesReady,
     settings,
     instances,
     credentials,

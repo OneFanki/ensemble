@@ -748,13 +748,20 @@ async function submitMaster() {
   color: var(--faint);
 }
 
+/*
+ * No `overflow` here on purpose: `overflow-x: auto` also computes overflow-y to
+ * auto, and the 1px negative margin used to overlap the active underline made
+ * the row 1px taller than its box — enough to render a vertical scrollbar that
+ * covered the bottom rule. Wrapping keeps every tab reachable on narrow windows.
+ */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   margin-top: 14px;
   border-bottom: 1px solid var(--line-soft);
   flex: 0 0 auto;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .tab {

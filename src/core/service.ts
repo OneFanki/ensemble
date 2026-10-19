@@ -27,6 +27,13 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { findLayout, isFreeLayout } from "@shared/layouts";
+import {
+  EXPORT_FORMAT,
+  EXPORT_VERSION,
+  exportCounts,
+  type ImportResult,
+  type WorkspaceExportFile,
+} from "@shared/transfer";
 import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
 import { buildAuthCheckExpression, buildFillExpression, type FillOutcome } from "./cdp/login";
 import {
@@ -36,6 +43,7 @@ import {
   type SecretBox,
   type VaultFile,
 } from "./credentials/vault";
+import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import { mergeManualEngines, scanEngines } from "./engines";
 import { t } from "./i18n/translate";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
@@ -580,6 +588,185 @@ export class WorkspaceService {
       scene.updatedAt = new Date().toISOString();
     }
     this.persist();
+  }
+
+  // ---------- export / import ----------
+
+  /**
+   * Builds a portable snapshot. Volatile state (login status, browser profiles,
+   * running instances) is deliberately dropped: it belongs to this machine.
+   * Secrets are only included when a passphrase is supplied, sealed with the same
+   * scrypt + AES-256-GCM construction as the vault.
+   */
+  exportWorkspace(passphrase?: string): {
+    file: WorkspaceExportFile;
+    counts: ReturnType<typeof exportCounts>;
+    secretsIncluded: boolean;
+  } {
+    const file: WorkspaceExportFile = {
+      format: EXPORT_FORMAT,
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      environments: this.data.environments.map((item) => ({ ...item })),
+      identities: this.data.identities.map((item) => {
+        const { lastCheckedAt: _checked, ...rest } = item;
+        return { ...rest, status: "unknown" as const };
+      }),
+      scenes: this.data.scenes.map((item) => ({
+        ...item,
+        identityIds: [...item.identityIds],
+        slotAssignments: { ...item.slotAssignments },
+        paths: { ...item.paths },
+      })),
+      layoutPresets: this.data.layoutPresets.map((item) => ({
+        ...item,
+        slots: item.slots.map((slot) => ({ ...slot })),
+      })),
+    };
+
+    if (passphrase) {
+      if (this.vault.locked) throw new Error(t("vault.locked"));
+      const secrets = {
+        environment: {} as Record<string, string>,
+        identity: {} as Record<string, string>,
+      };
+      for (const environment of this.data.environments) {
+        const password = this.vault.get({ kind: "environment", id: environment.id });
+        if (password) secrets.environment[environment.id] = password;
+      }
+      for (const identity of this.data.identities) {
+        const password = this.vault.get({ kind: "identity", id: identity.id });
+        if (password) secrets.identity[identity.id] = password;
+      }
+      const kdf = createKdfParams();
+      file.secrets = { kdf, payload: seal(deriveKey(passphrase, kdf), JSON.stringify(secrets)) };
+    }
+
+    return { file, counts: exportCounts(file), secretsIncluded: Boolean(file.secrets) };
+  }
+
+  /**
+   * Merges a validated export into the current workspace. Entries whose
+   * environment is missing are skipped rather than attached to the wrong scope.
+   */
+  importWorkspace(file: WorkspaceExportFile, passphrase?: string): ImportResult {
+    let secrets:
+      | { environment: Record<string, string>; identity: Record<string, string> }
+      | undefined;
+    if (file.secrets) {
+      if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
+      try {
+        const key = deriveKey(passphrase, file.secrets.kdf);
+        const parsed = JSON.parse(open(key, file.secrets.payload)) as {
+          environment?: Record<string, string>;
+          identity?: Record<string, string>;
+        };
+        secrets = {
+          environment: parsed.environment ?? {},
+          identity: parsed.identity ?? {},
+        };
+      } catch {
+        throw new Error(t("error.importPassphrase"));
+      }
+      // Writing needs the encryption key, so a locked master-password vault must
+      // be unlocked first rather than importing everything except the passwords.
+      if (this.vault.locked) throw new Error(t("vault.locked"));
+    }
+
+    let added = 0;
+    let updated = 0;
+
+    for (const environment of file.environments) {
+      const existing = this.data.environments.find((item) => item.id === environment.id);
+      if (existing) {
+        Object.assign(existing, environment, { updatedAt: new Date().toISOString() });
+        updated += 1;
+      } else {
+        this.data.environments.push({ ...environment });
+        added += 1;
+      }
+    }
+
+    const environmentIds = new Set(this.data.environments.map((item) => item.id));
+    let skipped = 0;
+    for (const identity of file.identities) {
+      if (!environmentIds.has(identity.environmentId)) {
+        skipped += 1;
+        continue;
+      }
+      const existing = this.data.identities.find((item) => item.id === identity.id);
+      if (existing) {
+        Object.assign(existing, identity, { updatedAt: new Date().toISOString() });
+        updated += 1;
+      } else {
+        this.data.identities.push({ ...identity });
+        added += 1;
+      }
+    }
+
+    const identityIds = new Set(this.data.identities.map((item) => item.id));
+    for (const scene of file.scenes) {
+      if (!environmentIds.has(scene.environmentId)) {
+        skipped += 1;
+        continue;
+      }
+      const members = scene.identityIds.filter((id) => identityIds.has(id));
+      if (members.length === 0) {
+        skipped += 1;
+        continue;
+      }
+      const slots = Object.fromEntries(
+        Object.entries(scene.slotAssignments).filter(([id]) => members.includes(id)),
+      );
+      const existing = this.data.scenes.find((item) => item.id === scene.id);
+      if (existing) {
+        Object.assign(existing, scene, {
+          identityIds: members,
+          slotAssignments: slots,
+          updatedAt: new Date().toISOString(),
+        });
+        updated += 1;
+      } else {
+        this.data.scenes.push({ ...scene, identityIds: members, slotAssignments: slots });
+        added += 1;
+      }
+    }
+
+    const builtinIds = new Set(["free", "1x1", "2x1", "1x2", "2x2", "3x1"]);
+    for (const preset of file.layoutPresets) {
+      if (builtinIds.has(preset.id)) continue;
+      const existing = this.data.layoutPresets.find((item) => item.id === preset.id);
+      if (existing) {
+        Object.assign(existing, preset, { builtin: false });
+        updated += 1;
+      } else {
+        this.data.layoutPresets.push({ ...preset, builtin: false });
+        added += 1;
+      }
+    }
+
+    let importedSecrets = 0;
+    if (secrets) {
+      for (const [id, password] of Object.entries(secrets.environment)) {
+        if (!environmentIds.has(id)) continue;
+        this.vault.set({ kind: "environment", id }, password);
+        importedSecrets += 1;
+      }
+      for (const [id, password] of Object.entries(secrets.identity)) {
+        if (!identityIds.has(id)) continue;
+        this.vault.set({ kind: "identity", id }, password);
+        importedSecrets += 1;
+      }
+    }
+
+    this.persist();
+    return {
+      ...exportCounts(file),
+      added,
+      updated,
+      importedSecrets,
+      skipped,
+    };
   }
 
   // ---------- settings ----------

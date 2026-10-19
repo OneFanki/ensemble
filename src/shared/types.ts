@@ -159,6 +159,12 @@ export interface AppSettings {
   layout: LayoutId;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
+  /**
+   * Keep running in the tray when the window is closed. On by default: the local
+   * MCP endpoint dies with the process, so an accidental close would disconnect
+   * every AI client mid-task.
+   */
+  closeToTray: boolean;
 }
 
 export interface CredentialPresence {
@@ -237,11 +243,54 @@ export interface LayoutPresetDraft {
 export type SettingsPatch = Partial<
   Pick<
     AppSettings,
-    "theme" | "locale" | "lastEnvironmentId" | "lastView" | "layout" | "autoFillOnLaunch"
+    | "theme"
+    | "locale"
+    | "lastEnvironmentId"
+    | "lastView"
+    | "layout"
+    | "autoFillOnLaunch"
+    | "closeToTray"
   >
 >;
 
 export interface PasswordOwner {
   kind: "environment" | "identity";
   id: string;
+}
+
+/** Settings for the local MCP endpoint AI clients connect to. */
+export interface McpSettings {
+  enabled: boolean;
+  /** Loopback port; clients are configured against it once. */
+  port: number;
+  /** Bearer token. Never part of the workspace snapshot. */
+  token: string;
+  allowWrite: boolean;
+  allowRun: boolean;
+  allowDelete: boolean;
+}
+
+export interface McpStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  /** Ready-to-paste URL, e.g. http://127.0.0.1:47821/mcp */
+  url: string;
+  token: string;
+  allowWrite: boolean;
+  allowRun: boolean;
+  allowDelete: boolean;
+  toolCount: number;
+  /** Last bind error, if the port could not be used. */
+  error?: string;
+}
+
+export interface McpPatch {
+  enabled?: boolean;
+  port?: number;
+  allowWrite?: boolean;
+  allowRun?: boolean;
+  allowDelete?: boolean;
+  /** Replaces the bearer token; every client must update its config. */
+  rotateToken?: boolean;
 }

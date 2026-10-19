@@ -16,6 +16,8 @@ const messages = {
     "error.layoutName": "请填写布局名称。",
     "error.layoutSlots": "布局至少需要一个槽位。",
     "error.layoutMissing": "布局预设不存在，可能已被删除。",
+    "error.importNeedsPassphrase": "该配置文件包含加密的密码，请先输入导出时设置的口令。",
+    "error.importPassphrase": "口令不正确，或配置文件中的密码部分已损坏。",
     "error.noEngine": "没有可用的浏览器引擎，请先在设置中扫描。",
     "error.engineBlocked": "该浏览器引擎不可用。",
     "error.noPassword": "没有可用的密码。请为该身份或所在环境设置密码。",
@@ -46,6 +48,10 @@ const messages = {
     "error.layoutName": "Enter a layout name.",
     "error.layoutSlots": "A layout needs at least one slot.",
     "error.layoutMissing": "Layout preset not found. It may have been deleted.",
+    "error.importNeedsPassphrase":
+      "This file contains encrypted passwords. Enter the passphrase used when exporting it.",
+    "error.importPassphrase":
+      "The passphrase is wrong, or the encrypted section of the file is corrupted.",
     "error.noEngine": "No browser engine available. Scan engines in settings first.",
     "error.engineBlocked": "This browser engine is unavailable.",
     "error.noPassword": "No password available. Set one for this identity or its environment.",

@@ -78,6 +78,7 @@ export const settingsPatchSchema = z.object({
   lastView: z.enum(["environments", "identities", "scenes"]).optional(),
   layout: z.string().min(1).max(64).optional(),
   autoFillOnLaunch: z.boolean().optional(),
+  closeToTray: z.boolean().optional(),
 });
 
 export const passwordOwnerSchema = z.object({

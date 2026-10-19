@@ -27,7 +27,13 @@ const api: EnsembleApi = {
   retileScene: (sceneId) => ipcRenderer.invoke(IPC.sceneRetile, sceneId),
   saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
   deleteLayoutPreset: (id) => ipcRenderer.invoke(IPC.layoutPresetDelete, id),
+  exportWorkspace: (options) => ipcRenderer.invoke(IPC.dataExport, options),
+  pickImport: () => ipcRenderer.invoke(IPC.dataImportPick),
+  applyImport: (passphrase) => ipcRenderer.invoke(IPC.dataImportApply, passphrase),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
+
+  mcpStatus: () => ipcRenderer.invoke(IPC.mcpInfo),
+  updateMcp: (patch) => ipcRenderer.invoke(IPC.mcpUpdate, patch),
 
   setPassword: (owner, password) => ipcRenderer.invoke(IPC.credentialsSet, owner, password),
   clearPassword: (owner) => ipcRenderer.invoke(IPC.credentialsClear, owner),
@@ -57,10 +63,12 @@ const api: EnsembleApi = {
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),
+  quitApp: () => ipcRenderer.invoke(IPC.appQuit),
 
   minimizeWindow: () => ipcRenderer.invoke(IPC.windowMinimize),
   toggleMaximizeWindow: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
   closeWindow: () => ipcRenderer.invoke(IPC.windowClose),
+  showWindow: () => ipcRenderer.invoke(IPC.windowShow),
 };
 
 contextBridge.exposeInMainWorld("ensemble", api);

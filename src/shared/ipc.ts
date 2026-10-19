@@ -9,11 +9,27 @@ import type {
   LayoutId,
   LayoutPreset,
   LayoutPresetDraft,
+  McpPatch,
+  McpStatus,
   PasswordOwner,
   SceneDraft,
   SettingsPatch,
   WorkspaceSnapshot,
 } from "./types";
+import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
+
+export interface ExportOutcome {
+  canceled: boolean;
+  path?: string;
+  counts?: ExportCounts;
+  secretsIncluded?: boolean;
+}
+
+export interface ImportPickOutcome {
+  canceled: boolean;
+  path?: string;
+  preview?: ImportPreview;
+}
 
 export const IPC = {
   workspaceGet: "workspace:get",
@@ -33,6 +49,11 @@ export const IPC = {
   sceneRetile: "scene:retile",
   layoutPresetSave: "layout:save",
   layoutPresetDelete: "layout:delete",
+  dataExport: "data:export",
+  dataImportPick: "data:import-pick",
+  dataImportApply: "data:import-apply",
+  mcpInfo: "mcp:info",
+  mcpUpdate: "mcp:update",
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
@@ -52,9 +73,11 @@ export const IPC = {
   authAutoFilled: "auth:auto-filled",
   settingsSave: "settings:save",
   appSetTheme: "app:set-theme",
+  appQuit: "app:quit",
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
+  windowShow: "window:show",
 } as const;
 
 export interface EnsembleApi {
@@ -83,7 +106,18 @@ export interface EnsembleApi {
   /** Returns the saved preset so the caller can select it right away. */
   saveLayoutPreset(draft: LayoutPresetDraft): Promise<LayoutPreset>;
   deleteLayoutPreset(id: LayoutId): Promise<WorkspaceSnapshot>;
+  /** Asks for a destination file, then writes the portable workspace there. */
+  exportWorkspace(options: {
+    includeSecrets: boolean;
+    passphrase?: string;
+  }): Promise<ExportOutcome>;
+  /** Asks for a file, validates it, and keeps it pending for `applyImport`. */
+  pickImport(): Promise<ImportPickOutcome>;
+  applyImport(passphrase?: string): Promise<ImportResult>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
+
+  mcpStatus(): Promise<McpStatus>;
+  updateMcp(patch: McpPatch): Promise<McpStatus>;
 
   setPassword(owner: PasswordOwner, password: string): Promise<WorkspaceSnapshot>;
   clearPassword(owner: PasswordOwner): Promise<WorkspaceSnapshot>;
@@ -108,8 +142,12 @@ export interface EnsembleApi {
 
   saveAppSettings(patch: SettingsPatch): Promise<AppSettings>;
   setTheme(theme: AppSettings["theme"]): Promise<void>;
+  /** Fully quits: stops browsers and the MCP endpoint, then exits. */
+  quitApp(): Promise<void>;
 
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<boolean>;
   closeWindow(): Promise<void>;
+  /** Shows the window again; used when the app is running in the tray. */
+  showWindow(): Promise<void>;
 }

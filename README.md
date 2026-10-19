@@ -74,6 +74,13 @@ export HTTP_PROXY=http://127.0.0.1:7897
 pnpm install
 ```
 
+也可以在本机创建 `.npmrc`（已被 `.gitignore` 忽略），使用镜像：
+
+```ini
+registry=https://registry.npmmirror.com
+electron_mirror=https://npmmirror.com/mirrors/electron/
+```
+
 如果 `pnpm install` 之后 `node_modules/electron/dist` 不存在，说明 Electron 的下载脚本没有执行成功。可以单独重试：
 
 ```bash

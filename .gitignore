@@ -5,6 +5,9 @@ release/
 *.local
 *.log
 
+# Local registry mirrors or credentials must stay machine specific.
+.npmrc
+
 # Local runtime data must never be committed.
 profiles/
 instances.json

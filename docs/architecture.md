@@ -87,8 +87,9 @@ Scene        N ── 1 LayoutPreset（内置或用户自定义）
 
 - 身份只属于一个环境。同一账号要测两个环境时创建两个身份，因为不同主机名的
   Cookie 域不同，复用 profile 会串环境。
-- 环境没有单独的「类型」字段：生产环境靠名称识别（`isProductionName`），
-  命中才在启动前二次确认。少一个字段就少一次填写和一次维护。
+- 环境没有「类型」字段，也没有隐式的生产/非生产区分。启动一个窗口只是打开一个
+  登录页，真正的破坏性动作发生在被测系统里，靠环境名字猜风险既会漏判也会误判；
+  权限边界由 MCP 的 run 档和用户自己开的窗口负责。
 - 凭据：身份存自定义密码，环境存默认密码，应用层不维护「账号库」。
   解析顺序是身份自定义 → 环境默认 → 报错。
 - Profile 目录用 UUID，显示名可随时改；引擎绑定在身份上，换引擎是复制身份
@@ -164,7 +165,7 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   `127.0.0.1:<port>` 或 `localhost:<port>`，`Origin` 必须是回环——两层分别挡 DNS 重绑定
   与浏览器跨源请求。
 - 权限门：工具分 read / write / run / danger 四档，后三档由设置页开关控制。
-  删除类还要 `confirm: true`；生产环境名额外要 `confirmProduction: true`。
+  删除类还要 `confirm: true`。
 - 凭据：工具可以写密码，但**没有任何读密码的工具**，返回值里也没有明文。
 - 审计：每次调用追加一行 JSON 到 `mcp-audit.log`，`password|passphrase|token|secret`
   字段递归替换为 `[redacted]`。
@@ -189,5 +190,4 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 - IPC 入参全部经过 Zod 校验；密码不在任何 IPC 返回值中出现。
 - 密码只存在于主进程内存与加密后的 `vault.json`。
 - 自动填充前校验当前页面 origin 属于目标环境，跨域拒绝执行。
-- 生产环境身份在启动前二次确认。
 - MCP 端点只绑回环、必须带 Token、校验 Host/Origin；工具永远不返回明文密码。

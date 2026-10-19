@@ -48,7 +48,7 @@ pnpm dist             # 打包安装程序与便携版到 release/
 12. **等宽字体只用于技术数据**（账号、路径、版本、时间戳）。含中文的标签用正文字体。
 13. **界面文案与占位不得出现具体业务名或真实人名。** 用「本地开发环境」「管理员 · 主账号」这类中性示例。
 14. **启动参数必须包含 `--disable-sync`。** 浏览器会自动用 Windows 账户登录并把同步数据（书签、扩展、密码）灌进新 profile，导致每个测试实例都带着操作者的账号和扩展。禁止改用 `--disable-extensions` 来规避——那会禁掉被测站点需要的扩展。
-15. **MCP 工具永远不返回明文密码。** 可以写密码（`password` 参数进加密凭据库），但不得提供读密码、复制密码或任何回显明文的工具与字段。删除类工具必须要求 `confirm: true`，生产环境名必须要求 `confirmProduction: true`。
+15. **MCP 工具永远不返回明文密码。** 可以写密码（`password` 参数进加密凭据库），但不得提供读密码、复制密码或任何回显明文的工具与字段。删除类工具必须要求 `confirm: true`；启动类只受「运行」权限控制，不得按环境名字或其它启发式额外加确认。
 16. **MCP 端点只绑 `127.0.0.1`，并且必须校验 Bearer Token、`Host` 与 `Origin`。** 新增工具时按 read / write / run / danger 定档，权限开关在设置页控制；审计日志写入前对 `password|passphrase|token|secret` 递归脱敏。
 17. **退出顺序固定**：先停 MCP → 销毁托盘 → 回收浏览器。由 `tests/contracts/tray-mcp-lifecycle.test.ts` 守护，禁止在 `before-quit` 里提前置 `quitting` 绕过。
 
@@ -75,7 +75,7 @@ pnpm dist             # 打包安装程序与便携版到 release/
 | --- | --- |
 | 任何代码改动 | 本文件 + `docs/architecture.md` |
 | 改动浏览器启动、CDP、窗口定位 | `docs/engineering/cdp-playbook.md` |
-| 改动凭据、自动填充、生产环境行为 | `docs/architecture.md` 的安全边界一节 |
+| 改动凭据、自动填充、启动与 MCP 权限 | `docs/architecture.md` 的安全边界一节 |
 | 遇到报错或反常行为 | `docs/engineering/踩坑库.md` |
 | 做架构取舍 | `docs/architecture/adr/` 现有决策，先看是否已被否 |
 | 打包、发布、升级 Electron | `docs/engineering/release.md` |

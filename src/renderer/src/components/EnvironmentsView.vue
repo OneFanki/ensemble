@@ -3,7 +3,6 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check, Globe, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
-import { isProductionName } from "@shared/environments";
 import type { Environment } from "@shared/types";
 
 const emit = defineEmits<{
@@ -81,7 +80,7 @@ async function remove(environment: Environment) {
         :class="{ active: isActive(environment) }"
       >
         <div class="card-head">
-          <span class="env-dot" :class="{ prod: isProductionName(environment.name) }"></span>
+          <span class="env-dot"></span>
           <h2 class="env-name">{{ environment.name }}</h2>
           <span v-if="isActive(environment)" class="active-chip">
             <Check :size="10" />
@@ -214,10 +213,6 @@ h1 {
   border-radius: 50%;
   background: var(--accent);
   flex: 0 0 7px;
-}
-
-.env-dot.prod {
-  background: var(--red);
 }
 
 .env-name {

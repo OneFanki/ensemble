@@ -8,7 +8,6 @@ import {
   layoutPresetDraftSchema,
   sceneDraftSchema,
 } from "@shared/schemas";
-import { isProductionName } from "@shared/environments";
 import type {
   Environment,
   EnvironmentDraft,
@@ -540,16 +539,6 @@ export class McpServer {
       }
     };
 
-    // Launching against a production-named environment always needs an explicit
-    // confirmation, even when the caller is an AI rather than the GUI.
-    const guardProduction = (environment: Environment, args: Record<string, unknown>) => {
-      if (!isProductionName(environment.name)) return;
-      if (args["confirmProduction"] === true) return;
-      throw new Error(
-        `「${environment.name}」看起来是生产环境。请与用户确认后带 confirmProduction: true 再调用。`,
-      );
-    };
-
     const identityDraftFrom = (
       environmentId: string,
       item: Record<string, unknown>,
@@ -1018,22 +1007,11 @@ export class McpServer {
       },
       {
         name: "launch_scene",
-        description:
-          "启动场景：按布局打开成员窗口并自动填充。生产环境需要 confirmProduction: true。",
+        description: "启动场景：按布局打开成员窗口并自动填充。",
         kind: "run",
-        inputSchema: object(
-          {
-            sceneId: string("场景 id"),
-            confirmProduction: {
-              type: "boolean",
-              description: "生产环境必须显式确认",
-            },
-          },
-          ["sceneId"],
-        ),
+        inputSchema: object({ sceneId: string("场景 id") }, ["sceneId"]),
         run: async (args) => {
           const scene = findScene(args["sceneId"]);
-          guardProduction(findEnvironment(scene.environmentId), args);
           const result = await service.launchScene(scene.id);
           return {
             instances: result.identities.map((identity) => ({
@@ -1045,18 +1023,11 @@ export class McpServer {
       },
       {
         name: "launch_identity",
-        description: "单独启动一个身份。生产环境需要 confirmProduction: true。",
+        description: "单独启动一个身份。",
         kind: "run",
-        inputSchema: object(
-          {
-            identityId: string("身份 id"),
-            confirmProduction: { type: "boolean", description: "生产环境必须显式确认" },
-          },
-          ["identityId"],
-        ),
+        inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
         run: async (args) => {
           const identity = findIdentity(args["identityId"]);
-          guardProduction(findEnvironment(identity.environmentId), args);
           const result = await service.launchIdentity(identity.id);
           return { instanceId: result.instance.id, label: result.instance.label };
         },
@@ -1068,14 +1039,12 @@ export class McpServer {
         kind: "run",
         inputSchema: object({
           environmentId: string("环境 id；省略则打开空白页"),
-          confirmProduction: { type: "boolean", description: "生产环境必须显式确认" },
         }),
         run: async (args) => {
           const environmentId =
             typeof args["environmentId"] === "string" && args["environmentId"]
               ? args["environmentId"]
               : undefined;
-          if (environmentId) guardProduction(findEnvironment(environmentId), args);
           const result = await service.launchCleanSession(environmentId);
           return { instanceId: result.instance.id, environmentId: result.instance.environmentId };
         },

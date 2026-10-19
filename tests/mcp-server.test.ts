@@ -277,7 +277,7 @@ describe("MCP tools", () => {
     expect(log).toContain("[redacted]");
   });
 
-  it("requires confirmProduction for a production-named environment", async () => {
+  it("gates launches on the run permission instead of the environment name", async () => {
     const env = await rpc(
       toolCall("create_environment", {
         name: "会员服务-生产环境",
@@ -293,9 +293,19 @@ describe("MCP tools", () => {
       }),
     );
     const identity = JSON.parse(identityResponse.json.result.content[0].text);
+
+    // The name alone must not fork the launch path: no extra confirmation field
+    // exists, because guessing risk from a name was both unreliable and advisory.
+    const tools = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json.result.tools;
+    for (const name of ["launch_scene", "launch_identity", "launch_clean_session"]) {
+      const tool = tools.find((item: { name: string }) => item.name === name);
+      expect(tool.inputSchema.properties).not.toHaveProperty("confirmProduction");
+    }
+
+    await server.update({ allowRun: false });
     const refused = await rpc(toolCall("launch_identity", { identityId: identity.id }));
     expect(refused.json.result.isError).toBe(true);
-    expect(refused.json.result.content[0].text).toMatch(/生产环境/);
+    expect(refused.json.result.content[0].text).toMatch(/权限/);
   });
 });
 

@@ -95,7 +95,7 @@ Permissions are three switches in settings:
 Hard boundaries:
 
 - **Passwords are write-only.** No tool reads, copies or returns a password; once stored it is only decrypted inside the main process for filling.
-- Delete tools additionally require an explicit `confirm: true`; production-named environments need a separate `confirmProduction`.
+- Delete tools additionally require an explicit `confirm: true`. Launch tools are gated only by the Run permission: opening a window changes no data.
 - Every call appends one line to `mcp-audit.log`; passwords, passphrases and tokens are replaced with `[redacted]`.
 - On quit the MCP server stops before browsers are reclaimed, so the port is released with the process.
 

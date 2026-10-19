@@ -5,7 +5,6 @@ import { useI18n } from "vue-i18n";
 import { Check, ChevronDown, Settings2 } from "lucide-vue-next";
 import Logo from "./Logo.vue";
 import { useWorkspaceStore } from "../stores/workspace";
-import { isProductionName } from "@shared/environments";
 
 defineProps<{ view: "environments" | "identities" | "scenes" | "settings" }>();
 const emit = defineEmits<{ manageEnvironments: [] }>();
@@ -27,8 +26,6 @@ const engineLabel = computed(() => {
   if (!engine) return t("app.noBrowserFound");
   return `${engine.brand} ${engine.version ?? ""}`.trim();
 });
-
-const isProd = computed(() => isProductionName(store.activeEnvironment?.name));
 
 function choose(id: string) {
   store.setActiveEnvironment(id);
@@ -57,7 +54,7 @@ function manage() {
         aria-haspopup="listbox"
         @click="open = !open"
       >
-        <span class="dot" :class="{ prod: isProd }"></span>
+        <span class="dot"></span>
         <span class="env-name">{{ store.activeEnvironment?.name ?? $t("app.notConfiguredEnv") }}</span>
         <ChevronDown :size="11" class="chevron" :class="{ flip: open }" />
       </button>
@@ -74,7 +71,7 @@ function manage() {
           :aria-selected="env.id === store.activeEnvironment?.id"
           @click="choose(env.id)"
         >
-          <span class="dot" :class="{ prod: isProductionName(env.name) }"></span>
+          <span class="dot"></span>
           <span class="menu-copy">
             <span class="menu-name">{{ env.name }}</span>
             <span class="menu-url mono">{{ env.baseUrl }}</span>
@@ -90,8 +87,6 @@ function manage() {
         </button>
       </div>
     </div>
-
-    <span v-if="isProd" class="prod-badge no-drag mono">{{ $t("app.prod") }}</span>
 
     <div class="right no-drag">
       <span class="engine-pill mono" :title="engineLabel">
@@ -184,11 +179,6 @@ function manage() {
   flex: 0 0 6px;
   align-self: center;
   background: var(--accent);
-}
-
-.env-switch .dot.prod,
-.menu-item .dot.prod {
-  background: var(--red);
 }
 
 .env-name {
@@ -308,16 +298,6 @@ function manage() {
 .menu-action:hover {
   background: var(--surface-2);
   color: var(--text-secondary);
-}
-
-.prod-badge {
-  font-size: 9.5px;
-  letter-spacing: 0.12em;
-  color: var(--red);
-  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line));
-  border-radius: 4px;
-  padding: 2px 5px;
-  line-height: 1.2;
 }
 
 .right {

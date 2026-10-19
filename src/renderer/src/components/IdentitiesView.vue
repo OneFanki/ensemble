@@ -3,7 +3,6 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Globe, Play, Plus, RefreshCw, Search, Square, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
-import { isProductionName } from "@shared/environments";
 import type { Identity, RoleColor } from "@shared/types";
 
 const emit = defineEmits<{
@@ -39,7 +38,6 @@ const runningCount = computed(
 const expiredCount = computed(
   () => store.environmentIdentities.filter((i) => i.status === "expired").length,
 );
-const isProd = computed(() => isProductionName(store.activeEnvironment?.name));
 
 const statusLabel = (identity: Identity): string => {
   if (store.instanceFor(identity.id)) return t("app.statusRunning");
@@ -60,12 +58,6 @@ function formatRelative(iso?: string): string {
 }
 
 async function launch(identity: Identity) {
-  if (isProd.value) {
-    const confirmed = window.confirm(
-      t("app.prodConfirm", { env: store.activeEnvironment?.name, name: identity.name }),
-    );
-    if (!confirmed) return;
-  }
   const instance = store.instanceFor(identity.id);
   if (instance) {
     await store.stopInstance(instance.id);
@@ -118,10 +110,6 @@ function passwordLabel(identity: Identity): string {
         </button>
       </div>
     </header>
-
-    <div v-if="isProd" class="prod-banner">
-      {{ $t("app.prodBanner") }}
-    </div>
 
     <div v-if="store.credentials?.warning" class="vault-banner">
       {{ store.credentials.warning }}
@@ -196,7 +184,6 @@ function passwordLabel(identity: Identity): string {
         <div class="meta-row">
           <span class="tag">{{ identity.role }}</span>
           <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
-          <span v-if="isProd" class="tag danger">PROD</span>
         </div>
 
         <div class="pw-row">
@@ -301,22 +288,12 @@ h1 {
   filter: brightness(1.06);
 }
 
-.prod-banner,
 .vault-banner {
   margin-top: 12px;
   padding: 8px 11px;
   border-radius: var(--radius);
   font-size: 11px;
   flex: 0 0 auto;
-}
-
-.prod-banner {
-  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line));
-  background: color-mix(in srgb, var(--red) 9%, transparent);
-  color: color-mix(in srgb, var(--red) 82%, var(--text));
-}
-
-.vault-banner {
   border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
   background: color-mix(in srgb, var(--accent) 7%, transparent);
   color: color-mix(in srgb, var(--accent) 78%, var(--text));
@@ -538,12 +515,6 @@ h1 {
   color: var(--faint);
   border-color: var(--line-soft);
   background: transparent;
-}
-
-.tag.danger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 40%, var(--line));
-  background: color-mix(in srgb, var(--red) 8%, transparent);
 }
 
 .pw-row {

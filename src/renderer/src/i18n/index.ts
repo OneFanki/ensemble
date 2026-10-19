@@ -245,7 +245,8 @@ const messages = {
       // Layout editor
       newLayoutTitle: "新建窗口布局",
       editLayoutTitle: "编辑窗口布局",
-      layoutEditorDesc: "拖动方块调整窗口位置，拖右下角调整大小。坐标按屏幕比例保存，换显示器也能用。",
+      layoutEditorDesc:
+        "拖动方块调整窗口位置，拖右下角调整大小。坐标按屏幕比例保存，换显示器也能用。",
       layoutName: "布局名称",
       layoutNameExample: "例如：左大右小 / 三联屏",
       startFrom: "从模板开始",
@@ -271,7 +272,7 @@ const messages = {
       instancesShort: "{count} 个实例",
 
       // Settings
-      settingsSubtitle: "引擎扫描 · 外观 · 凭据存储",
+      settingsSubtitle: "引擎扫描 · 外观 · 凭据存储 · 数据与 AI 接入",
       scanning: "扫描中",
       tableBrowser: "浏览器",
       tableVersion: "版本",
@@ -286,8 +287,7 @@ const messages = {
       appearanceNote: "深色适合长时间盯着控制台；浅色适合核对凭据和阅读。",
       autoFillLaunch: "启动自动填充",
       defaultLayout: "默认布局",
-      defaultLayoutNote:
-        "单独启动多个身份时使用该布局；场景可以在场景页里单独指定，互不影响。",
+      defaultLayoutNote: "单独启动多个身份时使用该布局；场景可以在场景页里单独指定，互不影响。",
       on: "开启",
       off: "关闭",
       autoFillLaunchNote:
@@ -310,6 +310,57 @@ const messages = {
       wrongMaster: "当前主密码不正确",
       vaultExplainer:
         "系统密钥环能挡住离线读取，但挡不住以你的账户身份运行的程序。主密码把密钥改成只有你知道的密码才能解开——即使测试库来自生产，也更接近密码管理器的保护级别。主密码不可找回，忘记后只能删除 vault.json 重新录入。",
+
+      // Data and AI access
+      dataTitle: "数据",
+      dataNote: "配置全部保存在本机。这里负责跨机器迁移，以及让本机 AI 客户端接管录入工作。",
+      closeToTray: "关闭窗口后留在托盘",
+      closeToTrayNote:
+        "开启后点关闭只是隐藏窗口，浏览器和 AI 接入继续运行；要彻底退出请在托盘菜单或这里选择退出。",
+      exportTitle: "导出配置",
+      exportIncludeSecrets: "连同密码一起导出（需要口令加密）",
+      exportPassphrasePlaceholder: "设置导出时的加密口令（至少 8 位）",
+      exportAction: "导出到文件",
+      exportNote: "导出环境、身份、场景与布局预设；浏览器 Profile 与登录态不会导出。",
+      exportPassphraseShort: "加密口令至少 8 位",
+      importTitle: "导入配置",
+      importPick: "选择配置文件",
+      importApply: "合并到当前配置",
+      importPassphrasePlaceholder: "输入导出时设置的口令",
+      importNeedsPassphrase: "该文件包含加密的密码，请输入导出时的口令",
+      importNote: "同 id 的条目会被覆盖，其它条目追加；缺少所属环境的身份会被跳过。",
+      importResult: "已新增 {added} 项、更新 {updated} 项，跳过 {skipped} 项",
+      layoutPresets: "布局预设",
+      mcpTitle: "AI 接入",
+      mcpNote:
+        "在本机开一个 MCP 端点，让 AI 客户端直接录入环境、身份与场景。AI 负责在容器或数据库里建账号，这里只接收账号信息。",
+      mcpEnable: "端点",
+      mcpRunning: "运行中",
+      mcpStopped: "未运行",
+      mcpPort: "端口",
+      mcpApplyPort: "应用",
+      mcpBadPort: "端口必须是 1024–65535 之间的整数",
+      mcpPermissions: "权限",
+      mcpAllowWrite: "允许创建与修改",
+      mcpAllowRun: "允许启动与停止窗口",
+      mcpAllowDelete: "允许删除",
+      mcpPermissionNote:
+        "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉环境、身份或场景。生产环境即使有运行权限也会要求单独确认。",
+      mcpEndpoint: "客户端连接信息",
+      copyUrl: "复制地址",
+      copyToken: "复制 Token",
+      mcpRotate: "轮换 Token",
+      mcpTokenNote: "Token 只在本机校验；轮换后所有已配置的客户端都要更新。",
+      mcpConfigTitle: "客户端配置片段（可直接粘贴）",
+      mcpCopyConfig: "复制配置",
+      toastTokenCopied: "Token 已复制",
+      toastSnippetCopied: "客户端配置已复制",
+      quitApp: "彻底退出",
+      quitConfirm: "将关闭全部浏览器并停止 AI 接入，确定退出？",
+      toastExportDone: "已导出 {identities} 个身份（{secrets}）",
+      exportWithSecrets: "含加密密码",
+      exportNoSecrets: "不含密码",
+      toastImportDone: "导入完成：新增 {added} 项、更新 {updated} 项",
       aboutTagline: "多个身份，同一个舞台。",
       platform: "平台",
       available: "可用",
@@ -599,7 +650,8 @@ const messages = {
       errSceneName: "Enter a scene name",
       errSceneMember: "Select at least one identity",
       reopen: "Reopen",
-      slotDragHint: "Drag a member onto a slot to place its window — or click a member, then a slot.",
+      slotDragHint:
+        "Drag a member onto a slot to place its window — or click a member, then a slot.",
       freeSlot: "Slot {index}",
       customizeLayout: "Customize layout",
       customTag: "Custom",
@@ -618,13 +670,13 @@ const messages = {
       addSlot: "Add slot",
       resizeSlot: "Resize slot",
       preview: "Preview",
-      layoutEditorHint: "Gaps are allowed; area no slot covers is simply not assigned to any window.",
+      layoutEditorHint:
+        "Gaps are allowed; area no slot covers is simply not assigned to any window.",
       customLayout: "Custom layout",
       freeLayoutPreview: "No layout: every window fills the screen",
       errLayoutName: "Enter a layout name",
       errLayoutSlots: "A layout needs at least one slot",
-      confirmDeleteLayout:
-        "Delete the layout preset “{name}”? Scenes using it fall back to 2 × 2.",
+      confirmDeleteLayout: "Delete the layout preset “{name}”? Scenes using it fall back to 2 × 2.",
 
       // Run dock
       noRunningIdentity: "Nothing is running. Start an identity, or launch a scene.",
@@ -640,7 +692,7 @@ const messages = {
       instancesShort: "{count} instances",
 
       // Settings
-      settingsSubtitle: "Engines · Appearance · Credentials",
+      settingsSubtitle: "Engines · Appearance · Credentials · Data and AI access",
       scanning: "Scanning",
       tableBrowser: "Browser",
       tableVersion: "Version",
@@ -681,6 +733,61 @@ const messages = {
       wrongMaster: "The current master password is incorrect",
       vaultExplainer:
         "The system keychain blocks offline reads but not a program running as your user. A master password makes the key derivable only from something you know — closer to a password manager, even when the test database came from production. It cannot be recovered: if you forget it, delete vault.json and re-enter the credentials.",
+
+      // Data and AI access
+      dataTitle: "Data",
+      dataNote:
+        "Everything is stored on this machine. This section moves it to another one and lets a local AI client do the data entry.",
+      closeToTray: "Keep running in the tray",
+      closeToTrayNote:
+        "With this on, closing the window only hides it; browsers and the AI endpoint keep running. Quit fully from the tray menu or the button below.",
+      exportTitle: "Export",
+      exportIncludeSecrets: "Include passwords (encrypted with a passphrase)",
+      exportPassphrasePlaceholder: "Passphrase used to encrypt the export (min 8 characters)",
+      exportAction: "Export to file",
+      exportNote:
+        "Exports environments, identities, scenes and layout presets. Browser profiles and sessions are never exported.",
+      exportPassphraseShort: "The passphrase must be at least 8 characters",
+      importTitle: "Import",
+      importPick: "Choose file",
+      importApply: "Merge into this workspace",
+      importPassphrasePlaceholder: "Passphrase used when exporting",
+      importNeedsPassphrase: "This file has encrypted passwords; enter its passphrase",
+      importNote:
+        "Entries with the same id are overwritten, others are appended; identities whose environment is missing are skipped.",
+      importResult: "{added} added, {updated} updated, {skipped} skipped",
+      layoutPresets: "Layout presets",
+      mcpTitle: "AI access",
+      mcpNote:
+        "Runs a local MCP endpoint so an AI client can record environments, identities and scenes directly. The AI creates accounts in your container or database; Ensemble only receives the account details.",
+      mcpEnable: "Endpoint",
+      mcpRunning: "Running",
+      mcpStopped: "Stopped",
+      mcpPort: "Port",
+      mcpApplyPort: "Apply",
+      mcpBadPort: "The port must be an integer between 1024 and 65535",
+      mcpPermissions: "Permissions",
+      mcpAllowWrite: "Create and edit",
+      mcpAllowRun: "Launch and stop windows",
+      mcpAllowDelete: "Delete",
+      mcpPermissionNote:
+        "Delete is off by default; once enabled, a single confirm flag lets the AI remove environments, identities or scenes. Production environments still need a separate confirmation even with run permission.",
+      mcpEndpoint: "Client connection",
+      copyUrl: "Copy URL",
+      copyToken: "Copy token",
+      mcpRotate: "Rotate token",
+      mcpTokenNote:
+        "The token is only checked locally. After rotating it, every configured client must be updated.",
+      mcpConfigTitle: "Client config snippet (paste as-is)",
+      mcpCopyConfig: "Copy config",
+      toastTokenCopied: "Token copied",
+      toastSnippetCopied: "Client config copied",
+      quitApp: "Quit completely",
+      quitConfirm: "This closes every browser and stops the AI endpoint. Quit now?",
+      toastExportDone: "Exported {identities} identities ({secrets})",
+      exportWithSecrets: "with encrypted passwords",
+      exportNoSecrets: "without passwords",
+      toastImportDone: "Import finished: {added} added, {updated} updated",
       aboutTagline: "Many identities. One stage.",
       platform: "Platform",
       available: "Available",

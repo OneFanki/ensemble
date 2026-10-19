@@ -1,8 +1,20 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Download, Monitor, Plus, RefreshCw, ShieldCheck, ShieldAlert } from "lucide-vue-next";
+import {
+  Bot,
+  Copy,
+  Download,
+  Monitor,
+  Plus,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+  Upload,
+} from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
+import type { ImportPreview, ImportResult } from "@shared/transfer";
+import type { McpStatus } from "@shared/types";
 
 const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
@@ -21,6 +33,110 @@ const currentPassword = ref("");
 const nextPassword = ref("");
 const confirmPassword = ref("");
 const masterError = ref<string | null>(null);
+
+// ---- data transfer ----
+const includeSecrets = ref(false);
+const exportPassphrase = ref("");
+const importPreview = ref<{ path: string; preview: ImportPreview } | null>(null);
+const importPassphrase = ref("");
+const importResult = ref<ImportResult | null>(null);
+const transferError = ref<string | null>(null);
+
+// ---- MCP ----
+const mcp = ref<McpStatus | null>(null);
+const portDraft = ref("");
+const showToken = ref(false);
+
+const mcpSnippet = computed(() => {
+  if (!mcp.value) return "";
+  return JSON.stringify(
+    {
+      mcpServers: {
+        ensemble: {
+          type: "http",
+          url: mcp.value.url,
+          headers: { Authorization: `Bearer ${mcp.value.token}` },
+        },
+      },
+    },
+    null,
+    2,
+  );
+});
+
+onMounted(async () => {
+  mcp.value = await store.mcpStatus();
+  portDraft.value = String(mcp.value?.port ?? "");
+});
+
+async function refreshMcp(patch: Parameters<typeof store.updateMcp>[0]) {
+  const next = await store.updateMcp(patch);
+  if (next) mcp.value = next;
+}
+
+async function updatePort() {
+  const port = Number.parseInt(portDraft.value, 10);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    store.notify(t("app.mcpBadPort"), "error");
+    return;
+  }
+  await refreshMcp({ port });
+}
+
+async function copyText(text: string, successKey = "app.toastCopied") {
+  await navigator.clipboard.writeText(text);
+  store.notify(t(successKey), "success");
+}
+
+async function doExport() {
+  transferError.value = null;
+  if (includeSecrets.value && exportPassphrase.value.length < 8) {
+    transferError.value = t("app.exportPassphraseShort");
+    return;
+  }
+  const outcome = await store.exportWorkspace({
+    includeSecrets: includeSecrets.value,
+    ...(includeSecrets.value ? { passphrase: exportPassphrase.value } : {}),
+  });
+  if (!outcome) return;
+  if (outcome.canceled) return;
+  exportPassphrase.value = "";
+  store.notify(
+    t("app.toastExportDone", {
+      identities: outcome.counts?.identities ?? 0,
+      secrets: outcome.secretsIncluded ? t("app.exportWithSecrets") : t("app.exportNoSecrets"),
+    }),
+    "success",
+  );
+}
+
+async function doPickImport() {
+  transferError.value = null;
+  importResult.value = null;
+  const picked = await store.pickImport();
+  if (!picked || picked.canceled || !picked.preview) return;
+  importPreview.value = { path: picked.path ?? "", preview: picked.preview };
+}
+
+async function doApplyImport() {
+  transferError.value = null;
+  if (importPreview.value?.preview.hasSecrets && importPassphrase.value.length === 0) {
+    transferError.value = t("app.importNeedsPassphrase");
+    return;
+  }
+  const result = await store.applyImport(
+    importPreview.value?.preview.hasSecrets ? importPassphrase.value : undefined,
+  );
+  if (!result) return;
+  importResult.value = result;
+  importPreview.value = null;
+  importPassphrase.value = "";
+}
+
+async function quitApp() {
+  if (!window.confirm(t("app.quitConfirm"))) return;
+  await window.ensemble.quitApp();
+}
 
 const canSubmitMaster = computed(
   () =>
@@ -346,8 +462,223 @@ async function submitMaster() {
       <section class="block">
         <div class="block-head">
           <div>
+            <h2>{{ $t("app.dataTitle") }}</h2>
+            <p>{{ $t("app.dataNote") }}</p>
+          </div>
+        </div>
+
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.closeToTray") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.closeToTray }"
+              @click="store.saveSettings({ closeToTray: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.closeToTray }"
+              @click="store.saveSettings({ closeToTray: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.closeToTrayNote") }}</p>
+
+        <div class="transfer">
+          <div class="transfer-col">
+            <h3>{{ $t("app.exportTitle") }}</h3>
+            <label class="check">
+              <input v-model="includeSecrets" type="checkbox" />
+              <span>{{ $t("app.exportIncludeSecrets") }}</span>
+            </label>
+            <input
+              v-if="includeSecrets"
+              v-model="exportPassphrase"
+              type="password"
+              class="input mono"
+              :placeholder="$t('app.exportPassphrasePlaceholder')"
+              autocomplete="new-password"
+            />
+            <button class="btn primary" type="button" :disabled="store.busy === 'transfer'" @click="doExport">
+              <Download :size="12" />
+              {{ $t("app.exportAction") }}
+            </button>
+            <p class="fineprint">{{ $t("app.exportNote") }}</p>
+          </div>
+
+          <div class="transfer-col">
+            <h3>{{ $t("app.importTitle") }}</h3>
+            <div v-if="importPreview" class="preview-box">
+              <p class="preview-name mono">{{ importPreview.path }}</p>
+              <dl class="preview-counts">
+                <div><dt>{{ $t("app.environments") }}</dt><dd class="mono">{{ importPreview.preview.environments }}</dd></div>
+                <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ importPreview.preview.identities }}</dd></div>
+                <div><dt>{{ $t("app.scenes") }}</dt><dd class="mono">{{ importPreview.preview.scenes }}</dd></div>
+                <div><dt>{{ $t("app.layoutPresets") }}</dt><dd class="mono">{{ importPreview.preview.layoutPresets }}</dd></div>
+              </dl>
+              <input
+                v-if="importPreview.preview.hasSecrets"
+                v-model="importPassphrase"
+                type="password"
+                class="input mono"
+                :placeholder="$t('app.importPassphrasePlaceholder')"
+                autocomplete="current-password"
+              />
+              <div class="vault-actions">
+                <button
+                  class="btn primary"
+                  type="button"
+                  :disabled="store.busy === 'transfer'"
+                  @click="doApplyImport"
+                >
+                  {{ $t("app.importApply") }}
+                </button>
+                <button class="btn" type="button" @click="importPreview = null">
+                  {{ $t("app.cancel") }}
+                </button>
+              </div>
+            </div>
+            <button v-else class="btn" type="button" :disabled="store.busy === 'transfer'" @click="doPickImport">
+              <Upload :size="12" />
+              {{ $t("app.importPick") }}
+            </button>
+            <p v-if="importResult" class="fineprint">
+              {{
+                $t("app.importResult", {
+                  added: importResult.added,
+                  updated: importResult.updated,
+                  skipped: importResult.skipped,
+                })
+              }}
+            </p>
+            <p class="fineprint">{{ $t("app.importNote") }}</p>
+          </div>
+        </div>
+        <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
+      </section>
+
+      <section class="block">
+        <div class="block-head">
+          <div>
+            <h2>{{ $t("app.mcpTitle") }}</h2>
+            <p>{{ $t("app.mcpNote") }}</p>
+          </div>
+          <div class="block-actions">
+            <span class="status-chip" :class="{ on: mcp?.running }">
+              {{ mcp?.running ? $t("app.mcpRunning") : $t("app.mcpStopped") }}
+            </span>
+          </div>
+        </div>
+
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.mcpEnable") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: mcp?.enabled }"
+              @click="refreshMcp({ enabled: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: mcp ? !mcp.enabled : false }"
+              @click="refreshMcp({ enabled: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.mcpPort") }}</span>
+          <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
+          <button class="btn" type="button" @click="updatePort">{{ $t("app.mcpApplyPort") }}</button>
+        </div>
+
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.mcpPermissions") }}</span>
+          <div class="perm-row">
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="mcp?.allowWrite"
+                @change="refreshMcp({ allowWrite: ($event.target as HTMLInputElement).checked })"
+              />
+              <span>{{ $t("app.mcpAllowWrite") }}</span>
+            </label>
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="mcp?.allowRun"
+                @change="refreshMcp({ allowRun: ($event.target as HTMLInputElement).checked })"
+              />
+              <span>{{ $t("app.mcpAllowRun") }}</span>
+            </label>
+            <label class="check danger">
+              <input
+                type="checkbox"
+                :checked="mcp?.allowDelete"
+                @change="refreshMcp({ allowDelete: ($event.target as HTMLInputElement).checked })"
+              />
+              <span>{{ $t("app.mcpAllowDelete") }}</span>
+            </label>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
+
+        <div v-if="mcp" class="mcp-endpoint">
+          <p class="fineprint">{{ $t("app.mcpEndpoint") }}</p>
+          <div class="copy-row">
+            <code class="mono">{{ mcp.url }}</code>
+            <button class="btn" type="button" @click="copyText(mcp.url)">
+              <Copy :size="11" />
+              {{ $t("app.copyUrl") }}
+            </button>
+          </div>
+          <div class="copy-row">
+            <code class="mono token">{{ showToken ? mcp.token : "•".repeat(28) }}</code>
+            <button class="btn" type="button" @click="showToken = !showToken">
+              {{ showToken ? $t("app.hide") : $t("app.show") }}
+            </button>
+            <button class="btn" type="button" @click="copyText(mcp.token, 'app.toastTokenCopied')">
+              <Copy :size="11" />
+              {{ $t("app.copyToken") }}
+            </button>
+            <button class="btn danger" type="button" @click="refreshMcp({ rotateToken: true })">
+              {{ $t("app.mcpRotate") }}
+            </button>
+          </div>
+          <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
+
+          <details class="snippet">
+            <summary>{{ $t("app.mcpConfigTitle") }}</summary>
+            <pre class="mono">{{ mcpSnippet }}</pre>
+            <button class="btn" type="button" @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
+              <Bot :size="11" />
+              {{ $t("app.mcpCopyConfig") }}
+            </button>
+          </details>
+        </div>
+        <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
+      </section>
+
+      <section class="block">
+        <div class="block-head">
+          <div>
             <h2>{{ $t("app.about") }}</h2>
             <p>{{ $t("app.aboutTagline") }}</p>
+          </div>
+          <div class="block-actions">
+            <button class="btn danger" type="button" @click="quitApp">{{ $t("app.quitApp") }}</button>
           </div>
         </div>
         <dl class="about">
@@ -721,6 +1052,208 @@ async function submitMaster() {
   margin: 0;
   font-size: 11px;
   color: var(--red);
+}
+
+/* ---- data transfer ---- */
+
+.transfer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.transfer-col {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transfer-col h3 {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.transfer-col .input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 6px 9px;
+  font-size: 11px;
+  color: var(--text);
+  outline: 0;
+}
+
+.transfer-col .input:focus {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 2px;
+}
+
+.check.danger {
+  color: color-mix(in srgb, var(--red) 80%, var(--text));
+}
+
+.preview-box {
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preview-name {
+  margin: 0;
+  font-size: 10px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-counts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.preview-counts dt {
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
+.preview-counts dd {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+/* ---- MCP ---- */
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.status-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.status-chip.on {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 40%, var(--line));
+}
+
+.status-chip.on::before {
+  background: var(--green);
+}
+
+.port-input {
+  width: 100px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  outline: 0;
+}
+
+.perm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.mcp-endpoint {
+  margin-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.copy-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.copy-row code {
+  flex: 0 1 auto;
+  max-width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  padding: 4px 8px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-row code.token {
+  min-width: 200px;
+  letter-spacing: 0.04em;
+}
+
+.snippet {
+  margin-top: 4px;
+}
+
+.snippet summary {
+  font-size: 10.5px;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.snippet pre {
+  margin: 7px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 9px 10px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  user-select: text;
 }
 
 .about {

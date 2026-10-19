@@ -12,6 +12,7 @@ import type {
   LayoutId,
   LayoutPreset,
   LayoutPresetDraft,
+  McpPatch,
   PasswordOwner,
   Scene,
   SceneDraft,
@@ -124,6 +125,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         lastView: "identities",
         layout: "2x2",
         autoFillOnLaunch: true,
+        closeToTray: true,
       },
   );
   const instances = computed(() => snapshot.value?.instances ?? []);
@@ -412,6 +414,33 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
+  async function exportWorkspace(options: { includeSecrets: boolean; passphrase?: string }) {
+    return run("transfer", () => window.ensemble.exportWorkspace(toPlain(options)));
+  }
+
+  async function pickImport() {
+    return run("transfer", () => window.ensemble.pickImport());
+  }
+
+  async function applyImport(passphrase?: string) {
+    return run("transfer", async () => {
+      const result = await window.ensemble.applyImport(passphrase);
+      notify(
+        tr("app.toastImportDone", { added: result.added, updated: result.updated }),
+        "success",
+      );
+      return result;
+    });
+  }
+
+  async function mcpStatus() {
+    return window.ensemble.mcpStatus();
+  }
+
+  async function updateMcp(patch: McpPatch) {
+    return run("mcp", () => window.ensemble.updateMcp(toPlain(patch)));
+  }
+
   return {
     snapshot,
     loading,
@@ -472,5 +501,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMasterPassword,
     changeMasterPassword,
     saveSettings,
+    exportWorkspace,
+    pickImport,
+    applyImport,
+    mcpStatus,
+    updateMcp,
   };
 });

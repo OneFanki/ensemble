@@ -38,7 +38,7 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Real browser isolation**: each identity has its own profile, so sessions, cookies and extensions never mix
 - **Scene orchestration**: launch a group of identities, tiled edge to edge with no wasted margin
 - **Place windows by role**: drag a member onto a slot to decide who sits where; open windows move with it
-- **Custom layouts**: built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`, plus a drag-and-drop editor for your own saved presets
+- **Custom layouts**: built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`, plus a drag-and-drop editor for your own saved presets; boxes snap to the stage edges and to each other, with alignment guides
 - **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
 - **Reopen a single member**: closed one account by mistake? Reopen just that window from the scene detail instead of relaunching the whole scene
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password

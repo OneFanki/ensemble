@@ -109,7 +109,19 @@ const SHOTS = [
     name: "settings-data",
     locale: "zh",
     view: "settings",
-    scrollTo: ".mcp-endpoint",
+    clicks: ['[role="tab"]:nth-child(4)'],
+  },
+  {
+    name: "settings-mcp",
+    locale: "zh",
+    view: "settings",
+    clicks: ['[role="tab"]:nth-child(5)'],
+  },
+  {
+    name: "layout-editor",
+    locale: "zh",
+    view: "scenes",
+    clicks: [".link-btn"],
   },
 ];
 

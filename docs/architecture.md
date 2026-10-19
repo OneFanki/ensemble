@@ -108,6 +108,9 @@ Scene        N ── 1 LayoutPreset（内置或用户自定义）
   旧实现的 8px 外边距在小屏幕上正好是浪费掉的可视面积。
 - 用户可以保存自己的预设（`LayoutPreset`，坐标经 `clampSlot` 收敛），
   场景按 id 引用；删除预设时引用它的场景回落到 `2x2`。
+- 编辑器里的拖动与缩放会吸附到舞台边缘和相邻槽位的四条边（`snapSlotMove` /
+  `snapSlotResize`，阈值按舞台像素换算成比例，与窗口宽度无关），吸附时显示参考线；
+  正在编辑的槽位始终置顶，避免缩放手柄被相邻槽位盖住。
 - 场景可以把成员拖到指定槽位（`Scene.slotAssignments: identityId → slotIndex`），
   未指定的成员按成员顺序补空槽位（`resolveSlotAssignments`）。启动、单独重开、
   拖拽换位都按这份映射排窗口。

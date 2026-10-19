@@ -1,42 +1,86 @@
 # Ensemble 项目约束
 
+> 本文件只保留每次任务都必须看到的约束。详细规范按任务读取，不一次性加载全部文档。
+> 通用工程纪律（提交规范、文档纪律、踩坑升级机制）在本文件；项目特有的业务规则在
+> `docs/architecture.md` 与 `docs/engineering/` 下。
+
 ## 定位
 
 本地多身份浏览器工作台，用于验证权限系统与多人协作。Electron + Vue 3 + 纯 Node 核心层。
 
-## 硬约束
+## 规则优先级
+
+1. 用户当前明确要求
+2. 数据正确性、账号隔离、凭据安全
+3. 现有架构边界（`core` 不依赖 Electron、浏览器不由 Electron 渲染）
+4. 局部便利
+
+本文件中的「必须 / 禁止」是硬约束；「默认 / 优先」是一般策略，偏离时必须说明理由。
+
+## 开发命令
+
+```bash
+pnpm install          # 安装依赖（Node >= 22.12，pnpm 12）
+pnpm dev              # 开发模式
+pnpm verify           # 全量校验：类型 + 单测 + 结构契约 + 构建（非 fail-fast）
+pnpm test             # 核心层单元测试
+pnpm typecheck        # Node 侧 + 渲染层类型检查
+pnpm build            # 构建 out/
+pnpm dist             # 打包安装程序与便携版到 release/
+```
+
+单跑某个测试文件：`pnpm test tests/grid.test.ts`。
+
+## 强制约束
 
 1. **被测浏览器不由 Electron 渲染。** 管理台用 Electron 自己的 WebView 渲染；被测站点必须由外部真实浏览器进程承载。禁止把被测页面塞进 `BrowserWindow` 或 `webview`，否则兼容性结论失真。
-2. **`src/core/` 不允许 import `electron`。** 核心层要能在纯 Node 下测试，并为未来 CLI/CI 复用保留可能性。系统能力（safeStorage、screen、clipboard）由主进程注入。
+2. **`src/core/` 不允许 import `electron`。** 核心层要能在纯 Node 下测试，并为未来 CLI/CI 复用保留可能性。系统能力（safeStorage、screen、clipboard）由主进程注入。由 `tests/contracts/core-isolation.test.ts` 守护。
 3. **每个身份一个独立 profile 目录**，路径 `<userData>/profiles/<envId>/<identityId>`。禁止两个身份共用 profile，禁止指向用户日常浏览器的 profile。
 4. **凭据绝不进入渲染进程。** IPC 不返回明文密码；填充在主进程通过 CDP 完成；日志不打印密码或页面内容。
-5. **进程清理只按 profile 路径归属。** 只清理命令行 `--user-data-dir` 指向自有 `profiles/` 根目录的进程，禁止按进程名批量杀浏览器。
+5. **进程清理只按 profile 路径归属。** 只清理命令行 `--user-data-dir` 指向自有 `profiles/` 根目录的进程，禁止按进程名批量杀浏览器。由 `tests/contracts/process-ownership.test.ts` 守护关键解析函数。
 6. **场景启动必须原子。** 中途失败要回收本次已拉起的窗口，不能留下半套实例。
-7. **不打包浏览器。** 引擎来自系统安装，版本由厂商更新；不要引入 Playwright 自带浏览器作为主链路依赖。
+7. **不打包浏览器。** 引擎来自系统安装，版本由厂商更新；不要把 Playwright 自带浏览器或 Chromium 二进制放进安装包。由 `tests/contracts/no-bundled-browser.test.ts` 守护。
+8. **主链路不用 Playwright 驱动人工窗口。** Playwright 会默认接管对话框与下载，会改变被测环境。它只能用于管理台自身的无头 E2E 测试。
 
-## 目录
+## 质量要求
 
-| 路径 | 内容 |
+- TypeScript 保持 strict，不用 `any` 绕过类型（第三方边界处允许 `any`，但必须局部收口）。
+- 修复缺陷时补回归测试；测试断言行为契约（输入→输出、边界约束），禁止写「变更检测器」式测试。
+- 碰到报错或诡异行为，先查 `docs/engineering/踩坑库.md`；解决后当场追加条目（含日期）。
+- 公共接口、目录结构或核心模式变化后，同步更新 `docs/architecture.md`；重大架构决策写 ADR 到 `docs/architecture/adr/`，**被否方案必填**。
+- 修改看似冗余的代码前，先 `git log -p -S <符号>` 查原始意图；确认是防御性设计就保留并注释原因。
+- 单文件膨胀到难以阅读时主动拆分，不在失衡结构上无限追加补丁。
+- 文档改一次压缩一次：过时信息当场删除、重复合并、同一结论只留一个详细版本。
+
+## Git 规范
+
+- 未得到当次明确指令，不提交、不推送；提交与推送是两个独立授权。
+- 提交格式 `type(scope): 中文描述`，`type` 只用 feat/fix/refactor/docs/test/chore，`scope` 必填（core/main/renderer/preload/docs/build/root），header ≤ 100 字符。
+- 多 AI 并发是常态：`git add` / `git commit` 只包含当前任务文件，禁止 `git add -A`、`git add .`、`git commit -a`。
+- 禁止对全项目执行自动修复（`lint --fix`、`format --write`）；检查只针对本次改动文件。
+
+## 按任务读取
+
+| 任务 | 必读 |
 | --- | --- |
-| `src/core/engines/` | 跨平台浏览器探测与排序 |
-| `src/core/cdp/` | CDP 客户端、目标发现、登录填充脚本 |
-| `src/core/launch/` | 参数构造、spawn、停止与回收 |
-| `src/core/credentials/` | 凭据库与继承解析 |
-| `src/core/layout/` | 网格布局计算 |
-| `src/core/processes/` | 进程发现与 workspace 数据结构 |
-| `src/core/service.ts` | 用例编排 |
-| `src/main/` | Electron 主进程、IPC、系统能力 |
-| `src/preload/` | 白名单 IPC 桥 |
-| `src/renderer/` | Vue 3 管理台 |
-| `tests/` | 核心层单元测试 |
+| 任何代码改动 | 本文件 + `docs/architecture.md` |
+| 改动浏览器启动、CDP、窗口定位 | `docs/engineering/cdp-playbook.md` |
+| 改动凭据、自动填充、生产环境行为 | `docs/architecture.md` 的安全边界一节 |
+| 遇到报错或反常行为 | `docs/engineering/踩坑库.md` |
+| 做架构取舍 | `docs/architecture/adr/` 现有决策，先看是否已被否 |
+| 打包、发布、升级 Electron | `docs/engineering/release.md` |
+| 新增依赖 | 先确认是否真需要；UI 层禁止引入 Element Plus 一类带视觉主张的组件库 |
 
-## 技术选型（已拍板）
+## 文档落点
 
-- Electron 44 + Vue 3.5 + TypeScript + Vite + pnpm
-- UI：Reka UI（无样式行为层）+ Lucide 图标 + CSS 变量；不引入 Element Plus
-- 表格：确有复杂表格需求时用 TanStack Table，不自研
-- 状态：Pinia；校验：Zod；测试：Vitest
-- 主链路：系统浏览器 + CDP，不用 Playwright 驱动人工窗口
+| 内容 | 位置 |
+| --- | --- |
+| 当前架构与数据模型 | `docs/architecture.md` |
+| 架构决策记录 | `docs/architecture/adr/` |
+| 工程规范与操作手册 | `docs/engineering/` |
+| 经验型踩坑 | `docs/engineering/踩坑库.md` |
+| 用户可见说明 | `README.md` |
+| 安全策略 | `SECURITY.md` |
 
 ## 标识
 
@@ -45,19 +89,17 @@
 - appId：`io.github.onefanki.ensemble`
 - 环境变量前缀：`ENSEMBLE_`
 
-## 提交规范
+## 验证清单
 
-中文，按功能拆分，前缀 `feat` / `fix` / `docs` / `refactor` / `test` / `chore`。
-主会话按显式路径暂存，禁止 `git add -A`。
-
-## 验证
-
-改动核心层后至少跑：
+交付代码前至少：
 
 ```bash
-pnpm test
-pnpm typecheck
-pnpm build
+pnpm verify
 ```
 
-涉及浏览器启动、登录填充、窗口定位的改动，需要在真实浏览器上手工验证，并确认退出后无残留进程。
+涉及浏览器启动、登录填充、窗口定位的改动，还必须在真实浏览器上手工验证，并确认退出后无残留进程：
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.Name -match "msedge|chrome" -and $_.CommandLine -like "*Ensemble*" }
+```

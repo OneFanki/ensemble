@@ -4,7 +4,6 @@ dist/
 release/
 *.local
 *.log
-
 # Local registry mirrors or credentials must stay machine specific.
 .npmrc
 

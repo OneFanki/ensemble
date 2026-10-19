@@ -20,7 +20,9 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "dist": "electron-vite build && electron-builder"
+    "dist": "node scripts/make-icon.mjs && electron-vite build && electron-builder",
+    "verify": "node scripts/verify.mjs",
+    "icon": "node scripts/make-icon.mjs"
   },
   "dependencies": {
     "@vueuse/core": "15.0.0",

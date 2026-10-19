@@ -2,6 +2,7 @@ appId: io.github.onefanki.ensemble
 productName: Ensemble
 directories:
   buildResources: build
+  output: release
 files:
   - out/**
   - package.json
@@ -10,11 +11,17 @@ asarUnpack:
   - resources/**
 win:
   target:
-    - nsis
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-win-${arch}-${target}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-win-${arch}-setup.${ext}
+portable:
+  artifactName: ${productName}-${version}-win-${arch}-portable.${ext}
 mac:
   target:
     - dmg
@@ -27,3 +34,4 @@ linux:
   category: Development
   artifactName: ${productName}-${version}-linux-${arch}.${ext}
 npmRebuild: false
+publish: null

@@ -45,17 +45,28 @@ export function normalizeForCompare(path: string): string {
 }
 
 /**
+ * Ownership check used before killing anything: a profile directory counts as ours
+ * only when it is exactly the root or lives beneath it. This prevents both prefix
+ * collisions (profiles-copy) and accidental matches against a user's own browser.
+ */
+export function isOwnedProfile(profileDir: string, profileRoot: string): boolean {
+  const dir = normalizeForCompare(profileDir);
+  const root = normalizeForCompare(profileRoot);
+  if (!root) return false;
+  return dir === root || dir.startsWith(`${root}/`);
+}
+
+/**
  * Lists processes launched with a --user-data-dir pointing inside the given roots.
  * Only processes whose profile directory is under our own profile root are adopted,
  * so a normal user browser is never touched.
  */
 export async function findOwnedBrowserProcesses(profileRoot: string): Promise<ProcessInfo[]> {
-  const normalizedRoot = normalizeForCompare(profileRoot);
   const processes = await listProcesses();
   return processes.filter((entry) => {
     const profileDir = profileDirFromCommandLine(entry.commandLine);
     if (!profileDir) return false;
-    return normalizeForCompare(profileDir).startsWith(normalizedRoot);
+    return isOwnedProfile(profileDir, profileRoot);
   });
 }
 

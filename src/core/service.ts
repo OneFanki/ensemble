@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   AppSettings,
@@ -328,6 +329,31 @@ export class WorkspaceService {
     }
     this.data.scenes = this.data.scenes.filter((scene) => scene.identityIds.length > 0);
     this.vault.clear({ kind: "identity", id });
+    this.persist();
+  }
+
+  /**
+   * Drops the browser profile directory for one identity. Useful when a profile was
+   * polluted before sync was disabled, or when the site's own state got corrupted.
+   * Credentials stored in the vault are kept; only browser-side state is removed.
+   */
+  async rebuildIdentityProfile(id: string): Promise<void> {
+    const identity = this.data.identities.find((item) => item.id === id);
+    if (!identity) throw new Error(t("error.identityMissing"));
+
+    const running = [...this.liveInstances.values()].find(
+      (instance) => instance.identityId === id,
+    );
+    if (running) {
+      await this.stopInstance(running.id);
+    }
+
+    const dir = join(this.options.profileRoot, identity.environmentId, identity.id);
+    await rm(dir, { recursive: true, force: true });
+
+    identity.status = "unknown";
+    identity.lastCheckedAt = undefined;
+    identity.updatedAt = new Date().toISOString();
     this.persist();
   }
 

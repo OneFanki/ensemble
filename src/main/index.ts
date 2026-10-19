@@ -232,6 +232,12 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.identityRebuildProfile, async (id: string) => {
+    await workspace.rebuildIdentityProfile(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
   handle(IPC.sceneSave, (draft: SceneDraft) => {
     workspace.saveScene(sceneDraftSchema.parse(draft));
     broadcastWorkspace();

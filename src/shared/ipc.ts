@@ -21,6 +21,7 @@ export const IPC = {
   environmentDelete: "environment:delete",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
+  identityRebuildProfile: "identity:rebuild-profile",
   sceneSave: "scene:save",
   sceneDelete: "scene:delete",
   credentialsSet: "credentials:set",
@@ -52,6 +53,8 @@ export interface EnsembleApi {
   deleteEnvironment(id: string): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
+  /** Deletes the browser profile directory so the next launch starts signed out. */
+  rebuildIdentityProfile(id: string): Promise<WorkspaceSnapshot>;
   saveScene(draft: SceneDraft): Promise<WorkspaceSnapshot>;
   deleteScene(id: string): Promise<WorkspaceSnapshot>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;

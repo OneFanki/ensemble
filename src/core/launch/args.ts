@@ -13,11 +13,16 @@ export function buildChromiumArgs(input: ChromiumArgsInput): string[] {
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-background-mode",
-    "--disable-features=Translate",
     // Keep the browser behaving like a real one: no automation banner, no throttling.
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
     "--disable-background-timer-throttling",
+    // A test profile must never inherit the operator's account data. Without this,
+    // Chromium vendors auto-sign-in with the OS account, open the sync consent
+    // dialog, and install synced extensions (password managers, etc.) that hijack
+    // the first page load. Sync is never desirable here.
+    "--disable-sync",
+    "--disable-features=Translate,msEdgeSyncConsent,EdgeSyncConsent",
   ];
 
   if (input.windowBounds) {

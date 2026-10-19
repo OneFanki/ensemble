@@ -18,6 +18,7 @@ const api: EnsembleApi = {
   deleteEnvironment: (id) => ipcRenderer.invoke(IPC.environmentDelete, id),
   saveIdentity: (draft) => ipcRenderer.invoke(IPC.identitySave, draft),
   deleteIdentity: (id) => ipcRenderer.invoke(IPC.identityDelete, id),
+  rebuildIdentityProfile: (id) => ipcRenderer.invoke(IPC.identityRebuildProfile, id),
   saveScene: (draft) => ipcRenderer.invoke(IPC.sceneSave, draft),
   deleteScene: (id) => ipcRenderer.invoke(IPC.sceneDelete, id),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),

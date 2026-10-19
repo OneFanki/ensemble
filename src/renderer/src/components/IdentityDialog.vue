@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";
-import { Eye, EyeOff, Trash2 } from "lucide-vue-next";
+import { Eye, EyeOff, RotateCcw, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import { ROLE_COLORS } from "@shared/defaults";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -72,6 +72,16 @@ async function saveEnvironmentPassword() {
 
 async function copyDefaultPassword() {
   await store.copyPassword({ kind: "environment", id: form.environmentId });
+}
+
+async function rebuildProfile() {
+  if (!form.id) return;
+  const confirmed = window.confirm(
+    "会删除该身份的浏览器 Profile 目录（Cookie、登录态、扩展数据），下次启动是全新未登录状态。\n保存的账号密码不受影响。确定继续？",
+  );
+  if (!confirmed) return;
+  const result = await store.rebuildIdentityProfile(form.id);
+  if (result) emit("close");
 }
 </script>
 
@@ -230,6 +240,16 @@ async function copyDefaultPassword() {
       <button v-if="form.id" type="button" class="btn danger" @click="emit('delete')">
         <Trash2 :size="12" />
         {{ $t("app.delete") }}
+      </button>
+      <button
+        v-if="form.id"
+        type="button"
+        class="btn"
+        :disabled="store.busy === 'identity'"
+        @click="rebuildProfile"
+      >
+        <RotateCcw :size="12" />
+        重建 Profile
       </button>
       <span class="spacer"></span>
       <button type="button" class="btn" @click="emit('close')">{{ $t("app.cancel") }}</button>

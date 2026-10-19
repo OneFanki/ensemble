@@ -166,6 +166,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("identity", () => window.ensemble.deleteIdentity(id));
   }
 
+  async function rebuildIdentityProfile(id: string) {
+    return run(
+      "identity",
+      () => window.ensemble.rebuildIdentityProfile(id),
+      "Profile 已清除，下次启动为全新未登录状态",
+    );
+  }
+
   async function saveScene(draft: SceneDraft) {
     return run("scene", () => window.ensemble.saveScene(toPlain(draft)), "场景已保存");
   }
@@ -292,6 +300,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     deleteEnvironment,
     saveIdentity,
     deleteIdentity,
+    rebuildIdentityProfile,
     saveScene,
     deleteScene,
     scanEngines,

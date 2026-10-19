@@ -1,0 +1,81 @@
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0d10;
+  --bg-elevated: #0d1014;
+  --surface: #12151a;
+  --surface-2: #171b21;
+  --surface-3: #1a1f26;
+  --line: #272d36;
+  --line-soft: #1b2027;
+  --text: #e7e9ed;
+  --text-secondary: #b6bec9;
+  --muted: #8d95a3;
+  --dim: #5f6877;
+  --faint: #4f5866;
+
+  --accent: #e0a44e;
+  --accent-strong: #eab35f;
+  --accent-foreground: #1a1305;
+  --green: #5fbf9f;
+  --amber: #e0a44e;
+  --violet: #8b7cf0;
+  --rose: #d9778a;
+  --blue: #6d94e8;
+  --red: #d4675f;
+
+  --role-amber: #e0a44e;
+  --role-teal: #4fb8a8;
+  --role-violet: #8b7cf0;
+  --role-rose: #d9778a;
+  --role-blue: #6d94e8;
+  --role-slate: #7c8798;
+
+  --radius-sm: 5px;
+  --radius: 7px;
+  --radius-lg: 9px;
+  --titlebar-height: 44px;
+  --rail-width: 206px;
+  --dock-width: 292px;
+
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", "Consolas", "Liberation Mono",
+    ui-monospace, monospace;
+  --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", system-ui, sans-serif;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f3efe6;
+  --bg-elevated: #f7f3ea;
+  --surface: #faf7f0;
+  --surface-2: #f5f1e8;
+  --surface-3: #ece6d9;
+  --line: #d8d0c0;
+  --line-soft: #e6dfd2;
+  --text: #1e1c18;
+  --text-secondary: #3d3830;
+  --muted: #6f695d;
+  --dim: #8a8274;
+  --faint: #a49c8c;
+
+  --accent: #b0472f;
+  --accent-strong: #c2543a;
+  --accent-foreground: #fff8f2;
+  --green: #2f7268;
+  --amber: #9a7427;
+  --violet: #6b5aa8;
+  --rose: #a8455c;
+  --blue: #3a5f96;
+  --red: #b0472f;
+
+  --role-amber: #9a7427;
+  --role-teal: #2f7268;
+  --role-violet: #6b5aa8;
+  --role-rose: #a8455c;
+  --role-blue: #3a5f96;
+  --role-slate: #8a8274;
+}

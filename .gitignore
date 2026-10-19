@@ -1,0 +1,24 @@
+node_modules/
+out/
+dist/
+release/
+*.local
+*.log
+
+# Local runtime data must never be committed.
+profiles/
+instances.json
+workspace.json
+vault.json
+credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.temp/

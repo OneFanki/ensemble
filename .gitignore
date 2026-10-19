@@ -2,6 +2,8 @@ node_modules/
 out/
 dist/
 release/
+release-new/
+release-old/
 *.local
 *.log
 # Local registry mirrors or credentials must stay machine specific.

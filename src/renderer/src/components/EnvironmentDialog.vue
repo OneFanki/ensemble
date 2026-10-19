@@ -72,7 +72,7 @@ function normalizePath(event: Event) {
       <div class="row">
         <label class="field grow">
           <span class="label">名称</span>
-          <input v-model="form.name" class="input" placeholder="例如：beat-array 本地" />
+          <input v-model="form.name" class="input" placeholder="例如：本地开发环境" />
         </label>
         <fieldset class="field">
           <legend class="label">类型</legend>

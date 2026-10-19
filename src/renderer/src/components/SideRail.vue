@@ -32,7 +32,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
 <template>
   <aside class="rail">
     <div class="rail-head">
-      <span class="rail-title mono">环境</span>
+      <span class="rail-title">环境</span>
       <div class="rail-tools">
         <button
           class="tool"
@@ -80,7 +80,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
     <div class="rail-sep"></div>
 
     <div class="rail-head">
-      <span class="rail-title mono">导航</span>
+      <span class="rail-title">导航</span>
     </div>
 
     <nav class="nav">
@@ -119,7 +119,7 @@ const activeSceneCount = computed(() => store.environmentScenes.length);
     <div class="rail-sep"></div>
 
     <div class="rail-head">
-      <span class="rail-title mono">场景</span>
+      <span class="rail-title">场景</span>
       <button
         class="tool"
         type="button"

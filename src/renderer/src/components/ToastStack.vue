@@ -27,7 +27,8 @@ const store = useWorkspaceStore();
   position: fixed;
   right: 18px;
   bottom: 44px;
-  z-index: 60;
+  /* Above dialogs (overlay 70 / content 71) so errors stay readable while editing. */
+  z-index: 100;
   display: flex;
   flex-direction: column;
   gap: 7px;

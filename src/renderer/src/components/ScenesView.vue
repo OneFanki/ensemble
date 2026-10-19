@@ -53,7 +53,7 @@ const slots = computed(() => {
     <header class="head">
       <div class="head-copy">
         <h1>{{ $t("app.scenes") }}</h1>
-        <p class="mono">一键拉起一组身份 · 自动平铺 · 关闭即回收</p>
+        <p class="head-note">一键拉起一组身份 · 自动平铺 · 关闭即回收</p>
       </div>
       <div class="head-actions">
         <button class="btn" type="button" @click="store.launchCleanSession()">
@@ -66,7 +66,7 @@ const slots = computed(() => {
       </div>
     </header>
 
-    <div class="scene-head mono">
+    <div class="scene-head">
       <span>#</span>
       <span>场景</span>
       <span>成员</span>
@@ -130,7 +130,7 @@ const slots = computed(() => {
 
     <div class="layout-section">
       <div class="section-head">
-        <span class="section-title mono">窗口布局</span>
+        <span class="section-title">窗口布局</span>
         <div class="layout-picker">
           <button
             v-for="layout in (['2x2', '2x1', '3x1', '1x1'] as LayoutKey[])"
@@ -162,7 +162,7 @@ const slots = computed(() => {
             ></span>
             {{ store.instances[index]?.label }}
           </template>
-          <span v-else class="mono">空闲槽位</span>
+          <span v-else>空闲槽位</span>
         </div>
       </div>
     </div>
@@ -193,7 +193,8 @@ h1 {
   letter-spacing: -0.015em;
 }
 
-.head-copy p {
+.head-copy p,
+.head-note {
   margin: 6px 0 0;
   font-size: 11.5px;
   color: var(--faint);

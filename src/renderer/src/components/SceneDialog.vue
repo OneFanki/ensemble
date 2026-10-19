@@ -63,7 +63,7 @@ function submit() {
     <div class="form">
       <label class="field">
         <span class="label">场景名称</span>
-        <input v-model="form.name" class="input" placeholder="例如：权限矩阵 · 曲谱编辑" />
+        <input v-model="form.name" class="input" placeholder="例如：权限矩阵 · 主流程" />
       </label>
 
       <div class="field">

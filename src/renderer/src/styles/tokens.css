@@ -40,12 +40,20 @@
   --rail-width: 206px;
   --dock-width: 292px;
 
-  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Noto Sans CJK SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", "Consolas", "Liberation Mono",
-    ui-monospace, monospace;
-  --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", system-ui, sans-serif;
+  /*
+   * CJK fallbacks come before the Latin-only faces so mixed strings pick a sans
+   * face per glyph. The generic `monospace` family is deliberately last: on Windows
+   * it resolves CJK glyphs to SimSun (a serif), which is what made mono labels look
+   * like printed text. Sans faces are listed ahead of it instead.
+   */
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
+    "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui,
+    -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", "Consolas",
+    "Liberation Mono", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+    "Noto Sans SC", ui-monospace, sans-serif;
+  --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI",
+    "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
 }
 
 :root[data-theme="light"] {

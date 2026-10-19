@@ -25,7 +25,7 @@ function statusLabel(status: string): string {
     <header class="head">
       <div>
         <h1>{{ $t("app.settings") }}</h1>
-        <p class="mono">引擎扫描 · 外观 · 凭据存储</p>
+        <p class="head-note">引擎扫描 · 外观 · 凭据存储</p>
       </div>
     </header>
 
@@ -49,7 +49,7 @@ function statusLabel(status: string): string {
         </div>
 
         <div class="engine-table">
-          <div class="engine-head mono">
+          <div class="engine-head">
             <span>浏览器</span>
             <span>版本</span>
             <span>能力</span>

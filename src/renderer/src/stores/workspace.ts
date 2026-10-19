@@ -143,8 +143,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return engines.value.find((engine) => engine.id === id) ?? defaultEngine.value;
   }
 
+  function toPlain<T>(value: T): T {
+    // Drafts originate from Vue reactive objects. Their nested arrays/records stay
+    // Proxy-wrapped, and the IPC structured-clone algorithm rejects Proxies with
+    // "An object could not be cloned". Drafts are JSON data, so a round trip is safe.
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
   async function saveEnvironment(draft: EnvironmentDraft) {
-    return run("environment", () => window.ensemble.saveEnvironment(draft), "环境已保存");
+    return run("environment", () => window.ensemble.saveEnvironment(toPlain(draft)), "环境已保存");
   }
 
   async function deleteEnvironment(id: string) {
@@ -152,7 +159,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveIdentity(draft: IdentityDraft) {
-    return run("identity", () => window.ensemble.saveIdentity(draft), "身份已保存");
+    return run("identity", () => window.ensemble.saveIdentity(toPlain(draft)), "身份已保存");
   }
 
   async function deleteIdentity(id: string) {
@@ -160,7 +167,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveScene(draft: SceneDraft) {
-    return run("scene", () => window.ensemble.saveScene(draft), "场景已保存");
+    return run("scene", () => window.ensemble.saveScene(toPlain(draft)), "场景已保存");
   }
 
   async function deleteScene(id: string) {
@@ -249,7 +256,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveSettings(patch: SettingsPatch) {
-    return run("settings", () => window.ensemble.saveSettings(patch));
+    return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
   function setLayout(layout: LayoutKey) {

@@ -87,7 +87,7 @@ async function copyDefaultPassword() {
       <div class="row">
         <label class="field grow">
           <span class="label">显示名称</span>
-          <input v-model="form.name" class="input" placeholder="例如：管理员 · 林枭" />
+          <input v-model="form.name" class="input" placeholder="例如：管理员 · 主账号" />
         </label>
         <label class="field" style="width: 150px">
           <span class="label">角色</span>

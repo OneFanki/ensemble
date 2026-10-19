@@ -182,7 +182,7 @@ async function handleLocale(locale: "zh" | "en") {
       <Logo :size="30" />
       <span class="boot-copy">
         <span class="boot-name">Ensemble</span>
-        <span class="boot-hint mono">正在准备工作区…</span>
+        <span class="boot-hint">正在准备工作区…</span>
       </span>
     </div>
 

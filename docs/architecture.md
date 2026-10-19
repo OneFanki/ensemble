@@ -142,6 +142,8 @@ Scene        N ── 1 LayoutPreset（内置或用户自定义）
   `shutdownAndQuit()`：先 `mcpServer.stop()`，再 `tray.destroy()`，最后
   `service.shutdown()` 回收浏览器。顺序不能反——否则 AI 可能在浏览器回收途中发起新启动。
 - `window-all-closed` 在托盘模式下直接返回，不触发退出；关闭托盘模式后恢复原有行为。
+- 干净会话的 profile 放在 `profiles/<envId>/clean-*`；不属于任何环境的空白会话放在
+  `profiles/clean/clean-*`，独立分段，删除环境不会误停它们，启动清扫仍会覆盖。
 - 启动时清理 `--user-data-dir` 指向自有 `profiles/` 根目录的残留进程。
 - 停止单个实例：CDP `Browser.close` → 等待 → 按 PID 兜底。
 - 场景启动是原子的：中途失败会回收本次已拉起的窗口，不留下半套。

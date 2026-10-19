@@ -42,7 +42,7 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
 - **Reopen a single member**: closed one account by mistake? Reopen just that window from the scene detail instead of relaunching the whole scene
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
-- **Clean sessions**: throwaway windows that never log in and are deleted on close
+- **Clean sessions**: throwaway windows that never log in and are deleted on close; the environments page can also open a blank one that belongs to no environment
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
 - **One entry per job**: the rail navigates environments / identities / scenes / settings; the title bar only switches environments
 - **Let an AI do the data entry**: a built-in MCP endpoint receives environments, identities and scenes from your AI client

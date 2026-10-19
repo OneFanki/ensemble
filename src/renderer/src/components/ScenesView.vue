@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { Layers, Pencil, Play, Plus, Square } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -12,6 +12,7 @@ const emit = defineEmits<{
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
+const selectedSceneId = ref("");
 
 const layoutLabel: Record<LayoutKey, string> = {
   "1x1": "1 × 1",
@@ -45,9 +46,29 @@ function sceneStatus(scene: Scene): string {
 }
 
 const slots = computed(() => {
-  const layout = store.settings.layout;
+  const layout = activeLayout.value;
   return Array.from({ length: columnCount[layout] * (layout === "2x2" ? 2 : 1) });
 });
+
+/**
+ * The layout picker edits the selected scene, not a global default: each scene
+ * is launched with its own grid, and there is nothing to "apply later".
+ */
+const selectedScene = computed<Scene | undefined>(
+  () => store.environmentScenes.find((scene) => scene.id === selectedSceneId.value) ?? store.environmentScenes[0],
+);
+const activeLayout = computed<LayoutKey>(() => selectedScene.value?.layout ?? store.settings.layout);
+
+watchEffect(() => {
+  if (!selectedScene.value) return;
+  if (selectedScene.value.id !== selectedSceneId.value) selectedSceneId.value = selectedScene.value.id;
+});
+
+function chooseLayout(layout: LayoutKey) {
+  const scene = selectedScene.value;
+  if (!scene) return;
+  void store.setSceneLayout(scene.id, layout);
+}
 </script>
 
 <template>
@@ -81,7 +102,8 @@ const slots = computed(() => {
         v-for="(scene, index) in store.environmentScenes"
         :key="scene.id"
         class="scene-row"
-        :class="{ running: isSceneRunning(scene) }"
+        :class="{ running: isSceneRunning(scene), selected: scene.id === selectedScene?.id }"
+        @click="selectedSceneId = scene.id"
       >
         <span class="idx mono">{{ String(index + 1).padStart(2, "0") }}</span>
         <div class="scene-copy">
@@ -133,14 +155,16 @@ const slots = computed(() => {
     <div class="layout-section">
       <div class="section-head">
         <span class="section-title">{{ $t("app.windowLayout") }}</span>
+        <span v-if="selectedScene" class="section-scene">{{ selectedScene.name }}</span>
         <div class="layout-picker">
           <button
             v-for="layout in (['2x2', '2x1', '3x1', '1x1'] as LayoutKey[])"
             :key="layout"
             type="button"
             class="layout-btn mono"
-            :class="{ on: store.settings.layout === layout }"
-            @click="store.setLayout(layout)"
+            :class="{ on: activeLayout === layout }"
+            :disabled="!selectedScene"
+            @click="chooseLayout(layout)"
           >
             {{ layoutLabel[layout] }}
           </button>
@@ -148,8 +172,8 @@ const slots = computed(() => {
       </div>
       <div
         class="layout-stage"
-        :class="`cols-${columnCount[store.settings.layout]}`"
-        :style="{ gridTemplateRows: store.settings.layout === '2x2' ? '1fr 1fr' : '1fr' }"
+        :class="`cols-${columnCount[activeLayout]}`"
+        :style="{ gridTemplateRows: activeLayout === '2x2' ? '1fr 1fr' : '1fr' }"
       >
         <div
           v-for="(_, index) in slots"
@@ -167,6 +191,7 @@ const slots = computed(() => {
           <span v-else>{{ $t("app.idleSlot") }}</span>
         </div>
       </div>
+      <p v-if="!store.environmentScenes.length" class="layout-empty">{{ $t("app.noScenesDockHint") }}</p>
     </div>
   </section>
 </template>
@@ -284,6 +309,11 @@ h1 {
 
 .scene-row.running {
   border-color: color-mix(in srgb, var(--green) 32%, var(--line));
+}
+
+.scene-row.selected {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-elevated));
 }
 
 .idx {
@@ -421,6 +451,21 @@ h1 {
   font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--faint);
+}
+
+.section-scene {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.layout-empty {
+  margin: 8px 0 0;
+  font-size: 10.5px;
   color: var(--faint);
 }
 

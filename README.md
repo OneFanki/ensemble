@@ -44,6 +44,12 @@ Ensemble 把这些窗口变成一张可以编排的台面：每个账号一个�
   <img src="docs/screenshots/settings.png" alt="设置与凭据存储" width="900" />
 </p>
 
+场景页把常一起测的身份编成一组，按 `1x1 / 2x1 / 2x2 / 3x1` 平铺；单个窗口则居中打开，方便专注操作。
+
+<p align="center">
+  <img src="docs/screenshots/scenes.png" alt="场景编排与窗口布局" width="900" />
+</p>
+
 ## 凭据安全
 
 测试库常常是生产数据的副本，所以密码不能明文躺在磁盘上。

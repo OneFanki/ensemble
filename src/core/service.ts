@@ -24,7 +24,7 @@ import type {
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { evaluate, navigateAndWait } from "./cdp/browser";
+import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
 import { buildAuthCheckExpression, buildFillExpression, type FillOutcome } from "./cdp/login";
 import {
   CredentialVault,
@@ -36,7 +36,7 @@ import {
 import { mergeManualEngines, scanEngines } from "./engines";
 import { t } from "./i18n/translate";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
-import { computeGrid, type Rect } from "./layout/grid";
+import { computeGrid, singleWindowRect, slotCount, type Rect } from "./layout/grid";
 import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
@@ -532,8 +532,14 @@ export class WorkspaceService {
       pathOverride ?? identity.startPath ?? environment.loginPath ?? "/",
     );
     const area = this.workArea();
-    const slots = computeGrid(this.settings.layout, area);
-    const slot = slots[this.liveInstances.size % slots.length];
+    // The first window is the one being worked in, so it opens centered and
+    // large; later windows tile into the remaining grid slots.
+    const slot =
+      this.liveInstances.size === 0
+        ? singleWindowRect(area)
+        : computeGrid(this.settings.layout, area)[
+            this.liveInstances.size % slotCount(this.settings.layout)
+          ];
 
     const outcome = await launchBrowser({
       environmentId: environment.id,
@@ -551,6 +557,7 @@ export class WorkspaceService {
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
     this.scheduleAutoFill(identity, environment, outcome.instance);
+    await this.tileInstances(this.settings.layout);
     return { instance: outcome.instance, identities: [identity] };
   }
 
@@ -614,6 +621,7 @@ export class WorkspaceService {
     }
 
     this.persist();
+    await this.tileInstances(scene.layout as LayoutKey);
     return { instance: launched[0] as RunningInstance, identities: members };
   }
 
@@ -628,8 +636,12 @@ export class WorkspaceService {
     if (!engine) throw new Error(t("error.noEngine"));
 
     const area = this.workArea();
-    const slots = computeGrid(this.settings.layout, area);
-    const slot = slots[this.liveInstances.size % slots.length];
+    const slot =
+      this.liveInstances.size === 0
+        ? singleWindowRect(area)
+        : computeGrid(this.settings.layout, area)[
+            this.liveInstances.size % slotCount(this.settings.layout)
+          ];
     const instanceId = randomUUID();
 
     const outcome = await launchBrowser({
@@ -647,6 +659,7 @@ export class WorkspaceService {
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
+    await this.tileInstances(this.settings.layout);
     return { instance: outcome.instance, identities: [] };
   }
 
@@ -684,6 +697,32 @@ export class WorkspaceService {
     cdpRegistry.delete(instance.id);
     await this.disposeCleanProfile(instance);
     this.persist();
+  }
+
+  /**
+   * Re-applies a grid to every window that is already open. Launching a second
+   * identity used to leave the first one centered and overlapping the newcomer;
+   * tiling on each launch keeps the layout matching what the picker promises.
+   * Failures are ignored per window: Wayland compositors may refuse absolute
+   * placement, and a window that moved nowhere is still usable.
+   */
+  private async tileInstances(layout: LayoutKey): Promise<void> {
+    const instances = [...this.liveInstances.values()].filter(
+      (instance) => instance.mode === "cdp" && instance.targetId,
+    );
+    if (instances.length < 2) return;
+
+    const slots = computeGrid(layout, this.workArea());
+    await Promise.all(
+      instances.map(async (instance, index) => {
+        const entry = cdpRegistry.get(instance.id);
+        const targetId = instance.targetId;
+        if (!entry || !targetId) return;
+        const slot = slots[index % slots.length];
+        if (!slot) return;
+        await setWindowBounds(entry.browser, targetId, slot).catch(() => {});
+      }),
+    );
   }
 
   /**

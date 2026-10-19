@@ -89,9 +89,16 @@ function broadcastWorkspace(): void {
   mainWindow.webContents.send(IPC.workspaceChanged, service.snapshot());
 }
 
+/**
+ * Windows are placed on the display the control panel lives on. Using the cursor
+ * picked the wrong monitor whenever the mouse was on another screen, which is
+ * how a launch could land somewhere the user was not looking.
+ */
 function workAreaRect(): { x: number; y: number; width: number; height: number } {
-  const point = screen.getCursorScreenPoint();
-  const display = screen.getDisplayNearestPoint(point);
+  const bounds = mainWindow?.isDestroyed() ? undefined : mainWindow?.getBounds();
+  const display = bounds
+    ? screen.getDisplayMatching(bounds)
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   return display.workArea;
 }
 

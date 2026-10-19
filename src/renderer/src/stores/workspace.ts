@@ -203,6 +203,24 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("scene", () => window.ensemble.deleteScene(id));
   }
 
+  /** Changes the stored layout of one scene without opening its dialog. */
+  async function setSceneLayout(sceneId: string, layout: LayoutKey) {
+    const scene = scenes.value.find((item) => item.id === sceneId);
+    if (!scene) return;
+    return run("scene", () =>
+      window.ensemble.saveScene(
+        toPlain({
+          id: scene.id,
+          environmentId: scene.environmentId,
+          name: scene.name,
+          identityIds: [...scene.identityIds],
+          layout,
+          paths: { ...scene.paths },
+        }),
+      ),
+    );
+  }
+
   async function scanEngines() {
     return run("scan", async () => {
       const engines = await window.ensemble.scanEngines();
@@ -388,5 +406,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     changeMasterPassword,
     saveSettings,
     setLayout,
+    setSceneLayout,
   };
 });

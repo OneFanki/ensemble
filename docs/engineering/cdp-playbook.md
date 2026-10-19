@@ -67,6 +67,33 @@
 - 提交优先 `form.requestSubmit()`，其次 `form.submit()`，最后点可见的提交按钮。
 - 填充前校验 `location.origin` 属于目标环境，跨域拒绝。
 
+### 账号密码之外的字段
+
+SaaS 登录常见「租户名 / 公司码 + 用户名 + 密码」三段式表单。这类字段按**标签匹配**处理：
+
+- 环境级 `extraFields` 下发给所有身份，身份级 `extraFields` 同名字段覆盖、空值移除；
+  合并逻辑在 `src/core/login-fields.ts`，比较时忽略大小写与空白。
+- 填充时先处理额外字段，并把命中的元素记入 `used`，之后选用户名输入框时跳过它们，
+  否则租户名输入框会被误当成用户名。
+- 匹配线索：`name`、`id`、`autocomplete`、`placeholder`、`aria-label`、`<label>` 文本、
+  `aria-labelledby` 指向的节点。所以字段名填「租户名」即可命中
+  `placeholder="请输入租户名"`。
+- 返回值带 `filledExtra` / `missingExtra` / `unmatchedInputs`：已填的、配置了但页面上
+  找不到的、页面上存在但没配置的。界面用它提示用户补配置，而不是静默漏填。
+
+额外字段是明文的非敏感值（租户码、公司域），**不要用它存密码**；密码仍走凭据库。
+
+### 启动后自动填充
+
+设置项 `autoFillOnLaunch` 默认开启。窗口登记到 `cdpRegistry` 后，服务在后台起一个
+最多 8 秒的轮询（500ms 一次），直到页面出现密码框为止，然后复用同一条
+`buildFillExpression` 路径填充，结果通过 `onAutoFill` 回调送到界面。
+
+- 不阻塞启动：场景四开不会每个身份等 8 秒。
+- 找不到密码框时按「已登录」处理（`skipped: "not-login-page"`），不报错。
+- 外部模式（Firefox）与未存密码的情况直接跳过，`skipped` 里写明原因。
+- `autoSubmit` 打开时自动提交；双因素验证码仍需人工输入。
+
 ## 登录态检测
 
 页面内执行：

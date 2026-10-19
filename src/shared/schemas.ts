@@ -13,6 +13,11 @@ const pathValue = z
 
 const localPath = z.string().trim().startsWith("/");
 
+const loginFieldSchema = z.object({
+  label: z.string().trim().max(60),
+  value: z.string().trim().max(200),
+});
+
 export const environmentDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(80),
@@ -22,6 +27,7 @@ export const environmentDraftSchema = z.object({
   kind: z.enum(["local", "staging", "prod"]),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean(),
+  extraFields: z.array(loginFieldSchema).max(6).optional(),
 });
 
 export const identityDraftSchema = z.object({
@@ -35,6 +41,7 @@ export const identityDraftSchema = z.object({
   startPath: pathValue.optional(),
   passwordMode: z.enum(["inherit", "custom"]),
   password: z.string().max(500).optional(),
+  extraFields: z.array(loginFieldSchema).max(6).optional(),
   note: z.string().max(1000).optional(),
 });
 
@@ -53,6 +60,7 @@ export const settingsPatchSchema = z.object({
   lastEnvironmentId: z.string().optional(),
   lastView: z.enum(["identities", "scenes"]).optional(),
   layout: z.enum(["1x1", "2x1", "2x2", "3x1"]).optional(),
+  autoFillOnLaunch: z.boolean().optional(),
 });
 
 export const passwordOwnerSchema = z.object({

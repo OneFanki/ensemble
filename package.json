@@ -18,6 +18,7 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "lint": "biome check .",
     "format": "biome format --write .",
     "dist": "node scripts/make-icon.mjs && electron-vite build && electron-builder",

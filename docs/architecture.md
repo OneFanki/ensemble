@@ -41,7 +41,8 @@ Playwright 是自动化测试库，它默认会接管对话框、下载和文件
 `--remote-debugging-port=0`，只通过 CDP 做三件事：
 
 1. 导航（`Page.navigate` 或重定向）
-2. 登录表单填充（`Runtime.evaluate` + 原生 value setter + `input` / `change` 事件）
+2. 登录表单填充（`Runtime.evaluate` + 原生 value setter + `input` / `change` 事件，
+   支持账号密码之外按标签匹配的额外字段）
 3. 登录态检测（页面内 `fetch` 携带 Cookie）与窗口定位
    （`Browser.getWindowForTarget` + `Browser.setWindowBounds`）
 

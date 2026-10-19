@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
-import type { Engine, EnvironmentDraft, EnvironmentKind } from "@shared/types";
+import type { Engine, EnvironmentDraft } from "@shared/types";
 
 const props = defineProps<{
   draft: EnvironmentDraft;
@@ -44,15 +44,23 @@ function submit() {
     error.message = t("app.errCheckPath");
     return;
   }
-  emit("save", { ...form, name: form.name.trim(), baseUrl: form.baseUrl.trim() });
+  emit("save", {
+    ...form,
+    name: form.name.trim(),
+    baseUrl: form.baseUrl.trim(),
+    kind: (form.kind || "").trim(),
+  });
 }
 
-// Reactive so the segmented labels follow a runtime language switch.
-const kinds = computed<Array<{ value: EnvironmentKind; label: string; hint: string }>>(() => [
+// Suggestions, not a closed set: the input stays free-form so "测试", "预发"
+// or "项目-联调" all work.
+const kindSuggestions = computed(() => [
   { value: "local", label: t("app.kindLocal"), hint: t("app.kindLocalHint") },
   { value: "staging", label: t("app.kindStaging"), hint: t("app.kindStagingHint") },
   { value: "prod", label: t("app.kindProd"), hint: t("app.kindProdHint") },
 ]);
+
+const namePlaceholder = computed(() => t("app.envNameExample"));
 
 function normalizePath(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -70,30 +78,42 @@ function normalizePath(event: Event) {
     :open="true"
     :title="form.id ? $t('app.editEnvironmentTitle') : $t('app.newEnvironmentTitle')"
     :description="$t('app.envDialogDesc')"
+    width="620px"
     @close="emit('close')"
   >
     <div class="form">
+      <label class="field">
+        <span class="label">{{ $t("app.envNameLabel") }}</span>
+        <input v-model="form.name" class="input" :placeholder="namePlaceholder" />
+        <span class="hint">{{ $t("app.envNameHint") }}</span>
+      </label>
+
       <div class="row">
         <label class="field grow">
-          <span class="label">{{ $t("app.envNameLabel") }}</span>
-          <input v-model="form.name" class="input" :placeholder="$t('app.envNameExample')" />
+          <span class="label">{{ $t("app.kind") }}</span>
+          <input
+            v-model="form.kind"
+            class="input"
+            list="env-kind-suggestions"
+            :placeholder="$t('app.kindExample')"
+          />
+          <datalist id="env-kind-suggestions">
+            <option v-for="item in kindSuggestions" :key="item.value" :value="item.value">
+              {{ item.label }} — {{ item.hint }}
+            </option>
+          </datalist>
         </label>
-        <fieldset class="field">
-          <legend class="label">{{ $t("app.kind") }}</legend>
-          <div class="segmented">
-            <button
-              v-for="kind in kinds"
-              :key="kind.value"
-              type="button"
-              class="seg"
-              :class="{ on: form.kind === kind.value, danger: kind.value === 'prod' && form.kind === 'prod' }"
-              :title="kind.hint"
-              @click="form.kind = kind.value"
-            >
-              {{ kind.label }}
-            </button>
-          </div>
-        </fieldset>
+        <label class="field grow">
+          <span class="label">{{ $t("app.defaultEngine") }}</span>
+          <select v-model="form.defaultEngineId" class="input">
+            <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
+            <option v-for="engine in engines" :key="engine.id" :value="engine.id">
+              {{ engine.brand }} {{ engine.version ?? "" }}
+              <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
+              <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
+            </option>
+          </select>
+        </label>
       </div>
 
       <label class="field">
@@ -124,27 +144,19 @@ function normalizePath(event: Event) {
         </label>
       </div>
 
-      <label class="field">
-        <span class="label">{{ $t("app.defaultEngine") }}</span>
-        <select v-model="form.defaultEngineId" class="input">
-          <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
-          <option v-for="engine in engines" :key="engine.id" :value="engine.id">
-            {{ engine.brand }} {{ engine.version ?? "" }}
-            <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
-            <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
-          </option>
-        </select>
-      </label>
+      <section class="group">
+        <div class="group-head">
+          <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
+          <span class="group-note">{{ $t("app.loginFormGroupNote") }}</span>
+        </div>
 
-      <label class="check">
-        <input v-model="form.autoSubmit" type="checkbox" />
-        <span>{{ $t("app.autoSubmitNote") }}</span>
-      </label>
+        <label class="check">
+          <input v-model="form.autoSubmit" type="checkbox" />
+          <span>{{ $t("app.autoSubmitNote") }}</span>
+        </label>
 
-      <ExtraLoginFields
-        v-model="form.extraFields"
-        :scope-hint="$t('app.envFieldsScope')"
-      />
+        <ExtraLoginFields v-model="form.extraFields" :scope-hint="$t('app.envFieldsScope')" />
+      </section>
 
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
     </div>
@@ -165,7 +177,7 @@ function normalizePath(event: Event) {
 .form {
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  gap: 14px;
 }
 
 .row {
@@ -177,9 +189,6 @@ function normalizePath(event: Event) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 0;
-  margin: 0;
-  padding: 0;
   min-width: 0;
 }
 
@@ -192,7 +201,11 @@ function normalizePath(event: Event) {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--faint);
-  padding: 0;
+}
+
+.hint {
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .input {
@@ -210,30 +223,32 @@ function normalizePath(event: Event) {
   border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
-.segmented {
+.group {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  padding: 12px;
   display: flex;
-  gap: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 2px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.seg {
-  padding: 5px 10px;
-  border-radius: 3px;
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.group-title {
   font-size: 11px;
-  color: var(--muted);
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
-.seg.on {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.seg.on.danger {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
-  color: var(--red);
+.group-note {
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .check {
@@ -267,12 +282,16 @@ function normalizePath(event: Event) {
   color: var(--text-secondary);
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   background: var(--surface-3);
 }
 
 .btn.primary {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
+  background: linear-gradient(
+    180deg,
+    var(--accent-strong),
+    color-mix(in srgb, var(--accent) 88%, black)
+  );
   border-color: color-mix(in srgb, var(--accent) 80%, black);
   color: var(--accent-foreground);
   font-weight: 500;

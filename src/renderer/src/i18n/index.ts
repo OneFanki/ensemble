@@ -144,7 +144,11 @@ const messages = {
       newEnvironmentTitle: "新建环境",
       envDialogDesc: "环境是被测目标的作用域：站点地址、登录入口与默认凭据。",
       envNameLabel: "名称",
-      envNameExample: "例如：本地开发环境",
+      envNameExample: "例如：项目名-测试环境",
+      envNameHint: "随意命名。想区分多个项目时，可以用「项目-环境」的写法。",
+      kindExample: "例如：测试 / 项目-联调",
+      loginFormGroup: "登录表单",
+      loginFormGroupNote: "提交方式与账号密码之外的输入框",
       kindLocal: "本地",
       kindLocalHint: "开发机上的服务",
       kindStaging: "预发布",
@@ -158,7 +162,8 @@ const messages = {
       engineBlockedSuffix: "（不可用）",
       engineExternalSuffix: "（仅外部模式）",
       autoSubmitNote: "重新登录与自动填充时，填充后直接提交（双因素验证码仍需手动完成）",
-      envFieldsScope: "环境级字段对所有身份生效；身份里同名字段可以覆盖。字段名会匹配页面上的占位符、name、id 或标签文字。",
+      envFieldsScope:
+        "环境级字段对所有身份生效；身份里同名字段可以覆盖。字段名会匹配页面上的占位符、name、id 或标签文字。",
       errEnvName: "请填写环境名称",
       errEnvUrl: "站点地址必须是 http(s) 开头",
       errLoginPath: "登录入口必须以 / 开头",
@@ -216,13 +221,14 @@ const messages = {
       errSceneMember: "至少选择一个身份",
 
       // Run dock
-      noRunningIdentity: "没有运行中的身份，点击卡片即可启动。",
+      noRunningIdentity: "没有运行中的身份。在身份页点「启动」，或用场景一键拉起。",
       layoutLabel: "布局 {layout}",
       noScenesDock: "还没有场景",
       noScenesDockHint: "把常一起测的身份编排成一幕。",
       passwordSafetyNote: "密码只保存在主进程，通过系统密钥环或主密码加密；自动填充不会写入日志。",
       copyPasswordFor: "复制 {label} 的密码",
       enginesCount: "{count} 个引擎",
+      deleteSceneConfirm: "删除场景只影响编排本身，已启动的窗口和身份都会保留。确定删除？",
       instancesShort: "{count} 个实例",
 
       // Settings
@@ -447,9 +453,15 @@ const messages = {
       // Environment dialog
       editEnvironmentTitle: "Edit environment",
       newEnvironmentTitle: "New environment",
-      envDialogDesc: "An environment is the scope under test: base URL, login entry and default credentials.",
+      envDialogDesc:
+        "An environment is the scope under test: base URL, login entry and default credentials.",
       envNameLabel: "Name",
-      envNameExample: "e.g. Local development",
+      envNameExample: "e.g. Project name — test",
+      envNameHint:
+        "Name it however you like. “Project — environment” works well when you test several projects.",
+      kindExample: "e.g. test / project-integration",
+      loginFormGroup: "Login form",
+      loginFormGroupNote: "Submission behavior and inputs beyond username and password",
       kindLocal: "Local",
       kindLocalHint: "A service on this machine",
       kindStaging: "Staging",
@@ -474,7 +486,8 @@ const messages = {
       // Identity dialog
       editIdentityTitle: "Edit identity",
       newIdentityTitle: "New identity",
-      identityDialogDesc: "Each identity has its own browser profile, so accounts and sessions never mix.",
+      identityDialogDesc:
+        "Each identity has its own browser profile, so accounts and sessions never mix.",
       displayName: "Display name",
       displayNameExample: "e.g. Admin · primary account",
       identityColor: "Color",
@@ -486,7 +499,8 @@ const messages = {
       copyDefaultPassword: "Copy default password",
       inheritNote:
         "Without a custom password the environment default is used. Changing it affects every identity that inherits.",
-      customNote: "A custom password applies to this identity only. Leaving it empty keeps the saved one.",
+      customNote:
+        "A custom password applies to this identity only. Leaving it empty keeps the saved one.",
       startPathLabel: "Start path",
       engineOverride: "Engine (optional override)",
       inheritEnvDefault: "Inherit environment default",
@@ -510,7 +524,8 @@ const messages = {
       // Scene dialog and scene view
       editSceneTitle: "Edit scene",
       newSceneTitle: "New scene",
-      sceneDialogDesc: "A scene groups identities you test together and tiles their windows on launch.",
+      sceneDialogDesc:
+        "A scene groups identities you test together and tiles their windows on launch.",
       sceneNameLabel: "Scene name",
       sceneNameExample: "e.g. Permission matrix · main flow",
       sceneMembersLabel: "Members (at least one)",
@@ -526,7 +541,7 @@ const messages = {
       errSceneMember: "Select at least one identity",
 
       // Run dock
-      noRunningIdentity: "Nothing is running. Click a card to launch it.",
+      noRunningIdentity: "Nothing is running. Start an identity, or launch a scene.",
       layoutLabel: "Layout {layout}",
       noScenesDock: "No scenes yet",
       noScenesDockHint: "Group the identities you test together.",
@@ -534,6 +549,8 @@ const messages = {
         "Passwords stay in the main process, protected by the system keychain or your master password; autofill never writes them to logs.",
       copyPasswordFor: "Copy the password for {label}",
       enginesCount: "{count} engines",
+      deleteSceneConfirm:
+        "Deleting a scene only removes the orchestration; running windows and identities stay. Delete it?",
       instancesShort: "{count} instances",
 
       // Settings
@@ -549,7 +566,8 @@ const messages = {
       engineCapabilityNote:
         "Only CDP engines support autofill, session checks and window tiling. Firefox runs in external mode: multiple windows and password copy, but no page control. Safari does not support multi-account isolation.",
       appearanceTitle: "Appearance",
-      appearanceNote: "Dark is easier on the eyes for long sessions; light helps when checking credentials.",
+      appearanceNote:
+        "Dark is easier on the eyes for long sessions; light helps when checking credentials.",
       autoFillLaunch: "Autofill on launch",
       on: "On",
       off: "Off",

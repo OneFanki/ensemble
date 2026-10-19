@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
+import { isProductionKind } from "@shared/environments";
 import type { Identity, RoleColor } from "@shared/types";
 
 const emit = defineEmits<{
@@ -42,7 +43,7 @@ const visibleIdentities = computed(() => {
 
 const runningCount = computed(() => store.environmentIdentities.filter((i) => store.instanceFor(i.id)).length);
 const expiredCount = computed(() => store.environmentIdentities.filter((i) => i.status === "expired").length);
-const isProd = computed(() => store.activeEnvironment?.kind === "prod");
+const isProd = computed(() => isProductionKind(store.activeEnvironment?.kind));
 
 const statusLabel = (identity: Identity): string => {
   if (store.instanceFor(identity.id)) return t("app.statusRunning");
@@ -199,7 +200,7 @@ function passwordLabel(identity: Identity): string {
         <div class="meta-row">
           <span class="tag">{{ identity.role }}</span>
           <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
-          <span v-if="store.activeEnvironment?.kind === 'prod'" class="tag danger">PROD</span>
+          <span v-if="isProd" class="tag danger">PROD</span>
         </div>
 
         <div class="pw-row">

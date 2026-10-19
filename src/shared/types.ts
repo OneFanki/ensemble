@@ -22,7 +22,12 @@ export interface Engine {
   profileBase?: string;
 }
 
-export type EnvironmentKind = "local" | "staging" | "prod";
+/**
+ * Free text by design. Teams label environments "local", "staging", "prod", but
+ * equally "测试", "项目-联调" or anything else. Only production-like values get
+ * the extra confirmation; see @shared/environments.
+ */
+export type EnvironmentKind = string;
 
 /**
  * A login form input beyond username and password, such as a tenant code.

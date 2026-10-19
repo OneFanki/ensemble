@@ -1,28 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { Copy, KeyRound, Play, Plus, Square, X } from "lucide-vue-next";
+import { Copy, KeyRound, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
-import type { RoleColor } from "@shared/types";
 
-const emit = defineEmits<{ newScene: [] }>();
 const store = useWorkspaceStore();
 const { t } = useI18n();
 
-const roleVar = (color: RoleColor) => `var(--role-${color})`;
-const featuredScene = computed(() => store.environmentScenes[0]);
-
-function identityName(identityId?: string): string {
-  if (!identityId) return t("app.cleanSessionName");
-  return store.identities.find((identity) => identity.id === identityId)?.name ?? t("app.unknownIdentity");
-}
-
-function identityColor(identityId?: string): string {
-  const identity = store.identities.find((item) => item.id === identityId);
-  return roleVar(identity?.color ?? "slate");
-}
-
-async function openProfile(instanceId: string, identityId?: string) {
+async function copyInstancePassword(instanceId: string, identityId?: string) {
   if (!identityId) return;
   const instance = store.instances.find((item) => item.id === instanceId);
   if (!instance) return;
@@ -31,6 +15,10 @@ async function openProfile(instanceId: string, identityId?: string) {
 </script>
 
 <template>
+  <!--
+    Live instances only. Scene launching lives in the scenes view and the rail is
+    the single navigation surface, so this panel does not repeat either.
+  -->
   <aside class="dock">
     <div class="dock-head">
       <span class="dock-title">{{ $t("app.running") }}</span>
@@ -49,13 +37,15 @@ async function openProfile(instanceId: string, identityId?: string) {
       <div v-for="instance in store.instances" :key="instance.id" class="run-row">
         <span class="led"></span>
         <span class="run-name">{{ instance.label }}</span>
-        <span class="run-mode mono" :class="instance.mode">{{ instance.mode === "cdp" ? "CDP" : "EXT" }}</span>
+        <span class="run-mode mono" :class="instance.mode">
+          {{ instance.mode === "cdp" ? "CDP" : "EXT" }}
+        </span>
         <button
           class="run-btn"
           type="button"
           :aria-label="$t('app.copyPasswordFor', { label: instance.label })"
           :disabled="!instance.identityId"
-          @click="openProfile(instance.id, instance.identityId)"
+          @click="copyInstancePassword(instance.id, instance.identityId)"
         >
           <Copy :size="11" />
         </button>
@@ -74,55 +64,14 @@ async function openProfile(instanceId: string, identityId?: string) {
       </div>
     </div>
 
-    <div class="dock-sep"></div>
-
-    <div v-if="featuredScene" class="scene-card">
-      <div class="kicker mono">Scene 01</div>
-      <div class="scene-name">{{ featuredScene.name }}</div>
-      <div class="scene-sub mono">
-        {{ $t("app.identityCount", { count: featuredScene.identityIds.length }) }} · {{ $t("app.layoutLabel", { layout: featuredScene.layout.replace("x", " × ") }) }}
-      </div>
-      <div class="scene-members">
-        <span
-          v-for="id in featuredScene.identityIds.slice(0, 6)"
-          :key="id"
-          class="mini-av"
-          :style="{ background: identityColor(id) }"
-          :title="identityName(id)"
-        >
-          {{ identityName(id).slice(0, 1) }}
-        </span>
-      </div>
-      <button
-        class="btn primary"
-        type="button"
-        :disabled="store.busy === 'launch'"
-        @click="store.launchScene(featuredScene.id)"
-      >
-        <Play :size="12" />
-        {{ $t("app.runScene") }}
-      </button>
-    </div>
-
-    <div v-else class="scene-card empty-scene">
-      <div class="scene-name">{{ $t("app.noScenesDock") }}</div>
-      <div class="scene-sub">{{ $t("app.noScenesDockHint") }}</div>
-      <button class="btn" type="button" @click="emit('newScene')">
-        <Plus :size="12" />
-        {{ $t("app.newScene") }}
-      </button>
-    </div>
-
     <div class="hint">
       <KeyRound :size="12" />
-      <span>
-        {{ $t("app.passwordSafetyNote") }}
-      </span>
+      <span>{{ $t("app.passwordSafetyNote") }}</span>
     </div>
 
     <div class="dock-foot mono">
-      <span>{{ $t("app.enginesCount", { count: store.engines.length }) }}</span>
-      <span class="right">{{ $t("app.instancesShort", { count: store.instances.length }) }}</span>
+      <span>{{ $t("app.instancesShort", { count: store.instances.length }) }}</span>
+      <span class="right">{{ $t("app.enginesCount", { count: store.engines.length }) }}</span>
     </div>
   </aside>
 </template>
@@ -130,7 +79,7 @@ async function openProfile(instanceId: string, identityId?: string) {
 <style scoped>
 .dock {
   border-left: 1px solid var(--line-soft);
-  background: color-mix(in srgb, var(--bg) 92%, black);
+  background: var(--bg);
   padding: 15px 13px;
   display: flex;
   flex-direction: column;
@@ -179,8 +128,8 @@ async function openProfile(instanceId: string, identityId?: string) {
   flex-direction: column;
   gap: 5px;
   overflow-y: auto;
-  max-height: 40%;
-  flex: 0 1 auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .run-row {
@@ -248,88 +197,6 @@ async function openProfile(instanceId: string, identityId?: string) {
   color: var(--faint);
 }
 
-.dock-sep {
-  height: 1px;
-  background: var(--line-soft);
-  flex: 0 0 auto;
-}
-
-.scene-card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(160deg, var(--surface-2), var(--surface));
-  padding: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.kicker {
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
-.scene-name {
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.scene-sub {
-  font-size: 11px;
-  color: var(--faint);
-  line-height: 1.5;
-}
-
-.scene-members {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.mini-av {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  font-size: 10.5px;
-  font-weight: 500;
-  color: var(--accent-foreground);
-  border: 2px solid var(--surface);
-}
-
-.mini-av + .mini-av {
-  margin-left: -9px;
-}
-
-.scene-card .btn,
-.empty-scene .btn {
-  width: 100%;
-  justify-content: center;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 10px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.btn.primary {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
 .hint {
   display: flex;
   align-items: flex-start;
@@ -350,7 +217,6 @@ async function openProfile(instanceId: string, identityId?: string) {
 }
 
 .dock-foot {
-  margin-top: auto;
   display: flex;
   font-size: 10.5px;
   color: var(--faint);

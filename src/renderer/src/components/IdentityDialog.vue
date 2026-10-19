@@ -80,9 +80,7 @@ async function copyDefaultPassword() {
 
 async function rebuildProfile() {
   if (!form.id) return;
-  const confirmed = window.confirm(
-    t("app.rebuildConfirm"),
-  );
+  const confirmed = window.confirm(t("app.rebuildConfirm"));
   if (!confirmed) return;
   const result = await store.rebuildIdentityProfile(form.id);
   if (result) emit("close");
@@ -138,83 +136,95 @@ async function rebuildProfile() {
         </div>
       </div>
 
-      <div class="field">
-        <span class="label">{{ $t("app.credentialsLabel") }}</span>
-        <div class="segmented">
+      <section class="group">
+        <div class="group-head">
+          <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
+          <span class="group-note">{{ $t("app.loginFormGroupNote") }}</span>
+        </div>
+
+        <div class="field">
+          <span class="label">{{ $t("app.credentialsLabel") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: form.passwordMode === 'inherit' }"
+              @click="form.passwordMode = 'inherit'"
+            >
+              {{ $t("app.passwordInherit") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: form.passwordMode === 'custom' }"
+              @click="form.passwordMode = 'custom'"
+            >
+              {{ $t("app.passwordCustom") }}
+            </button>
+          </div>
+        </div>
+
+        <div class="password-row">
+          <div class="pw-input">
+            <input
+              v-model="password"
+              class="input mono"
+              :type="reveal ? 'text' : 'password'"
+              :placeholder="form.passwordMode === 'inherit' ? $t('app.inheritOverridePlaceholder') : $t('app.customPasswordPlaceholder')"
+              autocomplete="new-password"
+            />
+            <button
+              type="button"
+              class="pw-btn"
+              :aria-label="reveal ? $t('app.hide') : $t('app.show')"
+              @click="reveal = !reveal"
+            >
+              <EyeOff v-if="reveal" :size="13" />
+              <Eye v-else :size="13" />
+            </button>
+          </div>
           <button
+            v-if="form.passwordMode === 'inherit'"
             type="button"
-            class="seg"
-            :class="{ on: form.passwordMode === 'inherit' }"
-            @click="form.passwordMode = 'inherit'"
+            class="btn"
+            :disabled="!password"
+            @click="saveEnvironmentPassword"
           >
-            {{ $t("app.passwordInherit") }}
+            {{ $t("app.saveAsEnvDefault") }}
           </button>
           <button
+            v-else
             type="button"
-            class="seg"
-            :class="{ on: form.passwordMode === 'custom' }"
-            @click="form.passwordMode = 'custom'"
+            class="btn"
+            :disabled="!password"
+            @click="store.setPassword({ kind: 'identity', id: form.id! }, password); password = ''"
           >
-            {{ $t("app.passwordCustom") }}
+            {{ $t("app.saveToIdentity") }}
+          </button>
+          <button
+            v-if="form.passwordMode === 'inherit'"
+            type="button"
+            class="btn ghost"
+            @click="copyDefaultPassword"
+          >
+            {{ $t("app.copyDefaultPassword") }}
           </button>
         </div>
-      </div>
 
-      <div class="password-row">
-        <div class="pw-input">
-          <input
-            v-model="password"
-            class="input mono"
-            :type="reveal ? 'text' : 'password'"
-            :placeholder="form.passwordMode === 'inherit' ? $t('app.inheritOverridePlaceholder') : $t('app.customPasswordPlaceholder')"
-            autocomplete="new-password"
-          />
-          <button
-            type="button"
-            class="pw-btn"
-            :aria-label="reveal ? $t('app.hide') : $t('app.show')"
-            @click="reveal = !reveal"
-          >
-            <EyeOff v-if="reveal" :size="13" />
-            <Eye v-else :size="13" />
-          </button>
-        </div>
-        <button
-          v-if="form.passwordMode === 'inherit'"
-          type="button"
-          class="btn"
-          :disabled="!password"
-          @click="saveEnvironmentPassword"
-        >
-          {{ $t("app.saveAsEnvDefault") }}
-        </button>
-        <button
-          v-else
-          type="button"
-          class="btn"
-          :disabled="!password"
-          @click="store.setPassword({ kind: 'identity', id: form.id! }, password); password = ''"
-        >
-          {{ $t("app.saveToIdentity") }}
-        </button>
-        <button
-          v-if="form.passwordMode === 'inherit'"
-          type="button"
-          class="btn ghost"
-          @click="copyDefaultPassword"
-        >
-          {{ $t("app.copyDefaultPassword") }}
-        </button>
-      </div>
+        <p class="note">
+          <template v-if="form.passwordMode === 'inherit'">
+            {{ $t("app.inheritNote") }}
+          </template>
+          <template v-else>
+            {{ $t("app.customNote") }}
+          </template>
+        </p>
 
-      <p class="note">
-        <template v-if="form.passwordMode === 'inherit'">
-          {{ $t("app.inheritNote") }}
-        </template>
-        <template v-else>
-          {{ $t("app.customNote") }}
-        </template>
-      </p>
+        <ExtraLoginFields
+          v-model="form.extraFields"
+          :scope-hint="$t('app.identityFieldsScope')"
+        />
+      </section>
 
       <div class="row">
         <label class="field grow">
@@ -236,11 +246,6 @@ async function rebuildProfile() {
         <span class="label">{{ $t("app.noteOptional") }}</span>
         <input v-model="form.note" class="input" :placeholder="$t('app.noteExample')" />
       </label>
-
-      <ExtraLoginFields
-        v-model="form.extraFields"
-        :scope-hint="$t('app.identityFieldsScope')"
-      />
 
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
@@ -393,6 +398,34 @@ async function rebuildProfile() {
   margin: 0;
   font-size: 11.5px;
   line-height: 1.55;
+  color: var(--faint);
+}
+
+.group {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.group-title {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.group-note {
+  font-size: 10.5px;
   color: var(--faint);
 }
 

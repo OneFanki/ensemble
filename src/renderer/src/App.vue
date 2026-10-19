@@ -161,6 +161,11 @@ async function saveScene(draft: SceneDraft) {
   if (result) sceneDraft.value = null;
 }
 
+async function deleteScene(sceneId: string) {
+  if (!window.confirm(tr("app.deleteSceneConfirm"))) return;
+  await store.deleteScene(sceneId);
+}
+
 async function handleTheme(theme: "dark" | "light" | "system") {
   applyTheme(theme);
   await store.saveSettings({ theme });
@@ -177,7 +182,6 @@ async function handleLocale(locale: "zh" | "en") {
   <div class="app-shell" :data-platform="platform">
     <TitleBar
       :view="view"
-      @open-settings="switchView('settings')"
       @open-environment="openEditEnvironment"
       @new-environment="openNewEnvironment"
     />
@@ -191,13 +195,7 @@ async function handleLocale(locale: "zh" | "en") {
     </div>
 
     <div v-else class="app-body" :class="{ 'settings-mode': view === 'settings' }">
-      <SideRail
-        :view="view"
-        @navigate="switchView"
-        @new-environment="openNewEnvironment"
-        @edit-environment="openEditEnvironment"
-        @new-scene="openNewScene"
-      />
+      <SideRail :view="view" @navigate="switchView" />
 
       <main class="main-pane">
         <IdentitiesView
@@ -209,6 +207,7 @@ async function handleLocale(locale: "zh" | "en") {
           v-else-if="view === 'scenes'"
           @new-scene="openNewScene"
           @edit-scene="openEditScene"
+          @delete-scene="deleteScene"
         />
         <SettingsView
           v-else
@@ -217,7 +216,7 @@ async function handleLocale(locale: "zh" | "en") {
         />
       </main>
 
-      <RunDock v-if="view !== 'settings'" @new-scene="openNewScene" />
+      <RunDock v-if="view !== 'settings'" />
     </div>
 
     <footer class="statusbar mono">

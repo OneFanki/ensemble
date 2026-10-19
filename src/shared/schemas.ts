@@ -24,7 +24,7 @@ export const environmentDraftSchema = z.object({
   baseUrl: httpUrl,
   loginPath: localPath,
   authCheckPath: pathValue.optional(),
-  kind: z.enum(["local", "staging", "prod"]),
+  kind: z.string().trim().max(40),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),

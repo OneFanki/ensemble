@@ -36,9 +36,22 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
 - **Clean sessions**: throwaway windows that never log in and are deleted on close
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
+- **One entry per job**: the rail navigates identities / scenes / settings; switching and creating environments live in the top environment menu
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />
+</p>
+
+The scenes view is a list on the left and a detail pane on the right: select a scene to see its members and layout, adjusting the tiling never launches anything, and only "Run scene" opens the windows. A single window opens centered so it stays comfortable to work in.
+
+<p align="center">
+  <img src="docs/screenshots/scenes-en.png" alt="Scene orchestration and window layout" width="900" />
+</p>
+
+The light theme matches the dark one, down to the native title-bar buttons:
+
+<p align="center">
+  <img src="docs/screenshots/light-en.png" alt="Light theme" width="900" />
 </p>
 
 ## Credential security
@@ -80,6 +93,7 @@ pnpm verify     # typecheck + unit tests + structural contracts + build
 pnpm test       # unit tests
 pnpm test:e2e   # real-browser end-to-end (needs an installed Chromium browser)
 pnpm build      # build to out/
+pnpm screenshots # regenerate the README screenshots (needs a prior build)
 pnpm dist       # package the installer and portable build into release/
 ```
 

@@ -39,15 +39,23 @@ Ensemble 把这些窗口变成一张可以编排的台面：每个账号一个�
 - **凭据保护**：系统密钥环（DPAPI / Keychain / keyring）加密，可再加一层应用主密码
 - **干净会话**：不登录、关闭即自动清除的临时窗口
 - **进程回收**：退出时按 profile 路径精确回收自己启动的浏览器，不碰你日常用的窗口
+- **两条入口各司其职**：左侧导航只管身份 / 场景 / 设置；环境切换与创建收在顶部环境菜单里
 
 <p align="center">
   <img src="docs/screenshots/settings.png" alt="设置与凭据存储" width="900" />
 </p>
 
-场景页把常一起测的身份编成一组，按 `1x1 / 2x1 / 2x2 / 3x1` 平铺；单个窗口则居中打开，方便专注操作。
+场景页是左侧列表加右侧详情：选中一幕后再看成员与布局，调整平铺方式不会误启动；
+点「一键启动」才真的拉起窗口。单个窗口居中打开，方便专注操作。
 
 <p align="center">
   <img src="docs/screenshots/scenes.png" alt="场景编排与窗口布局" width="900" />
+</p>
+
+浅色主题与深色主题一致，原生标题栏按钮也随主题切换：
+
+<p align="center">
+  <img src="docs/screenshots/light.png" alt="浅色主题" width="900" />
 </p>
 
 ## 凭据安全
@@ -92,6 +100,7 @@ pnpm verify     # 全量校验：类型 + 单测 + 结构契约 + 构建
 pnpm test       # 单元测试
 pnpm test:e2e   # 真实浏览器端到端（需要本机已安装 Chromium 系浏览器）
 pnpm build      # 构建 out/
+pnpm screenshots # 重新生成 README 截图（需先 build）
 pnpm dist       # 打包安装版与便携版到 release/
 ```
 

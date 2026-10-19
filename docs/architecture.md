@@ -22,9 +22,14 @@
 │  credentials/  safeStorage 抽象、凭据库、继承解析                        │
 │  layout/       预设解析与窗口矩形计算                                     │
 │  processes/    自有 profile 进程发现与清理、workspace 数据结构            │
-│  service.ts    用例编排：环境 / 身份 / 场景 / 登录态                      │
+│  service.ts    用例编排：环境 / 身份 / 场景 / 登录态 / 导入导出            │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+主进程内还托管两个与 UI 无关的服务：
+
+- `src/main/mcp/server.ts`：本机 MCP 端点（AI 接入），只依赖 `WorkspaceService`；
+- `src/shared/transfer.ts`：导入导出文件的格式校验，纯数据、无 IO。
 
 `src/core` 不依赖 Electron，所以能在纯 Node 下跑单元测试，也能被未来的 CLI 或 CI
 直接复用。浏览器窗口不是 Electron 的 `BrowserWindow`，而是由 `spawn` 启动的独立
@@ -117,17 +122,60 @@ Scene        N ── 1 LayoutPreset（内置或用户自定义）
 | `workspace.json` | 环境、身份、场景、布局预设、手动引擎路径 | Electron `userData` |
 | `settings.json` | 主题、语言、布局、上次视图 | Electron `userData` |
 | `vault.json` | 加密后的凭据 | Electron `userData` |
+| `mcp.json` | AI 接入开关、端口、Token、权限开关 | Electron `userData` |
+| `mcp-audit.log` | MCP 调用审计（参数已脱敏） | Electron `userData` |
 | `profiles/` | 每个身份的浏览器 profile | Electron `userData` |
 
-所有写入使用「临时文件 + rename」保证原子性，`vault.json` 以 0600 权限写入。
+所有写入使用「临时文件 + rename」保证原子性，`vault.json`、`mcp.json`、导出文件以 0600 权限写入。
 
 ## 进程生命周期
 
 - 应用是浏览器实例的唯一所有者，`workspace.json` 里不持久化运行中实例。
+- **单实例锁**：`app.requestSingleInstanceLock()`。第二个实例直接退出并唤起已有窗口，
+  避免两个进程各自启动浏览器、争抢 MCP 端口、并发写 `workspace.json`。
+- **托盘模式**（默认开）：窗口关闭只 `hide()`，进程、浏览器、MCP 端点继续运行。
+  托盘菜单提供「打开」与「退出」；设置页也有「彻底退出」。
+- 所有退出路径（托盘菜单、设置页按钮、系统关机、`app.quit()`）都收敛到
+  `shutdownAndQuit()`：先 `mcpServer.stop()`，再 `tray.destroy()`，最后
+  `service.shutdown()` 回收浏览器。顺序不能反——否则 AI 可能在浏览器回收途中发起新启动。
+- `window-all-closed` 在托盘模式下直接返回，不触发退出；关闭托盘模式后恢复原有行为。
 - 启动时清理 `--user-data-dir` 指向自有 `profiles/` 根目录的残留进程。
 - 停止单个实例：CDP `Browser.close` → 等待 → 按 PID 兜底。
 - 场景启动是原子的：中途失败会回收本次已拉起的窗口，不留下半套。
 - 退出应用时先优雅关闭全部实例，再退出主进程。
+
+## AI 接入（MCP）
+
+```
+AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService ──▶ 浏览器
+              Bearer Token        tools/call      同一套业务方法
+```
+
+- 传输：回环 HTTP，路径 `/mcp`，固定端口（`mcp.json`，默认 47821）。无状态，
+  只处理 POST；`GET`/`DELETE` 返回 405。
+- 协议：MCP JSON-RPC 子集（`initialize`、`ping`、`tools/list`、`tools/call`、
+  `resources/list`、`prompts/list`）。不引入官方 SDK，避免为几十行协议给安装包加依赖。
+- 鉴权：`Authorization: Bearer <token>`，`timingSafeEqual` 比较；`Host` 必须是
+  `127.0.0.1:<port>` 或 `localhost:<port>`，`Origin` 必须是回环——两层分别挡 DNS 重绑定
+  与浏览器跨源请求。
+- 权限门：工具分 read / write / run / danger 四档，后三档由设置页开关控制。
+  删除类还要 `confirm: true`；生产环境名额外要 `confirmProduction: true`。
+- 凭据：工具可以写密码，但**没有任何读密码的工具**，返回值里也没有明文。
+- 审计：每次调用追加一行 JSON 到 `mcp-audit.log`，`password|passphrase|token|secret`
+  字段递归替换为 `[redacted]`。
+- 生命周期：与主进程同生共死。`stop()` 先 `closeAllConnections()` 再 `close()`，
+  保证客户端保持长连接时也能立即释放端口。
+
+## 导入导出
+
+`shared/transfer.ts` 定义文件格式并做严格校验（拒绝陌生 format、未来版本、缺字段），
+`WorkspaceService.exportWorkspace / importWorkspace` 负责组装与合并。
+
+- 导出不含运行实例、Profile、登录态。
+- 密码可选：给定口令时用 `createKdfParams` + `seal` 把 `{environment, identity}` 密码表
+  加密成 `secrets.payload`，与 vault 同一套 scrypt + AES-256-GCM。
+- 导入按 id 合并，缺失所属环境的条目跳过并计数；有加密段但口令错误时整体抛错，
+  不写入任何数据。
 
 ## 安全边界
 
@@ -137,3 +185,4 @@ Scene        N ── 1 LayoutPreset（内置或用户自定义）
 - 密码只存在于主进程内存与加密后的 `vault.json`。
 - 自动填充前校验当前页面 origin 属于目标环境，跨域拒绝执行。
 - 生产环境身份在启动前二次确认。
+- MCP 端点只绑回环、必须带 Token、校验 Host/Origin；工具永远不返回明文密码。

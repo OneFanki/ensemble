@@ -105,6 +105,12 @@ const SHOTS = [
     clicks: [".head-actions .btn.primary"],
     hover: ".foot .btn.primary",
   },
+  {
+    name: "settings-data",
+    locale: "zh",
+    view: "settings",
+    scrollTo: ".mcp-endpoint",
+  },
 ];
 
 function uuid(index) {
@@ -189,6 +195,25 @@ async function seed(userData, locale, theme = "dark") {
         lastView: "identities",
         layout: "2x2",
         autoFillOnLaunch: true,
+        closeToTray: true,
+      },
+      null,
+      2,
+    ),
+  );
+
+  // AI access off by default so the README screenshots never expose a working
+  // token; the settings section still renders the disabled state.
+  await writeFile(
+    join(userData, "mcp.json"),
+    JSON.stringify(
+      {
+        enabled: false,
+        port: 47821,
+        token: "screenshot-token-not-valid",
+        allowWrite: true,
+        allowRun: true,
+        allowDelete: false,
       },
       null,
       2,
@@ -287,6 +312,15 @@ async function capture(shot) {
         });
         await wait(400);
       }
+    }
+
+    // Long pages (settings) need a scroll target instead of a taller viewport so
+    // the layout stays at the size users actually see.
+    if (shot.scrollTo) {
+      await client.evaluate(
+        `(() => { const el = document.querySelector(${JSON.stringify(shot.scrollTo)}); if (!el) return false; el.scrollIntoView({ block: "start" }); return true; })()`,
+      );
+      await wait(700);
     }
 
     const screenshot = await client.send("Page.captureScreenshot", {

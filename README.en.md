@@ -45,6 +45,9 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Clean sessions**: throwaway windows that never log in and are deleted on close
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
 - **One entry per job**: the rail navigates environments / identities / scenes / settings; the title bar only switches environments
+- **Let an AI do the data entry**: a built-in MCP endpoint receives environments, identities and scenes from your AI client
+- **Portable config**: export the whole workspace to JSON, including encrypted passwords
+- **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />
@@ -67,6 +70,56 @@ The light theme matches the dark one, down to the native title-bar buttons:
 <p align="center">
   <img src="docs/screenshots/light-en.png" alt="Light theme" width="900" />
 </p>
+
+## AI access
+
+Have your AI create the accounts in a container, then record them in Ensemble without typing a single form:
+
+1. Turn on "AI access" in settings to get the loopback URL and a Bearer token;
+2. Paste the config snippet into any MCP-capable client (Claude Code, ZCode, …);
+3. The AI calls `create_environment`, `create_identities`, `create_scene`, then `launch_scene`.
+
+The server is plain local HTTP + JSON-RPC (a subset of MCP 2025-06-18), bound to `127.0.0.1`.
+It validates `Host`/`Origin` against DNS rebinding, and every request needs the Bearer token.
+The default port is 47821 and it can be changed.
+
+Permissions are three switches in settings:
+
+| Permission | Tools | Default |
+| --- | --- | --- |
+| Read | List environments / identities / scenes / layouts, workspace summary | Always on |
+| Write | Create and edit environments, identities, scenes, layouts; store passwords | On |
+| Run | Launch / stop windows, check sessions | On |
+| Delete | Delete environments / identities / scenes | Off |
+
+Hard boundaries:
+
+- **Passwords are write-only.** No tool reads, copies or returns a password; once stored it is only decrypted inside the main process for filling.
+- Delete tools additionally require an explicit `confirm: true`; production-named environments need a separate `confirmProduction`.
+- Every call appends one line to `mcp-audit.log`; passwords, passphrases and tokens are replaced with `[redacted]`.
+- On quit the MCP server stops before browsers are reclaimed, so the port is released with the process.
+
+<p align="center">
+  <img src="docs/screenshots/settings-data.png" alt="Data and AI access" width="900" />
+</p>
+
+## Import and export
+
+The migration path for a local-first app: settings → Data → export one JSON file with environments,
+identities, scenes and layout presets. Browser profiles and sessions are never exported.
+
+- Passwords are excluded by default. With "include passwords", they are sealed with your passphrase
+  (scrypt + AES-256-GCM) inside the same file. Importing requires the same passphrase; a wrong one
+  rejects the whole file instead of importing half of it.
+- Import merges by id: same id overwrites, new entries are appended, and identities or scenes whose
+  environment is missing are skipped and counted.
+- Running instances and login status are never part of an export.
+
+## Tray mode
+
+On by default: the window's close button only hides it, so browsers and the AI endpoint keep running
+while an AI client is mid-task. Quit from the tray menu or the "Quit completely" button in settings;
+quitting stops the MCP server first, then reclaims every browser.
 
 ## Credential security
 

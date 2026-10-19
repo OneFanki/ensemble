@@ -463,6 +463,15 @@ async function rebuildProfile() {
   font-weight: 500;
 }
 
+/* `.btn:hover` matches primary buttons too; restate the gradient so the button
+   does not turn gray while the cursor is over it. */
+.btn.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
+  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  color: var(--accent-foreground);
+  filter: brightness(1.07);
+}
+
 .btn.danger {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 34%, var(--line));

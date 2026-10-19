@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
-import { isProductionKind } from "@shared/environments";
+import { isProductionName } from "@shared/environments";
 import type { Identity, RoleColor } from "@shared/types";
 
 const emit = defineEmits<{
@@ -43,7 +43,7 @@ const visibleIdentities = computed(() => {
 
 const runningCount = computed(() => store.environmentIdentities.filter((i) => store.instanceFor(i.id)).length);
 const expiredCount = computed(() => store.environmentIdentities.filter((i) => i.status === "expired").length);
-const isProd = computed(() => isProductionKind(store.activeEnvironment?.kind));
+const isProd = computed(() => isProductionName(store.activeEnvironment?.name));
 
 const statusLabel = (identity: Identity): string => {
   if (store.instanceFor(identity.id)) return t("app.statusRunning");

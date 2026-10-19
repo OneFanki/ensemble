@@ -1,18 +1,41 @@
 <script setup lang="ts">
-import { Layers, Settings2, Users } from "lucide-vue-next";
+import { Layers, Settings2, Users, Waypoints } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
 
-defineProps<{ view: "identities" | "scenes" | "settings" }>();
+defineProps<{ view: "environments" | "identities" | "scenes" | "settings" }>();
 const emit = defineEmits<{
-  navigate: [view: "identities" | "scenes" | "settings"];
+  navigate: [view: "environments" | "identities" | "scenes" | "settings"];
 }>();
 
 const store = useWorkspaceStore();
+const { t } = useI18n();
+
+/** English needs a singular form; a bare `{count} scenes` reads wrong at 1. */
+function countLabel(singularKey: string, pluralKey: string, count: number): string {
+  return t(count === 1 ? singularKey : pluralKey, { count });
+}
 </script>
 
 <template>
   <aside class="rail">
+    <!--
+      Every platform resource gets a nav row. Environments used to be reachable
+      only through the title-bar switcher, which made newcomers wonder where the
+      isolation boundary actually lived.
+    -->
     <nav class="nav">
+      <button
+        type="button"
+        data-nav="environments"
+        class="nav-item"
+        :class="{ active: view === 'environments' }"
+        @click="emit('navigate', 'environments')"
+      >
+        <Waypoints :size="14" />
+        <span>{{ $t("app.environments") }}</span>
+        <span class="nav-tail mono">{{ store.environments.length }}</span>
+      </button>
       <button
         type="button"
         data-nav="identities"
@@ -48,10 +71,24 @@ const store = useWorkspaceStore();
     </nav>
 
     <div class="rail-foot">
-      <span class="foot-label">{{ $t("app.railEnvironment") }}</span>
+      <span class="foot-label">{{ $t("app.currentEnvironment") }}</span>
       <span class="foot-env">
         <span class="dot"></span>
         <span class="foot-name">{{ store.activeEnvironment?.name ?? $t("app.notConfiguredEnv") }}</span>
+      </span>
+      <span class="foot-url mono" :title="store.activeEnvironment?.baseUrl">
+        {{ store.activeEnvironment?.baseUrl ?? "—" }}
+      </span>
+      <span class="foot-counts mono">
+        {{
+          countLabel(
+            "app.identityCountOne",
+            "app.identityCount",
+            store.environmentIdentities.length,
+          )
+        }}
+        ·
+        {{ countLabel("app.sceneCountOne", "app.sceneCount", store.environmentScenes.length) }}
       </span>
     </div>
   </aside>
@@ -109,7 +146,7 @@ const store = useWorkspaceStore();
   border-top: 1px solid var(--line-soft);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -141,5 +178,18 @@ const store = useWorkspaceStore();
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.foot-url {
+  font-size: 10px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foot-counts {
+  font-size: 10px;
+  color: var(--faint);
 }
 </style>

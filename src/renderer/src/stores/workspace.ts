@@ -9,13 +9,16 @@ import type {
   EnvironmentDraft,
   Identity,
   IdentityDraft,
-  LayoutKey,
+  LayoutId,
+  LayoutPreset,
+  LayoutPresetDraft,
   PasswordOwner,
   Scene,
   SceneDraft,
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
+import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, findLayout, isFreeLayout } from "@shared/layouts";
 import type { EnsembleApi } from "@shared/ipc";
 import { tr } from "../i18n";
 
@@ -43,11 +46,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   function apply(next: WorkspaceSnapshot) {
     snapshot.value = next;
-    if (!activeEnvironmentId.value || !next.environments.some((env) => env.id === activeEnvironmentId.value)) {
+    if (
+      !activeEnvironmentId.value ||
+      !next.environments.some((env) => env.id === activeEnvironmentId.value)
+    ) {
       activeEnvironmentId.value =
-        next.settings.lastEnvironmentId ??
-        next.environments[0]?.id ??
-        null;
+        next.settings.lastEnvironmentId ?? next.environments[0]?.id ?? null;
     }
   }
 
@@ -74,7 +78,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       notes.push(tr("app.toastMissingFields", { fields: report.missingFields.join(separator) }));
     }
     if (report.unmatchedFields.length > 0) {
-      notes.push(tr("app.toastUnmatchedFields", { fields: report.unmatchedFields.join(separator) }));
+      notes.push(
+        tr("app.toastUnmatchedFields", { fields: report.unmatchedFields.join(separator) }),
+      );
     }
     notify(notes.join(" · "), report.missingFields.length > 0 ? "info" : "success");
   }
@@ -87,7 +93,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }, 4200);
   }
 
-  async function run<T>(key: string, task: () => Promise<T>, success?: string): Promise<T | undefined> {
+  async function run<T>(
+    key: string,
+    task: () => Promise<T>,
+    success?: string,
+  ): Promise<T | undefined> {
     busy.value = key;
     try {
       const result = await task();
@@ -119,8 +129,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const instances = computed(() => snapshot.value?.instances ?? []);
   const credentials = computed(() => snapshot.value?.credentials);
 
+  /** Built-in presets first, then whatever the user saved. */
+  const layoutPresets = computed<LayoutPreset[]>(() => [
+    ...BUILTIN_LAYOUTS,
+    ...(snapshot.value?.layoutPresets ?? []),
+  ]);
+
   const activeEnvironment = computed<Environment | undefined>(
-    () => environments.value.find((env) => env.id === activeEnvironmentId.value) ?? environments.value[0],
+    () =>
+      environments.value.find((env) => env.id === activeEnvironmentId.value) ??
+      environments.value[0],
   );
 
   const environmentIdentities = computed<Identity[]>(() => {
@@ -164,6 +182,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return engines.value.find((engine) => engine.id === id) ?? defaultEngine.value;
   }
 
+  function presetById(id: LayoutId | undefined): LayoutPreset {
+    return findLayout(id, snapshot.value?.layoutPresets ?? []);
+  }
+
+  /** The no-layout preset is the only built-in whose name needs translating. */
+  function presetName(preset: LayoutPreset): string {
+    return preset.id === FREE_LAYOUT_ID ? tr("app.freeLayoutName") : preset.name;
+  }
+
   function toPlain<T>(value: T): T {
     // Drafts originate from Vue reactive objects. Their nested arrays/records stay
     // Proxy-wrapped, and the IPC structured-clone algorithm rejects Proxies with
@@ -172,7 +199,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveEnvironment(draft: EnvironmentDraft) {
-    return run("environment", () => window.ensemble.saveEnvironment(toPlain(draft)), tr("app.toastEnvSaved"));
+    return run(
+      "environment",
+      () => window.ensemble.saveEnvironment(toPlain(draft)),
+      tr("app.toastEnvSaved"),
+    );
   }
 
   async function deleteEnvironment(id: string) {
@@ -180,7 +211,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function saveIdentity(draft: IdentityDraft) {
-    return run("identity", () => window.ensemble.saveIdentity(toPlain(draft)), tr("app.toastIdentitySaved"));
+    return run(
+      "identity",
+      () => window.ensemble.saveIdentity(toPlain(draft)),
+      tr("app.toastIdentitySaved"),
+    );
   }
 
   async function deleteIdentity(id: string) {
@@ -203,21 +238,40 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("scene", () => window.ensemble.deleteScene(id));
   }
 
-  /** Changes the stored layout of one scene without opening its dialog. */
-  async function setSceneLayout(sceneId: string, layout: LayoutKey) {
-    const scene = scenes.value.find((item) => item.id === sceneId);
-    if (!scene) return;
-    return run("scene", () =>
-      window.ensemble.saveScene(
-        toPlain({
-          id: scene.id,
-          environmentId: scene.environmentId,
-          name: scene.name,
-          identityIds: [...scene.identityIds],
-          layout,
-          paths: { ...scene.paths },
-        }),
-      ),
+  /** Changes the stored preset of one scene without opening its dialog. */
+  async function setSceneLayout(sceneId: string, layoutId: LayoutId) {
+    return run("scene", () => window.ensemble.setSceneLayout(sceneId, layoutId));
+  }
+
+  /** identityId -> slot index, written whenever a chip is dropped on a slot. */
+  async function setSceneSlots(sceneId: string, assignments: Record<string, number>) {
+    return run("scene", async () => {
+      const next = await window.ensemble.setSceneSlotAssignments(sceneId, toPlain(assignments));
+      // Windows already open should move with the chips, not wait for a relaunch.
+      if (
+        next.instances.some(
+          (instance) => instance.identityId && assignments[instance.identityId] !== undefined,
+        )
+      ) {
+        await window.ensemble.retileScene(sceneId);
+      }
+      return next;
+    });
+  }
+
+  async function saveLayoutPreset(draft: LayoutPresetDraft): Promise<LayoutPreset | undefined> {
+    return run(
+      "layout",
+      () => window.ensemble.saveLayoutPreset(toPlain(draft)),
+      tr("app.toastLayoutSaved"),
+    );
+  }
+
+  async function deleteLayoutPreset(id: LayoutId) {
+    return run(
+      "layout",
+      () => window.ensemble.deleteLayoutPreset(id),
+      tr("app.toastLayoutDeleted"),
     );
   }
 
@@ -247,6 +301,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function launchScene(sceneId: string) {
     return run("launch", () => window.ensemble.launchScene(sceneId), tr("app.toastSceneStarted"));
+  }
+
+  async function launchSceneMember(sceneId: string, identityId: string) {
+    return run("launch", () => window.ensemble.launchSceneMember(sceneId, identityId));
   }
 
   async function launchCleanSession() {
@@ -290,7 +348,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function setPassword(owner: PasswordOwner, password: string) {
-    return run("password", () => window.ensemble.setPassword(owner, password), tr("app.toastPasswordSaved"));
+    return run(
+      "password",
+      () => window.ensemble.setPassword(owner, password),
+      tr("app.toastPasswordSaved"),
+    );
   }
 
   async function clearPassword(owner: PasswordOwner) {
@@ -350,10 +412,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
-  function setLayout(layout: LayoutKey) {
-    void saveSettings({ layout });
-  }
-
   return {
     snapshot,
     loading,
@@ -372,6 +430,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     environmentIdentities,
     environmentScenes,
     defaultEngine,
+    layoutPresets,
     api,
     init,
     notify,
@@ -379,6 +438,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     identityPasswordSet,
     instanceFor,
     engineFor,
+    presetById,
+    presetName,
+    isFreeLayout,
     saveEnvironment,
     deleteEnvironment,
     saveIdentity,
@@ -386,11 +448,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     rebuildIdentityProfile,
     saveScene,
     deleteScene,
+    setSceneLayout,
+    setSceneSlots,
+    saveLayoutPreset,
+    deleteLayoutPreset,
     scanEngines,
     addManualEngine,
     removeManualEngine,
     launchIdentity,
     launchScene,
+    launchSceneMember,
     launchCleanSession,
     stopInstance,
     stopAll,
@@ -405,7 +472,5 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMasterPassword,
     changeMasterPassword,
     saveSettings,
-    setLayout,
-    setSceneLayout,
   };
 });

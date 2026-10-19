@@ -216,6 +216,19 @@ async function submitMaster() {
           </div>
         </div>
         <div class="option-row">
+          <span class="option-label">{{ $t("app.defaultLayout") }}</span>
+          <select
+            class="input select-inline"
+            :value="store.settings.layout"
+            @change="store.saveSettings({ layout: ($event.target as HTMLSelectElement).value })"
+          >
+            <option v-for="preset in store.layoutPresets" :key="preset.id" :value="preset.id">
+              {{ store.presetName(preset) }}
+            </option>
+          </select>
+        </div>
+        <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
+        <div class="option-row">
           <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
           <div class="segmented">
             <button
@@ -585,6 +598,21 @@ async function submitMaster() {
   font-size: 11px;
   color: var(--muted);
   width: 70px;
+}
+
+.select-inline {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 5px 8px;
+  min-width: 170px;
+  outline: 0;
+}
+
+.select-inline:focus {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .segmented {

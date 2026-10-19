@@ -1,23 +1,18 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { Copy, KeyRound, X } from "lucide-vue-next";
+import { KeyRound, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
-
-async function copyInstancePassword(instanceId: string, identityId?: string) {
-  if (!identityId) return;
-  const instance = store.instances.find((item) => item.id === instanceId);
-  if (!instance) return;
-  await store.copyPassword({ kind: "identity", id: identityId });
-}
 </script>
 
 <template>
   <!--
-    Live instances only. Scene launching lives in the scenes view and the rail is
-    the single navigation surface, so this panel does not repeat either.
+    Live instances only. Launching lives in the identities and scenes views; this
+    panel just reports what is open and lets you close it. The old "copy password"
+    button was removed: copying belongs to the identity dialog, where the password
+    it refers to is visible.
   -->
   <aside class="dock">
     <div class="dock-head">
@@ -36,19 +31,10 @@ async function copyInstancePassword(instanceId: string, identityId?: string) {
     <div class="running-list">
       <div v-for="instance in store.instances" :key="instance.id" class="run-row">
         <span class="led"></span>
-        <span class="run-name">{{ instance.label }}</span>
+        <span class="run-name" :title="instance.label">{{ instance.label }}</span>
         <span class="run-mode mono" :class="instance.mode">
           {{ instance.mode === "cdp" ? "CDP" : "EXT" }}
         </span>
-        <button
-          class="run-btn"
-          type="button"
-          :aria-label="$t('app.copyPasswordFor', { label: instance.label })"
-          :disabled="!instance.identityId"
-          @click="copyInstancePassword(instance.id, instance.identityId)"
-        >
-          <Copy :size="11" />
-        </button>
         <button
           class="run-btn"
           type="button"
@@ -60,7 +46,7 @@ async function copyInstancePassword(instanceId: string, identityId?: string) {
       </div>
 
       <div v-if="!store.instances.length" class="empty">
-        {{ $t("app.noRunningIdentity") }}
+        {{ t("app.noRunningIdentity") }}
       </div>
     </div>
 
@@ -120,27 +106,26 @@ async function copyInstancePassword(instanceId: string, identityId?: string) {
 }
 
 .close-all:hover {
-  color: var(--red);
+  color: var(--text-secondary);
 }
 
 .running-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  overflow-y: auto;
-  min-height: 0;
-  flex: 1 1 auto;
+  gap: 4px;
 }
 
 .run-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   background: var(--surface);
-  border-radius: var(--radius);
-  padding: 7px 8px;
-  font-size: 11.5px;
+  padding: 6px 8px;
   min-width: 0;
 }
 
@@ -150,61 +135,55 @@ async function copyInstancePassword(instanceId: string, identityId?: string) {
   border-radius: 50%;
   background: var(--green);
   flex: 0 0 5px;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 60%, transparent);
 }
 
 .run-name {
-  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-mode {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--faint);
-  border: 1px solid var(--line-soft);
-  border-radius: 3px;
-  padding: 2px 4px;
-}
-
-.run-mode.external {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
 
 .run-btn {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border-radius: 4px;
   color: var(--faint);
-  flex: 0 0 18px;
+  flex: 0 0 20px;
 }
 
 .run-btn:hover {
+  color: var(--red);
   background: var(--surface-3);
-  color: var(--text-secondary);
 }
 
 .empty {
   border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  padding: 16px 10px;
-  text-align: center;
-  font-size: 11.5px;
+  border-radius: var(--radius-sm);
+  padding: 16px 12px;
+  font-size: 10.5px;
+  line-height: 1.6;
   color: var(--faint);
+  text-align: center;
 }
 
 .hint {
   display: flex;
   align-items: flex-start;
-  gap: 7px;
-  padding: 8px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  font-size: 11px;
+  gap: 6px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+  font-size: 10px;
   line-height: 1.55;
   color: var(--faint);
   flex: 0 0 auto;
@@ -213,23 +192,17 @@ async function copyInstancePassword(instanceId: string, identityId?: string) {
 .hint svg {
   flex: 0 0 12px;
   margin-top: 1px;
-  color: var(--accent);
 }
 
 .dock-foot {
   display: flex;
-  font-size: 10.5px;
+  gap: 10px;
+  font-size: 10px;
   color: var(--faint);
   flex: 0 0 auto;
 }
 
 .dock-foot .right {
   margin-left: auto;
-}
-
-@media (max-width: 1180px) {
-  .dock {
-    display: none;
-  }
 }
 </style>

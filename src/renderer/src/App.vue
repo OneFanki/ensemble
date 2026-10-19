@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import TitleBar from "./components/TitleBar.vue";
 import Logo from "./components/Logo.vue";
 import SideRail from "./components/SideRail.vue";
+import EnvironmentsView from "./components/EnvironmentsView.vue";
 import IdentitiesView from "./components/IdentitiesView.vue";
 import ScenesView from "./components/ScenesView.vue";
 import SettingsView from "./components/SettingsView.vue";
@@ -11,17 +12,27 @@ import ToastStack from "./components/ToastStack.vue";
 import EnvironmentDialog from "./components/EnvironmentDialog.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import SceneDialog from "./components/SceneDialog.vue";
+import LayoutEditor from "./components/LayoutEditor.vue";
 import { useWorkspaceStore } from "./stores/workspace";
 import { setLocale, tr, type Locale } from "./i18n";
-import type { EnvironmentDraft, IdentityDraft, SceneDraft } from "@shared/types";
+import type {
+  EnvironmentDraft,
+  IdentityDraft,
+  LayoutPreset,
+  SceneDraft,
+  SlotRect,
+} from "@shared/types";
 
-type View = "identities" | "scenes" | "settings";
+type View = "environments" | "identities" | "scenes" | "settings";
 
 const store = useWorkspaceStore();
 const view = ref<View>("identities");
 const environmentDraft = ref<EnvironmentDraft | null>(null);
 const identityDraft = ref<IdentityDraft | null>(null);
 const sceneDraft = ref<SceneDraft | null>(null);
+const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; sceneId?: string } | null>(
+  null,
+);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
@@ -29,7 +40,8 @@ onMounted(async () => {
   await store.init();
   applyTheme(store.settings.theme);
   setLocale(store.settings.locale as Locale);
-  view.value = store.settings.lastView === "scenes" ? "scenes" : "identities";
+  const saved = store.settings.lastView;
+  view.value = saved === "scenes" || saved === "environments" ? saved : "identities";
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -54,24 +66,24 @@ function openNewEnvironment() {
     name: "",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
-    authCheckPath: "/api/me",
-    kind: "local",
+    authCheckPath: "",
     defaultEngineId: store.defaultEngine?.id,
     autoSubmit: false,
     extraFields: [],
   };
 }
 
-function openEditEnvironment() {
-  const env = store.activeEnvironment;
+function openEditEnvironment(environmentId?: string) {
+  const env = environmentId
+    ? store.environments.find((item) => item.id === environmentId)
+    : store.activeEnvironment;
   if (!env) return;
   environmentDraft.value = {
     id: env.id,
     name: env.name,
     baseUrl: env.baseUrl,
     loginPath: env.loginPath,
-    authCheckPath: env.authCheckPath,
-    kind: env.kind,
+    authCheckPath: env.authCheckPath ?? "",
     defaultEngineId: env.defaultEngineId,
     autoSubmit: env.autoSubmit,
     extraFields: env.extraFields ? env.extraFields.map((field) => ({ ...field })) : [],
@@ -82,6 +94,7 @@ function openNewIdentity() {
   const env = store.activeEnvironment;
   if (!env) {
     store.notify(tr("app.toastNeedEnvironment"), "error");
+    view.value = "environments";
     return;
   }
   identityDraft.value = {
@@ -118,13 +131,15 @@ function openNewScene() {
   const env = store.activeEnvironment;
   if (!env) {
     store.notify(tr("app.toastNeedEnvironment"), "error");
+    view.value = "environments";
     return;
   }
   sceneDraft.value = {
     environmentId: env.id,
     name: "",
     identityIds: store.environmentIdentities.slice(0, 3).map((identity) => identity.id),
-    layout: store.settings.layout,
+    layoutId: store.settings.layout,
+    slotAssignments: {},
     paths: {},
   };
 }
@@ -137,7 +152,8 @@ function openEditScene(sceneId: string) {
     environmentId: scene.environmentId,
     name: scene.name,
     identityIds: [...scene.identityIds],
-    layout: scene.layout,
+    layoutId: scene.layoutId,
+    slotAssignments: { ...scene.slotAssignments },
     paths: { ...scene.paths },
   };
 }
@@ -146,7 +162,9 @@ async function saveEnvironment(draft: EnvironmentDraft) {
   const result = await store.saveEnvironment(draft);
   if (result) {
     environmentDraft.value = null;
-    const saved = result.environments.find((env) => env.name === draft.name);
+    const saved = draft.id
+      ? result.environments.find((env) => env.id === draft.id)
+      : result.environments.find((env) => env.name === draft.name);
     if (saved) store.setActiveEnvironment(saved.id);
   }
 }
@@ -166,6 +184,42 @@ async function deleteScene(sceneId: string) {
   await store.deleteScene(sceneId);
 }
 
+async function deleteEnvironment(environmentId: string) {
+  await store.deleteEnvironment(environmentId);
+  environmentDraft.value = null;
+}
+
+function openLayoutEditor(preset?: LayoutPreset, sceneId?: string) {
+  // Built-in presets cannot be edited in place, so customizing one seeds a new
+  // preset with its geometry instead of cloning the id.
+  const editablePreset = preset && !preset.builtin ? preset : undefined;
+  const seed = preset?.slots.map((slot) => ({ ...slot }));
+  layoutEditor.value = {
+    ...(editablePreset ? { preset: editablePreset } : {}),
+    ...(sceneId ? { sceneId } : {}),
+    seed:
+      seed && seed.length > 0
+        ? seed
+        : store.presetById(store.settings.layout).slots.map((slot) => ({ ...slot })),
+  };
+}
+
+async function saveLayout(draft: { id?: string; name: string; slots: SlotRect[] }) {
+  const sceneId = layoutEditor.value?.sceneId;
+  const saved = await store.saveLayoutPreset(draft);
+  if (!saved) return;
+  layoutEditor.value = null;
+  // When the editor was opened from a scene, switch that scene to the new preset
+  // right away; otherwise the user would save a layout and see nothing change.
+  if (sceneId) await store.setSceneLayout(sceneId, saved.id);
+}
+
+async function deleteLayout(preset: LayoutPreset) {
+  if (!window.confirm(tr("app.confirmDeleteLayout", { name: preset.name }))) return;
+  await store.deleteLayoutPreset(preset.id);
+  layoutEditor.value = null;
+}
+
 async function handleTheme(theme: "dark" | "light" | "system") {
   applyTheme(theme);
   await store.saveSettings({ theme });
@@ -182,8 +236,7 @@ async function handleLocale(locale: "zh" | "en") {
   <div class="app-shell" :data-platform="platform">
     <TitleBar
       :view="view"
-      @open-environment="openEditEnvironment"
-      @new-environment="openNewEnvironment"
+      @manage-environments="switchView('environments')"
     />
 
     <div v-if="store.loading" class="boot">
@@ -198,8 +251,13 @@ async function handleLocale(locale: "zh" | "en") {
       <SideRail :view="view" @navigate="switchView" />
 
       <main class="main-pane">
+        <EnvironmentsView
+          v-if="view === 'environments'"
+          @new-environment="openNewEnvironment"
+          @edit-environment="openEditEnvironment"
+        />
         <IdentitiesView
-          v-if="view === 'identities'"
+          v-else-if="view === 'identities'"
           @new-identity="openNewIdentity"
           @edit-identity="openEditIdentity"
         />
@@ -208,6 +266,7 @@ async function handleLocale(locale: "zh" | "en") {
           @new-scene="openNewScene"
           @edit-scene="openEditScene"
           @delete-scene="deleteScene"
+          @edit-layout="openLayoutEditor"
         />
         <SettingsView
           v-else
@@ -246,7 +305,7 @@ async function handleLocale(locale: "zh" | "en") {
       :engines="store.engines"
       @close="environmentDraft = null"
       @save="saveEnvironment"
-      @delete="store.deleteEnvironment(environmentDraft!.id!); environmentDraft = null"
+      @delete="deleteEnvironment(environmentDraft!.id!)"
     />
 
     <IdentityDialog
@@ -263,9 +322,19 @@ async function handleLocale(locale: "zh" | "en") {
       v-if="sceneDraft"
       :draft="sceneDraft"
       :identities="store.environmentIdentities"
+      :presets="store.layoutPresets"
       @close="sceneDraft = null"
       @save="saveScene"
       @delete="store.deleteScene(sceneDraft!.id!); sceneDraft = null"
+    />
+
+    <LayoutEditor
+      v-if="layoutEditor"
+      :preset="layoutEditor.preset"
+      :seed="layoutEditor.seed"
+      @close="layoutEditor = null"
+      @save="saveLayout"
+      @delete="layoutEditor.preset ? deleteLayout(layoutEditor.preset) : null"
     />
   </div>
 </template>

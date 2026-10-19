@@ -48,17 +48,9 @@ function submit() {
     ...form,
     name: form.name.trim(),
     baseUrl: form.baseUrl.trim(),
-    kind: (form.kind || "").trim(),
+    authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
   });
 }
-
-// Suggestions, not a closed set: the input stays free-form so "测试", "预发"
-// or "项目-联调" all work.
-const kindSuggestions = computed(() => [
-  { value: "local", label: t("app.kindLocal"), hint: t("app.kindLocalHint") },
-  { value: "staging", label: t("app.kindStaging"), hint: t("app.kindStagingHint") },
-  { value: "prod", label: t("app.kindProd"), hint: t("app.kindProdHint") },
-]);
 
 const namePlaceholder = computed(() => t("app.envNameExample"));
 
@@ -88,32 +80,16 @@ function normalizePath(event: Event) {
         <span class="hint">{{ $t("app.envNameHint") }}</span>
       </label>
 
-      <div class="row">
-        <label class="field grow">
-          <span class="label">{{ $t("app.kind") }}</span>
-          <input
-            v-model="form.kind"
-            class="input"
-            list="env-kind-suggestions"
-            :placeholder="$t('app.kindExample')"
-          />
-          <datalist id="env-kind-suggestions">
-            <option v-for="item in kindSuggestions" :key="item.value" :value="item.value">
-              {{ item.label }} — {{ item.hint }}
-            </option>
-          </datalist>
-        </label>
-        <label class="field grow">
-          <span class="label">{{ $t("app.defaultEngine") }}</span>
-          <select v-model="form.defaultEngineId" class="input">
-            <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
-            <option v-for="engine in engines" :key="engine.id" :value="engine.id">
-              {{ engine.brand }} {{ engine.version ?? "" }}
-              <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
-              <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
-            </option>
-          </select>
-        </label>
+      <div class="field">
+        <span class="label">{{ $t("app.defaultEngine") }}</span>
+        <select v-model="form.defaultEngineId" class="input">
+          <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
+          <option v-for="engine in engines" :key="engine.id" :value="engine.id">
+            {{ engine.brand }} {{ engine.version ?? "" }}
+            <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
+            <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
+          </option>
+        </select>
       </div>
 
       <label class="field">
@@ -138,7 +114,7 @@ function normalizePath(event: Event) {
             v-model="form.authCheckPath"
             class="input mono"
             data-field="authCheckPath"
-            placeholder="/api/me"
+            :placeholder="$t('app.authCheckPlaceholder')"
             @blur="normalizePath"
           />
         </label>
@@ -284,6 +260,7 @@ function normalizePath(event: Event) {
 
 .btn:hover:not(:disabled) {
   background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
 }
 
 .btn.primary {
@@ -295,6 +272,19 @@ function normalizePath(event: Event) {
   border-color: color-mix(in srgb, var(--accent) 80%, black);
   color: var(--accent-foreground);
   font-weight: 500;
+}
+
+/* `.btn:hover` matches primary buttons too; restate the gradient so the button
+   does not turn gray while the cursor is over it. */
+.btn.primary:hover:not(:disabled) {
+  background: linear-gradient(
+    180deg,
+    var(--accent-strong),
+    color-mix(in srgb, var(--accent) 88%, black)
+  );
+  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  color: var(--accent-foreground);
+  filter: brightness(1.07);
 }
 
 .btn.danger {

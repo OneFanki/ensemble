@@ -253,7 +253,7 @@ const messages = {
       addSlot: "添加槽位",
       resizeSlot: "调整槽位大小",
       preview: "预览",
-      layoutEditorHint: "相邻槽位允许留白，未被覆盖的区域不分配给任何窗口。",
+      layoutEditorHint: "相邻槽位会自动吸附对齐，靠近边缘或其它槽位时会出现参考线。",
       customLayout: "自定义布局",
       freeLayoutPreview: "无布局：每个窗口都铺满屏幕",
       errLayoutName: "请填写布局名称",
@@ -272,7 +272,13 @@ const messages = {
       instancesShort: "{count} 个实例",
 
       // Settings
-      settingsSubtitle: "引擎扫描 · 外观 · 凭据存储 · 数据与 AI 接入",
+      settingsSubtitle: "按类别查看与管理",
+      settingsTabGeneral: "常规",
+      settingsTabEngines: "浏览器",
+      settingsTabVault: "凭据",
+      settingsTabData: "数据",
+      settingsTabMcp: "AI 接入",
+      settingsTabAbout: "关于",
       scanning: "扫描中",
       tableBrowser: "浏览器",
       tableVersion: "版本",
@@ -314,7 +320,7 @@ const messages = {
       // Data and AI access
       dataTitle: "数据",
       dataNote: "配置全部保存在本机。这里负责跨机器迁移，以及让本机 AI 客户端接管录入工作。",
-      closeToTray: "关闭窗口后留在托盘",
+      closeToTray: "关闭进托盘",
       closeToTrayNote:
         "开启后点关闭只是隐藏窗口，浏览器和 AI 接入继续运行；要彻底退出请在托盘菜单或这里选择退出。",
       exportTitle: "导出配置",
@@ -671,7 +677,7 @@ const messages = {
       resizeSlot: "Resize slot",
       preview: "Preview",
       layoutEditorHint:
-        "Gaps are allowed; area no slot covers is simply not assigned to any window.",
+        "Slots snap to each other and to the stage edges; guides appear while an edge is aligned.",
       customLayout: "Custom layout",
       freeLayoutPreview: "No layout: every window fills the screen",
       errLayoutName: "Enter a layout name",
@@ -692,7 +698,13 @@ const messages = {
       instancesShort: "{count} instances",
 
       // Settings
-      settingsSubtitle: "Engines · Appearance · Credentials · Data and AI access",
+      settingsSubtitle: "Browse and manage settings by category",
+      settingsTabGeneral: "General",
+      settingsTabEngines: "Browsers",
+      settingsTabVault: "Credentials",
+      settingsTabData: "Data",
+      settingsTabMcp: "AI access",
+      settingsTabAbout: "About",
       scanning: "Scanning",
       tableBrowser: "Browser",
       tableVersion: "Version",
@@ -738,7 +750,7 @@ const messages = {
       dataTitle: "Data",
       dataNote:
         "Everything is stored on this machine. This section moves it to another one and lets a local AI client do the data entry.",
-      closeToTray: "Keep running in the tray",
+      closeToTray: "Close to tray",
       closeToTrayNote:
         "With this on, closing the window only hides it; browsers and the AI endpoint keep running. Quit fully from the tray menu or the button below.",
       exportTitle: "Export",

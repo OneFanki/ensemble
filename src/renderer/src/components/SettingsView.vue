@@ -4,17 +4,34 @@ import { useI18n } from "vue-i18n";
 import {
   Bot,
   Copy,
+  Database,
   Download,
+  Info,
   Monitor,
   Plus,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Upload,
 } from "lucide-vue-next";
+import type { Component } from "vue";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { McpStatus } from "@shared/types";
+
+type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
+
+const tabs: Array<{ id: SettingsTab; labelKey: string; icon: Component }> = [
+  { id: "general", labelKey: "app.settingsTabGeneral", icon: SlidersHorizontal },
+  { id: "engines", labelKey: "app.settingsTabEngines", icon: Monitor },
+  { id: "vault", labelKey: "app.settingsTabVault", icon: ShieldCheck },
+  { id: "data", labelKey: "app.settingsTabData", icon: Database },
+  { id: "mcp", labelKey: "app.settingsTabMcp", icon: Bot },
+  { id: "about", labelKey: "app.settingsTabAbout", icon: Info },
+];
+
+const activeTab = ref<SettingsTab>("general");
 
 const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
@@ -198,8 +215,24 @@ async function submitMaster() {
       </div>
     </header>
 
+    <nav class="tabs" role="tablist" :aria-label="$t('app.settings')">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        class="tab"
+        :class="{ active: activeTab === tab.id }"
+        :aria-selected="activeTab === tab.id"
+        @click="activeTab = tab.id"
+      >
+        <component :is="tab.icon" :size="13" />
+        <span>{{ $t(tab.labelKey) }}</span>
+      </button>
+    </nav>
+
     <div class="scroll">
-      <section class="block">
+      <section v-if="activeTab === 'engines'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.engineList") }}</h2>
@@ -274,7 +307,7 @@ async function submitMaster() {
         </p>
       </section>
 
-      <section class="block">
+      <section v-if="activeTab === 'general'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.appearanceTitle") }}</h2>
@@ -370,7 +403,7 @@ async function submitMaster() {
         </p>
       </section>
 
-      <section class="block">
+      <section v-if="activeTab === 'vault'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.vaultTitle") }}</h2>
@@ -459,7 +492,7 @@ async function submitMaster() {
         </p>
       </section>
 
-      <section class="block">
+      <section v-if="activeTab === 'data'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.dataTitle") }}</h2>
@@ -563,7 +596,7 @@ async function submitMaster() {
         <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
       </section>
 
-      <section class="block">
+      <section v-if="activeTab === 'mcp'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.mcpTitle") }}</h2>
@@ -671,7 +704,7 @@ async function submitMaster() {
         <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
       </section>
 
-      <section class="block">
+      <section v-if="activeTab === 'about'" class="block">
         <div class="block-head">
           <div>
             <h2>{{ $t("app.about") }}</h2>
@@ -715,8 +748,42 @@ async function submitMaster() {
   color: var(--faint);
 }
 
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 14px;
+  border-bottom: 1px solid var(--line-soft);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 11px;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
+  color: var(--faint);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--text-secondary);
+}
+
+/*
+ * The active tab is marked by the underline plus color, not by a filled pill:
+ * with six tabs a pill per item made the row look like a button bar.
+ */
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
 .scroll {
-  margin-top: 16px;
+  margin-top: 14px;
   overflow-y: auto;
   min-height: 0;
   display: flex;

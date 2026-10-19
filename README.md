@@ -74,6 +74,17 @@ export HTTP_PROXY=http://127.0.0.1:7897
 pnpm install
 ```
 
+如果 `pnpm install` 之后 `node_modules/electron/dist` 不存在，说明 Electron 的下载脚本没有执行成功。可以单独重试：
+
+```bash
+node node_modules/electron/install.js
+```
+
+下载成功但解压失败时，压缩包通常已在 Electron 缓存目录（Windows 为
+`%LOCALAPPDATA%\electron\Cache`），可手动解压到 `node_modules/electron/dist`，
+并写入 `node_modules/electron/path.txt`（Windows 内容为 `electron.exe`）。
+
+
 ## 数据与安全
 
 - 运行数据位于 Electron `userData` 目录，Windows 为 `%APPDATA%\Ensemble`，macOS 为 `~/Library/Application Support/Ensemble`，Linux 为 `~/.config/Ensemble`。

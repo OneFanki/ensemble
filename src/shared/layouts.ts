@@ -97,3 +97,107 @@ export function resolveSlotAssignments(
 
   return result;
 }
+
+/** Normalized lines the editor can snap to, in fractions of the stage. */
+export interface SnapGuides {
+  vertical: number[];
+  horizontal: number[];
+}
+
+export interface SnapResult {
+  rect: SlotRect;
+  guides: SnapGuides;
+}
+
+function snapCandidates(others: SlotRect[]): { xs: number[]; ys: number[] } {
+  // Stage edges are always candidates, so a slot can be flushed to the screen
+  // border as well as aligned with a neighbour.
+  const xs = [0, 1];
+  const ys = [0, 1];
+  for (const slot of others) {
+    xs.push(slot.x, slot.x + slot.width);
+    ys.push(slot.y, slot.y + slot.height);
+  }
+  return { xs, ys };
+}
+
+/**
+ * Picks the smallest movement that aligns any of `edges` with a candidate line.
+ * A tie is resolved by the first candidate, which keeps snapping predictable.
+ */
+function bestSnap(
+  edges: number[],
+  candidates: number[],
+  threshold: number,
+): { delta: number; target: number } | undefined {
+  let best: { delta: number; target: number } | undefined;
+  for (const edge of edges) {
+    for (const candidate of candidates) {
+      const delta = candidate - edge;
+      if (Math.abs(delta) > threshold) continue;
+      if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, target: candidate };
+    }
+  }
+  return best;
+}
+
+/**
+ * Moves a slot while snapping either of its horizontal edges to stage or
+ * neighbour edges. Both left and right edges are considered so dropping a slot
+ * flush against a neighbour's right side works without pixel hunting.
+ */
+export function snapSlotMove(
+  rect: SlotRect,
+  others: SlotRect[],
+  threshold: { x: number; y: number },
+): SnapResult {
+  const { xs, ys } = snapCandidates(others);
+  const xSnap = bestSnap([rect.x, rect.x + rect.width], xs, threshold.x);
+  const ySnap = bestSnap([rect.y, rect.y + rect.height], ys, threshold.y);
+  const moved = clampSlot({
+    ...rect,
+    x: rect.x + (xSnap?.delta ?? 0),
+    y: rect.y + (ySnap?.delta ?? 0),
+  });
+
+  // Clamping can move the rect away from the line it snapped to; only advertise
+  // guides that still coincide with an actual edge of the final rect.
+  const vertical =
+    xSnap && (aboutEqual(moved.x, xSnap.target) || aboutEqual(moved.x + moved.width, xSnap.target))
+      ? [xSnap.target]
+      : [];
+  const horizontal =
+    ySnap && (aboutEqual(moved.y, ySnap.target) || aboutEqual(moved.y + moved.height, ySnap.target))
+      ? [ySnap.target]
+      : [];
+  return { rect: moved, guides: { vertical, horizontal } };
+}
+
+/**
+ * Resizes from the bottom-right handle with the same snapping rules. The top-left
+ * corner stays put, which is what the handle implies.
+ */
+export function snapSlotResize(
+  rect: SlotRect,
+  others: SlotRect[],
+  threshold: { x: number; y: number },
+  minimum = 0.08,
+): SnapResult {
+  const { xs, ys } = snapCandidates(others);
+  const xSnap = bestSnap([rect.x + rect.width], xs, threshold.x);
+  const ySnap = bestSnap([rect.y + rect.height], ys, threshold.y);
+  const maxWidth = Math.max(minimum, 1 - rect.x);
+  const maxHeight = Math.max(minimum, 1 - rect.y);
+  const width = Math.min(maxWidth, Math.max(minimum, rect.width + (xSnap?.delta ?? 0)));
+  const height = Math.min(maxHeight, Math.max(minimum, rect.height + (ySnap?.delta ?? 0)));
+  const resized: SlotRect = { ...rect, width, height };
+  const vertical =
+    xSnap && aboutEqual(rect.x + width, xSnap.target) && width < maxWidth ? [xSnap.target] : [];
+  const horizontal =
+    ySnap && aboutEqual(rect.y + height, ySnap.target) && height < maxHeight ? [ySnap.target] : [];
+  return { rect: resized, guides: { vertical, horizontal } };
+}
+
+function aboutEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 1e-6;
+}

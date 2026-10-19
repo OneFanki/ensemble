@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Grid2x2, Plus, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import LayoutPreview from "./LayoutPreview.vue";
-import { clampSlot } from "@shared/layouts";
+import { clampSlot, snapSlotMove, snapSlotResize, type SnapGuides } from "@shared/layouts";
 import type { LayoutPreset, SlotRect } from "@shared/types";
 
 const props = defineProps<{
@@ -29,6 +29,10 @@ const form = reactive({
 const selected = ref(0);
 const stage = ref<HTMLElement | null>(null);
 const error = ref<string | null>(null);
+const guides = reactive<SnapGuides>({ vertical: [], horizontal: [] });
+
+/** Snap distance in stage pixels; converted to fractions of the stage per axis. */
+const SNAP_PIXELS = 7;
 
 watch(
   () => props.preset,
@@ -111,6 +115,8 @@ function beginDrag(event: PointerEvent, index: number, mode: DragMode) {
   drag.startX = event.clientX;
   drag.startY = event.clientY;
   drag.rect = { ...form.slots[index]! };
+  guides.vertical = [];
+  guides.horizontal = [];
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", endDrag, { once: true });
 }
@@ -121,15 +127,33 @@ function onMove(event: PointerEvent) {
   const dx = (event.clientX - drag.startX) / box.width;
   const dy = (event.clientY - drag.startY) / box.height;
   const rect = drag.rect;
-  form.slots[drag.index] = clampSlot(
-    drag.mode === "move"
-      ? { ...rect, x: rect.x + dx, y: rect.y + dy }
-      : { ...rect, width: rect.width + dx, height: rect.height + dy },
+  const others = form.slots.filter((_, index) => index !== drag.index);
+  // The threshold is expressed in stage pixels so snapping feels identical no
+  // matter how wide the editor dialog is.
+  const threshold = { x: SNAP_PIXELS / box.width, y: SNAP_PIXELS / box.height };
+
+  if (drag.mode === "move") {
+    const snapped = snapSlotMove({ ...rect, x: rect.x + dx, y: rect.y + dy }, others, threshold);
+    form.slots[drag.index] = snapped.rect;
+    guides.vertical = snapped.guides.vertical;
+    guides.horizontal = snapped.guides.horizontal;
+    return;
+  }
+
+  const snapped = snapSlotResize(
+    { ...rect, width: rect.width + dx, height: rect.height + dy },
+    others,
+    threshold,
   );
+  form.slots[drag.index] = snapped.rect;
+  guides.vertical = snapped.guides.vertical;
+  guides.horizontal = snapped.guides.horizontal;
 }
 
 function endDrag() {
   window.removeEventListener("pointermove", onMove);
+  guides.vertical = [];
+  guides.horizontal = [];
 }
 
 function submit() {
@@ -179,9 +203,23 @@ function submit() {
       </div>
 
       <div ref="stage" class="stage">
+        <!-- Snap guides: shown only while an edge is locked to a stage or neighbour edge. -->
+        <span
+          v-for="line in guides.vertical"
+          :key="`v-${line}`"
+          class="guide guide-v"
+          :style="{ left: `${line * 100}%` }"
+        ></span>
+        <span
+          v-for="line in guides.horizontal"
+          :key="`h-${line}`"
+          class="guide guide-h"
+          :style="{ top: `${line * 100}%` }"
+        ></span>
+
         <div
           v-for="(item, index) in sortedSlots"
-          :key="index"
+          :key="item.index"
           class="slot"
           :class="{ selected: selected === item.index }"
           :style="{
@@ -189,6 +227,9 @@ function submit() {
             top: `${item.slot.y * 100}%`,
             width: `${item.slot.width * 100}%`,
             height: `${item.slot.height * 100}%`,
+            // The slot being edited must never lose its resize handle behind a
+            // neighbouring slot, so it is lifted above every other one.
+            zIndex: selected === item.index ? 30 : 10,
           }"
           @pointerdown="beginDrag($event, item.index, 'move')"
         >
@@ -323,6 +364,28 @@ function submit() {
     var(--bg-elevated);
   overflow: hidden;
   touch-action: none;
+}
+
+.guide {
+  position: absolute;
+  z-index: 40;
+  pointer-events: none;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.guide-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+.guide-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+  transform: translateY(-0.5px);
 }
 
 .slot {

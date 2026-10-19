@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type EnsembleApi } from "@shared/ipc";
-import type { WorkspaceSnapshot } from "@shared/types";
+import type { AutoFillReport, WorkspaceSnapshot } from "@shared/types";
 
 const api: EnsembleApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.workspaceGet),
@@ -26,6 +26,12 @@ const api: EnsembleApi = {
   setPassword: (owner, password) => ipcRenderer.invoke(IPC.credentialsSet, owner, password),
   clearPassword: (owner) => ipcRenderer.invoke(IPC.credentialsClear, owner),
   copyPassword: (owner) => ipcRenderer.invoke(IPC.credentialsCopy, owner),
+  unlockVault: (password) => ipcRenderer.invoke(IPC.credentialsUnlock, password),
+  lockVault: () => ipcRenderer.invoke(IPC.credentialsLock),
+  setMasterPassword: (password) => ipcRenderer.invoke(IPC.credentialsSetMaster, password),
+  removeMasterPassword: () => ipcRenderer.invoke(IPC.credentialsRemoveMaster),
+  changeMasterPassword: (current, next) =>
+    ipcRenderer.invoke(IPC.credentialsChangeMaster, current, next),
 
   launchIdentity: (identityId, pathOverride) =>
     ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride),
@@ -35,6 +41,11 @@ const api: EnsembleApi = {
   stopAll: () => ipcRenderer.invoke(IPC.instanceStopAll),
   checkAuth: (identityId) => ipcRenderer.invoke(IPC.authCheck, identityId),
   fillLogin: (identityId) => ipcRenderer.invoke(IPC.authFill, identityId),
+  onAutoFilled: (listener: (report: AutoFillReport) => void) => {
+    const handler = (_event: unknown, report: AutoFillReport) => listener(report);
+    ipcRenderer.on(IPC.authAutoFilled, handler);
+    return () => ipcRenderer.removeListener(IPC.authAutoFilled, handler);
+  },
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),

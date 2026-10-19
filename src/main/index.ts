@@ -51,17 +51,20 @@ class SafeStorageBox implements SecretBox {
     return process.platform === "win32" ? "dpapi" : process.platform === "darwin" ? "keychain" : "unknown";
   }
 
+  get kind(): "os" {
+    return "os";
+  }
+
   encrypt(plain: string): string {
+    // There is no plaintext fallback: a machine without a usable keychain must
+    // either install one or protect the vault with a master password.
     if (!this.available) {
-      return `plain:${Buffer.from(plain, "utf8").toString("base64")}`;
+      throw new Error("System credential storage is unavailable");
     }
     return `enc:${safeStorage.encryptString(plain).toString("base64")}`;
   }
 
   decrypt(payload: string): string {
-    if (payload.startsWith("plain:")) {
-      return Buffer.from(payload.slice(6), "base64").toString("utf8");
-    }
     if (payload.startsWith("enc:")) {
       return safeStorage.decryptString(Buffer.from(payload.slice(4), "base64"));
     }
@@ -225,7 +228,6 @@ function registerIpc(workspace: WorkspaceService): void {
     broadcastWorkspace();
     return workspace.snapshot();
   });
-
   handle(IPC.identityDelete, (id: string) => {
     workspace.deleteIdentity(String(id));
     broadcastWorkspace();
@@ -272,6 +274,31 @@ function registerIpc(workspace: WorkspaceService): void {
       });
     }, 30_000);
     return true;
+  });
+
+  handle(IPC.credentialsUnlock, (password: string) => workspace.unlockVault(String(password)));
+
+  handle(IPC.credentialsLock, () => {
+    workspace.lockVault();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.credentialsSetMaster, (password: string) => {
+    workspace.setMasterPassword(String(password));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.credentialsRemoveMaster, () => {
+    workspace.removeMasterPassword();
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.credentialsChangeMaster, (current: string, next: string) => {
+    const changed = workspace.changeMasterPassword(String(current), String(next));
+    if (changed) broadcastWorkspace();
+    return changed;
   });
 
   handle(IPC.instanceLaunch, async (identityId: string, pathOverride?: string) => {
@@ -357,6 +384,11 @@ app.whenReady().then(async () => {
     appVersion: app.getVersion(),
     workArea: workAreaRect,
     onChange: broadcastWorkspace,
+    onAutoFill: (report) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.authAutoFilled, report);
+      }
+    },
   });
 
   setCoreLocale(service.settingsSnapshot().locale);
@@ -375,8 +407,17 @@ app.whenReady().then(async () => {
   });
 });
 
+// Registering this listener takes over the quit decision: without an explicit
+// app.quit() here the process stays alive after the last window closes (and a
+// portable build's exe stays locked on Windows).
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") void shutdownAndQuit();
+  if (process.platform === "darwin") return;
+  if (quitting) {
+    app.quit();
+    return;
+  }
+  // Windows were destroyed without a close event; still stop our browsers.
+  void shutdownAndQuit();
 });
 
 app.on("before-quit", () => {

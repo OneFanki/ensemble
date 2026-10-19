@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   AuthCheckResult,
+  AutoFillReport,
   Engine,
   EnvironmentDraft,
   IdentityDraft,
@@ -27,6 +28,11 @@ export const IPC = {
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
+  credentialsUnlock: "credentials:unlock",
+  credentialsLock: "credentials:lock",
+  credentialsSetMaster: "credentials:set-master",
+  credentialsRemoveMaster: "credentials:remove-master",
+  credentialsChangeMaster: "credentials:change-master",
   instanceLaunch: "instance:launch",
   instanceLaunchScene: "instance:launch-scene",
   instanceClean: "instance:clean",
@@ -34,6 +40,7 @@ export const IPC = {
   instanceStopAll: "instance:stop-all",
   authCheck: "auth:check",
   authFill: "auth:fill",
+  authAutoFilled: "auth:auto-filled",
   settingsSave: "settings:save",
   appSetTheme: "app:set-theme",
   windowMinimize: "window:minimize",
@@ -62,6 +69,12 @@ export interface EnsembleApi {
   setPassword(owner: PasswordOwner, password: string): Promise<WorkspaceSnapshot>;
   clearPassword(owner: PasswordOwner): Promise<WorkspaceSnapshot>;
   copyPassword(owner: PasswordOwner): Promise<boolean>;
+  /** Returns false when the master password is wrong. */
+  unlockVault(password: string): Promise<boolean>;
+  lockVault(): Promise<WorkspaceSnapshot>;
+  setMasterPassword(password: string): Promise<WorkspaceSnapshot>;
+  removeMasterPassword(): Promise<WorkspaceSnapshot>;
+  changeMasterPassword(current: string, next: string): Promise<boolean>;
 
   launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult>;
   launchScene(sceneId: string): Promise<LaunchResult>;
@@ -70,6 +83,8 @@ export interface EnsembleApi {
   stopAll(): Promise<void>;
   checkAuth(identityId: string): Promise<AuthCheckResult>;
   fillLogin(identityId: string): Promise<AuthCheckResult>;
+  /** Fires when a launch triggers a best-effort credential fill. */
+  onAutoFilled(listener: (report: AutoFillReport) => void): () => void;
 
   saveAppSettings(patch: SettingsPatch): Promise<AppSettings>;
   setTheme(theme: AppSettings["theme"]): Promise<void>;

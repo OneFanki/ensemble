@@ -24,6 +24,15 @@ export interface Engine {
 
 export type EnvironmentKind = "local" | "staging" | "prod";
 
+/**
+ * A login form input beyond username and password, such as a tenant code.
+ * `label` is matched against the field's placeholder/name/label text on the page.
+ */
+export interface LoginField {
+  label: string;
+  value: string;
+}
+
 export interface Environment {
   id: string;
   name: string;
@@ -33,6 +42,8 @@ export interface Environment {
   kind: EnvironmentKind;
   defaultEngineId?: string;
   autoSubmit: boolean;
+  /** Login fields shared by every identity in this environment. */
+  extraFields?: LoginField[];
   createdAt: string;
   updatedAt: string;
 }
@@ -53,6 +64,8 @@ export interface Identity {
   passwordMode: PasswordMode;
   status: IdentityStatus;
   lastCheckedAt?: string;
+  /** Overrides environment fields with the same label; an empty value removes one. */
+  extraFields?: LoginField[];
   note?: string;
   createdAt: string;
   updatedAt: string;
@@ -99,17 +112,37 @@ export interface LaunchResult {
   identities: Identity[];
 }
 
+/** Emitted after a best-effort fill that follows a launch or scene start. */
+export interface AutoFillReport {
+  identityId: string;
+  label: string;
+  filled: boolean;
+  submitted: boolean;
+  /** Configured fields whose input could not be located on the page. */
+  missingFields: string[];
+  /** Visible inputs the page has that no configuration describes yet. */
+  unmatchedFields: string[];
+  skipped?: "no-password" | "not-login-page" | "cross-origin" | "external" | "failed";
+}
+
 export interface AppSettings {
   theme: "dark" | "light" | "system";
   locale: "zh" | "en";
   lastEnvironmentId?: string;
   lastView: "identities" | "scenes";
   layout: LayoutKey;
+  /** Fill saved credentials as soon as a launched window reaches a login form. */
+  autoFillOnLaunch: boolean;
 }
 
 export interface CredentialPresence {
   secure: boolean;
   backend: string;
+  /** "os" uses the platform keychain; "master" uses an app master password. */
+  mode: "os" | "master";
+  locked: boolean;
+  /** True when a master password can be set or changed right now. */
+  canManageMaster: boolean;
   warning?: string;
   environment: Record<string, boolean>;
   identity: Record<string, boolean>;
@@ -139,6 +172,7 @@ export interface EnvironmentDraft {
   kind: EnvironmentKind;
   defaultEngineId?: string;
   autoSubmit: boolean;
+  extraFields?: LoginField[];
 }
 
 export interface IdentityDraft {
@@ -153,6 +187,7 @@ export interface IdentityDraft {
   passwordMode: PasswordMode;
   /** Only sent when the user typed a new password. Never returned by the main process. */
   password?: string;
+  extraFields?: LoginField[];
   note?: string;
 }
 
@@ -166,7 +201,10 @@ export interface SceneDraft {
 }
 
 export type SettingsPatch = Partial<
-  Pick<AppSettings, "theme" | "locale" | "lastEnvironmentId" | "lastView" | "layout">
+  Pick<
+    AppSettings,
+    "theme" | "locale" | "lastEnvironmentId" | "lastView" | "layout" | "autoFillOnLaunch"
+  >
 >;
 
 export interface PasswordOwner {

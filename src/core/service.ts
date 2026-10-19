@@ -14,7 +14,9 @@ import type {
   Identity,
   IdentityDraft,
   LaunchResult,
-  LayoutKey,
+  LayoutId,
+  LayoutPreset,
+  LayoutPresetDraft,
   LoginField,
   PasswordOwner,
   Platform,
@@ -24,6 +26,7 @@ import type {
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
+import { findLayout, isFreeLayout } from "@shared/layouts";
 import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
 import { buildAuthCheckExpression, buildFillExpression, type FillOutcome } from "./cdp/login";
 import {
@@ -36,7 +39,7 @@ import {
 import { mergeManualEngines, scanEngines } from "./engines";
 import { t } from "./i18n/translate";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
-import { computeGrid, singleWindowRect, slotCount, type Rect } from "./layout/grid";
+import { computeSlots, fullWorkArea, singleWindowRect, type Rect } from "./layout/grid";
 import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
@@ -199,6 +202,7 @@ export class WorkspaceService {
       engines: this.engines,
       enginesReady: this.enginesReady,
       instances: [...this.liveInstances.values()],
+      layoutPresets: this.data.layoutPresets,
       settings: this.settingsSnapshot(),
       credentials: this.credentialPresence(),
       platform: this.options.platform,
@@ -250,7 +254,6 @@ export class WorkspaceService {
         baseUrl: trimTrailingSlash(draft.baseUrl),
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
-        kind: draft.kind,
         defaultEngineId: draft.defaultEngineId,
         autoSubmit: draft.autoSubmit,
         extraFields: sanitizeLoginFields(draft.extraFields),
@@ -266,7 +269,6 @@ export class WorkspaceService {
       baseUrl: trimTrailingSlash(draft.baseUrl),
       loginPath: draft.loginPath,
       authCheckPath: draft.authCheckPath,
-      kind: draft.kind,
       defaultEngineId: draft.defaultEngineId,
       autoSubmit: draft.autoSubmit,
       extraFields: sanitizeLoginFields(draft.extraFields),
@@ -358,6 +360,7 @@ export class WorkspaceService {
     this.data.identities = this.data.identities.filter((item) => item.id !== id);
     for (const scene of this.data.scenes) {
       scene.identityIds = scene.identityIds.filter((identityId) => identityId !== id);
+      delete scene.slotAssignments[id];
       delete scene.paths[id];
     }
     this.data.scenes = this.data.scenes.filter((scene) => scene.identityIds.length > 0);
@@ -390,6 +393,32 @@ export class WorkspaceService {
 
   // ---------- scenes ----------
 
+  private presetFor(layoutId: LayoutId): LayoutPreset {
+    return findLayout(layoutId, this.data.layoutPresets);
+  }
+
+  /**
+   * Keeps assignments honest: only member ids survive, and only slot indices that
+   * exist in the referenced preset. Missing entries are filled at launch time in
+   * member order, so an old scene without assignments still opens sensibly.
+   */
+  private sanitizeAssignments(
+    layout: LayoutPreset,
+    identityIds: string[],
+    assignments: Record<string, number>,
+  ): Record<string, number> {
+    if (isFreeLayout(layout)) return {};
+    const members = new Set(identityIds);
+    const result: Record<string, number> = {};
+    for (const [identityId, slotIndex] of Object.entries(assignments ?? {})) {
+      if (!members.has(identityId)) continue;
+      if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= layout.slots.length)
+        continue;
+      result[identityId] = slotIndex;
+    }
+    return result;
+  }
+
   saveScene(draft: SceneDraft): Scene {
     const environment = this.data.environments.find((item) => item.id === draft.environmentId);
     if (!environment) throw new Error(t("error.environmentMissing"));
@@ -401,6 +430,8 @@ export class WorkspaceService {
     const identityIds = draft.identityIds.filter((id) => known.has(id));
     if (identityIds.length === 0) throw new Error(t("error.sceneMembers"));
 
+    const layout = this.presetFor(draft.layoutId);
+    const slotAssignments = this.sanitizeAssignments(layout, identityIds, draft.slotAssignments);
     const now = new Date().toISOString();
     if (draft.id) {
       const existing = this.data.scenes.find((item) => item.id === draft.id);
@@ -408,7 +439,8 @@ export class WorkspaceService {
       Object.assign(existing, {
         name: draft.name,
         identityIds,
-        layout: draft.layout,
+        layoutId: layout.id,
+        slotAssignments,
         paths: draft.paths,
         updatedAt: now,
       });
@@ -421,7 +453,8 @@ export class WorkspaceService {
       environmentId: draft.environmentId,
       name: draft.name,
       identityIds,
-      layout: draft.layout,
+      layoutId: layout.id,
+      slotAssignments,
       paths: draft.paths,
       createdAt: now,
       updatedAt: now,
@@ -433,6 +466,119 @@ export class WorkspaceService {
 
   deleteScene(id: string): void {
     this.data.scenes = this.data.scenes.filter((item) => item.id !== id);
+    this.persist();
+  }
+
+  /** Switching the preset clears assignments that no longer point at a real slot. */
+  setSceneLayout(sceneId: string, layoutId: LayoutId): void {
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    if (!scene) throw new Error(t("error.sceneMissing"));
+    const layout = this.presetFor(layoutId);
+    scene.layoutId = layout.id;
+    scene.slotAssignments = this.sanitizeAssignments(
+      layout,
+      scene.identityIds,
+      scene.slotAssignments,
+    );
+    scene.updatedAt = new Date().toISOString();
+    this.persist();
+  }
+
+  setSceneSlotAssignments(sceneId: string, assignments: Record<string, number>): void {
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    if (!scene) throw new Error(t("error.sceneMissing"));
+    const layout = this.presetFor(scene.layoutId);
+    scene.slotAssignments = this.sanitizeAssignments(layout, scene.identityIds, assignments);
+    scene.updatedAt = new Date().toISOString();
+    this.persist();
+  }
+
+  /**
+   * Moves the windows a scene already has open to match its slot assignments.
+   * Dragging a member to another slot is pointless if the browser window does not
+   * follow, so this is called right after an assignment change.
+   */
+  async retileScene(sceneId: string): Promise<void> {
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const preset = this.presetFor(scene.layoutId);
+    const area = this.workArea();
+    const taken = new Set<number>();
+    await Promise.all(
+      scene.identityIds.map(async (identityId, index) => {
+        const instance = [...this.liveInstances.values()].find(
+          (item) => item.identityId === identityId,
+        );
+        if (!instance || instance.mode !== "cdp" || !instance.targetId) return;
+        const identity = this.data.identities.find((item) => item.id === identityId);
+        if (!identity) return;
+        const slotIndex = this.resolveSlotIndex(
+          preset,
+          identity,
+          scene.slotAssignments,
+          taken,
+          index,
+        );
+        taken.add(slotIndex);
+        const entry = cdpRegistry.get(instance.id);
+        if (!entry) return;
+        instance.layoutId = preset.id;
+        instance.slotIndex = slotIndex;
+        await setWindowBounds(
+          entry.browser,
+          instance.targetId,
+          this.slotBounds(preset, area, slotIndex),
+        ).catch(() => {});
+      }),
+    );
+  }
+
+  // ---------- layout presets ----------
+
+  saveLayoutPreset(draft: LayoutPresetDraft): LayoutPreset {
+    const name = draft.name.trim();
+    if (!name) throw new Error(t("error.layoutName"));
+    const slots = draft.slots
+      .filter(
+        (slot) =>
+          Number.isFinite(slot.x) &&
+          Number.isFinite(slot.y) &&
+          Number.isFinite(slot.width) &&
+          Number.isFinite(slot.height),
+      )
+      .map((slot) => ({
+        x: roundFraction(slot.x),
+        y: roundFraction(slot.y),
+        width: roundFraction(slot.width),
+        height: roundFraction(slot.height),
+      }));
+    if (slots.length === 0) throw new Error(t("error.layoutSlots"));
+
+    if (draft.id) {
+      const existing = this.data.layoutPresets.find((item) => item.id === draft.id);
+      if (!existing) throw new Error(t("error.layoutMissing"));
+      Object.assign(existing, { name, slots });
+      this.persist();
+      return existing;
+    }
+
+    const preset: LayoutPreset = { id: randomUUID(), name, slots, builtin: false };
+    this.data.layoutPresets.push(preset);
+    this.persist();
+    return preset;
+  }
+
+  deleteLayoutPreset(id: LayoutId): void {
+    const preset = this.data.layoutPresets.find((item) => item.id === id);
+    if (!preset) return;
+    this.data.layoutPresets = this.data.layoutPresets.filter((item) => item.id !== id);
+    // Scenes must never dangle on a deleted preset; fall back to the default grid.
+    for (const scene of this.data.scenes) {
+      if (scene.layoutId !== id) continue;
+      scene.layoutId = "2x2";
+      scene.slotAssignments = {};
+      scene.updatedAt = new Date().toISOString();
+    }
     this.persist();
   }
 
@@ -513,6 +659,40 @@ export class WorkspaceService {
     return this.options.workArea?.() ?? { x: 0, y: 0, width: 1440, height: 900 };
   }
 
+  /** Bounds for one window under a preset; "no layout" means full work area. */
+  private slotBounds(preset: LayoutPreset, area: Rect, index: number): Rect {
+    if (isFreeLayout(preset)) return fullWorkArea(area);
+    return computeSlots(preset, area)[index] ?? fullWorkArea(area);
+  }
+
+  /**
+   * Prefers the user's drag-and-drop assignment, then the first free slot, and
+   * finally wraps around when there are more members than slots.
+   */
+  private resolveSlotIndex(
+    preset: LayoutPreset,
+    identity: Identity,
+    assignments: Record<string, number>,
+    taken: Set<number>,
+    fallback: number,
+  ): number {
+    if (isFreeLayout(preset)) return fallback;
+    const wanted = assignments[identity.id];
+    if (
+      typeof wanted === "number" &&
+      Number.isInteger(wanted) &&
+      wanted >= 0 &&
+      wanted < preset.slots.length &&
+      !taken.has(wanted)
+    ) {
+      return wanted;
+    }
+    for (let index = 0; index < preset.slots.length; index += 1) {
+      if (!taken.has(index)) return index;
+    }
+    return fallback % preset.slots.length;
+  }
+
   async launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
@@ -532,14 +712,17 @@ export class WorkspaceService {
       pathOverride ?? identity.startPath ?? environment.loginPath ?? "/",
     );
     const area = this.workArea();
+    const preset = this.presetFor(this.settings.layout);
+    const slotIndex =
+      this.liveInstances.size === 0
+        ? 0
+        : this.liveInstances.size % Math.max(1, isFreeLayout(preset) ? 1 : preset.slots.length);
     // The first window is the one being worked in, so it opens centered and
-    // large; later windows tile into the remaining grid slots.
-    const slot =
+    // large; later windows follow the configured preset.
+    const bounds =
       this.liveInstances.size === 0
         ? singleWindowRect(area)
-        : computeGrid(this.settings.layout, area)[
-            this.liveInstances.size % slotCount(this.settings.layout)
-          ];
+        : this.slotBounds(preset, area, slotIndex);
 
     const outcome = await launchBrowser({
       environmentId: environment.id,
@@ -547,17 +730,19 @@ export class WorkspaceService {
       engine,
       profileKey: identity.id,
       startUrl,
-      windowBounds: slot,
+      windowBounds: bounds,
       label: identity.name,
       identityId: identity.id,
       instanceId: randomUUID(),
     });
+    outcome.instance.layoutId = preset.id;
+    outcome.instance.slotIndex = slotIndex;
 
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
     this.scheduleAutoFill(identity, environment, outcome.instance);
-    await this.tileInstances(this.settings.layout);
+    await this.tileInstances(preset, [...this.liveInstances.values()]);
     return { instance: outcome.instance, identities: [identity] };
   }
 
@@ -573,17 +758,31 @@ export class WorkspaceService {
     if (members.length === 0) throw new Error(t("error.sceneMembers"));
 
     const area = this.workArea();
-    const slots = computeGrid(scene.layout as LayoutKey, area);
+    const preset = this.presetFor(scene.layoutId);
     const launched: RunningInstance[] = [];
     const startedHere: RunningInstance[] = [];
+    const takenSlots = new Set<number>();
+    const slotByInstance = new Map<string, number>();
 
     try {
       for (const [index, identity] of members.entries()) {
+        const slotIndex = this.resolveSlotIndex(
+          preset,
+          identity,
+          scene.slotAssignments,
+          takenSlots,
+          index,
+        );
+        takenSlots.add(slotIndex);
+
         const running = [...this.liveInstances.values()].find(
           (instance) => instance.identityId === identity.id,
         );
         if (running) {
           launched.push(running);
+          slotByInstance.set(running.id, slotIndex);
+          running.layoutId = preset.id;
+          running.slotIndex = slotIndex;
           continue;
         }
         const engine = this.resolveEngine(identity, environment);
@@ -597,15 +796,18 @@ export class WorkspaceService {
           engine,
           profileKey: identity.id,
           startUrl,
-          windowBounds: slots[index % slots.length],
+          windowBounds: this.slotBounds(preset, area, slotIndex),
           label: identity.name,
           identityId: identity.id,
           instanceId: randomUUID(),
         });
+        outcome.instance.layoutId = preset.id;
+        outcome.instance.slotIndex = slotIndex;
         this.liveInstances.set(outcome.instance.id, outcome.instance);
         this.watchInstance(outcome.instance, outcome.exited);
         launched.push(outcome.instance);
         startedHere.push(outcome.instance);
+        slotByInstance.set(outcome.instance.id, slotIndex);
         this.scheduleAutoFill(identity, environment, outcome.instance);
         await new Promise((resolve) => setTimeout(resolve, 350));
       }
@@ -621,8 +823,75 @@ export class WorkspaceService {
     }
 
     this.persist();
-    await this.tileInstances(scene.layout as LayoutKey);
+    // Only this scene's windows are rearranged; unrelated instances keep their
+    // position, which matters when several scenes run side by side.
+    const sceneInstances = launched.filter((instance) => this.liveInstances.has(instance.id));
+    await this.tileInstances(preset, sceneInstances, slotByInstance);
     return { instance: launched[0] as RunningInstance, identities: members };
+  }
+
+  /**
+   * Reopens one member after the user closed its window. Without this the only
+   * recovery was relaunching the whole scene, which also restarted windows that
+   * were still alive.
+   */
+  async launchSceneMember(sceneId: string, identityId: string): Promise<LaunchResult> {
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    if (!scene) throw new Error(t("error.sceneMissing"));
+    const identity = this.data.identities.find(
+      (item) => item.id === identityId && item.environmentId === scene.environmentId,
+    );
+    if (!identity) throw new Error(t("error.identityMissing"));
+    const environment = this.data.environments.find((item) => item.id === scene.environmentId);
+    if (!environment) throw new Error(t("error.environmentMissing"));
+
+    const running = [...this.liveInstances.values()].find(
+      (instance) => instance.identityId === identityId,
+    );
+    if (running) return { instance: running, identities: [identity] };
+
+    const preset = this.presetFor(scene.layoutId);
+    const taken = new Set<number>();
+    for (const memberId of scene.identityIds) {
+      if (memberId === identityId) continue;
+      const instance = [...this.liveInstances.values()].find(
+        (item) => item.identityId === memberId,
+      );
+      const assigned = scene.slotAssignments[memberId];
+      if (instance && typeof assigned === "number") taken.add(assigned);
+    }
+    const fallback = Math.max(0, scene.identityIds.indexOf(identityId));
+    const slotIndex = this.resolveSlotIndex(
+      preset,
+      identity,
+      scene.slotAssignments,
+      taken,
+      fallback,
+    );
+
+    const engine = this.resolveEngine(identity, environment);
+    const startUrl = joinUrl(
+      environment.baseUrl,
+      scene.paths[identity.id] ?? identity.startPath ?? environment.loginPath ?? "/",
+    );
+    const outcome = await launchBrowser({
+      environmentId: environment.id,
+      profileRoot: this.options.profileRoot,
+      engine,
+      profileKey: identity.id,
+      startUrl,
+      windowBounds: this.slotBounds(preset, this.workArea(), slotIndex),
+      label: identity.name,
+      identityId: identity.id,
+      instanceId: randomUUID(),
+    });
+    outcome.instance.layoutId = preset.id;
+    outcome.instance.slotIndex = slotIndex;
+    this.liveInstances.set(outcome.instance.id, outcome.instance);
+    this.watchInstance(outcome.instance, outcome.exited);
+    this.persist();
+    this.scheduleAutoFill(identity, environment, outcome.instance);
+    return { instance: outcome.instance, identities: [identity] };
   }
 
   async launchCleanSession(environmentId: string): Promise<LaunchResult> {
@@ -636,12 +905,15 @@ export class WorkspaceService {
     if (!engine) throw new Error(t("error.noEngine"));
 
     const area = this.workArea();
+    const preset = this.presetFor(this.settings.layout);
+    const slotIndex =
+      this.liveInstances.size === 0
+        ? 0
+        : this.liveInstances.size % Math.max(1, isFreeLayout(preset) ? 1 : preset.slots.length);
     const slot =
       this.liveInstances.size === 0
         ? singleWindowRect(area)
-        : computeGrid(this.settings.layout, area)[
-            this.liveInstances.size % slotCount(this.settings.layout)
-          ];
+        : this.slotBounds(preset, area, slotIndex);
     const instanceId = randomUUID();
 
     const outcome = await launchBrowser({
@@ -655,11 +927,13 @@ export class WorkspaceService {
       instanceId,
       clean: true,
     });
+    outcome.instance.layoutId = preset.id;
+    outcome.instance.slotIndex = slotIndex;
 
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
-    await this.tileInstances(this.settings.layout);
+    await this.tileInstances(preset, [...this.liveInstances.values()]);
     return { instance: outcome.instance, identities: [] };
   }
 
@@ -700,27 +974,36 @@ export class WorkspaceService {
   }
 
   /**
-   * Re-applies a grid to every window that is already open. Launching a second
-   * identity used to leave the first one centered and overlapping the newcomer;
-   * tiling on each launch keeps the layout matching what the picker promises.
-   * Failures are ignored per window: Wayland compositors may refuse absolute
-   * placement, and a window that moved nowhere is still usable.
+   * Re-applies a preset to the windows it belongs to. Launching a second identity
+   * used to leave the first one centered and overlapping the newcomer; tiling on
+   * each launch keeps the layout matching what the picker promises. Failures are
+   * ignored per window: Wayland compositors may refuse absolute placement, and a
+   * window that moved nowhere is still usable.
+   *
+   * `slotByInstance` carries the slots resolved for a scene: without it the index
+   * of the launch order would silently overwrite drag-and-drop assignments.
    */
-  private async tileInstances(layout: LayoutKey): Promise<void> {
-    const instances = [...this.liveInstances.values()].filter(
-      (instance) => instance.mode === "cdp" && instance.targetId,
+  private async tileInstances(
+    preset: LayoutPreset,
+    instances: RunningInstance[],
+    slotByInstance?: Map<string, number>,
+  ): Promise<void> {
+    const movable = instances.filter(
+      (instance) =>
+        instance.mode === "cdp" &&
+        instance.targetId &&
+        (instance.layoutId === undefined || instance.layoutId === preset.id),
     );
-    if (instances.length < 2) return;
+    if (movable.length < 2) return;
 
-    const slots = computeGrid(layout, this.workArea());
     await Promise.all(
-      instances.map(async (instance, index) => {
+      movable.map(async (instance, index) => {
         const entry = cdpRegistry.get(instance.id);
         const targetId = instance.targetId;
         if (!entry || !targetId) return;
-        const slot = slots[index % slots.length];
-        if (!slot) return;
-        await setWindowBounds(entry.browser, targetId, slot).catch(() => {});
+        const slotIndex = slotByInstance?.get(instance.id) ?? instance.slotIndex ?? index;
+        const bounds = this.slotBounds(preset, this.workArea(), slotIndex);
+        await setWindowBounds(entry.browser, targetId, bounds).catch(() => {});
       }),
     );
   }
@@ -1000,6 +1283,11 @@ export class WorkspaceService {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+/** Three decimals is plenty for a 4K screen and keeps stored presets readable. */
+function roundFraction(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 /** Drops rows the UI may have left empty while the user was editing. */

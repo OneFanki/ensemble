@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Environment, Engine, Identity, Scene } from "@shared/types";
+import { clampSlot } from "@shared/layouts";
+import type { Environment, Engine, Identity, LayoutPreset, Scene, SlotRect } from "@shared/types";
 
 export interface StoredInstance {
   id: string;
@@ -41,7 +42,10 @@ export function profileDirFromCommandLine(commandLine: string): string | undefin
 }
 
 export function normalizeForCompare(path: string): string {
-  return path.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+  return path
+    .replace(/[\\/]+$/, "")
+    .replace(/\\/g, "/")
+    .toLowerCase();
 }
 
 /**
@@ -145,6 +149,7 @@ export interface WorkspaceData {
   scenes: Scene[];
   instances: StoredInstance[];
   manualEngines: string[];
+  layoutPresets: LayoutPreset[];
 }
 
 export interface EngineCache {
@@ -161,17 +166,90 @@ export function emptyWorkspace(): WorkspaceData {
     scenes: [],
     instances: [],
     manualEngines: [],
+    layoutPresets: [],
   };
+}
+
+/** Older files stored a fixed layout key (`1x1`, `2x2`, …) on each scene. */
+type LegacyScene = Partial<Scene> & { layout?: string };
+
+function sanitizeScenes(input: unknown): Scene[] {
+  if (!Array.isArray(input)) return [];
+  return (input as LegacyScene[])
+    .filter(
+      (scene): scene is LegacyScene & { id: string; environmentId: string } =>
+        typeof scene?.id === "string" && typeof scene.environmentId === "string",
+    )
+    .map((scene) => {
+      const assignments =
+        scene.slotAssignments && typeof scene.slotAssignments === "object"
+          ? Object.fromEntries(
+              Object.entries(scene.slotAssignments).filter(
+                ([key, value]) => typeof key === "string" && Number.isInteger(value) && value >= 0,
+              ),
+            )
+          : {};
+      return {
+        id: scene.id,
+        environmentId: scene.environmentId,
+        name: typeof scene.name === "string" ? scene.name : "",
+        identityIds: Array.isArray(scene.identityIds) ? scene.identityIds : [],
+        layoutId:
+          typeof scene.layoutId === "string" && scene.layoutId
+            ? scene.layoutId
+            : typeof scene.layout === "string" && scene.layout
+              ? scene.layout
+              : "2x2",
+        slotAssignments: assignments,
+        paths: scene.paths && typeof scene.paths === "object" ? scene.paths : {},
+        createdAt: scene.createdAt ?? new Date().toISOString(),
+        updatedAt: scene.updatedAt ?? new Date().toISOString(),
+      };
+    });
+}
+
+function sanitizeLayoutPresets(input: unknown): LayoutPreset[] {
+  if (!Array.isArray(input)) return [];
+  const presets: LayoutPreset[] = [];
+  for (const raw of input as LayoutPreset[]) {
+    if (!raw || typeof raw.id !== "string" || typeof raw.name !== "string") continue;
+    if (!Array.isArray(raw.slots) || raw.slots.length === 0) continue;
+    const slots: SlotRect[] = [];
+    for (const slot of raw.slots) {
+      if (
+        typeof slot?.x === "number" &&
+        typeof slot.y === "number" &&
+        typeof slot.width === "number" &&
+        typeof slot.height === "number"
+      ) {
+        slots.push(clampSlot(slot));
+      }
+    }
+    if (slots.length > 0) {
+      presets.push({ id: raw.id, name: raw.name, slots, builtin: false });
+    }
+  }
+  return presets;
+}
+
+/** Strips fields from older schema versions so they cannot leak back into storage. */
+function sanitizeEnvironments(input: unknown): Environment[] {
+  if (!Array.isArray(input)) return [];
+  return (input as Array<Environment & { kind?: string }>).map((environment) => {
+    const { kind: _kind, ...rest } = environment;
+    return rest;
+  });
 }
 
 export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData {
   const base = emptyWorkspace();
   return {
     version: 1,
-    environments: Array.isArray(input.environments) ? input.environments : base.environments,
+    environments: sanitizeEnvironments(input.environments),
     identities: Array.isArray(input.identities) ? input.identities : base.identities,
-    scenes: Array.isArray(input.scenes) ? input.scenes : base.scenes,
+    scenes: sanitizeScenes(input.scenes),
     instances: Array.isArray(input.instances) ? input.instances : base.instances,
     manualEngines: Array.isArray(input.manualEngines) ? input.manualEngines : base.manualEngines,
+    layoutPresets: sanitizeLayoutPresets(input.layoutPresets),
   };
 }

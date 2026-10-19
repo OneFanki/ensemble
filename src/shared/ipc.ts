@@ -6,6 +6,9 @@ import type {
   EnvironmentDraft,
   IdentityDraft,
   LaunchResult,
+  LayoutId,
+  LayoutPreset,
+  LayoutPresetDraft,
   PasswordOwner,
   SceneDraft,
   SettingsPatch,
@@ -25,6 +28,11 @@ export const IPC = {
   identityRebuildProfile: "identity:rebuild-profile",
   sceneSave: "scene:save",
   sceneDelete: "scene:delete",
+  sceneSetLayout: "scene:set-layout",
+  sceneSetSlots: "scene:set-slots",
+  sceneRetile: "scene:retile",
+  layoutPresetSave: "layout:save",
+  layoutPresetDelete: "layout:delete",
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
@@ -35,6 +43,7 @@ export const IPC = {
   credentialsChangeMaster: "credentials:change-master",
   instanceLaunch: "instance:launch",
   instanceLaunchScene: "instance:launch-scene",
+  instanceLaunchSceneMember: "instance:launch-scene-member",
   instanceClean: "instance:clean",
   instanceStop: "instance:stop",
   instanceStopAll: "instance:stop-all",
@@ -64,6 +73,16 @@ export interface EnsembleApi {
   rebuildIdentityProfile(id: string): Promise<WorkspaceSnapshot>;
   saveScene(draft: SceneDraft): Promise<WorkspaceSnapshot>;
   deleteScene(id: string): Promise<WorkspaceSnapshot>;
+  setSceneLayout(sceneId: string, layoutId: LayoutId): Promise<WorkspaceSnapshot>;
+  setSceneSlotAssignments(
+    sceneId: string,
+    assignments: Record<string, number>,
+  ): Promise<WorkspaceSnapshot>;
+  /** Repositions the windows of one scene after its slots changed. */
+  retileScene(sceneId: string): Promise<void>;
+  /** Returns the saved preset so the caller can select it right away. */
+  saveLayoutPreset(draft: LayoutPresetDraft): Promise<LayoutPreset>;
+  deleteLayoutPreset(id: LayoutId): Promise<WorkspaceSnapshot>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
 
   setPassword(owner: PasswordOwner, password: string): Promise<WorkspaceSnapshot>;
@@ -78,6 +97,7 @@ export interface EnsembleApi {
 
   launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult>;
   launchScene(sceneId: string): Promise<LaunchResult>;
+  launchSceneMember(sceneId: string, identityId: string): Promise<LaunchResult>;
   launchCleanSession(environmentId: string): Promise<LaunchResult>;
   stopInstance(id: string): Promise<void>;
   stopAll(): Promise<void>;

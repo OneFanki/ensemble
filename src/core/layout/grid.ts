@@ -1,4 +1,4 @@
-import type { LayoutKey } from "@shared/types";
+import type { LayoutPreset } from "@shared/types";
 
 export interface Rect {
   x: number;
@@ -7,57 +7,31 @@ export interface Rect {
   height: number;
 }
 
-const DIMENSIONS: Record<LayoutKey, { columns: number; rows: number }> = {
-  "1x1": { columns: 1, rows: 1 },
-  "2x1": { columns: 2, rows: 1 },
-  "2x2": { columns: 2, rows: 2 },
-  "3x1": { columns: 3, rows: 1 },
-};
-
-export function layoutDimensions(layout: LayoutKey): { columns: number; rows: number } {
-  return DIMENSIONS[layout];
-}
-
 /**
- * Splits a work area into `columns x rows` slots in row-major order.
- * Remainder pixels are assigned to the last column/row so slots always cover the area.
+ * Turns a preset's normalized slots into absolute rectangles on the work area.
+ * The conversion is edge-to-edge: no outer padding and no gaps, so a 2×2 preset
+ * uses every pixel the screen offers. Adjacent windows keep their own 1px border,
+ * which is enough separation without stealing usable space.
  */
-export function computeGrid(layout: LayoutKey, area: Rect, gap = 8, padding = 8): Rect[] {
-  const { columns, rows } = DIMENSIONS[layout];
-  const innerWidth = Math.max(0, area.width - padding * 2 - gap * (columns - 1));
-  const innerHeight = Math.max(0, area.height - padding * 2 - gap * (rows - 1));
-  const cellWidth = Math.floor(innerWidth / columns);
-  const cellHeight = Math.floor(innerHeight / rows);
-  const slots: Rect[] = [];
-
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const isLastColumn = column === columns - 1;
-      const isLastRow = row === rows - 1;
-      const width = isLastColumn ? innerWidth - cellWidth * (columns - 1) : cellWidth;
-      const height = isLastRow ? innerHeight - cellHeight * (rows - 1) : cellHeight;
-      slots.push({
-        x: area.x + padding + column * (cellWidth + gap),
-        y: area.y + padding + row * (cellHeight + gap),
-        width,
-        height,
-      });
-    }
-  }
-
-  return slots;
-}
-
-export function slotCount(layout: LayoutKey): number {
-  const { columns, rows } = DIMENSIONS[layout];
-  return columns * rows;
+export function computeSlots(preset: LayoutPreset, area: Rect): Rect[] {
+  return preset.slots.map((slot) => {
+    const left = Math.round(slot.x * area.width);
+    const top = Math.round(slot.y * area.height);
+    const right = Math.round((slot.x + slot.width) * area.width);
+    const bottom = Math.round((slot.y + slot.height) * area.height);
+    return {
+      x: area.x + left,
+      y: area.y + top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
+    };
+  });
 }
 
 /**
- * Placement for a single window. A lone identity is the one you are actively
- * working in, so it gets a comfortable centered window instead of the first
- * grid slot — which would pin it to the top-left quarter of the screen.
- * Multi-window launches still tile.
+ * Placement for a single window launched outside a scene. A lone identity is the
+ * one you are actively working in, so it gets a comfortable centered window
+ * instead of a grid slot pinned to the top-left quarter.
  */
 export function singleWindowRect(
   area: Rect,
@@ -86,4 +60,9 @@ export function singleWindowRect(
     width,
     height,
   };
+}
+
+/** Full work area, used by the "no layout" mode for every window. */
+export function fullWorkArea(area: Rect): Rect {
+  return { ...area };
 }

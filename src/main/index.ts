@@ -17,6 +17,8 @@ import type {
   AppSettings,
   EnvironmentDraft,
   IdentityDraft,
+  LayoutId,
+  LayoutPresetDraft,
   PasswordOwner,
   SceneDraft,
   SettingsPatch,
@@ -24,6 +26,7 @@ import type {
 import {
   environmentDraftSchema,
   identityDraftSchema,
+  layoutPresetDraftSchema,
   passwordOwnerSchema,
   sceneDraftSchema,
   settingsPatchSchema,
@@ -48,7 +51,11 @@ class SafeStorageBox implements SecretBox {
       const backend = safeStorage.getSelectedStorageBackend?.();
       return backend ?? "unknown";
     }
-    return process.platform === "win32" ? "dpapi" : process.platform === "darwin" ? "keychain" : "unknown";
+    return process.platform === "win32"
+      ? "dpapi"
+      : process.platform === "darwin"
+        ? "keychain"
+        : "unknown";
   }
 
   get kind(): "os" {
@@ -286,6 +293,34 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.sceneSetLayout, (sceneId: string, layoutId: LayoutId) => {
+    workspace.setSceneLayout(String(sceneId), String(layoutId));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.sceneSetSlots, (sceneId: string, assignments: Record<string, number>) => {
+    workspace.setSceneSlotAssignments(String(sceneId), assignments);
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.sceneRetile, async (sceneId: string) => {
+    await workspace.retileScene(String(sceneId));
+  });
+
+  handle(IPC.layoutPresetSave, (draft: LayoutPresetDraft) => {
+    const preset = workspace.saveLayoutPreset(layoutPresetDraftSchema.parse(draft));
+    broadcastWorkspace();
+    return preset;
+  });
+
+  handle(IPC.layoutPresetDelete, (id: LayoutId) => {
+    workspace.deleteLayoutPreset(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
   handle(IPC.credentialsSet, (owner: PasswordOwner, password: string) => {
     workspace.setPassword(passwordOwnerSchema.parse(owner), String(password));
     broadcastWorkspace();
@@ -343,6 +378,12 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.instanceLaunchScene, async (sceneId: string) => {
     const result = await workspace.launchScene(String(sceneId));
+    broadcastWorkspace();
+    return result;
+  });
+
+  handle(IPC.instanceLaunchSceneMember, async (sceneId: string, identityId: string) => {
+    const result = await workspace.launchSceneMember(String(sceneId), String(identityId));
     broadcastWorkspace();
     return result;
   });

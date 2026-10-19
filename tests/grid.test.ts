@@ -1,18 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { computeGrid, layoutDimensions, singleWindowRect, slotCount } from "@core/layout/grid";
+import { computeSlots, fullWorkArea, singleWindowRect } from "@core/layout/grid";
+import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, clampSlot, findLayout } from "@shared/layouts";
 
 const area = { x: 100, y: 50, width: 1400, height: 900 };
 
-describe("computeGrid", () => {
-  it("returns one slot covering the padded area for 1x1", () => {
-    const slots = computeGrid("1x1", area, 8, 8);
-    expect(slots).toHaveLength(1);
-    expect(slots[0]).toEqual({ x: 108, y: 58, width: 1384, height: 884 });
+describe("computeSlots", () => {
+  it("covers the whole work area with no outer padding", () => {
+    const preset = findLayout("2x2");
+    const slots = computeSlots(preset, area);
+    expect(slots).toHaveLength(4);
+    expect(slots[0]).toEqual({ x: 100, y: 50, width: 700, height: 450 });
+    const last = slots[3]!;
+    expect(last.x + last.width).toBe(area.x + area.width);
+    expect(last.y + last.height).toBe(area.y + area.height);
   });
 
-  it("splits 2x2 into four non overlapping slots", () => {
-    const slots = computeGrid("2x2", area, 8, 8);
-    expect(slots).toHaveLength(4);
+  it("splits 2x2 into four non-overlapping slots", () => {
+    const slots = computeSlots(findLayout("2x2"), area);
     for (let i = 0; i < slots.length; i += 1) {
       for (let j = i + 1; j < slots.length; j += 1) {
         const a = slots[i]!;
@@ -27,23 +31,70 @@ describe("computeGrid", () => {
     }
   });
 
-  it("covers the full inner area including remainder pixels", () => {
+  it("absorbs rounding remainder so the right and bottom edges are exact", () => {
     const odd = { x: 0, y: 0, width: 1001, height: 701 };
-    const slots = computeGrid("3x1", odd, 8, 8);
+    const slots = computeSlots(findLayout("3x1"), odd);
     expect(slots).toHaveLength(3);
-    const first = slots[0]!;
+    expect(slots[0]!.x).toBe(0);
     const last = slots[2]!;
-    expect(first.x).toBe(8);
-    expect(last.x + last.width).toBe(993);
-    expect(last.y + last.height).toBe(693);
+    expect(last.x + last.width).toBe(1001);
+    expect(last.y + last.height).toBe(701);
   });
 
-  it("reports dimensions and slot counts consistently", () => {
-    for (const layout of ["1x1", "2x1", "2x2", "3x1"] as const) {
-      const { columns, rows } = layoutDimensions(layout);
-      expect(slotCount(layout)).toBe(columns * rows);
-      expect(computeGrid(layout, area)).toHaveLength(columns * rows);
+  it("maps custom fractional slots onto the work area", () => {
+    const slots = computeSlots(
+      {
+        id: "custom",
+        name: "wide-left",
+        builtin: false,
+        slots: [
+          { x: 0, y: 0, width: 0.6, height: 1 },
+          { x: 0.6, y: 0, width: 0.4, height: 0.5 },
+          { x: 0.6, y: 0.5, width: 0.4, height: 0.5 },
+        ],
+      },
+      area,
+    );
+    expect(slots[0]).toEqual({ x: 100, y: 50, width: 840, height: 900 });
+    expect(slots[1]!.x).toBe(940);
+    expect(slots[2]!.y).toBe(500);
+  });
+
+  it("falls back to a usable preset when the id is unknown", () => {
+    expect(findLayout("does-not-exist").id).toBe("2x2");
+  });
+
+  it("keeps every built-in preset inside the unit square", () => {
+    for (const preset of BUILTIN_LAYOUTS) {
+      for (const slot of preset.slots) {
+        expect(slot.x).toBeGreaterThanOrEqual(0);
+        expect(slot.y).toBeGreaterThanOrEqual(0);
+        expect(slot.x + slot.width).toBeLessThanOrEqual(1.0001);
+        expect(slot.y + slot.height).toBeLessThanOrEqual(1.0001);
+      }
     }
+  });
+
+  it("treats the free preset as no layout and gives windows the full area", () => {
+    const free = findLayout(FREE_LAYOUT_ID);
+    expect(free.slots).toHaveLength(0);
+    expect(computeSlots(free, area)).toEqual([]);
+    expect(fullWorkArea(area)).toEqual(area);
+  });
+});
+
+describe("clampSlot", () => {
+  it("keeps a slot inside the screen", () => {
+    const slot = clampSlot({ x: 0.9, y: 0.9, width: 0.5, height: 0.5 });
+    expect(slot.x).toBeCloseTo(0.5);
+    expect(slot.y).toBeCloseTo(0.5);
+    expect(slot.x + slot.width).toBeLessThanOrEqual(1);
+  });
+
+  it("enforces a usable minimum size", () => {
+    const slot = clampSlot({ x: 0, y: 0, width: 0.01, height: 0.01 });
+    expect(slot.width).toBeGreaterThanOrEqual(0.08);
+    expect(slot.height).toBeGreaterThanOrEqual(0.08);
   });
 });
 

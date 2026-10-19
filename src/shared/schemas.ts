@@ -18,13 +18,23 @@ const loginFieldSchema = z.object({
   value: z.string().trim().max(200),
 });
 
+const slotRectSchema = z
+  .object({
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    width: z.number().min(0.05).max(1),
+    height: z.number().min(0.05).max(1),
+  })
+  .refine((slot) => slot.x + slot.width <= 1.001 && slot.y + slot.height <= 1.001, {
+    message: "窗口必须落在屏幕范围内",
+  });
+
 export const environmentDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(80),
   baseUrl: httpUrl,
   loginPath: localPath,
   authCheckPath: pathValue.optional(),
-  kind: z.string().trim().max(40),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
@@ -50,16 +60,23 @@ export const sceneDraftSchema = z.object({
   environmentId: z.string().min(1),
   name: z.string().trim().min(1).max(80),
   identityIds: z.array(z.string().min(1)).min(1).max(8),
-  layout: z.enum(["1x1", "2x1", "2x2", "3x1"]),
+  layoutId: z.string().min(1).max(64),
+  slotAssignments: z.record(z.string(), z.number().int().min(0).max(15)),
   paths: z.record(z.string(), pathValue),
+});
+
+export const layoutPresetDraftSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().trim().min(1).max(60),
+  slots: z.array(slotRectSchema).min(1).max(12),
 });
 
 export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(["zh", "en"]).optional(),
   lastEnvironmentId: z.string().optional(),
-  lastView: z.enum(["identities", "scenes"]).optional(),
-  layout: z.enum(["1x1", "2x1", "2x2", "3x1"]).optional(),
+  lastView: z.enum(["environments", "identities", "scenes"]).optional(),
+  layout: z.string().min(1).max(64).optional(),
   autoFillOnLaunch: z.boolean().optional(),
 });
 

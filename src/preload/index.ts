@@ -21,6 +21,12 @@ const api: EnsembleApi = {
   rebuildIdentityProfile: (id) => ipcRenderer.invoke(IPC.identityRebuildProfile, id),
   saveScene: (draft) => ipcRenderer.invoke(IPC.sceneSave, draft),
   deleteScene: (id) => ipcRenderer.invoke(IPC.sceneDelete, id),
+  setSceneLayout: (sceneId, layoutId) => ipcRenderer.invoke(IPC.sceneSetLayout, sceneId, layoutId),
+  setSceneSlotAssignments: (sceneId, assignments) =>
+    ipcRenderer.invoke(IPC.sceneSetSlots, sceneId, assignments),
+  retileScene: (sceneId) => ipcRenderer.invoke(IPC.sceneRetile, sceneId),
+  saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
+  deleteLayoutPreset: (id) => ipcRenderer.invoke(IPC.layoutPresetDelete, id),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
 
   setPassword: (owner, password) => ipcRenderer.invoke(IPC.credentialsSet, owner, password),
@@ -36,6 +42,8 @@ const api: EnsembleApi = {
   launchIdentity: (identityId, pathOverride) =>
     ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride),
   launchScene: (sceneId) => ipcRenderer.invoke(IPC.instanceLaunchScene, sceneId),
+  launchSceneMember: (sceneId, identityId) =>
+    ipcRenderer.invoke(IPC.instanceLaunchSceneMember, sceneId, identityId),
   launchCleanSession: (environmentId) => ipcRenderer.invoke(IPC.instanceClean, environmentId),
   stopInstance: (id) => ipcRenderer.invoke(IPC.instanceStop, id),
   stopAll: () => ipcRenderer.invoke(IPC.instanceStopAll),

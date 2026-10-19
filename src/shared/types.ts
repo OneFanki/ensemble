@@ -23,13 +23,6 @@ export interface Engine {
 }
 
 /**
- * Free text by design. Teams label environments "local", "staging", "prod", but
- * equally "测试", "项目-联调" or anything else. Only production-like values get
- * the extra confirmation; see @shared/environments.
- */
-export type EnvironmentKind = string;
-
-/**
  * A login form input beyond username and password, such as a tenant code.
  * `label` is matched against the field's placeholder/name/label text on the page.
  */
@@ -44,7 +37,6 @@ export interface Environment {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  kind: EnvironmentKind;
   defaultEngineId?: string;
   autoSubmit: boolean;
   /** Login fields shared by every identity in this environment. */
@@ -76,15 +68,40 @@ export interface Identity {
   updatedAt: string;
 }
 
-/** Layout key is columns x rows. */
-export type LayoutKey = "1x1" | "2x1" | "2x2" | "3x1";
+/**
+ * Built-in ids are stable strings such as "2x2" or "free". Custom presets use a
+ * generated id, so scenes only ever reference a preset by id.
+ */
+export type LayoutId = string;
+
+/** A window rectangle in fractions of the work area (0–1). */
+export interface SlotRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A named window arrangement. `slots` positions windows edge to edge across the
+ * whole work area; an empty slot list means "no layout": every window opens at
+ * full work-area size and windows overlap instead of shrinking.
+ */
+export interface LayoutPreset {
+  id: LayoutId;
+  name: string;
+  slots: SlotRect[];
+  builtin: boolean;
+}
 
 export interface Scene {
   id: string;
   environmentId: string;
   name: string;
   identityIds: string[];
-  layout: LayoutKey;
+  layoutId: LayoutId;
+  /** identityId -> slot index. Missing entries fall back to launch order. */
+  slotAssignments: Record<string, number>;
   paths: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -101,6 +118,9 @@ export interface RunningInstance {
   mode: "cdp" | "external";
   cdpPort?: number;
   targetId?: string;
+  /** Preset and slot the window was placed with, so later retiles keep it put. */
+  layoutId?: LayoutId;
+  slotIndex?: number;
   startedAt: string;
   clean?: boolean;
 }
@@ -134,8 +154,9 @@ export interface AppSettings {
   theme: "dark" | "light" | "system";
   locale: "zh" | "en";
   lastEnvironmentId?: string;
-  lastView: "identities" | "scenes";
-  layout: LayoutKey;
+  lastView: "environments" | "identities" | "scenes";
+  /** Preset used when identities are launched outside a scene. */
+  layout: LayoutId;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
 }
@@ -161,6 +182,8 @@ export interface WorkspaceSnapshot {
   /** False while the background engine scan is still running. */
   enginesReady: boolean;
   instances: RunningInstance[];
+  /** User-defined layout presets; built-ins live in @shared/layouts. */
+  layoutPresets: LayoutPreset[];
   settings: AppSettings;
   credentials: CredentialPresence;
   platform: Platform;
@@ -174,7 +197,6 @@ export interface EnvironmentDraft {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  kind: EnvironmentKind;
   defaultEngineId?: string;
   autoSubmit: boolean;
   extraFields?: LoginField[];
@@ -201,8 +223,15 @@ export interface SceneDraft {
   environmentId: string;
   name: string;
   identityIds: string[];
-  layout: LayoutKey;
+  layoutId: LayoutId;
+  slotAssignments: Record<string, number>;
   paths: Record<string, string>;
+}
+
+export interface LayoutPresetDraft {
+  id?: string;
+  name: string;
+  slots: SlotRect[];
 }
 
 export type SettingsPatch = Partial<

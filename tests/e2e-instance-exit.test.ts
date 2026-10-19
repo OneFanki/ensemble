@@ -39,7 +39,6 @@ async function makeService() {
     name: "exit",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/",
-    kind: "local",
     defaultEngineId: engine.id,
     autoSubmit: false,
   });

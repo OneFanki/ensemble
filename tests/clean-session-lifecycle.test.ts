@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceService } from "@core/service";
 import type { SecretBox } from "@core/credentials/vault";
 import type { RunningInstance } from "@shared/types";
+import {
+  CLEAN_SESSION_SEGMENT,
+  isCleanProfileDir,
+  removeCleanProfiles,
+} from "@core/processes/clean-profiles";
 
 const plainBox: SecretBox = {
   available: false,
@@ -93,5 +98,30 @@ describe("clean session lifecycle", () => {
     await service.stopInstance("identity-2");
 
     expect(existsSync(dir)).toBe(true);
+  });
+});
+
+describe("environment-free clean sessions", () => {
+  it("uses a dedicated root segment outside every environment", () => {
+    // Deleting an environment stops instances by environmentId, so a blank clean
+    // session must not borrow a real one.
+    expect(CLEAN_SESSION_SEGMENT).toBe("clean");
+    expect(isCleanProfileDir(join("profiles", CLEAN_SESSION_SEGMENT, "clean-123"))).toBe(true);
+  });
+
+  it("is swept on startup alongside environment-scoped clean profiles", async () => {
+    const { profileRoot } = await makeService();
+    const scoped = join(profileRoot, "env-1", "clean-a");
+    const unscoped = join(profileRoot, CLEAN_SESSION_SEGMENT, "clean-b");
+    const identityDir = join(profileRoot, "env-1", "identity-1");
+    for (const dir of [scoped, unscoped, identityDir]) {
+      await mkdir(dir, { recursive: true });
+    }
+
+    await removeCleanProfiles([profileRoot]);
+
+    expect(existsSync(scoped)).toBe(false);
+    expect(existsSync(unscoped)).toBe(false);
+    expect(existsSync(identityDir)).toBe(true);
   });
 });

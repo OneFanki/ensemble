@@ -53,6 +53,10 @@ async function remove(environment: Environment) {
         <p class="head-note">{{ $t("app.environmentsSubtitle") }}</p>
       </div>
       <div class="head-actions">
+        <button class="btn" type="button" @click="store.launchCleanSession()">
+          <Globe :size="13" />
+          {{ $t("app.cleanSessionNoEnv") }}
+        </button>
         <button class="btn primary" type="button" @click="emit('newEnvironment')">
           <Plus :size="13" />
           {{ $t("app.newEnvironment") }}

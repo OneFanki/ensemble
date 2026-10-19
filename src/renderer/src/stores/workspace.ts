@@ -309,17 +309,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("launch", () => window.ensemble.launchSceneMember(sceneId, identityId));
   }
 
-  async function launchCleanSession() {
-    const envId = activeEnvironment.value?.id;
-    if (!envId) {
-      notify(tr("app.toastNeedEnvironment"), "error");
-      return;
-    }
+  /**
+   * Pass an environment id for a clean window on that login page; omit it for a
+   * blank tab that belongs to no environment.
+   */
+  async function launchCleanSession(environmentId?: string) {
     return run("launch", async () => {
-      const result = await window.ensemble.launchCleanSession(envId);
+      const result = await window.ensemble.launchCleanSession(environmentId);
       notify(tr("app.toastCleanOpened"), "success");
       return result;
     });
+  }
+
+  /** Convenience wrapper for the views scoped to the active environment. */
+  async function launchScopedCleanSession() {
+    return launchCleanSession(activeEnvironment.value?.id);
   }
 
   async function stopInstance(id: string) {
@@ -488,6 +492,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     launchScene,
     launchSceneMember,
     launchCleanSession,
+    launchScopedCleanSession,
     stopInstance,
     stopAll,
     checkAuth,

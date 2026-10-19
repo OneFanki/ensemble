@@ -475,8 +475,10 @@ function registerIpc(workspace: WorkspaceService): void {
     return result;
   });
 
-  handle(IPC.instanceClean, async (environmentId: string) => {
-    const result = await workspace.launchCleanSession(String(environmentId));
+  handle(IPC.instanceClean, async (environmentId?: string) => {
+    const result = await workspace.launchCleanSession(
+      environmentId ? String(environmentId) : undefined,
+    );
     broadcastWorkspace();
     return result;
   });

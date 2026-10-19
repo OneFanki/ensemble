@@ -1062,6 +1062,25 @@ export class McpServer {
         },
       },
       {
+        name: "launch_clean_session",
+        description:
+          "打开一个干净会话窗口：不登录、关闭即删除。传 environmentId 时打开该环境登录页；不传则打开不属于任何环境的空白页。",
+        kind: "run",
+        inputSchema: object({
+          environmentId: string("环境 id；省略则打开空白页"),
+          confirmProduction: { type: "boolean", description: "生产环境必须显式确认" },
+        }),
+        run: async (args) => {
+          const environmentId =
+            typeof args["environmentId"] === "string" && args["environmentId"]
+              ? args["environmentId"]
+              : undefined;
+          if (environmentId) guardProduction(findEnvironment(environmentId), args);
+          const result = await service.launchCleanSession(environmentId);
+          return { instanceId: result.instance.id, environmentId: result.instance.environmentId };
+        },
+      },
+      {
         name: "stop_all",
         description: "关闭全部由 Ensemble 启动的浏览器窗口。",
         kind: "run",

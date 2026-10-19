@@ -1,15 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import {
-  Globe,
-  Play,
-  Plus,
-  RefreshCw,
-  Search,
-  Square,
-  X,
-} from "lucide-vue-next";
+import { Globe, Play, Plus, RefreshCw, Search, Square, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 import { isProductionName } from "@shared/environments";
 import type { Identity, RoleColor } from "@shared/types";
@@ -41,8 +33,12 @@ const visibleIdentities = computed(() => {
   });
 });
 
-const runningCount = computed(() => store.environmentIdentities.filter((i) => store.instanceFor(i.id)).length);
-const expiredCount = computed(() => store.environmentIdentities.filter((i) => i.status === "expired").length);
+const runningCount = computed(
+  () => store.environmentIdentities.filter((i) => store.instanceFor(i.id)).length,
+);
+const expiredCount = computed(
+  () => store.environmentIdentities.filter((i) => i.status === "expired").length,
+);
 const isProd = computed(() => isProductionName(store.activeEnvironment?.name));
 
 const statusLabel = (identity: Identity): string => {
@@ -112,7 +108,7 @@ function passwordLabel(identity: Identity): string {
         </p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="store.launchCleanSession()">
+        <button class="btn" type="button" @click="store.launchScopedCleanSession()">
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
         </button>

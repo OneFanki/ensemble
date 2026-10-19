@@ -63,7 +63,11 @@ class CdpRegistry {
 
 export const cdpRegistry = new CdpRegistry();
 
-export function instanceProfileDir(profileRoot: string, environmentId: string, key: string): string {
+export function instanceProfileDir(
+  profileRoot: string,
+  environmentId: string,
+  key: string,
+): string {
   return join(profileRoot, safeProfileSegment(environmentId), safeProfileSegment(key));
 }
 
@@ -132,12 +136,15 @@ async function launchChromium(request: LaunchRequest, profileDir: string): Promi
     const version = await readBrowserVersion(port);
     const browser = await CdpClient.connect(version.webSocketDebuggerUrl);
 
-    // Prefer the real page over the initial about:blank target.
-    const target = await waitForPageTarget(
-      port,
-      15_000,
-      (item) => item.url !== "about:blank",
-    ).catch(() => waitForPageTarget(port));
+    // Prefer the real page over the initial about:blank target. A clean session
+    // that deliberately opens a blank tab would never satisfy that predicate, so
+    // skip the wait in that case instead of stalling for the full timeout.
+    const blankStart = /^about:blank$/i.test(request.startUrl);
+    const target = blankStart
+      ? await waitForPageTarget(port)
+      : await waitForPageTarget(port, 15_000, (item) => item.url !== "about:blank").catch(() =>
+          waitForPageTarget(port),
+        );
 
     const page = await CdpClient.connect(target.webSocketDebuggerUrl as string);
     if (request.windowBounds) {
@@ -263,7 +270,8 @@ function waitForBrowserExit(browser: CdpClient, page: CdpClient): Promise<void> 
 export async function stopInstances(
   instances: RunningInstance[],
   timeoutMs = 3_000,
-): Promise<void> {  await Promise.all(
+): Promise<void> {
+  await Promise.all(
     instances.map(async (instance) => {
       const entry = cdpRegistry.get(instance.id);
       if (entry) {

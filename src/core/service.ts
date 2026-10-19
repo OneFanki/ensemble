@@ -51,6 +51,7 @@ import { computeSlots, fullWorkArea, singleWindowRect, type Rect } from "./layou
 import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
+  CLEAN_SESSION_SEGMENT,
   isCleanProfileDir,
   removeCleanProfiles,
 } from "./processes/clean-profiles";
@@ -1081,13 +1082,20 @@ export class WorkspaceService {
     return { instance: outcome.instance, identities: [identity] };
   }
 
-  async launchCleanSession(environmentId: string): Promise<LaunchResult> {
+  /**
+   * Opens a disposable browser window. With an environment it starts on that
+   * login page; without one it opens a blank tab, for the cases where all the
+   * user wants is a throwaway browser that belongs to no environment at all.
+   */
+  async launchCleanSession(environmentId?: string): Promise<LaunchResult> {
     // Reuse of a directory the startup sweep is about to delete must not happen.
     await this.maintenanceDone;
-    const environment = this.data.environments.find((item) => item.id === environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
+    const environment = environmentId
+      ? this.data.environments.find((item) => item.id === environmentId)
+      : undefined;
+    if (environmentId && !environment) throw new Error(t("error.environmentMissing"));
     const engine =
-      this.engines.find((item) => item.id === environment.defaultEngineId) ??
+      this.engines.find((item) => item.id === environment?.defaultEngineId) ??
       this.engines.find((item) => item.cdp);
     if (!engine) throw new Error(t("error.noEngine"));
 
@@ -1104,11 +1112,15 @@ export class WorkspaceService {
     const instanceId = randomUUID();
 
     const outcome = await launchBrowser({
-      environmentId: environment.id,
+      // Environment-free sessions live in their own segment so deleting an
+      // environment can never adopt or stop them.
+      environmentId: environment?.id ?? CLEAN_SESSION_SEGMENT,
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: `${CLEAN_PROFILE_PREFIX}${instanceId}`,
-      startUrl: joinUrl(environment.baseUrl, environment.loginPath || "/"),
+      startUrl: environment
+        ? joinUrl(environment.baseUrl, environment.loginPath || "/")
+        : "about:blank",
       windowBounds: slot,
       label: t("instance.cleanLabel"),
       instanceId,

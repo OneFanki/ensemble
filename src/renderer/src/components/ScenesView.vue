@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
-import { GripVertical, Layers, Pencil, Play, Plus, Square, Trash2, Wand2 } from "lucide-vue-next";
+import {
+  Globe,
+  GripVertical,
+  Layers,
+  Pencil,
+  Play,
+  Plus,
+  Square,
+  Trash2,
+  Wand2,
+} from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 import { isFreeLayout, resolveSlotAssignments } from "@shared/layouts";
 import type { Identity, LayoutPreset, Scene } from "@shared/types";
@@ -164,7 +174,8 @@ function launchSelected() {
         <p class="head-note">{{ $t("app.scenesSubtitle") }}</p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="store.launchCleanSession()">
+        <button class="btn" type="button" @click="store.launchScopedCleanSession()">
+          <Globe :size="13" />
           {{ $t("app.cleanSession") }}
         </button>
         <button class="btn primary" type="button" @click="emit('newScene')">

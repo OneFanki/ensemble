@@ -132,7 +132,8 @@ export interface EnsembleApi {
   launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult>;
   launchScene(sceneId: string): Promise<LaunchResult>;
   launchSceneMember(sceneId: string, identityId: string): Promise<LaunchResult>;
-  launchCleanSession(environmentId: string): Promise<LaunchResult>;
+  /** Without an environmentId this opens a blank tab outside any environment. */
+  launchCleanSession(environmentId?: string): Promise<LaunchResult>;
   stopInstance(id: string): Promise<void>;
   stopAll(): Promise<void>;
   checkAuth(identityId: string): Promise<AuthCheckResult>;

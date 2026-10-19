@@ -4,7 +4,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 // Generates the Ensemble mark without any image dependency:
 // an amber rounded square with three descending bars and one solid dot.
 // The same geometry is mirrored by src/renderer/src/components/Logo.vue.
-const SIZES = [16, 24, 32, 48, 64, 128, 256];
+//
+// Every size is drawn at 4x and box-filtered down. Drawing straight at 16/24/32
+// produced hard, aliased edges that Windows then rescaled again — the reason the
+// taskbar icon looked blurry next to sharper icons.
+const SUPERSAMPLE = 4;
+const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
+const PNG_SIZE = 1024;
 
 const BG_TOP = [240, 189, 111, 255];
 const BG_BOTTOM = [207, 140, 51, 255];
@@ -69,19 +75,63 @@ function drawMark(size) {
     (_px, py) => blend(BG_TOP, BG_BOTTOM, Math.min(1, Math.max(0, py / size))),
   );
 
-  // Three descending bars: the ensemble members.
+  // Bars are slightly thicker than the renderer logo so they survive 16px.
   const bars = [
-    { x: 6.5, y: 8.4, w: 19, h: 3.8 },
-    { x: 6.5, y: 14.2, w: 13.5, h: 3.8 },
-    { x: 6.5, y: 20, w: 8, h: 3.8 },
+    { x: 6.4, y: 8.2, w: 19.2, h: 4.2 },
+    { x: 6.4, y: 14.2, w: 13.8, h: 4.2 },
+    { x: 6.4, y: 20.2, w: 8.2, h: 4.2 },
   ];
   for (const bar of bars) {
-    roundedRect(canvas, bar.x * k, bar.y * k, bar.w * k, bar.h * k, 1.9 * k, () => INK);
+    roundedRect(canvas, bar.x * k, bar.y * k, bar.w * k, bar.h * k, 2.1 * k, () => INK);
   }
 
   // The focused identity, aligned under the second bar's right edge.
-  circle(canvas, 21.6 * k, 21.9 * k, 2.9 * k, INK);
+  circle(canvas, 21.6 * k, 22.3 * k, 3.05 * k, INK);
   return canvas;
+}
+
+/** Averages source pixels; colors are alpha-weighted so edges keep their hue. */
+function downsample(source, size) {
+  const target = createCanvas(size);
+  const factor = source.size / size;
+  const count = factor * factor;
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      for (let sy = 0; sy < factor; sy += 1) {
+        for (let sx = 0; sx < factor; sx += 1) {
+          const index = ((y * factor + sy) * source.size + (x * factor + sx)) * 4;
+          const alpha = source.pixels[index + 3];
+          const weight = alpha / 255;
+          r += source.pixels[index] * weight;
+          g += source.pixels[index + 1] * weight;
+          b += source.pixels[index + 2] * weight;
+          a += alpha;
+        }
+      }
+      const alpha = Math.round(a / count);
+      if (alpha === 0) {
+        target.set(x, y, [0, 0, 0, 0]);
+        continue;
+      }
+      const normalizer = a / 255;
+      target.set(x, y, [
+        Math.round(r / normalizer),
+        Math.round(g / normalizer),
+        Math.round(b / normalizer),
+        alpha,
+      ]);
+    }
+  }
+  return target;
+}
+
+function render(size) {
+  return downsample(drawMark(size * SUPERSAMPLE), size);
 }
 
 function crc32(buffer) {
@@ -150,8 +200,8 @@ function encodeIco(entries) {
 
 mkdirSync("build", { recursive: true });
 
-const pngs = SIZES.map((size) => ({ size, png: encodePng(drawMark(size)) }));
-const largest = pngs[pngs.length - 1];
-writeFileSync("build/icon.png", largest.png);
-writeFileSync("build/icon.ico", encodeIco(pngs.filter((entry) => entry.size <= 256)));
-console.log(`icon.png ${largest.png.length} bytes; icon.ico ${pngs.length} sizes`);
+const icoEntries = ICO_SIZES.map((size) => ({ size, png: encodePng(render(size)) }));
+const large = encodePng(render(PNG_SIZE));
+writeFileSync("build/icon.png", large);
+writeFileSync("build/icon.ico", encodeIco(icoEntries));
+console.log(`icon.png ${PNG_SIZE}px (${large.length} bytes); icon.ico ${ICO_SIZES.join("/")}px`);

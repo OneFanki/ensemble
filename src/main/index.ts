@@ -75,6 +75,23 @@ class SafeStorageBox implements SecretBox {
 let mainWindow: BrowserWindow | null = null;
 let service: WorkspaceService | null = null;
 let quitting = false;
+let currentTheme: AppSettings["theme"] = "dark";
+
+/** Native window-control colors mirror the renderer tokens for each theme. */
+const TITLEBAR_COLORS = {
+  dark: { color: "#12151a", symbolColor: "#a3abb8" },
+  light: { color: "#faf7f0", symbolColor: "#565049" },
+} as const;
+
+function isDarkTheme(theme: AppSettings["theme"]): boolean {
+  if (theme === "dark") return true;
+  if (theme === "light") return false;
+  return nativeTheme.shouldUseDarkColors;
+}
+
+function titleBarOverlay(theme: AppSettings["theme"]): Electron.TitleBarOverlay {
+  return { ...TITLEBAR_COLORS[isDarkTheme(theme) ? "dark" : "light"], height: 44 };
+}
 
 function userDataDir(): string {
   return app.getPath("userData");
@@ -113,17 +130,16 @@ async function createWindow(): Promise<void> {
     // first paint lands right after. Waiting for ready-to-show makes startup feel
     // several hundred milliseconds slower than it is.
     show: true,
-    backgroundColor: "#0b0d10",
+    backgroundColor: isDarkTheme(currentTheme) ? "#0b0d10" : "#f3efe6",
     title: "Ensemble",
     titleBarStyle: "hidden",
+    // Packaged builds take the executable icon (build/icon.ico); in development
+    // the window and taskbar need it passed explicitly.
+    ...(app.isPackaged ? {} : { icon: join(__dirname, "../../build/icon.png") }),
     ...(isMac
       ? { trafficLightPosition: { x: 14, y: 14 } }
       : {
-          titleBarOverlay: {
-            color: "#0d1014",
-            symbolColor: "#8d95a3",
-            height: 44,
-          },
+          titleBarOverlay: titleBarOverlay(currentTheme),
         }),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
@@ -162,6 +178,11 @@ async function createWindow(): Promise<void> {
   } else {
     await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
+
+  // Setting the overlay only in the constructor leaves the caption buttons in the
+  // default dark palette on some Windows builds; reapplying once the window exists
+  // (and on every theme change) is what actually colors them.
+  if (!isMac) mainWindow.setTitleBarOverlay(titleBarOverlay(currentTheme));
 }
 
 async function shutdownAndQuit(): Promise<void> {
@@ -175,7 +196,13 @@ async function shutdownAndQuit(): Promise<void> {
 }
 
 function applyTheme(theme: AppSettings["theme"]): void {
+  currentTheme = theme;
   nativeTheme.themeSource = theme;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBackgroundColor(isDarkTheme(theme) ? "#0b0d10" : "#f3efe6");
+  if (process.platform !== "darwin") {
+    mainWindow.setTitleBarOverlay(titleBarOverlay(theme));
+  }
 }
 
 function registerIpc(workspace: WorkspaceService): void {

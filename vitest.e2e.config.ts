@@ -14,7 +14,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/e2e-autofill.test.ts"],
+    include: ["tests/e2e-autofill.test.ts", "tests/e2e-instance-exit.test.ts"],
     testTimeout: 90_000,
     hookTimeout: 30_000,
     env: { ENSEMBLE_E2E: "1" },

@@ -32,6 +32,12 @@ export interface LaunchOutcome {
   pageCdp?: CdpClient;
   browserCdp?: CdpClient;
   targetId?: string;
+  /**
+   * Resolves when the browser goes away on its own — the user closed the last
+   * window, or the process crashed. The caller uses it to drop the instance from
+   * the UI instead of showing a window that no longer exists.
+   */
+  exited: Promise<void>;
 }
 
 interface CdpEntry {
@@ -100,6 +106,7 @@ export async function launchBrowser(request: LaunchRequest): Promise<LaunchOutco
     return {
       child,
       instance: buildInstance(request, engine, profileDir, child.pid as number, "external"),
+      exited: waitForChildExit(child),
     };
   }
 
@@ -140,10 +147,20 @@ async function launchChromium(request: LaunchRequest, profileDir: string): Promi
     }
 
     cdpRegistry.set(request.instanceId, { page, browser });
-    const instance = buildInstance(request, engine, profileDir, child.pid as number, "cdp");
+    const pid = await resolveBrowserPid(browser, child.pid as number);
+    const instance = buildInstance(request, engine, profileDir, pid, "cdp");
     instance.cdpPort = port;
     instance.targetId = target.id;
-    return { child, pageCdp: page, browserCdp: browser, targetId: target.id, instance };
+    return {
+      child,
+      pageCdp: page,
+      browserCdp: browser,
+      targetId: target.id,
+      instance,
+      // The browser-level socket outlives individual pages, so it is the best
+      // signal that the whole browser is gone.
+      exited: waitForBrowserExit(browser, page),
+    };
   } catch (error) {
     try {
       child.kill();
@@ -153,6 +170,25 @@ async function launchChromium(request: LaunchRequest, profileDir: string): Promi
     throw new Error(
       `启动 ${engine.brand} 失败：${(error as Error).message}。若浏览器被企业策略禁用远程调试，请改用外部模式。`,
     );
+  }
+}
+
+/**
+ * The process we spawned is not always the browser: Edge and Chrome relaunch
+ * themselves through a compat layer and let the launcher exit immediately, so
+ * `child.pid` can be dead before the window appears. CDP knows the real browser
+ * process, which is what a forced kill needs.
+ */
+async function resolveBrowserPid(browser: CdpClient, fallback: number): Promise<number> {
+  try {
+    const result = await browser.send<{ processInfo?: Array<{ type: string; id: number }> }>(
+      "SystemInfo.getProcessInfo",
+      {},
+      { timeoutMs: 3_000 },
+    );
+    return result.processInfo?.find((item) => item.type === "browser")?.id ?? fallback;
+  } catch {
+    return fallback;
   }
 }
 
@@ -177,11 +213,57 @@ function buildInstance(
   };
 }
 
+/**
+ * Resolves once the spawned process exits. Firefox keeps the launched process
+ * alive for the whole session, so its exit is a trustworthy signal.
+ */
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    child.once("exit", () => resolve());
+    child.once("error", () => resolve());
+  });
+}
+
+/**
+ * Detects a Chromium browser that went away on its own.
+ *
+ * The spawned process is useless as a signal on Windows: when the browser is
+ * already running with another profile, the launcher exits immediately after
+ * handing the URL over. The CDP sockets stay open for exactly as long as the
+ * browser lives, so they are the reliable signal — browser level first, page
+ * level as a fallback.
+ */
+function waitForBrowserExit(browser: CdpClient, page: CdpClient): Promise<void> {
+  let settled = false;
+  let unsubscribeBrowser = () => {};
+  let unsubscribePage = () => {};
+
+  return new Promise((resolve) => {
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      unsubscribeBrowser();
+      unsubscribePage();
+      resolve();
+    };
+
+    if (browser.isClosed || page.isClosed) {
+      resolve();
+      return;
+    }
+    unsubscribeBrowser = browser.onClose(finish);
+    unsubscribePage = page.onClose(finish);
+  });
+}
+
 export async function stopInstances(
   instances: RunningInstance[],
   timeoutMs = 3_000,
-): Promise<void> {
-  await Promise.all(
+): Promise<void> {  await Promise.all(
     instances.map(async (instance) => {
       const entry = cdpRegistry.get(instance.id);
       if (entry) {
@@ -219,7 +301,6 @@ async function killIfAlive(pid: number, timeoutMs: number): Promise<void> {
   } catch {
     return;
   }
-
   try {
     process.kill(pid, "SIGTERM");
   } catch {

@@ -22,6 +22,7 @@ export class CdpClient {
   private nextId = 1;
   private readonly pending = new Map<number, PendingCall>();
   private readonly listeners = new Map<string, Set<(params: any) => void>>();
+  private readonly closeListeners = new Set<() => void>();
   private closed = false;
 
   private constructor(private readonly socket: WebSocketLike) {
@@ -35,7 +36,29 @@ export class CdpClient {
         call.reject(new Error("CDP connection closed"));
       }
       this.pending.clear();
+      for (const listener of this.closeListeners) {
+        try {
+          listener();
+        } catch {
+          // A close listener must never break socket cleanup.
+        }
+      }
+      this.closeListeners.clear();
     });
+  }
+
+  /** Fires once the socket closes, or immediately when it already has. */
+  onClose(listener: () => void): () => void {
+    if (this.closed) {
+      listener();
+      return () => {};
+    }
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
+  }
+
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   static connect(url: string, timeoutMs = 10_000): Promise<CdpClient> {

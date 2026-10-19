@@ -548,6 +548,7 @@ export class WorkspaceService {
     });
 
     this.liveInstances.set(outcome.instance.id, outcome.instance);
+    this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
     this.scheduleAutoFill(identity, environment, outcome.instance);
     return { instance: outcome.instance, identities: [identity] };
@@ -595,6 +596,7 @@ export class WorkspaceService {
           instanceId: randomUUID(),
         });
         this.liveInstances.set(outcome.instance.id, outcome.instance);
+        this.watchInstance(outcome.instance, outcome.exited);
         launched.push(outcome.instance);
         startedHere.push(outcome.instance);
         this.scheduleAutoFill(identity, environment, outcome.instance);
@@ -643,6 +645,7 @@ export class WorkspaceService {
     });
 
     this.liveInstances.set(outcome.instance.id, outcome.instance);
+    this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
     return { instance: outcome.instance, identities: [] };
   }
@@ -661,6 +664,25 @@ export class WorkspaceService {
     await stopInstances(instances);
     await Promise.all(instances.map((instance) => this.disposeCleanProfile(instance)));
     this.liveInstances.clear();
+    this.persist();
+  }
+
+  /**
+   * Keeps the instance list honest when the browser goes away on its own —
+   * the user closed the window, or the process crashed. Without this the UI
+   * keeps offering "stop" for a browser that no longer exists.
+   */
+  private watchInstance(instance: RunningInstance, exited: Promise<void>): void {
+    void exited.then(() => this.forgetExitedInstance(instance));
+  }
+
+  private async forgetExitedInstance(instance: RunningInstance): Promise<void> {
+    // A stop triggered from the UI deletes the entry itself; this path must not
+    // then resurrect, re-dispose or double-persist anything.
+    if (!this.liveInstances.has(instance.id)) return;
+    this.liveInstances.delete(instance.id);
+    cdpRegistry.delete(instance.id);
+    await this.disposeCleanProfile(instance);
     this.persist();
   }
 
@@ -835,7 +857,9 @@ export class WorkspaceService {
       return { ...base, skipped: "no-password" };
     }
 
-    const deadline = Date.now() + 8_000;
+    // A window that is still painting a client-rendered login page can take a
+    // few seconds on a loaded machine; giving up early reads as "autofill broke".
+    const deadline = Date.now() + 15_000;
     let last: FillOutcome | undefined;
     while (Date.now() < deadline) {
       try {

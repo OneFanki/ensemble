@@ -6,9 +6,13 @@ directories:
 files:
   - out/**
   - package.json
+  - build/tray.png
+  - build/icon.png
   - "!**/*.map"
 asarUnpack:
   - resources/**
+  # The tray icon is loaded by native code from disk, so it must exist outside asar.
+  - build/tray.png
 win:
   target:
     - target: nsis

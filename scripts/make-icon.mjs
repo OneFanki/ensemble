@@ -204,4 +204,10 @@ const icoEntries = ICO_SIZES.map((size) => ({ size, png: encodePng(render(size))
 const large = encodePng(render(PNG_SIZE));
 writeFileSync("build/icon.png", large);
 writeFileSync("build/icon.ico", encodeIco(icoEntries));
-console.log(`icon.png ${PNG_SIZE}px (${large.length} bytes); icon.ico ${ICO_SIZES.join("/")}px`);
+// Windows trays render at 16px with 150% scaling often landing on 24px; 32 is a
+// good middle ground that Electron downsamples cleanly.
+const tray = encodePng(render(32));
+writeFileSync("build/tray.png", tray);
+console.log(
+  `icon.png ${PNG_SIZE}px (${large.length} bytes); icon.ico ${ICO_SIZES.join("/")}px; tray.png 32px`,
+);

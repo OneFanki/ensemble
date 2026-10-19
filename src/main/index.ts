@@ -1,24 +1,27 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   BrowserWindow,
   Menu,
+  Tray,
   app,
   clipboard,
   dialog,
   ipcMain,
   nativeTheme,
+  nativeImage,
   safeStorage,
   screen,
   shell,
 } from "electron";
-import { IPC } from "@shared/ipc";
+import { IPC, type ExportOutcome, type ImportPickOutcome } from "@shared/ipc";
 import type {
   AppSettings,
   EnvironmentDraft,
   IdentityDraft,
   LayoutId,
   LayoutPresetDraft,
+  McpPatch,
   PasswordOwner,
   SceneDraft,
   SettingsPatch,
@@ -31,9 +34,11 @@ import {
   sceneDraftSchema,
   settingsPatchSchema,
 } from "@shared/schemas";
+import { parseExportFile } from "@shared/transfer";
 import { WorkspaceService } from "@core/service";
 import { setCoreLocale } from "@core/i18n/translate";
 import type { SecretBox } from "@core/credentials/vault";
+import { McpServer } from "./mcp/server";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
 
@@ -83,6 +88,12 @@ let mainWindow: BrowserWindow | null = null;
 let service: WorkspaceService | null = null;
 let quitting = false;
 let currentTheme: AppSettings["theme"] = "dark";
+let tray: Tray | null = null;
+let mcpServer: McpServer | null = null;
+/** Kept in sync so the close handler does not need the service to be initialized. */
+let settingsCache: AppSettings | null = null;
+/** A parsed import file waiting for its confirmation, keyed by absolute path. */
+let pendingImport: { path: string; payload: ReturnType<typeof parseExportFile> } | null = null;
 
 /** Native window-control colors mirror the renderer tokens for each theme. */
 const TITLEBAR_COLORS = {
@@ -125,6 +136,69 @@ function workAreaRect(): { x: number; y: number; width: number; height: number }
     : screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   return display.workArea;
 }
+
+function trayIconPath(): string {
+  // Packaged: unpacked next to the asar so Windows can load it without extraction.
+  return app.isPackaged
+    ? join(process.resourcesPath, "app.asar.unpacked", "build", "tray.png")
+    : join(__dirname, "../../build/tray.png");
+}
+
+function fallbackTrayIcon(): Electron.NativeImage {
+  // A missing tray asset must not break the tray; a 1x1 transparent image keeps
+  // the app running invisibly rather than crashing at startup.
+  return nativeImage.createFromBuffer(Buffer.from("", "utf8"));
+}
+
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    void createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray(): void {
+  if (tray) return;
+  let image: Electron.NativeImage;
+  try {
+    image = nativeImage.createFromPath(trayIconPath());
+  } catch {
+    image = fallbackTrayIcon();
+  }
+  if (image.isEmpty()) image = nativeImage.createFromPath(join(__dirname, "../../build/icon.png"));
+  tray = new Tray(image);
+  tray.setToolTip("Ensemble");
+  const rebuild = () => {
+    if (!tray) return;
+    const mcp = mcpServer?.status();
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: "打开 Ensemble", click: () => showMainWindow() },
+        { type: "separator" },
+        {
+          label: mcp?.running ? `AI 接入：已开启 (${mcp.port})` : "AI 接入：已关闭",
+          enabled: false,
+        },
+        { type: "separator" },
+        {
+          label: "退出",
+          click: () => {
+            void shutdownAndQuit();
+          },
+        },
+      ]),
+    );
+  };
+  rebuild();
+  tray.on("click", () => showMainWindow());
+  tray.on("double-click", () => showMainWindow());
+  trayRebuild = rebuild;
+}
+
+let trayRebuild: (() => void) | null = null;
 
 async function createWindow(): Promise<void> {
   const isMac = process.platform === "darwin";
@@ -176,6 +250,13 @@ async function createWindow(): Promise<void> {
 
   mainWindow.on("close", (event) => {
     if (quitting) return;
+    // Closing the window is the common accident; the tray keeps the MCP endpoint
+    // and any running browsers alive. Quit explicitly from the tray or the menu.
+    if (settingsCache?.closeToTray) {
+      event.preventDefault();
+      mainWindow?.hide();
+      return;
+    }
     event.preventDefault();
     void shutdownAndQuit();
   });
@@ -190,12 +271,18 @@ async function createWindow(): Promise<void> {
   // default dark palette on some Windows builds; reapplying once the window exists
   // (and on every theme change) is what actually colors them.
   if (!isMac) mainWindow.setTitleBarOverlay(titleBarOverlay(currentTheme));
+  createTray();
 }
 
 async function shutdownAndQuit(): Promise<void> {
   if (quitting) return;
   quitting = true;
   try {
+    // Order matters: stop accepting new AI requests before tearing down browsers,
+    // so a tool call cannot start a launch halfway through shutdown.
+    await mcpServer?.stop();
+    tray?.destroy();
+    tray = null;
     await service?.shutdown();
   } finally {
     app.quit();
@@ -419,14 +506,90 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.settingsSave, (patch: SettingsPatch) => {
     const parsed = settingsPatchSchema.parse(patch);
     const settings = workspace.saveSettings(parsed);
+    settingsCache = settings;
     if (parsed.theme) applyTheme(parsed.theme);
     if (parsed.locale) setCoreLocale(parsed.locale);
     broadcastWorkspace();
     return settings;
   });
 
+  handle(IPC.dataExport, async (options: { includeSecrets: boolean; passphrase?: string }) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: "导出配置",
+      defaultPath: join(app.getPath("documents"), `ensemble-${dateStamp()}.json`),
+      filters: [{ name: "Ensemble 配置", extensions: ["json"] }],
+    });
+    const outcome: ExportOutcome = { canceled: true };
+    if (canceled || !filePath) return outcome;
+    const passphrase = String(options?.passphrase ?? "");
+    const exported = workspace.exportWorkspace(options?.includeSecrets ? passphrase : undefined);
+    writeFileSync(filePath, `${JSON.stringify(exported.file, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    return {
+      canceled: false,
+      path: filePath,
+      counts: exported.counts,
+      secretsIncluded: exported.secretsIncluded,
+    } satisfies ExportOutcome;
+  });
+
+  handle(IPC.dataImportPick, async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: "导入配置",
+      properties: ["openFile"],
+      filters: [{ name: "Ensemble 配置", extensions: ["json"] }],
+    });
+    const outcome: ImportPickOutcome = { canceled: true };
+    const filePath = filePaths?.[0];
+    if (canceled || !filePath) return outcome;
+    let payload: ReturnType<typeof parseExportFile>;
+    try {
+      payload = parseExportFile(JSON.parse(readFileSync(filePath, "utf8")));
+    } catch (error) {
+      throw new Error(`无法读取该文件：${(error as Error).message}`);
+    }
+    pendingImport = { path: filePath, payload };
+    return {
+      canceled: false,
+      path: filePath,
+      preview: {
+        version: payload.version,
+        exportedAt: payload.exportedAt,
+        hasSecrets: Boolean(payload.secrets),
+        environments: payload.environments.length,
+        identities: payload.identities.length,
+        scenes: payload.scenes.length,
+        layoutPresets: payload.layoutPresets.length,
+      },
+    } satisfies ImportPickOutcome;
+  });
+
+  handle(IPC.dataImportApply, (passphrase?: string) => {
+    if (!pendingImport) throw new Error("请先选择要导入的配置文件");
+    const { payload } = pendingImport;
+    pendingImport = null;
+    const result = workspace.importWorkspace(payload, passphrase ? String(passphrase) : undefined);
+    broadcastWorkspace();
+    return result;
+  });
+
+  handle(IPC.mcpInfo, () => mcpServer?.status());
+
+  handle(IPC.mcpUpdate, async (patch: McpPatch) => {
+    if (!mcpServer) throw new Error("MCP 服务未初始化");
+    const status = await mcpServer.update(patch ?? {});
+    trayRebuild?.();
+    return status;
+  });
+
   handle(IPC.appSetTheme, (theme: AppSettings["theme"]) => {
     applyTheme(theme);
+  });
+
+  handle(IPC.appQuit, async () => {
+    await shutdownAndQuit();
   });
 
   handle(IPC.windowMinimize, () => {
@@ -446,41 +609,75 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.windowClose, () => {
     mainWindow?.close();
   });
+
+  handle(IPC.windowShow, () => {
+    showMainWindow();
+  });
 }
 
-app.whenReady().then(async () => {
-  mkdirSync(profileRoot(), { recursive: true });
+function dateStamp(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+}
 
-  service = new WorkspaceService({
-    userDataDir: userDataDir(),
-    profileRoot: profileRoot(),
-    platform: process.platform as "win32" | "darwin" | "linux",
-    secretBox: new SafeStorageBox(),
-    appVersion: app.getVersion(),
-    workArea: workAreaRect,
-    onChange: broadcastWorkspace,
-    onAutoFill: (report) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IPC.authAutoFilled, report);
-      }
-    },
+// A second instance would own its own browsers and MCP port, and both would write
+// workspace.json. The first instance wins and simply reveals its window instead.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    showMainWindow();
   });
 
-  setCoreLocale(service.settingsSnapshot().locale);
-  applyTheme(service.settingsSnapshot().theme);
+  app.whenReady().then(async () => {
+    mkdirSync(profileRoot(), { recursive: true });
 
-  // initialize() only reads local JSON and the engine cache, so the window can
-  // appear right away. Orphan sweeping and engine scanning run afterwards.
-  await service.initialize();
-  registerIpc(service);
-  await createWindow();
+    service = new WorkspaceService({
+      userDataDir: userDataDir(),
+      profileRoot: profileRoot(),
+      platform: process.platform as "win32" | "darwin" | "linux",
+      secretBox: new SafeStorageBox(),
+      appVersion: app.getVersion(),
+      workArea: workAreaRect,
+      onChange: broadcastWorkspace,
+      onAutoFill: (report) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC.authAutoFilled, report);
+        }
+      },
+    });
 
-  void service.startBackgroundMaintenance();
+    settingsCache = service.settingsSnapshot();
+    setCoreLocale(settingsCache.locale);
+    applyTheme(settingsCache.theme);
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    // initialize() only reads local JSON and the engine cache, so the window can
+    // appear right away. Orphan sweeping and engine scanning run afterwards.
+    await service.initialize();
+    settingsCache = service.settingsSnapshot();
+
+    mcpServer = new McpServer({
+      settingsPath: join(userDataDir(), "mcp.json"),
+      auditPath: join(userDataDir(), "mcp-audit.log"),
+      service,
+      appVersion: app.getVersion(),
+      onChange: broadcastWorkspace,
+    });
+
+    registerIpc(service);
+    await createWindow();
+    await mcpServer.start();
+
+    void service.startBackgroundMaintenance();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+      else showMainWindow();
+    });
   });
-});
+}
 
 // Registering this listener takes over the quit decision: without an explicit
 // app.quit() here the process stays alive after the last window closes (and a
@@ -491,12 +688,22 @@ app.on("window-all-closed", () => {
     app.quit();
     return;
   }
+  // Tray mode keeps the process (and with it the MCP endpoint) alive even if the
+  // window was destroyed without a close event.
+  if (settingsCache?.closeToTray) return;
   // Windows were destroyed without a close event; still stop our browsers.
   void shutdownAndQuit();
 });
 
-app.on("before-quit", () => {
-  quitting = true;
+/**
+ * Every quit path (tray menu, system shutdown, `app.quit()` from anywhere) funnels
+ * through the same teardown: the MCP socket is closed first so no AI client can
+ * start work while browsers are being reclaimed.
+ */
+app.on("before-quit", (event) => {
+  if (quitting) return;
+  event.preventDefault();
+  void shutdownAndQuit();
 });
 
 process.on("uncaughtException", (error) => {

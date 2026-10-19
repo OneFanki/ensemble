@@ -3,6 +3,14 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "@shared/defaults";
+import { findLayout, isFreeLayout } from "@shared/layouts";
+import {
+  EXPORT_FORMAT,
+  EXPORT_VERSION,
+  exportCounts,
+  type ImportResult,
+  type WorkspaceExportFile,
+} from "@shared/transfer";
 import type {
   AppSettings,
   AuthCheckResult,
@@ -26,28 +34,20 @@ import type {
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { findLayout, isFreeLayout } from "@shared/layouts";
-import {
-  EXPORT_FORMAT,
-  EXPORT_VERSION,
-  exportCounts,
-  type ImportResult,
-  type WorkspaceExportFile,
-} from "@shared/transfer";
 import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
 import { buildAuthCheckExpression, buildFillExpression, type FillOutcome } from "./cdp/login";
+import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import {
   CredentialVault,
   resolvePassword,
-  VaultLockedError,
   type SecretBox,
   type VaultFile,
+  VaultLockedError,
 } from "./credentials/vault";
-import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import { mergeManualEngines, scanEngines } from "./engines";
 import { t } from "./i18n/translate";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
-import { computeSlots, fullWorkArea, singleWindowRect, type Rect } from "./layout/grid";
+import { computeSlots, fullWorkArea, type Rect, singleWindowRect } from "./layout/grid";
 import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
@@ -91,6 +91,11 @@ export class WorkspaceService {
   /** Resolves once startup cleanup finished; clean sessions wait on it. */
   private maintenanceDone: Promise<void> = Promise.resolve();
   private readonly liveInstances = new Map<string, RunningInstance>();
+  /**
+   * Failed clean-profile deletes, retried until the exiting browser releases its
+   * files. Never blocks window close: the promise only keeps the retry alive.
+   */
+  private readonly cleanProfileRetries = new Map<string, Promise<void>>();
 
   constructor(private readonly options: WorkspaceServiceOptions) {
     this.store = new JsonStore(join(options.userDataDir, "workspace.json"), emptyWorkspace);
@@ -1210,20 +1215,40 @@ export class WorkspaceService {
   /**
    * A clean session promises to leave nothing behind, so its profile directory is
    * dropped once the browser is gone. A locked file must not abort shutdown.
+   *
+   * `rm` retries with exponential backoff, so a generous maxRetries can block for
+   * seconds when Chromium is still flushing. Bound the first attempt to roughly a
+   * third of a second: the common case is still covered inline, and a directory
+   * that stays locked moves to the background retry instead of stalling the
+   * window close or being abandoned until the next startup sweep.
    */
   private async disposeCleanProfile(instance: RunningInstance): Promise<void> {
     if (!instance.clean) return;
     if (!isCleanProfileDir(instance.profileDir)) return;
+    const dir = instance.profileDir;
     try {
-      await rm(instance.profileDir, {
-        recursive: true,
-        force: true,
-        maxRetries: 8,
-        retryDelay: 150,
-      });
+      await rm(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
     } catch {
-      // A file still held by the exiting browser is reclaimed by the next sweep.
+      this.retryCleanProfile(dir);
     }
+  }
+
+  private retryCleanProfile(dir: string): void {
+    if (this.cleanProfileRetries.has(dir)) return;
+    const job = (async () => {
+      // ~12s ceiling: long enough for a busy machine to flush handles, short
+      // enough that a stuck directory falls through to the startup sweep.
+      for (let attempt = 0; attempt < 24; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        try {
+          await rm(dir, { recursive: true, force: true });
+          return;
+        } catch {
+          // The browser may still be shutting down.
+        }
+      }
+    })().finally(() => this.cleanProfileRetries.delete(dir));
+    this.cleanProfileRetries.set(dir, job);
   }
 
   /**

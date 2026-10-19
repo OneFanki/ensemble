@@ -86,7 +86,9 @@ afterAll(async () => {
     servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
   );
   await Promise.all(
-    cleanup.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})),
+    cleanup.map((dir) =>
+      rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {}),
+    ),
   );
 });
 

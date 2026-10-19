@@ -66,7 +66,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<bo
 afterAll(async () => {
   await Promise.all(services.map((service) => service.stopAll().catch(() => {})));
   await Promise.all(
-    cleanup.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})),
+    cleanup.map((dir) =>
+      rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }).catch(() => {}),
+    ),
   );
 });
 

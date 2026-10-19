@@ -1,16 +1,17 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { WorkspaceService } from "@core/service";
 import type { SecretBox } from "@core/credentials/vault";
-import type { RunningInstance } from "@shared/types";
 import {
   CLEAN_SESSION_SEGMENT,
   isCleanProfileDir,
   removeCleanProfiles,
 } from "@core/processes/clean-profiles";
+import { WorkspaceService } from "@core/service";
+import type { RunningInstance } from "@shared/types";
+import { afterEach, describe, expect, it } from "vitest";
 
 const plainBox: SecretBox = {
   available: false,
@@ -62,6 +63,29 @@ afterEach(async () => {
   await Promise.all(created.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+/** Holds a file without sharing deletes, then releases it after `holdMs`. */
+async function lockExclusively(file: string, holdMs: number): Promise<() => Promise<void>> {
+  const quoted = file.replace(/'/g, "''");
+  const script =
+    `$f=[System.IO.File]::Open('${quoted}','Open','Read','None');` +
+    `[Console]::Out.WriteLine('locked');[Console]::Out.Flush();` +
+    `Start-Sleep -Milliseconds ${holdMs};$f.Close()`;
+  const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  await new Promise<void>((resolve, reject) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (chunk.toString().includes("locked")) resolve();
+    });
+    child.once("error", reject);
+    child.once("exit", () => reject(new Error("lock holder exited early")));
+  });
+  return () =>
+    child.exitCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => child.once("exit", () => resolve()));
+}
+
 describe("clean session lifecycle", () => {
   it("drops the profile directory when a clean instance stops", async () => {
     const { service, profileRoot } = await makeService();
@@ -99,6 +123,34 @@ describe("clean session lifecycle", () => {
 
     expect(existsSync(dir)).toBe(true);
   });
+
+  // Opening a file without FILE_SHARE_DELETE is how a slower Chromium shutdown
+  // shows up to us. Node's own open() always shares delete, so PowerShell holds
+  // the handle exclusively instead. Other platforms delete open files silently.
+  it.skipIf(process.platform !== "win32")(
+    "finishes the delete in the background when a held file blocks the first attempt",
+    async () => {
+      const { service, profileRoot } = await makeService();
+      const dir = join(profileRoot, "env", "clean-locked");
+      await mkdir(dir, { recursive: true });
+      const file = join(dir, "Preferences");
+      await writeFile(file, "{}");
+      const release = await lockExclusively(file, 2_500);
+      seedInstance(service, { id: "clean-locked", profileDir: dir, clean: true });
+
+      await service.stopInstance("clean-locked");
+      // The window close must not wait for the browser to flush its handles.
+      expect(existsSync(dir)).toBe(true);
+
+      await release();
+      const deadline = Date.now() + 10_000;
+      while (existsSync(dir) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      expect(existsSync(dir)).toBe(false);
+    },
+    20_000,
+  );
 });
 
 describe("environment-free clean sessions", () => {

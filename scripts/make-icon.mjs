@@ -1,8 +1,13 @@
 import { deflateSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 
-// Generates the Ensemble mark without any image dependency:
-// an amber rounded square with three descending bars and one solid dot.
+// Generates the Ensemble mark without any image dependency: a dark plate with a
+// deck of three window frames, the front one filled in amber.
+//
+// The plate is dark on purpose. An amber plate with a dark glyph is the visual
+// language of a generic system placeholder — whatever is drawn inside reads as a
+// stock icon. Inverting it (dark surface, amber marks) matches the app's own dark
+// UI and gives the shape room to carry the identity.
 // The same geometry is mirrored by src/renderer/src/components/Logo.vue.
 //
 // Every size is drawn at 4x and box-filtered down. Drawing straight at 16/24/32
@@ -12,9 +17,9 @@ const SUPERSAMPLE = 4;
 const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
 const PNG_SIZE = 1024;
 
-const BG_TOP = [240, 189, 111, 255];
-const BG_BOTTOM = [207, 140, 51, 255];
-const INK = [26, 19, 5, 255];
+const PLATE = [23, 27, 34, 255];
+const AMBER = [224, 164, 78, 255];
+const INK = [11, 13, 16, 255];
 // macOS menu bar icons are template images: only the alpha channel is used, and
 // the system tints the glyph for the current menu bar appearance.
 const TEMPLATE_INK = [0, 0, 0, 255];
@@ -67,30 +72,43 @@ function drawMark(size) {
   const canvas = createCanvas(size);
   const k = size / 32;
 
-  // Amber plate with a subtle vertical gradient.
-  roundedRect(
-    canvas,
-    0,
-    0,
-    size,
-    size,
-    8 * k,
-    (_px, py) => blend(BG_TOP, BG_BOTTOM, Math.min(1, Math.max(0, py / size))),
-  );
+  // Dark plate: see the note at the top of the file.
+  roundedRect(canvas, 0, 0, size, size, 7.5 * k, () => PLATE);
 
-  // Bars are slightly thicker than the renderer logo so they survive 16px.
-  const bars = [
-    { x: 6.4, y: 8.2, w: 19.2, h: 4.2 },
-    { x: 6.4, y: 14.2, w: 13.8, h: 4.2 },
-    { x: 6.4, y: 20.2, w: 8.2, h: 4.2 },
-  ];
-  for (const bar of bars) {
-    roundedRect(canvas, bar.x * k, bar.y * k, bar.w * k, bar.h * k, 2.1 * k, () => INK);
-  }
+  // Two frames behind, one in front — the deck of open windows. The back frames
+  // are pre-mixed against the plate instead of drawn semi-transparent: the canvas
+  // writes pixels rather than compositing, so an alpha stroke would punch holes.
+  const recessed = blend(PLATE, AMBER, 0.42);
+  const deeper = blend(PLATE, AMBER, 0.66);
+  drawWindowFrame(canvas, 6.5 * k, 5.5 * k, 15 * k, 11 * k, 2.2 * k, 1.6 * k, recessed, PLATE);
+  drawWindowFrame(canvas, 9.5 * k, 8.8 * k, 15 * k, 11 * k, 2.2 * k, 1.6 * k, deeper, PLATE);
 
-  // The focused identity, aligned under the second bar's right edge.
-  circle(canvas, 21.6 * k, 22.3 * k, 3.05 * k, INK);
+  // The front card is filled, with a title bar and a dot cut out of the fill.
+  roundedRect(canvas, 12.5 * k, 12.2 * k, 15 * k, 11.5 * k, 2.2 * k, () => AMBER);
+  roundedRect(canvas, 15.2 * k, 15.2 * k, 6 * k, 2 * k, 1 * k, () => INK);
+  circle(canvas, 23 * k, 18.6 * k, 1.5 * k, INK);
   return canvas;
+}
+
+/**
+ * An outlined rounded rectangle. Drawing the ring analytically produced spikes
+ * at the corners, so this fills the outer shape and then paints the inner one
+ * with `inside` — the plate colour, so a frame never punches a transparent hole
+ * through the icon.
+ */
+function drawWindowFrame(canvas, x, y, w, h, r, stroke, color, inside) {
+  roundedRect(canvas, x, y, w, h, r, () => color);
+  const inset = stroke;
+  const ir = Math.max(r - inset, 0.1);
+  for (let py = Math.floor(y + inset); py < Math.ceil(y + h - inset); py += 1) {
+    for (let px = Math.floor(x + inset); px < Math.ceil(x + w - inset); px += 1) {
+      const cx = Math.min(Math.max(px + 0.5, x + inset + ir), x + w - inset - ir);
+      const cy = Math.min(Math.max(py + 0.5, y + inset + ir), y + h - inset - ir);
+      const dx = px + 0.5 - cx;
+      const dy = py + 0.5 - cy;
+      if (dx * dx + dy * dy <= ir * ir) canvas.set(px, py, inside);
+    }
+  }
 }
 
 /**
@@ -102,27 +120,36 @@ function drawTemplateMark(size) {
   const canvas = createCanvas(size);
   const scale = (size / 32) * 1.32;
   const x = (value) => size / 2 + (value - 16) * scale;
-  const y = (value) => size / 2 + (value - 16.6) * scale;
+  const y = (value) => size / 2 + (value - 17.2) * scale;
+  const stroke = 1.9 * scale;
 
-  const bars = [
-    { x: 6.4, y: 8.2, w: 19.2, h: 4.2 },
-    { x: 6.4, y: 14.2, w: 13.8, h: 4.2 },
-    { x: 6.4, y: 20.2, w: 8.2, h: 4.2 },
-  ];
-  for (const bar of bars) {
-    roundedRect(
-      canvas,
-      x(bar.x),
-      y(bar.y),
-      bar.w * scale,
-      bar.h * scale,
-      2.1 * scale,
-      () => TEMPLATE_INK,
-    );
-  }
+  // Same deck as the app icon, but monochrome: template images keep only alpha,
+  // so the two back frames are outlines and the front card is a filled block
+  // with its title bar punched out.
+  frameAt(canvas, x(7.4), y(6.6), 14 * scale, 10 * scale, 2 * scale, stroke);
+  frameAt(canvas, x(10.2), y(9.7), 14 * scale, 10 * scale, 2 * scale, stroke);
 
-  circle(canvas, x(21.6), y(22.3), 3.05 * scale, TEMPLATE_INK);
+  roundedRect(canvas, x(13), y(13), 14 * scale, 10.6 * scale, 2 * scale, () => TEMPLATE_INK);
+  roundedRect(canvas, x(15.4), y(15.6), 5.4 * scale, 1.9 * scale, 0.95 * scale, () => [
+    0, 0, 0, 0,
+  ]);
+  circle(canvas, x(22.6), y(18.7), 1.4 * scale, [0, 0, 0, 0]);
   return canvas;
+}
+
+/** Cleared rounded rectangle: the outline used by the mono tray glyph. */
+function frameAt(canvas, x, y, w, h, r, stroke) {
+  roundedRect(canvas, x, y, w, h, r, () => TEMPLATE_INK);
+  const ir = Math.max(r - stroke, 0.1);
+  for (let py = Math.floor(y + stroke); py < Math.ceil(y + h - stroke); py += 1) {
+    for (let px = Math.floor(x + stroke); px < Math.ceil(x + w - stroke); px += 1) {
+      const cx = Math.min(Math.max(px + 0.5, x + stroke + ir), x + w - stroke - ir);
+      const cy = Math.min(Math.max(py + 0.5, y + stroke + ir), y + h - stroke - ir);
+      const dx = px + 0.5 - cx;
+      const dy = py + 0.5 - cy;
+      if (dx * dx + dy * dy <= ir * ir) canvas.set(px, py, [0, 0, 0, 0]);
+    }
+  }
 }
 
 /** Averages source pixels; colors are alpha-weighted so edges keep their hue. */

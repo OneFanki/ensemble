@@ -14,17 +14,35 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
     role="img"
     :aria-label="label"
   >
-    <defs>
-      <linearGradient :id="`ens-logo-${size}`" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#f0bd6f" />
-        <stop offset="1" stop-color="#cf8c33" />
-      </linearGradient>
-    </defs>
-    <rect width="32" height="32" rx="8" :fill="`url(#ens-logo-${size})`" />
-    <rect x="6.5" y="8.4" width="19" height="3.8" rx="1.9" fill="#1a1305" />
-    <rect x="6.5" y="14.2" width="13.5" height="3.8" rx="1.9" fill="#1a1305" />
-    <rect x="6.5" y="20" width="8" height="3.8" rx="1.9" fill="#1a1305" />
-    <circle cx="21.6" cy="21.9" r="2.9" fill="#1a1305" />
+    <!--
+      Same deck as scripts/make-icon.mjs: two recessed frames behind, one filled
+      card in front. The plate is dark so the amber shape carries the identity;
+      an amber plate with a dark glyph read as a generic placeholder.
+    -->
+    <rect width="32" height="32" rx="7.5" fill="#171b22" />
+    <rect
+      x="6.5"
+      y="5.5"
+      width="15"
+      height="11"
+      rx="2.2"
+      fill="none"
+      stroke="#8b7040"
+      stroke-width="1.6"
+    />
+    <rect
+      x="9.5"
+      y="8.8"
+      width="15"
+      height="11"
+      rx="2.2"
+      fill="none"
+      stroke="#b98544"
+      stroke-width="1.6"
+    />
+    <rect x="12.5" y="12.2" width="15" height="11.5" rx="2.2" fill="#e0a44e" />
+    <rect x="15.2" y="15.2" width="6" height="2" rx="1" fill="#0b0d10" />
+    <circle cx="23" cy="18.6" r="1.5" fill="#0b0d10" />
   </svg>
 </template>
 
@@ -32,7 +50,6 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
 .logo {
   display: block;
   flex: 0 0 auto;
-  border-radius: 6px;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  border-radius: 5px;
 }
 </style>

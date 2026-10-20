@@ -43,7 +43,7 @@ function manage() {
     <div class="brand no-drag" data-tour="brand">
       <Logo :size="22" />
       <span class="name">Ensemble</span>
-      <span class="version mono">0.1</span>
+      <span class="version mono">{{ store.snapshot?.appVersion ?? "0.1" }}</span>
     </div>
 
     <div ref="switcher" class="env-switcher no-drag" data-tour="environment-switcher">

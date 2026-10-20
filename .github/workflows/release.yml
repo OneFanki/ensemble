@@ -112,7 +112,7 @@ jobs:
       - run: node scripts/make-icon.mjs
       - run: pnpm build
       - run: ${{ matrix.builder }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ensemble-${{ matrix.name }}
           path: ${{ matrix.artifacts }}

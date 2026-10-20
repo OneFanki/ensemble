@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import TitleBar from "./components/TitleBar.vue";
 import Logo from "./components/Logo.vue";
 import SideRail from "./components/SideRail.vue";
@@ -53,6 +53,19 @@ function applyTheme(theme: "dark" | "light" | "system") {
       : theme;
   document.documentElement.dataset["theme"] = resolved;
 }
+
+/**
+ * `prefers-color-scheme` changes when the OS switches appearance while the
+ * setting is "system". Re-resolve it here so the window follows without a
+ * restart; explicit dark/light settings must ignore the event.
+ */
+function handleSystemThemeChange() {
+  if (store.settings.theme === "system") applyTheme("system");
+}
+
+const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
+systemTheme.addEventListener("change", handleSystemThemeChange);
+onUnmounted(() => systemTheme.removeEventListener("change", handleSystemThemeChange));
 
 function switchView(next: View) {
   view.value = next;
@@ -221,9 +234,11 @@ async function deleteLayout(preset: LayoutPreset) {
 }
 
 async function handleTheme(theme: "dark" | "light" | "system") {
-  applyTheme(theme);
-  await store.saveSettings({ theme });
+  // Switch the native source before resolving "system": until the main process
+  // updates themeSource, prefers-color-scheme still reflects the old forced theme.
   await window.ensemble.setTheme(theme);
+  await store.saveSettings({ theme });
+  applyTheme(theme);
 }
 
 async function handleLocale(locale: "zh" | "en") {

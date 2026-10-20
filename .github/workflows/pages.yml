@@ -10,6 +10,9 @@ on:
       - "site/**"
       - "docs/screenshots/**"
       - "build/icon.png"
+      # The version badge is injected from this file, so a release bump must
+      # redeploy the page even when nothing else changed.
+      - "package.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

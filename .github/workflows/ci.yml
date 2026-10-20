@@ -23,7 +23,7 @@ jobs:
       # and package.json's `packageManager` field are present. The field is the
       # single source of truth and the action reads it.
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm

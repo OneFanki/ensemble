@@ -35,6 +35,12 @@ import {
   settingsPatchSchema,
 } from "@shared/schemas";
 import { parseExportFile } from "@shared/transfer";
+import {
+  LATEST_RELEASE_API,
+  evaluateUpdate,
+  parseLatestRelease,
+  type UpdateCheckResult,
+} from "@shared/update";
 import { WorkspaceService } from "@core/service";
 import { setCoreLocale } from "@core/i18n/translate";
 import type { SecretBox } from "@core/credentials/vault";
@@ -595,6 +601,41 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.appQuit, async () => {
     await shutdownAndQuit();
+  });
+
+  handle(IPC.appOpenExternal, async (url: string) => {
+    // The renderer only ever passes URLs from its own message table, but a
+    // compromised renderer would otherwise get a system-browser launch for any
+    // scheme. Restrict to the two the UI needs.
+    if (!/^https?:\/\//i.test(String(url))) return;
+    await shell.openExternal(String(url));
+  });
+
+  handle(IPC.appCheckUpdate, async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const response = await fetch(LATEST_RELEASE_API, {
+        headers: { accept: "application/vnd.github+json", "user-agent": "ensemble-update-check" },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return {
+          status: "error",
+          current: app.getVersion(),
+          message: `HTTP ${response.status}`,
+        } satisfies UpdateCheckResult;
+      }
+      return evaluateUpdate(app.getVersion(), parseLatestRelease(await response.json()));
+    } catch (error) {
+      return {
+        status: "error",
+        current: app.getVersion(),
+        message: (error as Error).message,
+      } satisfies UpdateCheckResult;
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   handle(IPC.windowMinimize, () => {

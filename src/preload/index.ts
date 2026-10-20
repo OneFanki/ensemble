@@ -64,6 +64,8 @@ const api: EnsembleApi = {
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),
   quitApp: () => ipcRenderer.invoke(IPC.appQuit),
+  openExternal: (url) => ipcRenderer.invoke(IPC.appOpenExternal, url),
+  checkUpdate: () => ipcRenderer.invoke(IPC.appCheckUpdate),
 
   minimizeWindow: () => ipcRenderer.invoke(IPC.windowMinimize),
   toggleMaximizeWindow: () => ipcRenderer.invoke(IPC.windowToggleMaximize),

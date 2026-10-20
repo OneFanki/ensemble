@@ -17,6 +17,7 @@ import type {
   WorkspaceSnapshot,
 } from "./types";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
+import type { UpdateCheckResult } from "./update";
 
 export interface ExportOutcome {
   canceled: boolean;
@@ -74,6 +75,8 @@ export const IPC = {
   settingsSave: "settings:save",
   appSetTheme: "app:set-theme",
   appQuit: "app:quit",
+  appOpenExternal: "app:open-external",
+  appCheckUpdate: "app:check-update",
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
@@ -145,6 +148,10 @@ export interface EnsembleApi {
   setTheme(theme: AppSettings["theme"]): Promise<void>;
   /** Fully quits: stops browsers and the MCP endpoint, then exits. */
   quitApp(): Promise<void>;
+  /** Opens a documentation or release URL in the system browser. */
+  openExternal(url: string): Promise<void>;
+  /** Compares the running version with the latest GitHub release; check-only. */
+  checkUpdate(): Promise<UpdateCheckResult>;
 
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<boolean>;

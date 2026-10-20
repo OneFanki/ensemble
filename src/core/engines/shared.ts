@@ -31,17 +31,9 @@ export function parseVersionOutput(output: string): string | undefined {
   return match?.[1];
 }
 
-/** Compares dotted numeric versions; missing segments count as zero. */
-export function compareVersions(a: string, b: string): number {
-  const left = a.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const right = b.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
+// Re-exported so engine scanners keep importing it from here.
+export { compareVersions } from "@shared/version";
+
 
 /**
  * Splits on both separators instead of using `node:path`. These helpers receive

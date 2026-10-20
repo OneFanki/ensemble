@@ -6,6 +6,8 @@ import {
   Copy,
   Database,
   Download,
+  ExternalLink,
+  Github,
   Info,
   Monitor,
   Plus,
@@ -19,6 +21,7 @@ import type { Component } from "vue";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { McpStatus } from "@shared/types";
+import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 
 type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
 
@@ -63,6 +66,44 @@ const transferError = ref<string | null>(null);
 const mcp = ref<McpStatus | null>(null);
 const portDraft = ref("");
 const showToken = ref(false);
+
+// ---- update check ----
+const update = ref<UpdateCheckResult | null>(null);
+const checkingUpdate = ref(false);
+
+const updateTone = computed(() => {
+  if (!update.value) return "muted";
+  if (update.value.status === "available") return "warn";
+  if (update.value.status === "error") return "error";
+  return "ok";
+});
+
+const updateText = computed(() => {
+  if (!update.value) return t("app.updateIdle");
+  if (update.value.status === "current") {
+    return t("app.updateCurrent", { version: update.value.current });
+  }
+  if (update.value.status === "available") {
+    return t("app.updateAvailable", {
+      current: update.value.current,
+      latest: update.value.latest,
+    });
+  }
+  return t("app.updateFailed");
+});
+
+async function checkUpdate() {
+  checkingUpdate.value = true;
+  try {
+    update.value = await window.ensemble.checkUpdate();
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
+
+async function openExternal(url: string) {
+  await window.ensemble.openExternal(url);
+}
 
 const mcpSnippet = computed(() => {
   if (!mcp.value) return "";
@@ -720,6 +761,40 @@ async function submitMaster() {
           <div><dt>{{ $t("app.dataDir") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}</dd></div>
           <div><dt>{{ $t("app.profileRoot") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}\profiles</dd></div>
         </dl>
+
+        <div class="update-row">
+          <div class="update-copy">
+            <p class="update-state" :class="updateTone">
+              {{ updateText }}
+            </p>
+            <p v-if="update?.status === 'available'" class="update-hint">
+              {{ $t("app.updateManualHint") }}
+            </p>
+          </div>
+          <div class="update-actions">
+            <button
+              class="btn"
+              type="button"
+              :disabled="checkingUpdate"
+              @click="checkUpdate"
+            >
+              <RefreshCw :size="12" :class="{ spinning: checkingUpdate }" />
+              {{ checkingUpdate ? $t("app.updateChecking") : $t("app.updateCheck") }}
+            </button>
+            <button
+              class="btn"
+              type="button"
+              @click="openExternal(update?.url ?? RELEASES_PAGE_URL)"
+            >
+              <ExternalLink :size="12" />
+              {{ $t("app.openReleases") }}
+            </button>
+            <button class="btn" type="button" @click="openExternal(REPOSITORY_URL)">
+              <Github :size="12" />
+              {{ $t("app.openRepository") }}
+            </button>
+          </div>
+        </div>
       </section>
     </div>
   </section>
@@ -1360,6 +1435,68 @@ async function submitMaster() {
   white-space: nowrap;
   direction: rtl;
   text-align: left;
+}
+
+.update-row {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.update-copy {
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.update-state {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.update-state.muted {
+  color: var(--faint);
+}
+
+.update-state.ok {
+  color: var(--green);
+}
+
+.update-state.warn {
+  color: var(--accent);
+}
+
+.update-state.error {
+  color: var(--red);
+}
+
+.update-hint {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.update-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 1000px) {

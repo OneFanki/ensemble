@@ -35,22 +35,80 @@ pnpm dist
 
 ## 三平台
 
-| 平台 | 目标 | 要求 |
+| 平台 | 目标 | 构建环境 |
 | --- | --- | --- |
-| Windows | nsis + portable | 无 |
-| macOS | dmg | 需要 Apple 开发者证书做签名与公证，否则用户需手动放行 |
-| Linux | AppImage + deb | 依赖系统 WebKitGTK 运行时 |
+| Windows | nsis + portable | Windows，或 GitHub Actions 的 `windows-latest` |
+| macOS | dmg（x64 + arm64） | 必须在 macOS 上构建 |
+| Linux | AppImage + deb | Linux，或 Docker 中的 `electronuserland/builder` |
 
-GitHub Actions 的三平台矩阵由 `.github/workflows/ci.yml` 负责校验；发布产物建议单独加
-一个 tag 触发的 workflow，避免每次 PR 都打包。
+dmg 需要 `hdiutil`，签名需要 `codesign` 与钥匙串，二者只存在于 macOS，所以 Mac 版绕不开
+真机或 macOS runner。Linux 产物可以在 Windows 上用 Docker 交叉构建，也可以交给 CI。
 
-## 签名
+`.github/workflows/release.yml` 负责三平台矩阵与发布；`.github/workflows/ci.yml` 只做
+PR/main 校验，不打包。
 
-当前配置会在 Windows 上用 `signtool` 尝试签名，但没有证书时不会失败。正式发布前：
+## 签名策略
 
-1. 准备代码签名证书（Windows）或 Apple Developer ID（macOS）。
-2. 通过环境变量注入（`CSC_LINK` / `CSC_KEY_PASSWORD`），不要把证书提交进仓库。
-3. macOS 还需要 `notarize` 配置，否则用户首次打开会被 Gatekeeper 拦截。
+**本项目不购买代码签名证书，发布的产物默认未签名。** 这是有意取舍：证书年费对个人开源
+项目不划算，而签名只影响首次运行的系统提示，不影响功能与安全边界。CI 里设置了
+`CSC_IDENTITY_AUTO_DISCOVERY=false`，避免 runner 上残留的证书造成「本地未签名、CI 已签名」
+的不一致。
+
+### Windows
+
+未签名的实际表现：
+
+- 浏览器下载时可能提示「不常下载，可能有害」，选择保留
+- 首次运行触发 SmartScreen「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」
+- 文件属性 → 数字签名标签为空
+
+核验方法：
+
+```powershell
+Get-AuthenticodeSignature .\Ensemble-0.1.0-win-x64-setup.exe | Format-List Status
+# NotSigned
+```
+
+### macOS
+
+未签名、未公证的 dmg 首次打开会被 Gatekeeper 拦截，提示「无法验证开发者」。放行方式：
+
+- 在 Finder 中右键应用 →「打开」→ 确认一次
+- 或执行 `xattr -dr com.apple.quarantine /Applications/Ensemble.app`
+
+Apple Silicon 要求二进制至少有签名才能运行。electron-builder **不会**在没有证书时自动
+ad-hoc 签名，所以 `electron-builder.yml` 的 `mac` 段显式写了 `identity: "-"`；同时
+`hardenedRuntime: false`——带硬化的 ad-hoc 签名会拒绝 Electron 自带的不同 Team ID 框架。
+ad-hoc 不等于通过 Gatekeeper，首次打开仍需用户手动放行。
+
+### 以后若要签名
+
+不需要改代码，只在构建环境注入变量：
+
+- Windows OV 证书：`CSC_LINK`（.pfx 的路径或 base64）与 `CSC_KEY_PASSWORD`。新签发的
+  OV 证书没有 SmartScreen 信誉，需要一段时间的下载量才会减少提示
+- Windows EV 证书：私钥在硬件令牌里，需要改用云签名服务（如 Azure Trusted Signing）
+- macOS：`CSC_LINK` / `CSC_KEY_PASSWORD` 提供 Developer ID 证书，另加 `APPLE_ID`、
+  `APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`，并在 `electron-builder.yml` 打开公证
+
+## 发布流程
+
+版本号唯一来源是 `package.json` 的 `version`。**没有 bump 版本号的合入不会产生新版本。**
+
+1. 合入 main 的 PR 修改 `version`：feature 升 minor，修复升 patch
+2. `release.yml` 读取版本号并拼出 `v<version>`
+3. 远端已存在该 tag → 普通合入，跳过发布
+4. 不存在 → 校验通过后三平台并行构建，创建 GitHub Release 并自动生成 release notes，
+   tag 指向本次提交
+5. 需要补发或重跑时，推送同名 tag；此时 tag 必须与 `package.json` 一致，否则 workflow 失败
+
+主仓在云效时，需要额外配置一个 GitHub remote，并在发布时把 main 与 tag 一起推过去：
+
+```bash
+git push github main --follow-tags
+```
+
+公开仓库使用标准 runner 构建三平台不产生费用；私有仓库的 macOS 分钟按约 10 倍计费。
 
 ## 版本号
 

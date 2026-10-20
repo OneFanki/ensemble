@@ -1,0 +1,148 @@
+name: Release
+
+# Two ways in: a version bump merged to main creates the tag and the release, and
+# pushing a v* tag rebuilds an existing version. A main push whose version is
+# already tagged is a normal merge and does nothing.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      commit: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "${tag}" ]]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}" >&2
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists; bump package.json to release again."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  verify:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+
+  build:
+    needs: [version, verify]
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            builder: pnpm exec electron-builder --win --x64
+            artifacts: |
+              release/*.exe
+          - os: macos-latest
+            name: macos
+            builder: pnpm exec electron-builder --mac --x64 --arm64
+            artifacts: |
+              release/*.dmg
+          - os: ubuntu-latest
+            name: linux
+            builder: pnpm exec electron-builder --linux --x64
+            artifacts: |
+              release/*.AppImage
+              release/*.deb
+    runs-on: ${{ matrix.os }}
+    env:
+      # electron-builder downloads its own Electron zip, so the npm postinstall
+      # binary is not needed by any build step here.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # The project ships unsigned Windows builds. Explicitly disabling discovery
+      # keeps a runner's leftover keychain from producing a half-signed build that
+      # behaves differently from the local one. macOS signs ad-hoc via the mac
+      # section's `identity: "-"`, which bypasses discovery by design.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/make-icon.mjs
+      - run: pnpm build
+      - run: ${{ matrix.builder }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ensemble-${{ matrix.name }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.version.outputs.tag }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Re-run on an existing tag: replace assets instead of failing.
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --generate-notes
+          else
+            # First release of this version: create the tag on the commit that
+            # passed the build, not on whatever the default branch is by now.
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --target "$COMMIT" --generate-notes
+          fi

@@ -147,6 +147,13 @@ CDP engines support autofill, session checks and window tiling. Firefox runs in 
 
 Download the installer for your platform from [Releases](https://github.com/OneFanki/ensemble/releases).
 
+Release artifacts are **not code-signed** (a personal open-source project does not buy certificates).
+The system warning on first launch is expected:
+
+- **Windows**: in the SmartScreen dialog choose More info → Run anyway; the browser may need a manual "keep"
+- **macOS**: right-click the app → Open, or run
+  `xattr -dr com.apple.quarantine /Applications/Ensemble.app`
+
 > This is 0.x software; interfaces and data formats may change.
 
 ## Development

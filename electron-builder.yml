@@ -31,6 +31,14 @@ mac:
     - dmg
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  # No certificate is bought for this project, and electron-builder does not fall
+  # back to ad-hoc signing on its own. Apple Silicon refuses to run unsigned arm64
+  # code, so opt in explicitly. Ad-hoc still fails Gatekeeper for downloaded dmg
+  # files; users clear the quarantine flag once.
+  identity: "-"
+  # Hardened runtime with an ad-hoc signature rejects Electron's pre-signed
+  # frameworks (different Team ID), so it must stay off without notarization.
+  hardenedRuntime: false
 linux:
   target:
     - AppImage

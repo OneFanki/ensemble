@@ -157,6 +157,13 @@ CDP 引擎支持自动填充、登录态检测与窗口平铺；Firefox 走外�
 
 从 [Releases](https://github.com/OneFanki/ensemble/releases) 下载对应平台的安装包。
 
+发布产物**没有代码签名**（个人开源项目不购买证书）。首次运行时系统会提示来源不可信，
+属于预期行为：
+
+- **Windows**：SmartScreen 弹窗点「更多信息」→「仍要运行」；浏览器下载时可能需要手动保留
+- **macOS**：右键应用 →「打开」确认一次，或执行
+  `xattr -dr com.apple.quarantine /Applications/Ensemble.app`
+
 > 当前为 0.x 阶段，接口与数据格式可能变化。
 
 ## 开发

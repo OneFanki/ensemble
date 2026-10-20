@@ -24,7 +24,7 @@ jobs:
       tag: ${{ steps.decide.outputs.tag }}
       commit: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: decide
@@ -53,7 +53,7 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The pnpm version comes from package.json's `packageManager`; passing a
       # `version` input as well makes pnpm/action-setup@v4 fail with a mismatch.
       - uses: pnpm/action-setup@v4
@@ -100,7 +100,7 @@ jobs:
       # section's `identity: "-"`, which bypasses discovery by design.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -126,7 +126,7 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       COMMIT: ${{ needs.version.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           path: dist

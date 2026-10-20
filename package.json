@@ -4,7 +4,18 @@
   "private": true,
   "description": "Multiple identities, one stage. A local multi-account browser workbench for permission and collaboration testing.",
   "license": "MIT",
-  "author": "OneFanki",
+  "author": {
+    "name": "OneFanki",
+    "email": "onefanki@foxmail.com"
+  },
+  "homepage": "https://github.com/OneFanki/ensemble#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OneFanki/ensemble.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OneFanki/ensemble/issues"
+  },
   "type": "module",
   "main": "./out/main/index.js",
   "packageManager": "pnpm@12.10.1",

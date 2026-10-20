@@ -346,7 +346,7 @@ function submit() {
   position: relative;
   height: 260px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 0;
   background: repeating-linear-gradient(
       90deg,
       transparent 0,
@@ -391,7 +391,7 @@ function submit() {
 .slot {
   position: absolute;
   border: 1px solid color-mix(in srgb, var(--line) 70%, var(--accent));
-  border-radius: 4px;
+  border-radius: 0;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
   display: flex;
   align-items: flex-start;

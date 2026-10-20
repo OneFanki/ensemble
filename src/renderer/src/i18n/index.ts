@@ -348,7 +348,7 @@ const messages = {
       mcpAllowRun: "允许启动与停止窗口",
       mcpAllowDelete: "允许删除",
       mcpPermissionNote:
-        "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉环境、身份或场景。启动只受运行权限控制，不再按环境名额外确认。",
+        "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉环境、身份或场景。",
       mcpEndpoint: "客户端连接信息",
       copyUrl: "复制地址",
       copyToken: "复制 Token",
@@ -777,7 +777,7 @@ const messages = {
       mcpAllowRun: "Launch and stop windows",
       mcpAllowDelete: "Delete",
       mcpPermissionNote:
-        "Delete is off by default; once enabled, a single confirm flag lets the AI remove environments, identities or scenes. Launches are gated only by run permission, with no extra confirmation based on the environment name.",
+        "Delete is off by default; once enabled, a single confirm flag lets the AI remove environments, identities or scenes.",
       mcpEndpoint: "Client connection",
       copyUrl: "Copy URL",
       copyToken: "Copy token",

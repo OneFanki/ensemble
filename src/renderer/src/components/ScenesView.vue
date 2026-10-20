@@ -383,6 +383,12 @@ h1 {
   letter-spacing: -0.015em;
 }
 
+/* Same guard as the environments page: the copy shrinks, the buttons never do. */
+.head-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .head-copy p {
   margin: 6px 0 0;
   font-size: 11.5px;
@@ -392,7 +398,9 @@ h1 {
 .head-actions {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .workspace {

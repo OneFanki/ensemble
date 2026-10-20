@@ -132,6 +132,23 @@ describe("workspace import", () => {
     expect(service.snapshot().environments).toHaveLength(0);
   });
 
+  it("can be retried with the right passphrase after a wrong one", () => {
+    seed();
+    const { file } = service.exportWorkspace("correct horse battery");
+    rmSync(dir, { recursive: true, force: true });
+    dir = mkdtempSync(join(tmpdir(), "ensemble-transfer-retry-"));
+    service = makeService();
+    void service.initialize();
+    const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
+
+    // The caller keeps the parsed file between attempts, so a failed merge must
+    // leave no state behind that blocks the retry.
+    expect(() => service.importWorkspace(parsed, "wrong")).toThrow(/口令/);
+    const result = service.importWorkspace(parsed, "correct horse battery");
+    expect(result.importedSecrets).toBe(1);
+    expect(service.snapshot().identities).toHaveLength(1);
+  });
+
   it("updates entries with the same id instead of duplicating them", () => {
     const { environment } = seed();
     const { file } = service.exportWorkspace();

@@ -39,7 +39,7 @@ function slotStyle(index: number, slot: { x: number; y: number; width: number; h
   position: relative;
   width: 100%;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: var(--bg-elevated);
   overflow: hidden;
 }

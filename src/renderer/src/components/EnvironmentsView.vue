@@ -156,6 +156,14 @@ async function remove(environment: Environment) {
   flex: 0 0 auto;
 }
 
+/* Let the copy shrink so the buttons keep their intrinsic width; without this the
+   flex item shrinks below the sum of both buttons and the inline-flex children
+   wrap onto two lines at the default window size. */
+.head-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 h1 {
   margin: 0;
   font-family: var(--font-display);
@@ -173,6 +181,10 @@ h1 {
 }
 
 .head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
   margin-left: auto;
 }
 

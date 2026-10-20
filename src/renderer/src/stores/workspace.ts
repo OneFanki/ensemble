@@ -105,7 +105,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       if (success) notify(success, "success");
       return result;
     } catch (error) {
-      notify((error as Error).message, "error");
+      // Electron wraps IPC rejections as "Error invoking remote method 'x': Error: …";
+      // the wrapper means nothing to the user, so show only the real message.
+      notify(
+        (error as Error).message.replace(
+          /^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/,
+          "",
+        ),
+        "error",
+      );
       return undefined;
     } finally {
       busy.value = null;

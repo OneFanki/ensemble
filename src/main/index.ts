@@ -571,8 +571,11 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.dataImportApply, (passphrase?: string) => {
     if (!pendingImport) throw new Error("请先选择要导入的配置文件");
     const { payload } = pendingImport;
-    pendingImport = null;
+    // Clear only after the merge succeeds: a wrong passphrase throws before any
+    // write, and dropping the payload here would force the user to re-pick the
+    // very same file just to retype it.
     const result = workspace.importWorkspace(payload, passphrase ? String(passphrase) : undefined);
+    pendingImport = null;
     broadcastWorkspace();
     return result;
   });

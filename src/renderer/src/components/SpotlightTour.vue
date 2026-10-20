@@ -295,7 +295,9 @@ onBeforeUnmount(() => {
 .tour-layer {
   position: fixed;
   inset: 0;
-  z-index: 4000;
+  /* Above the modal layer (70/71) but below toasts (100): the tour dims dialogs
+     it may be pointing at, while a toast must never end up behind the mask. */
+  z-index: 90;
 }
 
 .tour-layer--dim {

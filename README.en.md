@@ -146,7 +146,8 @@ CDP engines support autofill, session checks and window tiling. Firefox runs in 
 
 ## Install
 
-Download the installer for your platform from [Releases](https://github.com/OneFanki/ensemble/releases).
+Download the installer for your platform from [Releases](https://github.com/OneFanki/ensemble/releases),
+or visit the landing page at <https://onefanki.github.io/ensemble/>.
 
 Release artifacts are **not code-signed** (a personal open-source project does not buy certificates).
 The system warning on first launch is expected:

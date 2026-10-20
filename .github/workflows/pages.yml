@@ -1,0 +1,49 @@
+name: Pages
+
+# The landing page lives in site/ and has no build step: it is plain HTML with the
+# screenshots from docs/screenshots copied in at deploy time, so the repository
+# keeps a single copy of every image.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/screenshots/**"
+      - "build/icon.png"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assemble static assets
+        run: |
+          mkdir -p site/assets site/screenshots
+          cp build/icon.png site/assets/icon.png
+          cp docs/screenshots/*.png site/screenshots/
+          # The badge reads package.json so it can never drift from the release.
+          version="$(node -p "require('./package.json').version")"
+          sed -i "s/__VERSION__/${version}/g" site/index.html
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+          # The page is a single HTML file plus images; the default retention is
+          # plenty and a short-lived artifact keeps storage trivial.
+          retention-days: 3
+      - id: deployment
+        uses: actions/deploy-pages@v5

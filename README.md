@@ -157,7 +157,8 @@ CDP 引擎支持自动填充、登录态检测与窗口平铺；Firefox 走外�
 
 ## 安装
 
-从 [Releases](https://github.com/OneFanki/ensemble/releases) 下载对应平台的安装包。
+从 [Releases](https://github.com/OneFanki/ensemble/releases) 下载对应平台的安装包，
+或访问展示页 <https://onefanki.github.io/ensemble/>。
 
 发布产物**没有代码签名**（个人开源项目不购买证书）。首次运行时系统会提示来源不可信，
 属于预期行为：

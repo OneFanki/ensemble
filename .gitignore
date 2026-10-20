@@ -31,3 +31,9 @@ Thumbs.db
 # Ad-hoc verification artifacts (screenshots, one-off scripts) live at the repo root.
 .temp*.mjs
 .temp*.png
+
+# Landing page assets are assembled from build/ and docs/screenshots/ at deploy
+# time (see .github/workflows/pages.yml); committed copies would drift from the
+# README screenshots.
+site/assets/
+site/screenshots/

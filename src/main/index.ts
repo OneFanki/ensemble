@@ -143,16 +143,34 @@ function workAreaRect(): { x: number; y: number; width: number; height: number }
   return display.workArea;
 }
 
-function trayIconPath(): string {
-  // Packaged: unpacked next to the asar so Windows can load it without extraction.
+function buildAssetPath(file: string): string {
+  // Packaged: unpacked next to the asar so the native tray loader can read it
+  // without going through the archive.
   return app.isPackaged
-    ? join(process.resourcesPath, "app.asar.unpacked", "build", "tray.png")
-    : join(__dirname, "../../build/tray.png");
+    ? join(process.resourcesPath, "app.asar.unpacked", "build", file)
+    : join(__dirname, "../../build", file);
 }
 
-function fallbackTrayIcon(): Electron.NativeImage {
-  // A missing tray asset must not break the tray; a 1x1 transparent image keeps
-  // the app running invisibly rather than crashing at startup.
+function loadTrayImage(): Electron.NativeImage {
+  if (process.platform === "darwin") {
+    // The menu bar only uses the alpha channel of a template image, so the
+    // colored app mark would render as a solid block. 16pt + @2x keeps the
+    // glyph sharp and lets macOS tint it for light and dark menu bars.
+    const template = nativeImage.createFromPath(buildAssetPath("trayTemplate.png"));
+    if (!template.isEmpty()) {
+      // nativeImage pairs trayTemplate@2x.png automatically on Retina displays;
+      // the Template suffix also marks it as a template image, but set it
+      // explicitly so a renamed asset cannot silently lose the tinting.
+      template.setTemplateImage(true);
+      return template;
+    }
+  }
+  for (const file of ["tray.png", "icon.png"]) {
+    const image = nativeImage.createFromPath(buildAssetPath(file));
+    if (!image.isEmpty()) return image;
+  }
+  // A missing tray asset must not break the tray; an empty image keeps the app
+  // running invisibly rather than crashing at startup.
   return nativeImage.createFromBuffer(Buffer.from("", "utf8"));
 }
 
@@ -168,14 +186,7 @@ function showMainWindow(): void {
 
 function createTray(): void {
   if (tray) return;
-  let image: Electron.NativeImage;
-  try {
-    image = nativeImage.createFromPath(trayIconPath());
-  } catch {
-    image = fallbackTrayIcon();
-  }
-  if (image.isEmpty()) image = nativeImage.createFromPath(join(__dirname, "../../build/icon.png"));
-  tray = new Tray(image);
+  tray = new Tray(loadTrayImage());
   tray.setToolTip("Ensemble");
   const rebuild = () => {
     if (!tray) return;

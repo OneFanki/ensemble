@@ -18,12 +18,12 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      # No `version` input: pnpm/action-setup@v4 errors out when both this input
+      - uses: actions/checkout@v7
+      # No `version` input: pnpm/action-setup@v6 errors out when both this input
       # and package.json's `packageManager` field are present. The field is the
       # single source of truth and the action reads it.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm

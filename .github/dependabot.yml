@@ -12,8 +12,23 @@ updates:
       # Electron upgrades change the safeStorage and CDP behavior; do them by hand.
       - dependency-name: electron
         update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native (Go) compiler. vue-tsc drives the SFC type
+      # check, and its compatibility with the new compiler is not established;
+      # a green build here would say nothing about `.vue` files. Upgrade by hand
+      # once vue-tsc declares support.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # @types/node must track the Electron runtime's Node major, not the
+      # newest Node release.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    # One PR for every action bump: five separate PRs each ran the full
+    # three-OS matrix, which is 45 jobs to review five one-line diffs.
+    groups:
+      github-actions:
+        patterns: ["*"]

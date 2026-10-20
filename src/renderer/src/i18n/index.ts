@@ -105,6 +105,34 @@ const messages = {
       insecure: "弱加密",
       docs: "文档",
 
+      // Onboarding tour
+      tourWelcomeTitle: "欢迎使用 Ensemble",
+      tourWelcomeBody:
+        "一个本地多账号工作台：每个身份使用独立的浏览器 profile，Cookie 和登录态互不影响。",
+      tourEnvSwitcherTitle: "环境切换器",
+      tourEnvSwitcherBody:
+        "环境是一组账号和站点地址的边界。切换环境后，身份和场景只显示当前环境的内容。",
+      tourSideNavTitle: "四个工作区",
+      tourSideNavBody:
+        "环境定义站点，身份保存账号，场景把多个身份按布局一起打开，设置管理浏览器、密码和 AI 接入。",
+      tourNewEnvironmentTitle: "先建一个环境",
+      tourNewEnvironmentBody: "填写站点地址和登录路径。环境是后续身份和场景的容器。",
+      tourNewIdentityTitle: "再添加身份",
+      tourNewIdentityBody:
+        "每个身份对应一个独立浏览器 profile。可以保存账号密码，启动时自动填充；密码只保存在系统密钥环或主密码中。",
+      tourNewSceneTitle: "用场景批量拉起",
+      tourNewSceneBody: "场景把多个身份按 2×2 等布局同时打开，适合权限、协作和多账号测试。",
+      tourRunDockTitle: "查看运行状态",
+      tourRunDockBody:
+        "右侧显示正在运行的浏览器。CDP 实例支持自动填充和登录态检测，EXT 为外部模式；关闭窗口不会退出应用，默认驻留托盘。",
+      tourSkip: "跳过",
+      tourPrev: "上一步",
+      tourNext: "下一步",
+      tourDone: "完成",
+      tourLabel: "新手引导",
+      tourReplay: "重新播放",
+      tourReplayNote: "随时可以在这里重新播放 7 步引导。",
+
       // Shell and status line
       bootHint: "正在准备工作区…",
       statusReady: "待命",
@@ -522,6 +550,36 @@ const messages = {
       secure: "Encrypted",
       insecure: "Weak protection",
       docs: "Docs",
+
+      // Onboarding tour
+      tourWelcomeTitle: "Welcome to Ensemble",
+      tourWelcomeBody:
+        "A local multi-account workbench: every identity gets its own browser profile, so cookies and login state stay isolated.",
+      tourEnvSwitcherTitle: "Environment switcher",
+      tourEnvSwitcherBody:
+        "An environment is the boundary for a set of accounts and site URLs. Switching environments shows only that environment's identities and scenes.",
+      tourSideNavTitle: "Four workspaces",
+      tourSideNavBody:
+        "Environments define sites, identities hold accounts, scenes open several identities in a layout, and Settings manages browsers, passwords, and AI access.",
+      tourNewEnvironmentTitle: "Create an environment first",
+      tourNewEnvironmentBody:
+        "Enter the site URL and login path. Environments hold identities and scenes.",
+      tourNewIdentityTitle: "Add an identity",
+      tourNewIdentityBody:
+        "Each identity gets a separate browser profile. Save credentials to auto-fill on launch; passwords stay in the system keychain or behind a master password.",
+      tourNewSceneTitle: "Launch a scene",
+      tourNewSceneBody:
+        "A scene opens several identities in a 2×2 (or custom) layout — useful for permissions, collaboration, and multi-account testing.",
+      tourRunDockTitle: "Check running instances",
+      tourRunDockBody:
+        "The right panel shows running browsers. CDP instances support auto-fill and login checks; EXT is external mode. Closing the window does not quit the app — it stays in the tray by default.",
+      tourSkip: "Skip",
+      tourPrev: "Back",
+      tourNext: "Next",
+      tourDone: "Done",
+      tourLabel: "Getting started",
+      tourReplay: "Replay tour",
+      tourReplayNote: "Replay the 7-step tour at any time.",
 
       // Shell and status line
       bootHint: "Preparing your workspace…",

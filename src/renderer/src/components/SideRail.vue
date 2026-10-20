@@ -24,7 +24,7 @@ function countLabel(singularKey: string, pluralKey: string, count: number): stri
       only through the title-bar switcher, which made newcomers wonder where the
       isolation boundary actually lived.
     -->
-    <nav class="nav">
+    <nav class="nav" data-tour="side-nav">
       <button
         type="button"
         data-nav="environments"

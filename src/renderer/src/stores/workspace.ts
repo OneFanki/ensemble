@@ -134,6 +134,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         layout: "2x2",
         autoFillOnLaunch: true,
         closeToTray: true,
+        onboardingVersion: 0,
       },
   );
   const instances = computed(() => snapshot.value?.instances ?? []);

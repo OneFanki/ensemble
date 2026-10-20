@@ -214,6 +214,7 @@ async function seed(userData, locale, theme = "dark") {
         layout: "2x2",
         autoFillOnLaunch: true,
         closeToTray: true,
+        onboardingVersion: 1,
       },
       null,
       2,

@@ -168,7 +168,7 @@ pnpm test       # unit tests
 pnpm test:e2e   # real-browser end-to-end (needs an installed Chromium browser)
 pnpm build      # build to out/
 pnpm screenshots # regenerate the README screenshots (needs a prior build)
-pnpm dist       # package the installer and portable build into release/
+pnpm dist       # package the installer into release/
 ```
 
 Electron downloads its runtime on first install. If `node_modules/electron/dist` is missing afterwards, rerun the download step:

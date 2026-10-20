@@ -74,8 +74,10 @@ jobs:
           - os: windows-latest
             name: windows
             builder: pnpm exec electron-builder --win --x64
+            # Only the installer: `release/*.exe` would also pick up NSIS's
+            # temporary `__uninstaller.exe`.
             artifacts: |
-              release/*.exe
+              release/*-setup.exe
           - os: macos-latest
             name: macos
             builder: pnpm exec electron-builder --mac --x64 --arm64

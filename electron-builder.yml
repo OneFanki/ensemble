@@ -14,18 +14,17 @@ asarUnpack:
   # The tray icon is loaded by native code from disk, so it must exist outside asar.
   - build/tray.png
 win:
+  # Installer only. The portable target is a self-extracting stub that unpacks the
+  # whole Electron runtime on every launch, which reads as "this app is slow" and
+  # gives users a second exe they cannot tell apart from the installer.
   target:
     - target: nsis
-      arch: [x64]
-    - target: portable
       arch: [x64]
   artifactName: ${productName}-${version}-win-${arch}-${target}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   artifactName: ${productName}-${version}-win-${arch}-setup.${ext}
-portable:
-  artifactName: ${productName}-${version}-win-${arch}-portable.${ext}
 mac:
   target:
     - dmg

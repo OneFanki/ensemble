@@ -27,7 +27,7 @@ pnpm test             # 核心层单元测试
 pnpm typecheck        # Node 侧 + 渲染层类型检查
 pnpm build            # 构建 out/
 pnpm screenshots      # 重新生成 README 截图（需先 build）
-pnpm dist             # 打包安装程序与便携版到 release/
+pnpm dist             # 打包三平台产物到 release/
 ```
 
 单跑某个测试文件：`pnpm test tests/grid.test.ts`。

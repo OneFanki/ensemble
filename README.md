@@ -178,7 +178,7 @@ pnpm test       # 单元测试
 pnpm test:e2e   # 真实浏览器端到端（需要本机已安装 Chromium 系浏览器）
 pnpm build      # 构建 out/
 pnpm screenshots # 重新生成 README 截图（需先 build）
-pnpm dist       # 打包安装版与便携版到 release/
+pnpm dist       # 打包安装程序到 release/
 ```
 
 首次安装 Electron 需要访问外网。国内网络可先配置代理：

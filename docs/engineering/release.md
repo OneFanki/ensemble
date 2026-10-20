@@ -10,13 +10,13 @@ pnpm dist
 
 | 产物 | 用途 |
 | --- | --- |
-| `Ensemble-<version>-win-x64-setup.exe` | NSIS 安装程序，可选安装目录 |
-| `Ensemble-<version>-win-x64-portable.exe` | 免安装便携版 |
+| `Ensemble-<version>-win-x64-setup.exe` | NSIS 安装程序，可选安装目录；对外只发布这一个 Windows 产物 |
 | `win-unpacked/` | 解压后的完整目录，排查问题时直接运行 |
 
-**启动速度与产物形态强相关。** 便携版每次启动都要把 Electron 运行时解压到临时目录，
-冷启动会多等一到两秒；安装版与 `win-unpacked` 直接读盘。日常使用请装安装版，便携版
-只用于临时试用或拷给别人。
+**不再产出便携版。** portable target 是一个自解压 stub，每次启动都要先把整个 Electron
+运行时解压到临时目录，冷启动多等一到两秒；更麻烦的是它和安装版是两个同名的 exe，用户
+分不清该下哪个，下错就会觉得「这软件启动怎么这么慢」。需要免安装场景时，直接拷
+`win-unpacked/` 目录即可，它没有解压开销。
 
 图标由 `scripts/make-icon.mjs` 生成，不依赖任何图像库；`build/icon.ico` 供 Windows、
 `build/icon.png` 供 Linux/macOS。改图标只需改这个脚本。
@@ -37,7 +37,7 @@ pnpm dist
 
 | 平台 | 目标 | 构建环境 |
 | --- | --- | --- |
-| Windows | nsis + portable | Windows，或 GitHub Actions 的 `windows-latest` |
+| Windows | nsis | Windows，或 GitHub Actions 的 `windows-latest` |
 | macOS | dmg（x64 + arm64） | 必须在 macOS 上构建 |
 | Linux | AppImage + deb | Linux，或 Docker 中的 `electronuserland/builder` |
 

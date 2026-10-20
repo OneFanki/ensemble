@@ -33,6 +33,39 @@ docs(readme): 补充 Wayland 窗口定位限制
 
 一个提交只做一件事。不要把格式化整个仓库和个人改动混在一起。
 
+## Versioning and releases
+
+`package.json` 的 `version` 是唯一来源：安装包文件名、应用内「关于」、GitHub tag 与 Release
+标题都由它派生。发布是自动的——**合入 main 时版本号变了，就会发一版**；版本号没变，合并只
+是普通提交，不会产生重复 Release。
+
+什么时候动版本号（语义化版本，当前处于 0.x）：
+
+| 改动 | 版本号 | 例子 |
+| --- | --- | --- |
+| 新功能，或破坏性变更（数据格式、导出文件、MCP 接口不兼容） | 升 minor | `0.1.3` → `0.2.0` |
+| 修复、文档、内部重构，无行为变化 | 升 patch | `0.2.0` → `0.2.1` |
+| 纯 CI / 依赖 / 注释，用户感知不到 | 不升 | — |
+
+0.x 阶段 semver 允许把破坏性变更放进 minor，所以功能与破坏性变更共用同一档；等 1.0 之后
+再拆分到 major。现在的判定从宽：只要用户需要重新导入配置或重建 profile，就必须升 minor，
+并在 Release notes 里写清迁移方式。
+
+操作方式：
+
+```bash
+pnpm version patch --no-git-tag-version   # 或 minor / 手动改成 0.2.0
+git add package.json
+git commit -m "chore(build): 版本号 0.2.1"
+```
+
+`--no-git-tag-version` 只改文件、不自动打 tag。**正常发布时不要手动推送 `v*` tag**：
+tag 由 `.github/workflows/release.yml` 在构建成功后创建，手动推会让版本号和产物脱节。
+只有需要重跑某个已发布版本时，才推一个与 `package.json` 完全一致的 tag。
+
+一个 PR 只在需要发布时改版本号。多个 PR 一起合入时，由最后一个合入的 PR 负责 bump，
+避免同一版本号被并发合入的 PR 重复使用。
+
 ## Code layout
 
 - `src/core/`：纯 Node，不允许 import `electron`（由契约测试守护）。

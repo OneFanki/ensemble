@@ -104,7 +104,7 @@ function passwordLabel(identity: Identity): string {
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
         </button>
-        <button class="btn primary" type="button" @click="emit('newIdentity')">
+        <button class="btn primary" type="button" data-tour="new-identity" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
         </button>

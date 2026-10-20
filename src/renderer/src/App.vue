@@ -8,6 +8,7 @@ import IdentitiesView from "./components/IdentitiesView.vue";
 import ScenesView from "./components/ScenesView.vue";
 import SettingsView from "./components/SettingsView.vue";
 import RunDock from "./components/RunDock.vue";
+import SpotlightTour from "./components/SpotlightTour.vue";
 import ToastStack from "./components/ToastStack.vue";
 import EnvironmentDialog from "./components/EnvironmentDialog.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
@@ -15,6 +16,12 @@ import SceneDialog from "./components/SceneDialog.vue";
 import LayoutEditor from "./components/LayoutEditor.vue";
 import { useWorkspaceStore } from "./stores/workspace";
 import { setLocale, tr, type Locale } from "./i18n";
+import {
+  TOUR_STEPS,
+  TOUR_VERSION,
+  shouldAutoStartTour,
+  type TourView,
+} from "./onboarding/tourSteps";
 import type {
   EnvironmentDraft,
   IdentityDraft,
@@ -33,6 +40,10 @@ const sceneDraft = ref<SceneDraft | null>(null);
 const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; sceneId?: string } | null>(
   null,
 );
+const tourOpen = ref(false);
+const tourOriginView = ref<View>("identities");
+/** Remount the tour on replay so it cannot keep the previous step index. */
+const tourSession = ref(0);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
@@ -42,6 +53,12 @@ onMounted(async () => {
   setLocale(store.settings.locale as Locale);
   const saved = store.settings.lastView;
   view.value = saved === "scenes" || saved === "environments" ? saved : "identities";
+  if (shouldAutoStartTour(store.settings)) {
+    tourOriginView.value = view.value;
+    window.setTimeout(() => {
+      tourOpen.value = true;
+    }, 350);
+  }
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -72,6 +89,24 @@ function switchView(next: View) {
   if (next !== "settings") {
     void store.saveSettings({ lastView: next });
   }
+}
+
+function startTour() {
+  tourOriginView.value = view.value;
+  tourSession.value += 1;
+  tourOpen.value = true;
+}
+
+async function finishTour(completed: boolean) {
+  tourOpen.value = false;
+  if (!completed) view.value = tourOriginView.value;
+  if ((store.settings.onboardingVersion ?? 0) < TOUR_VERSION) {
+    await store.saveSettings({ onboardingVersion: TOUR_VERSION });
+  }
+}
+
+function handleTourNavigate(next: TourView) {
+  view.value = next;
 }
 
 function openNewEnvironment() {
@@ -287,6 +322,7 @@ async function handleLocale(locale: "zh" | "en") {
           v-else
           @theme="handleTheme"
           @locale="handleLocale"
+          @start-tour="startTour"
         />
       </main>
 
@@ -350,6 +386,14 @@ async function handleLocale(locale: "zh" | "en") {
       @close="layoutEditor = null"
       @save="saveLayout"
       @delete="layoutEditor.preset ? deleteLayout(layoutEditor.preset) : null"
+    />
+
+    <SpotlightTour
+      :key="tourSession"
+      :open="tourOpen"
+      :steps="TOUR_STEPS"
+      @navigate="handleTourNavigate"
+      @close="finishTour"
     />
   </div>
 </template>

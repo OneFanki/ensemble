@@ -79,6 +79,7 @@ export const settingsPatchSchema = z.object({
   layout: z.string().min(1).max(64).optional(),
   autoFillOnLaunch: z.boolean().optional(),
   closeToTray: z.boolean().optional(),
+  onboardingVersion: z.number().int().min(0).max(999).optional(),
 });
 
 export const passwordOwnerSchema = z.object({

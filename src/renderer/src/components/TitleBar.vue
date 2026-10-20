@@ -40,13 +40,13 @@ function manage() {
 
 <template>
   <header class="titlebar drag-region" :data-platform="platform">
-    <div class="brand no-drag">
+    <div class="brand no-drag" data-tour="brand">
       <Logo :size="22" />
       <span class="name">Ensemble</span>
       <span class="version mono">0.1</span>
     </div>
 
-    <div ref="switcher" class="env-switcher no-drag">
+    <div ref="switcher" class="env-switcher no-drag" data-tour="environment-switcher">
       <button
         class="env-switch"
         type="button"

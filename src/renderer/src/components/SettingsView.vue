@@ -39,6 +39,7 @@ const activeTab = ref<SettingsTab>("general");
 const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
   locale: [locale: "zh" | "en"];
+  startTour: [];
 }>();
 
 const store = useWorkspaceStore();
@@ -442,6 +443,13 @@ async function submitMaster() {
         <p class="fineprint">
           {{ $t("app.autoFillLaunchNote") }}
         </p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.tourLabel") }}</span>
+          <button class="btn" type="button" @click="emit('startTour')">
+            {{ $t("app.tourReplay") }}
+          </button>
+        </div>
+        <p class="fineprint">{{ $t("app.tourReplayNote") }}</p>
       </section>
 
       <section v-if="activeTab === 'vault'" class="block">

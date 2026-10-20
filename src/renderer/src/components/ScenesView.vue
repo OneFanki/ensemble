@@ -178,7 +178,7 @@ function launchSelected() {
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
         </button>
-        <button class="btn primary" type="button" @click="emit('newScene')">
+        <button class="btn primary" type="button" data-tour="new-scene" @click="emit('newScene')">
           <Plus :size="13" />
           {{ $t("app.newScene") }}
         </button>

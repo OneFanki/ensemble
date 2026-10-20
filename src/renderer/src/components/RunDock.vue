@@ -14,7 +14,7 @@ const { t } = useI18n();
     button was removed: copying belongs to the identity dialog, where the password
     it refers to is visible.
   -->
-  <aside class="dock">
+  <aside class="dock" data-tour="run-dock">
     <div class="dock-head">
       <span class="dock-title">{{ $t("app.running") }}</span>
       <span class="count mono">{{ store.instances.length }}</span>

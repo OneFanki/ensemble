@@ -56,7 +56,7 @@ async function remove(environment: Environment) {
           <Globe :size="13" />
           {{ $t("app.cleanSessionNoEnv") }}
         </button>
-        <button class="btn primary" type="button" @click="emit('newEnvironment')">
+        <button class="btn primary" type="button" data-tour="new-environment" @click="emit('newEnvironment')">
           <Plus :size="13" />
           {{ $t("app.newEnvironment") }}
         </button>

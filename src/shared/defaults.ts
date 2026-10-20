@@ -7,6 +7,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layout: "2x2",
   autoFillOnLaunch: true,
   closeToTray: true,
+  onboardingVersion: 0,
 };
 
 export const ROLE_COLORS = ["amber", "teal", "violet", "rose", "blue", "slate"] as const;

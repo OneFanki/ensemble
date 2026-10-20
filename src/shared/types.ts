@@ -165,6 +165,8 @@ export interface AppSettings {
    * every AI client mid-task.
    */
   closeToTray: boolean;
+  /** Version of the onboarding tour the user has already seen. */
+  onboardingVersion: number;
 }
 
 export interface CredentialPresence {
@@ -250,6 +252,7 @@ export type SettingsPatch = Partial<
     | "layout"
     | "autoFillOnLaunch"
     | "closeToTray"
+    | "onboardingVersion"
   >
 >;
 

@@ -183,6 +183,19 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 - 导入按 id 合并，缺失所属环境的条目跳过并计数；有加密段但口令错误时整体抛错，
   不写入任何数据。
 
+## 版本检查
+
+纯检查，不自动更新。`shared/update.ts` 负责解析 GitHub Releases API 的返回并比较版本，
+`src/main/index.ts` 的 `app:check-update` 在 8 秒超时内请求
+`api.github.com/repos/OneFanki/ensemble/releases/latest`，把结果交给关于页展示。
+
+- 不做内置下载或自动安装：发布产物未签名，macOS 会拒绝未签名更新包，Windows 仍会
+  过 SmartScreen，自动更新换不来更好的体验，只会多一条无法验证的代码路径。
+- 版本号比较按点分段数值比较，不是字符串比较（`0.10.0` 比 `0.9.0` 新）。
+- 返回体不符合预期（代理错误页、tag 名不是版本号）一律按「检查失败」处理，不猜版本。
+- 用户点「打开 Releases」时由主进程用 `shell.openExternal` 打开，渲染层只能传
+  `http(s)` 地址。
+
 ## 安全边界
 
 - 渲染进程：`contextIsolation: true`、`nodeIntegration: false`、`webviewTag: false`，

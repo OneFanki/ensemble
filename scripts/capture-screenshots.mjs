@@ -118,6 +118,12 @@ const SHOTS = [
     clicks: ['[role="tab"]:nth-child(5)'],
   },
   {
+    name: "settings-about",
+    locale: "zh",
+    view: "settings",
+    clicks: ['[role="tab"]:nth-child(6)'],
+  },
+  {
     name: "layout-editor",
     locale: "zh",
     view: "scenes",

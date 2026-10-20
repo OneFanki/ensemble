@@ -48,6 +48,7 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Let an AI do the data entry**: a built-in MCP endpoint receives environments, identities and scenes from your AI client
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
 - **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
+- **Version check**: Settings → About compares the running version with the latest GitHub release and links straight to the download page; updates are installed by running the newer installer
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />

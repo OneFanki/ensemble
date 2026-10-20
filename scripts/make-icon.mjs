@@ -15,6 +15,9 @@ const PNG_SIZE = 1024;
 const BG_TOP = [240, 189, 111, 255];
 const BG_BOTTOM = [207, 140, 51, 255];
 const INK = [26, 19, 5, 255];
+// macOS menu bar icons are template images: only the alpha channel is used, and
+// the system tints the glyph for the current menu bar appearance.
+const TEMPLATE_INK = [0, 0, 0, 255];
 
 function blend(top, bottom, t) {
   return [
@@ -90,6 +93,38 @@ function drawMark(size) {
   return canvas;
 }
 
+/**
+ * The same mark without the amber plate, for the macOS menu bar. The glyph is
+ * scaled up ~1.3x so it reads at 16pt next to native status items instead of
+ * floating in a mostly empty square.
+ */
+function drawTemplateMark(size) {
+  const canvas = createCanvas(size);
+  const scale = (size / 32) * 1.32;
+  const x = (value) => size / 2 + (value - 16) * scale;
+  const y = (value) => size / 2 + (value - 16.6) * scale;
+
+  const bars = [
+    { x: 6.4, y: 8.2, w: 19.2, h: 4.2 },
+    { x: 6.4, y: 14.2, w: 13.8, h: 4.2 },
+    { x: 6.4, y: 20.2, w: 8.2, h: 4.2 },
+  ];
+  for (const bar of bars) {
+    roundedRect(
+      canvas,
+      x(bar.x),
+      y(bar.y),
+      bar.w * scale,
+      bar.h * scale,
+      2.1 * scale,
+      () => TEMPLATE_INK,
+    );
+  }
+
+  circle(canvas, x(21.6), y(22.3), 3.05 * scale, TEMPLATE_INK);
+  return canvas;
+}
+
 /** Averages source pixels; colors are alpha-weighted so edges keep their hue. */
 function downsample(source, size) {
   const target = createCanvas(size);
@@ -132,6 +167,10 @@ function downsample(source, size) {
 
 function render(size) {
   return downsample(drawMark(size * SUPERSAMPLE), size);
+}
+
+function renderTemplate(size) {
+  return downsample(drawTemplateMark(size * SUPERSAMPLE), size);
 }
 
 function crc32(buffer) {
@@ -208,6 +247,10 @@ writeFileSync("build/icon.ico", encodeIco(icoEntries));
 // good middle ground that Electron downsamples cleanly.
 const tray = encodePng(render(32));
 writeFileSync("build/tray.png", tray);
+// macOS gets a template glyph at 16pt plus a 2x variant for Retina menu bars.
+writeFileSync("build/trayTemplate.png", encodePng(renderTemplate(16)));
+writeFileSync("build/trayTemplate@2x.png", encodePng(renderTemplate(32)));
 console.log(
-  `icon.png ${PNG_SIZE}px (${large.length} bytes); icon.ico ${ICO_SIZES.join("/")}px; tray.png 32px`,
+  `icon.png ${PNG_SIZE}px (${large.length} bytes); icon.ico ${ICO_SIZES.join("/")}px; ` +
+    "tray.png 32px; trayTemplate.png 16px; trayTemplate@2x.png 32px",
 );

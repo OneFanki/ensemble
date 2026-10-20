@@ -7,12 +7,16 @@ files:
   - out/**
   - package.json
   - build/tray.png
+  - build/trayTemplate.png
+  - build/trayTemplate@2x.png
   - build/icon.png
   - "!**/*.map"
 asarUnpack:
   - resources/**
-  # The tray icon is loaded by native code from disk, so it must exist outside asar.
+  # Tray icons are loaded by native code from disk, so they must exist outside asar.
   - build/tray.png
+  - build/trayTemplate.png
+  - build/trayTemplate@2x.png
 win:
   # Installer only. The portable target is a self-extracting stub that unpacks the
   # whole Electron runtime on every launch, which reads as "this app is slow" and

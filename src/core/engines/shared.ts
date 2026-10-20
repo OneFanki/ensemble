@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import { basename, dirname } from "node:path";
 import type { Engine, EngineChannel, EngineFamily, EngineSource } from "@shared/types";
 
 export interface EngineCandidate {
@@ -44,13 +43,33 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Splits on both separators instead of using `node:path`. These helpers receive
+ * path strings that may have been written on another platform — stored manual
+ * engine entries, and the cross-platform CI matrix — while `node:path` only
+ * understands the host separator and would hand back the whole string.
+ */
+function pathSegments(value: string): string[] {
+  return value.split(/[\\/]+/).filter(Boolean);
+}
+
+function fileName(value: string): string {
+  const segments = pathSegments(value);
+  return segments[segments.length - 1] ?? "";
+}
+
+function parentName(value: string): string {
+  const segments = pathSegments(value);
+  return segments[segments.length - 2] ?? "";
+}
+
 export function versionFromExecutablePath(exePath: string): string | undefined {
-  const parent = basename(dirname(exePath));
+  const parent = parentName(exePath);
   return /^\d+\.\d+(?:\.\d+){0,2}$/.test(parent) ? parent : undefined;
 }
 
 export function detectFamilyFromPath(exePath: string): EngineFamily | undefined {
-  const name = basename(exePath).toLowerCase();
+  const name = fileName(exePath).toLowerCase();
   if (name.includes("firefox")) return "firefox";
   if (
     name.includes("chrome") ||
@@ -65,7 +84,7 @@ export function detectFamilyFromPath(exePath: string): EngineFamily | undefined 
 }
 
 export function detectBrandFromPath(exePath: string): string {
-  const name = basename(exePath).toLowerCase();
+  const name = fileName(exePath).toLowerCase();
   if (name.includes("msedge")) return "Microsoft Edge";
   if (name.includes("chrome-beta")) return "Google Chrome Beta";
   if (name.includes("chrome-dev")) return "Google Chrome Dev";
@@ -74,7 +93,7 @@ export function detectBrandFromPath(exePath: string): string {
   if (name.includes("vivaldi")) return "Vivaldi";
   if (name.includes("chromium")) return "Chromium";
   if (name.includes("firefox")) return "Firefox";
-  return basename(exePath);
+  return fileName(exePath);
 }
 
 export function dedupeEngines(engines: Engine[]): Engine[] {

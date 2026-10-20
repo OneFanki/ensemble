@@ -710,6 +710,18 @@ if (!gotLock) {
     setCoreLocale(settingsCache.locale);
     applyTheme(settingsCache.theme);
 
+    // Follow OS appearance changes while the setting is "system": the renderer
+    // gets prefers-color-scheme updates itself, but the native window background
+    // and Windows/Linux caption buttons have to be recolored here.
+    nativeTheme.on("updated", () => {
+      if (currentTheme !== "system") return;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.setBackgroundColor(isDarkTheme("system") ? "#0b0d10" : "#f3efe6");
+      if (process.platform !== "darwin") {
+        mainWindow.setTitleBarOverlay(titleBarOverlay("system"));
+      }
+    });
+
     // initialize() only reads local JSON and the engine cache, so the window can
     // appear right away. Orphan sweeping and engine scanning run afterwards.
     await service.initialize();

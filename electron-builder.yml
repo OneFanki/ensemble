@@ -1,5 +1,11 @@
 appId: io.github.onefanki.ensemble
 productName: Ensemble
+# Runtime UI translation files only. User-entered text in any language still
+# renders through system fonts, so the shipped UI languages are all we need.
+electronLanguages:
+  - zh-CN
+  - en-US
+compression: maximum
 directories:
   buildResources: build
   output: release

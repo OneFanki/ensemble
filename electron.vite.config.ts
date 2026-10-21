@@ -9,7 +9,9 @@ const sharedAliases = {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // Bundle every dependency into the main-process output so the installer
+    // ships no node_modules at all; only `electron` stays external.
+    plugins: [externalizeDepsPlugin({ exclude: ["zod"] })],
     resolve: { alias: sharedAliases },
   },
   preload: {

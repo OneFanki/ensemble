@@ -1,6 +1,6 @@
 {
   "name": "ensemble",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Multiple identities, one stage. A local multi-account browser workbench for permission and collaboration testing.",
   "license": "MIT",
@@ -35,28 +35,27 @@
     "dist": "node scripts/make-icon.mjs && electron-vite build && electron-builder",
     "verify": "node scripts/verify.mjs",
     "icon": "node scripts/make-icon.mjs",
+    "diagrams": "node scripts/make-diagrams.mjs",
     "screenshots": "node scripts/capture-screenshots.mjs",
     "site": "node scripts/preview-site.mjs"
-  },
-  "dependencies": {
-    "@vueuse/core": "15.0.0",
-    "lucide-vue-next": "1.0.0",
-    "pinia": "4.1.0",
-    "reka-ui": "2.11.0",
-    "vue": "3.5.44",
-    "vue-i18n": "11.4.16",
-    "zod": "4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@types/node": "^24.0.0",
     "@vitejs/plugin-vue": "6.0.10",
+    "@vueuse/core": "15.0.0",
     "electron": "44.9.0",
     "electron-builder": "26.15.3",
     "electron-vite": "6.0.0",
+    "lucide-vue-next": "1.0.0",
+    "pinia": "4.1.0",
+    "reka-ui": "2.11.0",
     "typescript": "5.9.3",
     "vite": "8.3.4",
     "vitest": "5.0.5",
-    "vue-tsc": "3.3.13"
+    "vue": "3.5.44",
+    "vue-i18n": "11.4.16",
+    "vue-tsc": "3.3.13",
+    "zod": "4.6.7"
   }
 }

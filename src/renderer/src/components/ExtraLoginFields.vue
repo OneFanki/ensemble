@@ -63,7 +63,11 @@ function removeRow(index: number) {
     </div>
 
     <p class="hint">
-      {{ scopeHint ?? $t("app.extraFieldsHint") }}
+      {{ $t("app.extraFieldsHint") }}
+      <template v-if="scopeHint">
+        <br />
+        {{ scopeHint }}
+      </template>
     </p>
   </div>
 </template>

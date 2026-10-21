@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
+import SelectField from "./SelectField.vue";
 import type { Engine, EnvironmentDraft } from "@shared/types";
 
 const props = defineProps<{
@@ -54,6 +55,23 @@ function submit() {
 
 const namePlaceholder = computed(() => t("app.envNameExample"));
 
+const engineOptions = computed(() => [
+  { value: "__auto__", label: t("app.autoPickEngine") },
+  ...props.engines.map((engine) => ({
+    value: engine.id,
+    label: `${engine.brand} ${engine.version ?? ""}`.trim(),
+    hint:
+      engine.status === "blocked"
+        ? t("app.engineBlockedSuffix").trim()
+        : !engine.cdp
+          ? t("app.engineExternalSuffix").trim()
+          : t("app.cdpMode"),
+    disabled: engine.status === "blocked",
+  })),
+]);
+
+const engineValue = computed(() => form.defaultEngineId ?? "__auto__");
+
 function normalizePath(event: Event) {
   const input = event.target as HTMLInputElement;
   const value = input.value.trim();
@@ -82,14 +100,13 @@ function normalizePath(event: Event) {
 
       <div class="field">
         <span class="label">{{ $t("app.defaultEngine") }}</span>
-        <select v-model="form.defaultEngineId" class="input">
-          <option :value="undefined">{{ $t("app.autoPickEngine") }}</option>
-          <option v-for="engine in engines" :key="engine.id" :value="engine.id">
-            {{ engine.brand }} {{ engine.version ?? "" }}
-            <template v-if="engine.status === 'blocked'">{{ $t("app.engineBlockedSuffix") }}</template>
-            <template v-else-if="!engine.cdp">{{ $t("app.engineExternalSuffix") }}</template>
-          </option>
-        </select>
+        <SelectField
+          :model-value="engineValue"
+          :options="engineOptions"
+          @update:model-value="
+            form.defaultEngineId = $event === '__auto__' ? undefined : $event
+          "
+        />
       </div>
 
       <label class="field">

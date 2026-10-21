@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Trash2 } from "lucide-vue-next";
+import { GripVertical, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import LayoutPreview from "./LayoutPreview.vue";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -40,6 +40,10 @@ watch(
 const selectedPreset = computed<LayoutPreset>(() => store.presetById(form.layoutId));
 const presetSlots = computed(() => selectedPreset.value.slots.length);
 
+const draggedId = ref<string | null>(null);
+/** Slot the pointer is over while dragging a member, for the drop highlight. */
+const dropSlot = ref<number | null>(null);
+
 function toggle(id: string) {
   if (form.identityIds.includes(id)) {
     form.identityIds = form.identityIds.filter((item) => item !== id);
@@ -65,6 +69,60 @@ function slotOwner(index: number): Identity | undefined {
 function chooseLayout(layoutId: string) {
   form.layoutId = layoutId;
   // Assignments only make sense against the new slot list.
+  form.slotAssignments = {};
+}
+
+/** Writes every visible owner into `slotAssignments`, pinning the fallback order. */
+function effectiveAssignments(): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (let index = 0; index < presetSlots.value; index += 1) {
+    const owner = slotOwner(index);
+    if (owner && !(owner.id in result)) result[owner.id] = index;
+  }
+  return result;
+}
+
+/**
+ * Moves a member to a slot. Dropping onto an occupied slot swaps the two, which
+ * is what people expect when reordering a grid.
+ */
+function assignToSlot(identityId: string, slotIndex: number) {
+  if (slotIndex < 0 || slotIndex >= presetSlots.value) return;
+  const current = effectiveAssignments();
+  const previousOwner = Object.entries(current).find(([, slot]) => slot === slotIndex)?.[0];
+  const previousSlot = current[identityId];
+  if (previousOwner && previousOwner !== identityId) {
+    if (previousSlot === undefined) delete current[previousOwner];
+    else current[previousOwner] = previousSlot;
+  }
+  current[identityId] = slotIndex;
+  form.slotAssignments = current;
+}
+
+function onSlotDrop(event: DragEvent, slotIndex: number) {
+  event.preventDefault();
+  dropSlot.value = null;
+  const payload = event.dataTransfer?.getData("text/plain") || draggedId.value;
+  draggedId.value = null;
+  if (payload) assignToSlot(payload, slotIndex);
+}
+
+/**
+ * Reorders the member list itself, which is also the launch order. Dropping on
+ * another member moves the dragged one to that position.
+ */
+function reorderMembers(targetId: string) {
+  const from = draggedId.value;
+  draggedId.value = null;
+  if (!from || from === targetId) return;
+  const ids = [...form.identityIds];
+  const fromIndex = ids.indexOf(from);
+  const toIndex = ids.indexOf(targetId);
+  if (fromIndex < 0 || toIndex < 0) return;
+  ids.splice(fromIndex, 1);
+  ids.splice(toIndex, 0, from);
+  form.identityIds = ids;
+  // Slot ownership follows the new order for members without an explicit slot.
   form.slotAssignments = {};
 }
 
@@ -102,16 +160,29 @@ function submit() {
 
       <div class="field">
         <span class="label">{{ $t("app.sceneMembersLabel") }}</span>
+        <p class="hint">{{ $t("app.sceneMemberDragHint") }}</p>
         <div class="members">
           <button
             v-for="identity in identities"
             :key="identity.id"
             type="button"
             class="member"
-            :class="{ on: form.identityIds.includes(identity.id) }"
+            :class="{
+              on: form.identityIds.includes(identity.id),
+              dragging: draggedId === identity.id,
+            }"
             :style="{ '--role': `var(--role-${identity.color})` }"
+            :draggable="form.identityIds.includes(identity.id)"
+            @dragstart="
+              draggedId = identity.id;
+              $event.dataTransfer?.setData('text/plain', identity.id)
+            "
+            @dragend="draggedId = null; dropSlot = null"
+            @dragover.prevent
+            @drop.prevent="reorderMembers(identity.id)"
             @click="toggle(identity.id)"
           >
+            <GripVertical v-if="form.identityIds.includes(identity.id)" :size="10" class="grip" />
             <span class="d">{{ identity.name.slice(0, 1) }}</span>
             <span class="m-copy">
               <span class="m-name">{{ identity.name }}</span>
@@ -142,15 +213,23 @@ function submit() {
         </div>
         <LayoutPreview :preset="selectedPreset" height="118px">
           <template #slot="{ index }">
-            <span
-              v-if="slotOwner(index)"
-              class="slot-owner"
-              :style="{ '--role': `var(--role-${slotOwner(index)?.color})` }"
+            <div
+              class="slot-drop"
+              :class="{ over: dropSlot === index }"
+              @dragover.prevent="dropSlot = index"
+              @dragleave="dropSlot === index ? (dropSlot = null) : null"
+              @drop="onSlotDrop($event, index)"
             >
-              <span class="d">{{ slotOwner(index)?.name.slice(0, 1) }}</span>
-              {{ slotOwner(index)?.name }}
-            </span>
-            <span v-else class="slot-empty">{{ $t("app.freeSlot", { index: index + 1 }) }}</span>
+              <span
+                v-if="slotOwner(index)"
+                class="slot-owner"
+                :style="{ '--role': `var(--role-${slotOwner(index)?.color})` }"
+              >
+                <span class="d">{{ slotOwner(index)?.name.slice(0, 1) }}</span>
+                {{ slotOwner(index)?.name }}
+              </span>
+              <span v-else class="slot-empty">{{ $t("app.freeSlot", { index: index + 1 }) }}</span>
+            </div>
           </template>
         </LayoutPreview>
         <p class="note">{{ $t("app.sceneLayoutNote", { count: presetSlots }) }}</p>
@@ -236,6 +315,42 @@ function submit() {
 .member.on {
   border-color: color-mix(in srgb, var(--role) 50%, var(--line));
   background: color-mix(in srgb, var(--role) 7%, var(--bg-elevated));
+}
+
+.member.dragging {
+  opacity: 0.55;
+}
+
+.grip {
+  color: var(--faint);
+  flex: 0 0 10px;
+  cursor: grab;
+}
+
+/* The preview cell itself is the drop target, so a member can be dragged
+   straight onto the slot it should occupy. */
+.slot-drop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0 2px;
+  overflow: hidden;
+}
+
+.slot-drop.over {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -2px;
+}
+
+.hint {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--faint);
 }
 
 .member .d {

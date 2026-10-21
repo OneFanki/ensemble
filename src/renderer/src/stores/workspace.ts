@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type {
   AppSettings,
+  AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
   Engine,
@@ -14,6 +15,7 @@ import type {
   LayoutPresetDraft,
   McpPatch,
   PasswordOwner,
+  ReloginBatchResult,
   Scene,
   SceneDraft,
   SettingsPatch,
@@ -131,10 +133,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         theme: "dark",
         locale: "zh",
         lastView: "identities",
+        restoreLastScene: false,
+        overlayEnabled: true,
+        headlessCheckUa: "desktop",
+        focusLabelEnabled: true,
+        launchIntervalMs: 0,
         layout: "2x2",
         autoFillOnLaunch: true,
         closeToTray: true,
         onboardingVersion: 0,
+        autoCheckUpdates: true,
       },
   );
   const instances = computed(() => snapshot.value?.instances ?? []);
@@ -310,6 +318,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("launch", () => window.ensemble.launchIdentity(identityId, pathOverride));
   }
 
+  /** Opens several identities at once, tiled with the default layout. */
+  async function launchIdentities(identityIds: string[]) {
+    return run("launch", async () => {
+      const result = await window.ensemble.launchIdentities(identityIds);
+      notify(tr("app.toastBatchStarted"), "success");
+      return result;
+    });
+  }
+
   async function launchScene(sceneId: string) {
     return run("launch", () => window.ensemble.launchScene(sceneId), tr("app.toastSceneStarted"));
   }
@@ -339,10 +356,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("stop", () => window.ensemble.stopInstance(id));
   }
 
+  /** Raises the browser window behind an instance; no relaunch, no reload. */
+  async function focusInstance(id: string): Promise<boolean> {
+    return window.ensemble.focusInstance(id);
+  }
+
   async function stopAll() {
     return run("stop", async () => {
       await window.ensemble.stopAll();
       notify(tr("app.toastAllClosed"), "success");
+    });
+  }
+
+  /** Closes only the windows this scene opened. */
+  async function stopScene(sceneId: string) {
+    return run("stop", async () => {
+      await window.ensemble.stopScene(sceneId);
+      notify(tr("app.toastSceneClosed"), "success");
     });
   }
 
@@ -358,6 +388,35 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("auth", async () => {
       const result = await window.ensemble.fillLogin(identityId);
       notify(result.detail ?? tr("app.toastFilled"), "success");
+      return result;
+    });
+  }
+
+  async function checkAllAuth(environmentId?: string): Promise<AuthBatchResult | undefined> {
+    return run("auth-check-all", async () => {
+      const result = await window.ensemble.checkAllAuth(environmentId);
+      notify(
+        tr("app.toastCheckedAll", {
+          signedIn: result.totals.signedIn,
+          expired: result.totals.expired,
+          unknown: result.totals.unknown,
+        }),
+        result.totals.expired > 0 ? "error" : "success",
+      );
+      return result;
+    });
+  }
+
+  async function reloginExpired(environmentId?: string): Promise<ReloginBatchResult | undefined> {
+    return run("auth-relogin", async () => {
+      const result = await window.ensemble.reloginExpired(environmentId);
+      notify(
+        tr("app.toastReloginDone", {
+          succeeded: result.succeeded,
+          attempted: result.attempted,
+        }),
+        result.succeeded === result.attempted ? "success" : "info",
+      );
       return result;
     });
   }
@@ -498,13 +557,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     addManualEngine,
     removeManualEngine,
     launchIdentity,
+    launchIdentities,
     launchScene,
     launchSceneMember,
     launchCleanSession,
     launchScopedCleanSession,
     stopInstance,
     stopAll,
+    stopScene,
+    focusInstance,
     checkAuth,
+    checkAllAuth,
+    reloginExpired,
     fillLogin,
     setPassword,
     clearPassword,

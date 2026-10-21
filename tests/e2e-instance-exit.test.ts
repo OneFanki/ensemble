@@ -120,8 +120,111 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
     if (!entry) throw new Error("CDP 连接未登记");
     await entry.browser.send("Browser.close", {}).catch(() => {});
 
-    const cleaned = await waitFor(() => !existsSync(instance.profileDir));
+    // The directory is removed inline when possible and by a background retry
+    // otherwise; give the retry its full budget before failing the case.
+    const cleaned = await waitFor(() => !existsSync(instance.profileDir), 30_000);
     expect(cleaned).toBe(true);
     expect(service.snapshot().instances).toHaveLength(0);
+  }, 90_000);
+
+  it("raises a minimized browser window without relaunching it", async () => {
+    const { service, identity } = await makeService();
+    const { instance } = await service.launchIdentity(identity.id);
+    const entry = cdpRegistry.get(instance.id);
+    if (!entry) throw new Error("CDP 连接未登记");
+
+    const info = await entry.browser.send<{ windowId: number }>("Browser.getWindowForTarget", {
+      targetId: instance.targetId,
+    });
+    await entry.browser.send("Browser.setWindowBounds", {
+      windowId: info.windowId,
+      bounds: { windowState: "minimized" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    expect(await service.focusInstance(instance.id)).toBe(true);
+
+    // Window managers may ignore a programmatic minimize (Wayland in particular),
+    // so only assert the restored state when it actually took effect.
+    const state = await entry.browser.send<{ bounds: { windowState?: string } }>(
+      "Browser.getWindowForTarget",
+      { targetId: instance.targetId },
+    );
+    if (state.bounds.windowState) expect(state.bounds.windowState).toBe("normal");
+    // Switching must raise the existing window, never replace it.
+    expect(service.snapshot().instances).toHaveLength(1);
+    expect(service.snapshot().instances[0]?.id).toBe(instance.id);
+  }, 90_000);
+
+  it("reports false when the instance has no CDP target", async () => {
+    const { service } = await makeService();
+    expect(await service.focusInstance("missing")).toBe(false);
+  });
+
+  it("closes only one scene's windows", async () => {
+    const { service, identity } = await makeService();
+    const environmentId = service.snapshot().environments[0]?.id;
+    if (!environmentId) throw new Error("缺少环境");
+    const other = service.saveIdentity({
+      environmentId,
+      name: "other",
+      username: "other@example.test",
+      role: "member",
+      color: "teal",
+      passwordMode: "inherit",
+      startPath: "/",
+    });
+    const sceneDraft = (name: string, identityIds: string[]) => ({
+      environmentId,
+      name,
+      identityIds,
+      layoutId: "2x2" as const,
+      slotAssignments: {},
+      paths: {},
+    });
+    const first = service.saveScene(sceneDraft("first", [identity.id]));
+    service.saveScene(sceneDraft("second", [other.id]));
+
+    const launched = await Promise.all([
+      service.launchIdentity(identity.id),
+      service.launchIdentity(other.id),
+    ]);
+    expect(service.snapshot().instances).toHaveLength(2);
+
+    await service.stopScene(first.id);
+
+    // Only the scene's own window is gone; the window that belongs to the other
+    // scene (or to no scene at all) is still running.
+    const remaining = service.snapshot().instances;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]?.identityId).toBe(other.id);
+    expect(remaining[0]?.id).toBe(launched[1].instance.id);
+  }, 90_000);
+
+  it("batch-launches a selection with the default layout and reuses running windows", async () => {
+    const { service, identity } = await makeService();
+    const environmentId = service.snapshot().environments[0]?.id;
+    if (!environmentId) throw new Error("缺少环境");
+    const second = service.saveIdentity({
+      environmentId,
+      name: "second",
+      username: "second@example.test",
+      role: "member",
+      color: "violet",
+      passwordMode: "inherit",
+      startPath: "/",
+    });
+    service.saveSettings({ layout: "2x2" });
+
+    const first = await service.launchIdentities([identity.id, second.id]);
+    const instances = service.snapshot().instances;
+    expect(instances).toHaveLength(2);
+    expect(first.identities).toHaveLength(2);
+    // Tiled, not stacked: each window gets its own slot of the default layout.
+    expect(instances.map((item) => item.slotIndex).sort()).toEqual([0, 1]);
+
+    // Asking again must raise the existing windows instead of opening duplicates.
+    await service.launchIdentities([identity.id, second.id]);
+    expect(service.snapshot().instances).toHaveLength(2);
   }, 90_000);
 });

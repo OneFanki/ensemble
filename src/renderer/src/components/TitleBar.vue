@@ -40,6 +40,14 @@ function manage() {
 
 <template>
   <header class="titlebar drag-region" :data-platform="platform">
+    <!--
+      The title bar itself is an OS drag region, which swallows mouse events, so
+      "click the empty bar to dismiss the menu" cannot be handled by a normal
+      listener. While the menu is open this no-drag layer covers the bar and
+      turns that click into a dismiss.
+    -->
+    <div v-if="open" class="dismiss-layer" @pointerdown="open = false"></div>
+
     <div class="brand no-drag" data-tour="brand">
       <Logo :size="22" />
       <span class="name">Ensemble</span>
@@ -99,6 +107,7 @@ function manage() {
 
 <style scoped>
 .titlebar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -139,9 +148,31 @@ function manage() {
 
 .env-switcher {
   position: relative;
+  z-index: 6;
   display: flex;
   align-items: center;
   height: 30px;
+}
+
+/*
+ * Covers the draggable part of the bar while the environment menu is open.
+ * Window controls live in the right padding, so they are excluded.
+ */
+.dismiss-layer {
+  position: absolute;
+  z-index: 5;
+  inset: 0 0 0 0;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar[data-platform="win32"] .dismiss-layer,
+.titlebar[data-platform="linux"] .dismiss-layer {
+  right: 146px;
+}
+
+/* Leave the macOS traffic lights clickable while the menu is open. */
+.titlebar[data-platform="darwin"] .dismiss-layer {
+  left: 86px;
 }
 
 /*

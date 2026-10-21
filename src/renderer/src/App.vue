@@ -14,6 +14,8 @@ import EnvironmentDialog from "./components/EnvironmentDialog.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import SceneDialog from "./components/SceneDialog.vue";
 import LayoutEditor from "./components/LayoutEditor.vue";
+import SessionHealthDialog from "./components/SessionHealthDialog.vue";
+import UpdateDialog from "./components/UpdateDialog.vue";
 import { useWorkspaceStore } from "./stores/workspace";
 import { setLocale, tr, type Locale } from "./i18n";
 import {
@@ -29,6 +31,7 @@ import type {
   SceneDraft,
   SlotRect,
 } from "@shared/types";
+import type { UpdateCheckResult } from "@shared/update";
 
 type View = "environments" | "identities" | "scenes" | "settings";
 
@@ -44,6 +47,9 @@ const tourOpen = ref(false);
 const tourOriginView = ref<View>("identities");
 /** Remount the tour on replay so it cannot keep the previous step index. */
 const tourSession = ref(0);
+const healthOpen = ref(false);
+/** Set by a background check, or by the manual check in Settings. */
+const updatePrompt = ref<UpdateCheckResult | null>(null);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
@@ -59,6 +65,20 @@ onMounted(async () => {
       tourOpen.value = true;
     }, 350);
   }
+  // The main process restores the last scene itself; the renderer only reports it
+  // so the user knows why several windows just appeared.
+  window.ensemble.onSceneRestored((outcome) => {
+    if (outcome.restored) {
+      store.notify(tr("app.toastSceneRestored", { name: outcome.sceneName ?? "" }), "success");
+    } else if (outcome.reason) {
+      store.notify(tr("app.toastSceneRestoreFailed", { reason: outcome.reason }), "error");
+    }
+  });
+  // Background checks stay silent until they find something; the dialog also
+  // opens from the manual check in Settings, which emits the same event.
+  window.ensemble.onUpdateAvailable((result) => {
+    updatePrompt.value = result;
+  });
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -310,6 +330,7 @@ async function handleLocale(locale: "zh" | "en") {
           v-else-if="view === 'identities'"
           @new-identity="openNewIdentity"
           @edit-identity="openEditIdentity"
+          @session-health="healthOpen = true"
         />
         <ScenesView
           v-else-if="view === 'scenes'"
@@ -323,6 +344,7 @@ async function handleLocale(locale: "zh" | "en") {
           @theme="handleTheme"
           @locale="handleLocale"
           @start-tour="startTour"
+          @update-found="(result) => (updatePrompt = result)"
         />
       </main>
 
@@ -377,6 +399,15 @@ async function handleLocale(locale: "zh" | "en") {
       @close="sceneDraft = null"
       @save="saveScene"
       @delete="store.deleteScene(sceneDraft!.id!); sceneDraft = null"
+    />
+
+    <SessionHealthDialog v-if="healthOpen" @close="healthOpen = false" />
+
+    <UpdateDialog
+      v-if="updatePrompt"
+      :result="updatePrompt"
+      @dismissed="(version) => store.saveSettings({ dismissedUpdateVersion: version })"
+      @close="updatePrompt = null"
     />
 
     <LayoutEditor

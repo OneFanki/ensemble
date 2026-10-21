@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { KeyRound, X } from "lucide-vue-next";
+import { KeyRound, Power, X } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const store = useWorkspaceStore();
@@ -9,10 +9,10 @@ const { t } = useI18n();
 
 <template>
   <!--
-    Live instances only. Launching lives in the identities and scenes views; this
-    panel just reports what is open and lets you close it. The old "copy password"
-    button was removed: copying belongs to the identity dialog, where the password
-    it refers to is visible.
+    Live instances only. The row itself switches to that browser window; closing
+    stays on its own button so "click the label to raise the window" never turns
+    into an accidental shutdown. Launching lives in the identities and scenes
+    views.
   -->
   <aside class="dock" data-tour="run-dock">
     <div class="dock-head">
@@ -22,16 +22,27 @@ const { t } = useI18n();
         v-if="store.instances.length"
         type="button"
         class="close-all"
+        :title="$t('app.closeAll')"
         @click="store.stopAll()"
       >
+        <Power :size="11" />
         {{ $t("app.closeAll") }}
       </button>
     </div>
 
     <div class="running-list">
-      <div v-for="instance in store.instances" :key="instance.id" class="run-row">
+      <div
+        v-for="instance in store.instances"
+        :key="instance.id"
+        class="run-row"
+        role="button"
+        tabindex="0"
+        :title="$t('app.switchTo')"
+        @click="store.focusInstance(instance.id)"
+        @keydown.enter="store.focusInstance(instance.id)"
+      >
         <span class="led"></span>
-        <span class="run-name" :title="instance.label">{{ instance.label }}</span>
+        <span class="run-name">{{ instance.label }}</span>
         <span class="run-mode mono" :class="instance.mode">
           {{ instance.mode === "cdp" ? "CDP" : "EXT" }}
         </span>
@@ -39,7 +50,7 @@ const { t } = useI18n();
           class="run-btn"
           type="button"
           :aria-label="$t('app.stop')"
-          @click="store.stopInstance(instance.id)"
+          @click.stop="store.stopInstance(instance.id)"
         >
           <X :size="11" />
         </button>
@@ -101,12 +112,20 @@ const { t } = useI18n();
 
 .close-all {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: var(--faint);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 
 .close-all:hover {
-  color: var(--text-secondary);
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 35%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
 }
 
 .running-list {
@@ -127,6 +146,12 @@ const { t } = useI18n();
   background: var(--surface);
   padding: 6px 8px;
   min-width: 0;
+  cursor: pointer;
+}
+
+.run-row:hover {
+  border-color: var(--line);
+  background: var(--surface-2);
 }
 
 .led {

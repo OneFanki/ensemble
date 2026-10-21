@@ -14,10 +14,18 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["tests/e2e-autofill.test.ts", "tests/e2e-instance-exit.test.ts"],
+    include: [
+      "tests/e2e-autofill.test.ts",
+      "tests/e2e-headless-check.test.ts",
+      "tests/e2e-instance-exit.test.ts",
+    ],
     globalSetup: ["tests/e2e-global-setup.ts"],
     testTimeout: 90_000,
     hookTimeout: 30_000,
+    // Every file drives a real browser. Running them together makes two
+    // Chromium instances compete for the same machine, which shows up as a
+    // login page that paints too slowly to autofill.
+    fileParallelism: false,
     env: { ENSEMBLE_E2E: "1" },
   },
 });

@@ -24,6 +24,7 @@ const messages = {
       closeAll: "全部关闭",
       stop: "停止",
       launch: "启动",
+      switchTo: "切换过去",
       relaunch: "重新登录",
       edit: "编辑",
       delete: "删除",
@@ -34,7 +35,14 @@ const messages = {
       copied: "已复制，30 秒后清除剪贴板",
       username: "账号",
       password: "密码",
-      role: "角色",
+      role: "职责",
+      rolePlaceholder: "如 管理员 / 审核 / 只读",
+      roleSuggestions: "选择常用职责",
+      roleAdmin: "管理员",
+      roleEditor: "编辑",
+      roleReviewer: "审核",
+      roleViewer: "只读",
+      roleGuest: "访客",
       engine: "引擎",
       environment: "环境",
       note: "备注",
@@ -57,6 +65,7 @@ const messages = {
       members: "成员",
       windows: "窗口",
       runScene: "一键启动",
+      closeSceneWindows: "关闭本场景窗口",
       identityCount: "{count} 个身份",
       identityCountOne: "{count} 个身份",
       sceneCount: "{count} 个场景",
@@ -168,6 +177,15 @@ const messages = {
       filterAll: "全部",
       filterRunning: "运行中",
       filterExpired: "已过期",
+      batchSelect: "批量启动",
+      batchSelectHint: "勾选多个身份，一次按默认布局全部打开",
+      batchSelectAll: "全选可见",
+      batchClearAll: "取消全选",
+      batchSelected: "已选 {count} 个",
+      batchLaunch: "启动所选（{count}）",
+      batchLaunchNote: "按设置里的默认布局平铺；已在运行的身份会被跳过，窗口不会重复打开。",
+      batchAlreadyRunning: "已在运行，会被跳过",
+      batchWillLaunch: "将按默认布局打开",
 
       // Environment dialog
       editEnvironmentTitle: "编辑环境",
@@ -202,6 +220,9 @@ const messages = {
       credentialsLabel: "凭据",
       customPasswordPlaceholder: "设置该身份的密码",
       inheritOverridePlaceholder: "覆盖环境默认密码（留空则继续继承）",
+      envPasswordPlaceholder: "设置环境默认密码（作用于所有继承它的身份）",
+      editEnvPassword: "修改默认密码",
+      noOptions: "没有可选项",
       saveAsEnvDefault: "存为环境默认",
       saveToIdentity: "立即保存到身份",
       copyDefaultPassword: "复制默认密码",
@@ -249,7 +270,9 @@ const messages = {
       sceneNameExample: "例如：权限矩阵 · 主流程",
       sceneMembersLabel: "成员（至少一个）",
       sceneNoIdentities: "当前环境还没有身份，请先创建身份。",
-      sceneOrderNote: "启动顺序按选择顺序执行，间隔约 350ms，避免设备瞬时过载。",
+      sceneOrderNote: "启动顺序按这里排列的成员顺序执行。",
+      sceneMemberDragHint:
+        "拖动成员可调整启动顺序；把成员拖到下方布局的格子里，或先点成员再点格子，即可指定它出现在哪个位置。",
       sceneLayoutNote: "当前布局共 {count} 个槽位；多出的窗口会叠加在已有槽位上。",
       scenesSubtitle: "一键拉起一组身份 · 自动平铺 · 关闭即回收",
       sceneColumnName: "场景",
@@ -296,6 +319,31 @@ const messages = {
       deleteSceneConfirm: "删除场景只影响编排本身，已启动的窗口和身份都会保留。确定删除？",
       instancesShort: "{count} 个实例",
 
+      // Running-instances overlay
+      overlayTitle: "运行中的身份",
+      overlayCollapse: "收起为小方块",
+      overlayResize: "拖动调整大小，双击恢复自动高度",
+      overlayHide: "隐藏悬浮条（可在设置里重新开启）",
+      overlayBallLabel: "已收起，{count} 个运行中的窗口",
+      overlayBallHint: "点击展开；按住拖动可移动，松手自动贴边",
+      cleanShort: "干净",
+
+      // Session health
+      sessionHealth: "会话健康",
+      healthTitle: "会话健康中心",
+      healthDesc:
+        "一屏查看当前环境的登录状态。检测只在点击时发生，不会在后台自动访问被测系统。",
+      healthSignedIn: "正常",
+      healthExpired: "已过期",
+      healthUnknown: "未确认",
+      healthHidden: "后台检测",
+      healthExpiredNoCheck: "上次检测已过期",
+      healthSignedInNoCheck: "上次检测正常",
+      healthCheckAll: "检测全部",
+      healthRelogin: "重新登录过期项",
+      healthNote:
+        "窗口开着就在窗口里检测；没开窗口的身份会用一个不显示窗口的后台浏览器，读取它自己 Profile 的 Cookie 完成检测，检测完立即关闭，不会出现在悬浮条里，也不需要你手动启动。重新登录会为每个过期身份打开登录页并填入已保存的账号密码。如果站点只使用会话 Cookie（关闭浏览器即失效），关窗后检测会显示已过期，这和你重新打开窗口看到的状态一致。",
+
       // Settings
       settingsSubtitle: "按类别查看与管理",
       settingsTabGeneral: "常规",
@@ -319,10 +367,27 @@ const messages = {
       autoFillLaunch: "启动自动填充",
       defaultLayout: "默认布局",
       defaultLayoutNote: "单独启动多个身份时使用该布局；场景可以在场景页里单独指定，互不影响。",
+      launchInterval: "场景启动间隔",
+      launchIntervalNote:
+        "同一场景里两个窗口之间的等待时间，默认 0（连续打开）。设备较慢或站点扛不住并发时可以调高，最多 5000 毫秒。",
       on: "开启",
       off: "关闭",
       autoFillLaunchNote:
         "开启后，启动身份或场景时窗口会自动填入已保存的账号密码，并提示页面上还有哪些未配置的输入框。",
+      restoreScene: "启动时恢复上次场景",
+      restoreSceneNote:
+        "开启后，下次打开应用会按原布局自动拉起上次使用的场景。默认关闭，避免冷启动时突然弹出多个浏览器窗口。",
+      overlaySetting: "运行实例悬浮条",
+      overlaySettingNote:
+        "有窗口运行时在桌面角落显示一个置顶小条，列出所有运行中的身份，点一下即可切到对应窗口。可以收起成一个小方块：只剩数字、不占地方，拖动后自动贴边，需要操作时点一下再展开。悬浮条本身没有关闭按钮，右键可以选择收起或隐藏，也可以回到这里重新打开。",
+      focusLabelSetting: "切换时显示账号名",
+      focusLabelSettingNote:
+        "从悬浮条切换窗口后，在被切到的窗口上方短暂显示该账号的名称，不挡鼠标、不抢焦点。页面看起来都一样时用来确认切到了谁。",
+      headlessUaSetting: "后台检测的 UA",
+      headlessUaDesktop: "有头 UA",
+      headlessUaHeadless: "无头 UA",
+      headlessUaNote:
+        "后台检测用无窗口浏览器读取该身份的 Cookie。默认把它上报的 User-Agent 换成正常桌面浏览器的值，避免被测系统把检测请求当成爬虫；这不是指纹伪装，浏览器开发者工具也能改 UA。改成无头 UA 则如实上报 HeadlessChrome，更贴近真实的无头访问。",
       vaultTitle: "凭据存储",
       vaultNote: "密码只在主进程内解密，用于在登录页填充；不会发送到界面进程。",
       vaultUnlockPlaceholder: "输入主密码解锁凭据库",
@@ -399,8 +464,27 @@ const messages = {
       updateCurrent: "已是最新版本（{version}）。",
       updateAvailable: "有新版本：当前 {current}，最新 {latest}。",
       updateFailed: "无法检查更新（可能是网络问题），可手动打开 Releases 页面。",
-      updateManualHint: "本应用不会自动安装更新，请下载对应平台的安装包覆盖安装。",
+      updateManualHint: "点上面的按钮可在应用内下载并安装，不需要去 GitHub 手动下载。",
       openReleases: "打开 Releases",
+      autoUpdateSetting: "自动检查更新",
+      autoUpdateNote:
+        "开启后，启动几秒后会在后台检查一次，之后每 6 小时一次；发现新版本会弹窗，但下载和安装都要你点确认。对某个版本点「稍后」，在下一个版本发布前不会再打扰你。",
+
+      // Update dialog
+      updateDialogTitle: "发现新版本 {version}",
+      updateDialogDesc: "当前版本 {current}，可以现在就更新。",
+      updateNoNotes: "这个版本没有提供摘要。",
+      updateFullNotes: "查看完整变更",
+      updateDownload: "下载更新",
+      updateRetry: "重试下载",
+      updateDownloading: "正在下载 {percent}%",
+      updateVerifying: "正在校验下载文件…",
+      updateReady: "下载完成，校验通过，可以安装了",
+      updateInstalling: "正在退出并安装，应用会自动重新启动…",
+      updateError: "更新失败",
+      updateNoChecksum: "该版本没有提供校验值，为安全起见不提供自动安装，请到 Releases 页面手动下载。",
+      updateLater: "稍后",
+      updateInstall: "退出并安装",
       openRepository: "GitHub 仓库",
       platform: "平台",
       available: "可用",
@@ -414,7 +498,7 @@ const messages = {
       fieldValuePlaceholder: "要填入的值",
       removeField: "移除字段",
       extraFieldsHint:
-        "用于账号密码之外的输入框。字段名会匹配页面上的占位符、name、id 或标签文字。这里只放租户名、公司码这类非敏感值；密码请用上面的凭据区。",
+        "字段名不是代码里的变量名，而是网页上看得见的文字：会依次匹配输入框的占位提示（placeholder）、name、id、aria-label，以及它前面 <label> 的文字。例如登录页显示「租户名」，这里就填「租户名」。这里只放租户名、公司码这类非敏感值；密码请用上面的凭据区。",
 
       // Toasts
       toastEnvSaved: "环境已保存",
@@ -426,9 +510,11 @@ const messages = {
       toastScanDone: "扫描完成，发现 {count} 个浏览器",
       toastManualAdded: "已添加手动指定的浏览器",
       toastSceneStarted: "场景已启动",
+      toastBatchStarted: "批量启动完成",
       toastNeedEnvironment: "请先创建环境",
       toastCleanOpened: "已打开干净会话",
       toastAllClosed: "已关闭全部实例",
+      toastSceneClosed: "已关闭该场景的窗口",
       toastFilled: "已填充",
       toastPasswordSaved: "密码已保存",
       toastCopied: "已复制，30 秒后清除剪贴板",
@@ -443,6 +529,10 @@ const messages = {
       toastMasterRemoved: "已改回系统密钥环保护",
       toastMasterChanged: "主密码已更新",
       toastWrongMaster: "主密码不正确",
+      toastCheckedAll: "检测完成：{signedIn} 个正常、{expired} 个过期、{unknown} 个未确认",
+      toastReloginDone: "已处理 {attempted} 个过期身份，成功 {succeeded} 个",
+      toastSceneRestored: "已恢复上次场景「{name}」",
+      toastSceneRestoreFailed: "无法恢复上次场景：{reason}",
       listSeparator: "、",
     },
   },
@@ -469,6 +559,7 @@ const messages = {
       closeAll: "Close all",
       stop: "Stop",
       launch: "Launch",
+      switchTo: "Switch to",
       relaunch: "Sign in again",
       edit: "Edit",
       delete: "Delete",
@@ -480,6 +571,13 @@ const messages = {
       username: "Username",
       password: "Password",
       role: "Role",
+      rolePlaceholder: "e.g. Admin / Reviewer / Read-only",
+      roleSuggestions: "Pick a common role",
+      roleAdmin: "Admin",
+      roleEditor: "Editor",
+      roleReviewer: "Reviewer",
+      roleViewer: "Read-only",
+      roleGuest: "Guest",
       engine: "Engine",
       environment: "Environment",
       note: "Note",
@@ -502,6 +600,7 @@ const messages = {
       members: "Members",
       windows: "Windows",
       runScene: "Launch scene",
+      closeSceneWindows: "Close scene windows",
       identityCount: "{count} identities",
       identityCountOne: "{count} identity",
       sceneCount: "{count} scenes",
@@ -616,6 +715,16 @@ const messages = {
       filterAll: "All",
       filterRunning: "Running",
       filterExpired: "Expired",
+      batchSelect: "Launch several",
+      batchSelectHint: "Pick several identities and open them all at once in the default layout",
+      batchSelectAll: "Select visible",
+      batchClearAll: "Clear selection",
+      batchSelected: "{count} selected",
+      batchLaunch: "Launch selected ({count})",
+      batchLaunchNote:
+        "Tiled with the default layout from Settings; identities already running are skipped, so no window opens twice.",
+      batchAlreadyRunning: "Already running, will be skipped",
+      batchWillLaunch: "Will open in the default layout",
 
       // Environment dialog
       editEnvironmentTitle: "Edit environment",
@@ -654,6 +763,9 @@ const messages = {
       credentialsLabel: "Credentials",
       customPasswordPlaceholder: "Password for this identity",
       inheritOverridePlaceholder: "Override the environment password (leave empty to inherit)",
+      envPasswordPlaceholder: "Set the environment default (applies to every identity inheriting it)",
+      editEnvPassword: "Edit default password",
+      noOptions: "No options",
       saveAsEnvDefault: "Save as environment default",
       saveToIdentity: "Save to identity",
       copyDefaultPassword: "Copy default password",
@@ -705,8 +817,9 @@ const messages = {
       sceneNameExample: "e.g. Permission matrix · main flow",
       sceneMembersLabel: "Members (at least one)",
       sceneNoIdentities: "This environment has no identities yet. Create one first.",
-      sceneOrderNote:
-        "Windows launch in the order selected, about 350ms apart, to avoid overloading the machine.",
+      sceneOrderNote: "Windows launch in the order the members are listed here.",
+      sceneMemberDragHint:
+        "Drag a member to change the launch order; drop it on a slot below — or click a member, then a slot — to choose where its window appears.",
       sceneLayoutNote:
         "This layout has {count} slots; any extra windows stack on top of the last slot.",
       scenesSubtitle: "Launch a group at once · auto-tile · reclaimed on close",
@@ -758,6 +871,31 @@ const messages = {
         "Deleting a scene only removes the orchestration; running windows and identities stay. Delete it?",
       instancesShort: "{count} instances",
 
+      // Running-instances overlay
+      overlayTitle: "Running identities",
+      overlayCollapse: "Collapse to a small square",
+      overlayResize: "Drag to resize; double-click for the automatic height",
+      overlayHide: "Hide the overlay (turn it back on in Settings)",
+      overlayBallLabel: "Collapsed, {count} running windows",
+      overlayBallHint: "Click to expand; drag to move, and it snaps to the screen edge",
+      cleanShort: "Clean",
+
+      // Session health
+      sessionHealth: "Session health",
+      healthTitle: "Session health",
+      healthDesc:
+        "One screen for the sign-in state of every identity in this environment. Checks run only when you click, never in the background.",
+      healthSignedIn: "Signed in",
+      healthExpired: "Expired",
+      healthUnknown: "Unconfirmed",
+      healthHidden: "background",
+      healthExpiredNoCheck: "Expired at the last check",
+      healthSignedInNoCheck: "Signed in at the last check",
+      healthCheckAll: "Check all",
+      healthRelogin: "Sign in expired",
+      healthNote:
+        "An open window is checked in place. An identity without a window is checked in a hidden background browser reading that profile's own cookies, then closed again — it never appears in the switcher and you never have to launch it. Signing in expired identities opens the login page and fills the saved credentials. If a site only uses session cookies (gone when the browser exits), a closed window reads as expired after the close, which matches what reopening the window would show.",
+
       // Settings
       settingsSubtitle: "Browse and manage settings by category",
       settingsTabGeneral: "General",
@@ -783,10 +921,27 @@ const messages = {
       defaultLayout: "Default layout",
       defaultLayoutNote:
         "Used when launching several identities on their own; each scene can pick its own layout independently.",
+      launchInterval: "Scene launch interval",
+      launchIntervalNote:
+        "Wait between two windows of the same scene. The default is 0 (back to back); raise it when the machine or the site under test cannot take the burst. At most 5000 ms.",
       on: "On",
       off: "Off",
       autoFillLaunchNote:
         "When enabled, launching an identity or scene fills saved credentials automatically and reports any inputs still unconfigured.",
+      restoreScene: "Restore last scene on start",
+      restoreSceneNote:
+        "Reopens the last used scene in its saved layout the next time the app starts. Off by default, so a cold start never dumps several browser windows on the screen unannounced.",
+      overlaySetting: "Running instances overlay",
+      overlaySettingNote:
+        "Shows a small always-on-top strip listing every running identity. Click one to raise its window. It can collapse into a small square that shows only a number, snaps to the screen edge after you drag it, and expands again on click. The strip has no close button of its own — right-click it to collapse or hide, or turn it back on here.",
+      focusLabelSetting: "Show the account name on switch",
+      focusLabelSettingNote:
+        "After switching from the strip, the account name flashes briefly over the window that was raised. It never blocks clicks or takes focus, which is what you need when every page looks the same.",
+      headlessUaSetting: "User agent for background checks",
+      headlessUaDesktop: "Desktop UA",
+      headlessUaHeadless: "Headless UA",
+      headlessUaNote:
+        "Background checks read the identity's cookies using a windowless browser. By default it reports the normal desktop User-Agent, so the site under test does not treat the check as a crawler. That is not fingerprint spoofing — devtools can change the UA too. Switch to the headless UA to report HeadlessChrome honestly.",
       vaultTitle: "Credential storage",
       vaultNote:
         "Passwords are decrypted only in the main process for login-page fills; they never reach the renderer.",
@@ -868,8 +1023,28 @@ const messages = {
       updateCurrent: "You are on the latest version ({version}).",
       updateAvailable: "New version available: {current} → {latest}.",
       updateFailed: "Could not check for updates (network issue?). Open the Releases page instead.",
-      updateManualHint: "Updates are installed manually: download the installer for your platform and run it.",
+      updateManualHint: "Use the button above to download and install in the app; no manual download needed.",
       openReleases: "Open Releases",
+      autoUpdateSetting: "Check for updates automatically",
+      autoUpdateNote:
+        "When on, the app checks in the background a few seconds after launch and then every 6 hours. A new version opens a dialog, but downloading and installing always wait for your click. Choosing \"Later\" for a version keeps it quiet until the next one is published.",
+
+      // Update dialog
+      updateDialogTitle: "Version {version} is available",
+      updateDialogDesc: "You are on {current}. You can update now.",
+      updateNoNotes: "This release did not include a summary.",
+      updateFullNotes: "See all changes",
+      updateDownload: "Download update",
+      updateRetry: "Retry download",
+      updateDownloading: "Downloading {percent}%",
+      updateVerifying: "Verifying the downloaded file…",
+      updateReady: "Downloaded and verified — ready to install",
+      updateInstalling: "Quitting and installing; the app will restart itself…",
+      updateError: "Update failed",
+      updateNoChecksum:
+        "This release has no published checksum, so automatic installation is unavailable. Download it from the Releases page instead.",
+      updateLater: "Later",
+      updateInstall: "Quit and install",
       openRepository: "GitHub repository",
       platform: "Platform",
       available: "Available",
@@ -883,7 +1058,7 @@ const messages = {
       fieldValuePlaceholder: "Value to fill",
       removeField: "Remove field",
       extraFieldsHint:
-        "For inputs beyond username and password. The field name matches placeholder, name, id or label text. Keep only non-sensitive values such as a tenant or company code here; passwords belong in the credential area.",
+        "The field name is not a variable in the site's code: it is text the page shows. Matching tries the input's placeholder, name, id and aria-label, then the text of its <label>. If the login page shows “Tenant”, type Tenant here. Keep only non-sensitive values such as a tenant or company code; passwords belong in the credential area.",
 
       // Toasts
       toastEnvSaved: "Environment saved",
@@ -895,9 +1070,11 @@ const messages = {
       toastScanDone: "Scan complete: {count} browsers found",
       toastManualAdded: "Browser added manually",
       toastSceneStarted: "Scene launched",
+      toastBatchStarted: "Batch launch complete",
       toastNeedEnvironment: "Create an environment first",
       toastCleanOpened: "Clean session opened",
       toastAllClosed: "All instances closed",
+      toastSceneClosed: "Closed this scene's windows",
       toastFilled: "Filled",
       toastPasswordSaved: "Password saved",
       toastCopied: "Copied. Clipboard clears in 30 seconds.",
@@ -912,6 +1089,10 @@ const messages = {
       toastMasterRemoved: "Switched back to the system keychain",
       toastMasterChanged: "Master password updated",
       toastWrongMaster: "Incorrect master password",
+      toastCheckedAll: "Check finished: {signedIn} signed in, {expired} expired, {unknown} unconfirmed",
+      toastReloginDone: "Handled {attempted} expired identities, {succeeded} succeeded",
+      toastSceneRestored: "Restored last scene “{name}”",
+      toastSceneRestoreFailed: "Could not restore the last scene: {reason}",
       listSeparator: ", ",
     },
   },

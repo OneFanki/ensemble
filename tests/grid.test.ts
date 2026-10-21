@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeSlots, fullWorkArea, singleWindowRect } from "@core/layout/grid";
+import { computeSlots, fullWorkArea, inflateRect, singleWindowRect } from "@core/layout/grid";
 import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, clampSlot, findLayout } from "@shared/layouts";
 
 const area = { x: 100, y: 50, width: 1400, height: 900 };
@@ -127,5 +127,37 @@ describe("singleWindowRect", () => {
     const rect = singleWindowRect(secondary);
     expect(rect.x).toBeGreaterThanOrEqual(1920);
     expect(rect.x + rect.width).toBeLessThanOrEqual(1920 + 1400);
+  });
+});
+
+describe("inflateRect", () => {
+  const inset = { left: 6, top: 3, right: 6, bottom: 3 };
+
+  it("grows the rect by the invisible frame on every side", () => {
+    expect(inflateRect({ x: 100, y: 50, width: 400, height: 300 }, inset)).toEqual({
+      x: 94,
+      y: 47,
+      width: 412,
+      height: 306,
+    });
+  });
+
+  it("returns the input untouched without measurements", () => {
+    const rect = { x: 0, y: 0, width: 10, height: 10 };
+    expect(inflateRect(rect, undefined)).toBe(rect);
+    expect(inflateRect(rect, { left: 0, top: 0, right: 0, bottom: 0 })).toBe(rect);
+  });
+
+  it("keeps neighbours meeting: adjacent visible frames share an edge", () => {
+    const area = { x: 0, y: 0, width: 1000, height: 800 };
+    const preset = BUILTIN_LAYOUTS.find((item) => item.id === "2x2")!;
+    const [topLeft, topRight, bottomLeft] = computeSlots(preset, area).map((slot) =>
+      inflateRect(slot, inset),
+    );
+    // The outer rects overlap by twice the inset — that overlap is the point: each
+    // window's invisible border hangs outside its visible frame, so the frames
+    // themselves meet exactly.
+    expect(topLeft!.x + topLeft!.width - inset.right).toBe(topRight!.x + inset.left);
+    expect(topLeft!.y + topLeft!.height - inset.bottom).toBe(bottomLeft!.y + inset.top);
   });
 });

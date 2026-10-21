@@ -1,19 +1,79 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { Globe, Play, Plus, RefreshCw, Search, Square, X } from "lucide-vue-next";
+import {
+  Check,
+  CheckSquare,
+  Globe,
+  HeartPulse,
+  Play,
+  Plus,
+  Search,
+  Square,
+} from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { Identity, RoleColor } from "@shared/types";
 
 const emit = defineEmits<{
   newIdentity: [];
   editIdentity: [id: string];
+  sessionHealth: [];
 }>();
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
+/**
+ * Selection mode. The cards are buttons that launch (or open) on click, so
+ * launching a handful one by one means every new browser window covers the next
+ * card. In this mode a click toggles a checkbox instead, and one action launches
+ * the whole selection into a single layout.
+ */
+const selecting = ref(false);
+const selected = ref<Set<string>>(new Set());
+
+const allSelected = computed(
+  () =>
+    visibleIdentities.value.length > 0 &&
+    visibleIdentities.value.every((identity) => selected.value.has(identity.id)),
+);
+
+const notRunningSelected = computed(() =>
+  visibleIdentities.value.filter(
+    (identity) => selected.value.has(identity.id) && !store.instanceFor(identity.id),
+  ),
+);
+
+function toggleSelected(identityId: string) {
+  // A new Set per change: Vue cannot see mutations of the same Set object.
+  const next = new Set(selected.value);
+  if (next.has(identityId)) next.delete(identityId);
+  else next.add(identityId);
+  selected.value = next;
+}
+
+function toggleAll() {
+  selected.value = allSelected.value
+    ? new Set()
+    : new Set(visibleIdentities.value.map((identity) => identity.id));
+}
+
+function startSelecting() {
+  selecting.value = true;
+}
+
+function endSelecting() {
+  selecting.value = false;
+  selected.value = new Set();
+}
+
+async function launchSelected() {
+  const ids = notRunningSelected.value.map((identity) => identity.id);
+  if (ids.length === 0) return;
+  await store.launchIdentities(ids);
+  endSelecting();
+}
 
 const roleVar = (color: RoleColor) => `var(--role-${color})`;
 
@@ -58,9 +118,14 @@ function formatRelative(iso?: string): string {
 }
 
 async function launch(identity: Identity) {
+  if (selecting.value) {
+    toggleSelected(identity.id);
+    return;
+  }
   const instance = store.instanceFor(identity.id);
   if (instance) {
-    await store.stopInstance(instance.id);
+    // Clicking a running identity raises its window; stopping is its own button.
+    await store.focusInstance(instance.id);
     return;
   }
   await store.launchIdentity(identity.id);
@@ -152,6 +217,45 @@ function passwordLabel(identity: Identity): string {
         <Search :size="12" />
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
+      <button
+        v-if="!selecting"
+        class="btn"
+        type="button"
+        :title="$t('app.batchSelectHint')"
+        @click="startSelecting"
+      >
+        <CheckSquare :size="12" />
+        {{ $t("app.batchSelect") }}
+      </button>
+      <button class="btn health" type="button" @click="emit('sessionHealth')">
+        <HeartPulse :size="13" />
+        {{ $t("app.sessionHealth") }}
+      </button>
+    </div>
+
+    <!--
+      Selection bar. It replaces the toolbar's action row rather than floating
+      over the cards, so the count and the launch button stay in one place while
+      the selection changes.
+    -->
+    <div v-if="selecting" class="select-bar">
+      <button type="button" class="link" @click="toggleAll">
+        {{ allSelected ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
+      </button>
+      <span class="sel-count mono">
+        {{ $t("app.batchSelected", { count: selected.size }) }}
+      </span>
+      <span class="sel-note">{{ $t("app.batchLaunchNote") }}</span>
+      <button type="button" class="btn" @click="endSelecting">{{ $t("app.cancel") }}</button>
+      <button
+        type="button"
+        class="btn primary"
+        :disabled="!notRunningSelected.length || store.busy === 'launch'"
+        @click="launchSelected"
+      >
+        <Play :size="12" />
+        {{ $t("app.batchLaunch", { count: notRunningSelected.length }) }}
+      </button>
     </div>
 
     <div class="cards">
@@ -160,10 +264,26 @@ function passwordLabel(identity: Identity): string {
         :key="identity.id"
         type="button"
         class="id-card"
-        :class="{ running: Boolean(store.instanceFor(identity.id)) }"
+        :class="{
+          running: Boolean(store.instanceFor(identity.id)),
+          picking: selecting,
+          picked: selected.has(identity.id),
+        }"
         :style="{ '--role': roleVar(identity.color) }"
-        @click="store.instanceFor(identity.id) ? launch(identity) : emit('editIdentity', identity.id)"
+        :aria-pressed="selecting ? selected.has(identity.id) : undefined"
+        @click="
+          selecting
+            ? toggleSelected(identity.id)
+            : store.instanceFor(identity.id)
+              ? launch(identity)
+              : emit('editIdentity', identity.id)
+        "
       >
+        <!-- Selection mode hides the per-card actions: in that mode the card is a
+             checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
+        <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
+          <Check v-if="selected.has(identity.id)" :size="11" />
+        </span>
         <div class="card-top">
           <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
           <span class="who">
@@ -191,15 +311,29 @@ function passwordLabel(identity: Identity): string {
           <span class="inherit mono">{{ passwordLabel(identity) }}</span>
         </div>
 
-        <div class="card-actions">
-          <span class="launch" @click.stop="launch(identity)">
-            <Square v-if="store.instanceFor(identity.id)" :size="10" />
-            <Play v-else :size="10" />
-            {{ store.instanceFor(identity.id) ? $t("app.stop") : $t("app.launch") }}
+        <div v-if="!selecting" class="card-actions">
+          <template v-if="store.instanceFor(identity.id)">
+            <span class="launch" @click.stop="launch(identity)">
+              <Play :size="10" />
+              {{ $t("app.switchTo") }}
+            </span>
+            <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
+              <Square :size="9" />
+              {{ $t("app.stop") }}
+            </span>
+          </template>
+          <span v-else class="launch" @click.stop="launch(identity)">
+            <Play :size="10" />
+            {{ $t("app.launch") }}
           </span>
           <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
           <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
           <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
+        </div>
+        <div v-else class="card-pick-note mono">
+          {{
+            store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
+          }}
         </div>
       </button>
 
@@ -301,6 +435,7 @@ h1 {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin: 16px 0 12px;
@@ -354,7 +489,52 @@ h1 {
   border-radius: var(--radius);
   padding: 6px 9px;
   width: 200px;
+  min-width: 130px;
+  flex: 0 1 200px;
   color: var(--faint);
+}
+
+/* Kept out of the header: three action buttons crowded the title at the minimum
+   window width, and the expired filter next to it is the same mental context. */
+.health {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 11.5px;
+}
+
+.select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 12px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
+  flex: 0 0 auto;
+}
+
+.select-bar .link {
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.sel-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.sel-note {
+  font-size: 10.5px;
+  color: var(--faint);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.select-bar .btn:last-child {
+  margin-left: auto;
 }
 
 .search:focus-within {
@@ -414,6 +594,48 @@ h1 {
 .id-card.running {
   border-color: color-mix(in srgb, var(--role) 46%, var(--line));
   background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+
+.id-card.picking {
+  cursor: pointer;
+}
+
+.id-card.picked {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+/* A checkbox in the corner, sized like the cards' own tags so it reads as part
+   of the card rather than an overlay widget. */
+.pick-mark {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  display: grid;
+  place-items: center;
+  color: var(--accent-foreground);
+}
+
+.pick-mark.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The status text sits in the same corner, so it yields while selecting. */
+.id-card.picking .state {
+  opacity: 0;
+}
+
+.card-pick-note {
+  font-size: 10.5px;
+  color: var(--faint);
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
 }
 
 .card-top {
@@ -539,7 +761,8 @@ h1 {
 
 .card-actions {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   font-size: 11.5px;
   color: var(--muted);
 }

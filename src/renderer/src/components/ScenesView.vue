@@ -161,7 +161,9 @@ function editActiveLayout() {
 function launchSelected() {
   const scene = selectedScene.value;
   if (!scene) return;
-  if (isRunning.value) void store.stopAll();
+  // Stopping from here closes this scene's windows only. Other scenes and
+  // hand-launched windows are somebody else's work and stay open.
+  if (isRunning.value) void store.stopScene(scene.id);
   else void store.launchScene(scene.id);
 }
 </script>
@@ -235,7 +237,7 @@ function launchSelected() {
             >
               <Square v-if="isRunning" :size="11" />
               <Play v-else :size="11" />
-              {{ isRunning ? $t("app.stop") : $t("app.runScene") }}
+              {{ isRunning ? $t("app.closeSceneWindows") : $t("app.runScene") }}
             </button>
             <button
               class="icon-btn"

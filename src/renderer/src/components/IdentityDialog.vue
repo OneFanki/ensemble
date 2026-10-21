@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import { Eye, EyeOff, RotateCcw, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
+import ComboBox from "./ComboBox.vue";
+import SelectField from "./SelectField.vue";
 import { ROLE_COLORS } from "@shared/defaults";
 import { useWorkspaceStore } from "../stores/workspace";
 import type { Engine, IdentityDraft, RoleColor } from "@shared/types";
@@ -26,14 +28,41 @@ const form = reactive<IdentityDraft>({ ...props.draft });
 const password = ref("");
 const reveal = ref(false);
 const error = ref<string | null>(null);
+/** In inherit mode the password input stays hidden until the user asks to edit. */
+const editingEnvPassword = ref(false);
 
 watch(
   () => props.draft,
   (next) => {
     Object.assign(form, next);
     password.value = "";
+    editingEnvPassword.value = false;
   },
 );
+
+/** Role is a displayed label, so the suggestions are localized words, not keys. */
+const roleSuggestions = computed<string[]>(() => [
+  t("app.roleAdmin"),
+  t("app.roleEditor"),
+  t("app.roleReviewer"),
+  t("app.roleViewer"),
+  t("app.roleGuest"),
+]);
+
+const envPasswordSet = computed(
+  () => Boolean(store.credentials?.environment[form.environmentId]),
+);
+
+const engineOptions = computed(() => [
+  { value: "__inherit__", label: t("app.inheritEnvDefault") },
+  ...props.engines.map((engine) => ({
+    value: engine.id,
+    label: `${engine.brand} ${engine.version ?? ""}`.trim(),
+    hint: engine.cdp ? t("app.cdpMode") : t("app.externalMode"),
+  })),
+]);
+
+const engineValue = computed(() => form.engineId ?? "__inherit__");
 
 // Reactive so the swatch tooltips follow a runtime language switch.
 const colorLabels = computed<Record<RoleColor, string>>(() => ({
@@ -78,6 +107,12 @@ async function copyDefaultPassword() {
   await store.copyPassword({ kind: "environment", id: form.environmentId });
 }
 
+async function saveIdentityPassword() {
+  if (!form.id || !password.value) return;
+  const saved = await store.setPassword({ kind: "identity", id: form.id }, password.value);
+  if (saved !== undefined) password.value = "";
+}
+
 async function rebuildProfile() {
   if (!form.id) return;
   const confirmed = window.confirm(t("app.rebuildConfirm"));
@@ -103,14 +138,11 @@ async function rebuildProfile() {
         </label>
         <label class="field" style="width: 150px">
           <span class="label">{{ $t("app.role") }}</span>
-          <input v-model="form.role" class="input" list="role-suggestions" placeholder="admin" />
-          <datalist id="role-suggestions">
-            <option value="admin" />
-            <option value="editor" />
-            <option value="viewer" />
-            <option value="reviewer" />
-            <option value="ops" />
-          </datalist>
+          <ComboBox
+            v-model="form.role"
+            :suggestions="roleSuggestions"
+            :placeholder="t('app.rolePlaceholder')"
+          />
         </label>
       </div>
 
@@ -164,13 +196,40 @@ async function rebuildProfile() {
           </div>
         </div>
 
-        <div class="password-row">
+        <!-- Inheriting shows the state, not an input: two password boxes for the
+             same secret was the confusing part. Editing the environment default
+             is possible, but has to be asked for. -->
+        <div v-if="form.passwordMode === 'inherit'" class="cred-row">
+          <span class="cred-copy">
+            <span class="cred-name">{{ $t("app.defaultPassword") }}</span>
+            <span class="cred-state mono" :class="{ unset: !envPasswordSet }">
+              {{ envPasswordSet ? $t("app.passwordSet") : $t("app.passwordNotSet") }}
+            </span>
+          </span>
+          <button
+            type="button"
+            class="btn ghost"
+            :disabled="!envPasswordSet"
+            @click="copyDefaultPassword"
+          >
+            {{ $t("app.copy") }}
+          </button>
+          <button type="button" class="btn" @click="editingEnvPassword = !editingEnvPassword">
+            {{ editingEnvPassword ? $t("app.cancel") : $t("app.editEnvPassword") }}
+          </button>
+        </div>
+
+        <div v-if="form.passwordMode === 'custom' || editingEnvPassword" class="password-row">
           <div class="pw-input">
             <input
               v-model="password"
               class="input mono"
               :type="reveal ? 'text' : 'password'"
-              :placeholder="form.passwordMode === 'inherit' ? $t('app.inheritOverridePlaceholder') : $t('app.customPasswordPlaceholder')"
+              :placeholder="
+                editingEnvPassword
+                  ? $t('app.envPasswordPlaceholder')
+                  : $t('app.customPasswordPlaceholder')
+              "
               autocomplete="new-password"
             />
             <button
@@ -184,7 +243,7 @@ async function rebuildProfile() {
             </button>
           </div>
           <button
-            v-if="form.passwordMode === 'inherit'"
+            v-if="editingEnvPassword"
             type="button"
             class="btn"
             :disabled="!password"
@@ -193,21 +252,13 @@ async function rebuildProfile() {
             {{ $t("app.saveAsEnvDefault") }}
           </button>
           <button
-            v-else
+            v-else-if="form.id"
             type="button"
             class="btn"
             :disabled="!password"
-            @click="store.setPassword({ kind: 'identity', id: form.id! }, password); password = ''"
+            @click="saveIdentityPassword"
           >
             {{ $t("app.saveToIdentity") }}
-          </button>
-          <button
-            v-if="form.passwordMode === 'inherit'"
-            type="button"
-            class="btn ghost"
-            @click="copyDefaultPassword"
-          >
-            {{ $t("app.copyDefaultPassword") }}
           </button>
         </div>
 
@@ -233,12 +284,13 @@ async function rebuildProfile() {
         </label>
         <label class="field grow">
           <span class="label">{{ $t("app.engineOverride") }}</span>
-          <select v-model="form.engineId" class="input">
-            <option :value="undefined">{{ $t("app.inheritEnvDefault") }}</option>
-            <option v-for="engine in engines" :key="engine.id" :value="engine.id">
-              {{ engine.brand }} {{ engine.version ?? "" }}
-            </option>
-          </select>
+          <SelectField
+            :model-value="engineValue"
+            :options="engineOptions"
+            @update:model-value="
+              form.engineId = $event === '__inherit__' ? undefined : $event
+            "
+          />
         </label>
       </div>
 
@@ -366,6 +418,42 @@ async function rebuildProfile() {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.cred-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 7px 9px;
+}
+
+.cred-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cred-name {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.cred-state {
+  font-size: 10px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 40%, var(--line));
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.cred-state.unset {
+  color: var(--faint);
+  border-color: var(--line);
 }
 
 .pw-input {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildChromiumArgs, buildFirefoxArgs, safeProfileSegment } from "@core/launch/args";
+import { desktopUserAgent } from "@core/launch/headless";
 
 const base = {
   profileDir: "C:\\profiles\\env\\identity",
@@ -26,6 +27,10 @@ describe("chromium launch args", () => {
     expect(args).toContain("--no-default-browser-check");
   });
 
+  it("hides the crash-restore bubble that would offer old tabs", () => {
+    expect(args).toContain("--hide-crash-restore-bubble");
+  });
+
   it("keeps background throttling off so manual interaction stays responsive", () => {
     expect(args).toContain("--disable-renderer-backgrounding");
     expect(args).toContain("--disable-background-timer-throttling");
@@ -47,6 +52,47 @@ describe("chromium launch args", () => {
     });
     expect(placed).toContain("--window-position=10,20");
     expect(placed).toContain("--window-size=800,600");
+  });
+
+  it("opens no window when headless is requested", () => {
+    const headless = buildChromiumArgs({ ...base, headless: true });
+    expect(headless).toContain("--headless=new");
+    // Old headless renders a different engine path, which would check the wrong
+    // thing; only the "new" mode is acceptable.
+    expect(headless).not.toContain("--headless");
+  });
+
+  it("keeps the start url last in headless mode", () => {
+    const headless = buildChromiumArgs({ ...base, headless: true });
+    expect(headless.at(-1)).toBe(base.startUrl);
+  });
+});
+
+describe("headless session user agent", () => {
+  /*
+   * A background check should present the same UA the user's own browser sends.
+   * The only difference between the two strings is the product token, so the
+   * rewrite is exactly that and nothing else.
+   */
+  it("turns Chromium's headless UA into the visible one", () => {
+    const headless =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
+    const desktop =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
+    expect(desktopUserAgent(headless)).toBe(desktop);
+  });
+
+  it("leaves a UA that is already desktop-shaped untouched", () => {
+    const desktop =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36";
+    expect(desktopUserAgent(desktop)).toBe(desktop);
+  });
+
+  it("keeps the engine's own brand suffix", () => {
+    const result = desktopUserAgent("HeadlessChrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0");
+    expect(result).toContain("Chrome/120.0.0.0");
+    expect(result).toContain("OPR/106.0.0.0");
+    expect(result).not.toContain("Headless");
   });
 });
 

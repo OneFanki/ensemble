@@ -19,6 +19,7 @@ import {
 } from "lucide-vue-next";
 import type { Component } from "vue";
 import { useWorkspaceStore } from "../stores/workspace";
+import SelectField from "./SelectField.vue";
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { McpStatus } from "@shared/types";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
@@ -40,6 +41,7 @@ const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
   locale: [locale: "zh" | "en"];
   startTour: [];
+  updateFound: [result: UpdateCheckResult];
 }>();
 
 const store = useWorkspaceStore();
@@ -96,7 +98,11 @@ const updateText = computed(() => {
 async function checkUpdate() {
   checkingUpdate.value = true;
   try {
-    update.value = await window.ensemble.checkUpdate();
+    const result = await window.ensemble.checkUpdate();
+    update.value = result;
+    // A manual check asks "is there one?" — the answer belongs in the update
+    // dialog, not in a line of text the user then has to act on elsewhere.
+    if (result.status === "available") emit("updateFound", result);
   } finally {
     checkingUpdate.value = false;
   }
@@ -408,17 +414,45 @@ async function submitMaster() {
         </div>
         <div class="option-row">
           <span class="option-label">{{ $t("app.defaultLayout") }}</span>
-          <select
-            class="input select-inline"
-            :value="store.settings.layout"
-            @change="store.saveSettings({ layout: ($event.target as HTMLSelectElement).value })"
-          >
-            <option v-for="preset in store.layoutPresets" :key="preset.id" :value="preset.id">
-              {{ store.presetName(preset) }}
-            </option>
-          </select>
+          <div class="select-slot">
+            <SelectField
+              :model-value="store.settings.layout"
+              :options="
+                store.layoutPresets.map((preset) => ({
+                  value: preset.id,
+                  label: store.presetName(preset),
+                }))
+              "
+              @update:model-value="
+                store.saveSettings({ layout: $event ?? store.settings.layout })
+              "
+            />
+          </div>
         </div>
         <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.launchInterval") }}</span>
+          <div class="interval">
+            <input
+              class="input mono interval-input"
+              type="number"
+              min="0"
+              max="5000"
+              step="50"
+              :value="store.settings.launchIntervalMs"
+              @change="
+                store.saveSettings({
+                  launchIntervalMs: Math.min(
+                    5000,
+                    Math.max(0, Number(($event.target as HTMLInputElement).value) || 0),
+                  ),
+                })
+              "
+            />
+            <span class="unit mono">ms</span>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.launchIntervalNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
           <div class="segmented">
@@ -443,6 +477,116 @@ async function submitMaster() {
         <p class="fineprint">
           {{ $t("app.autoFillLaunchNote") }}
         </p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.restoreScene") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.restoreLastScene }"
+              @click="store.saveSettings({ restoreLastScene: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.restoreLastScene }"
+              @click="store.saveSettings({ restoreLastScene: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.restoreSceneNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.autoCheckUpdates }"
+              @click="store.saveSettings({ autoCheckUpdates: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.autoCheckUpdates }"
+              @click="store.saveSettings({ autoCheckUpdates: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.autoUpdateNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.overlaySetting") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.overlayEnabled }"
+              @click="store.saveSettings({ overlayEnabled: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.overlayEnabled }"
+              @click="store.saveSettings({ overlayEnabled: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.overlaySettingNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.focusLabelSetting") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.focusLabelEnabled }"
+              @click="store.saveSettings({ focusLabelEnabled: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.focusLabelEnabled }"
+              @click="store.saveSettings({ focusLabelEnabled: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.focusLabelSettingNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.headlessUaSetting") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.headlessCheckUa === 'desktop' }"
+              @click="store.saveSettings({ headlessCheckUa: 'desktop' })"
+            >
+              {{ $t("app.headlessUaDesktop") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.headlessCheckUa === 'headless' }"
+              @click="store.saveSettings({ headlessCheckUa: 'headless' })"
+            >
+              {{ $t("app.headlessUaHeadless") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.headlessUaNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.tourLabel") }}</span>
           <button class="btn" type="button" @click="emit('startTour')">
@@ -777,8 +921,7 @@ async function submitMaster() {
             </p>
             <p v-if="update?.status === 'available'" class="update-hint">
               {{ $t("app.updateManualHint") }}
-            </p>
-          </div>
+            </p>          </div>
           <div class="update-actions">
             <button
               class="btn"
@@ -1085,22 +1228,39 @@ async function submitMaster() {
 .option-label {
   font-size: 11px;
   color: var(--muted);
-  width: 70px;
+  /* Wide enough for the longest label ("Restore last scene on start") so the
+     switch column stays aligned instead of every row drifting. */
+  flex: 0 0 132px;
 }
 
-.select-inline {
+.select-slot {
+  width: 170px;
+}
+
+.interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.interval-input {
+  width: 90px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   color: var(--text-secondary);
   font-size: 11px;
-  padding: 5px 8px;
-  min-width: 170px;
+  padding: 6px 8px;
   outline: 0;
 }
 
-.select-inline:focus {
+.interval-input:focus {
   border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
+.unit {
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .segmented {

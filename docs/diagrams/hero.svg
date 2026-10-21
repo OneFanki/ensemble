@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="img" aria-label="One scene on the left launches four isolated browser profiles tiled edge to edge on the right, with a floating switcher highlighting the current window and a brief account label over it">
+  <title>Multiple identities, one stage</title>
+  <defs>
+    <linearGradient id="heroBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12151a"/>
+      <stop offset="1" stop-color="#0a0c0f"/>
+    </linearGradient>
+    <linearGradient id="heroChrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b212a"/>
+      <stop offset="1" stop-color="#151a21"/>
+    </linearGradient>
+    <linearGradient id="heroPill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#242c36" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#151a21" stop-opacity="0.96"/>
+    </linearGradient>
+    <filter id="heroShadow" x="-40%" y="-40%" width="180%" height="200%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="heroPanelShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="760" rx="18" fill="url(#heroBg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="759" rx="17.5" fill="none" stroke="#232a33"/>
+
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="56" y="64" font-size="25" fill="#eef0f3" font-weight="600">Multiple identities, one stage</text>
+    <text x="56" y="90" font-size="12.5" fill="#828c9a">One system · four accounts · four isolated profiles</text>
+  </g>
+
+  <!-- Environment chip: the scope every window below belongs to -->
+  <g>
+    <rect x="1006" y="46" width="138" height="26" rx="13" fill="#12151a" stroke="#303844"/>
+    <circle cx="1020" cy="59" r="3" fill="#e0a44e"/>
+    <text x="1030" y="63" font-size="10.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Order service · test</text>
+  </g>
+
+  <!-- ============ left: the scene that defines the group ============ -->
+  <g filter="url(#heroPanelShadow)">
+    <rect x="56" y="110" width="360" height="600" rx="10" fill="#12151a" stroke="#303844"/>
+    <path d="M56 120a10 10 0 0 1 10-10h340a10 10 0 0 1 10 10v22H56z" fill="#171b21"/>
+  </g>
+  <g fill="#5a6270">
+    <circle cx="70" cy="126" r="1.7"/>
+    <circle cx="76" cy="126" r="1.7"/>
+    <circle cx="82" cy="126" r="1.7"/>
+  </g>
+  <text x="94" y="130" font-size="11" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Ensemble</text>
+
+  <!-- rail -->
+  <path d="M56 142h92v568H66a10 10 0 0 1-10-10z" fill="#10141a"/>
+  <path d="M148 142v568" stroke="#232a33"/>
+  <rect x="60" y="214" width="84" height="26" rx="5" fill="#e0a44e" fill-opacity="0.13"/>
+  <rect x="60" y="214" width="2" height="26" rx="1" fill="#e0a44e"/>
+  <g>
+        <rect x="68" y="154" width="9" height="9" rx="2" fill="#3a434f" fill-opacity="0.5"/>
+        <text x="86" y="162" font-size="10.5" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Env</text>
+      </g><g>
+        <rect x="68" y="186" width="9" height="9" rx="2" fill="#3a434f" fill-opacity="0.5"/>
+        <text x="86" y="194" font-size="10.5" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Identities</text>
+      </g><g>
+        <rect x="68" y="218" width="9" height="9" rx="2" fill="#e0a44e" fill-opacity="0.9"/>
+        <text x="86" y="226" font-size="10.5" fill="#eef0f3" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Scenes</text>
+      </g><g>
+        <rect x="68" y="250" width="9" height="9" rx="2" fill="#3a434f" fill-opacity="0.5"/>
+        <text x="86" y="258" font-size="10.5" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Settings</text>
+      </g>
+
+  <!-- scene detail -->
+  <text x="164" y="174" font-size="13.5" fill="#eef0f3" font-weight="500" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Permission matrix · main flow</text>
+  <text x="164" y="192" font-size="10" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">4 members · 2 × 2</text>
+  <rect x="164" y="206" width="236" height="26" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <circle cx="176" cy="219" r="3.4" fill="#e0a44e"/>
+        <text x="188" y="223" font-size="10.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Admin · primary</text>
+        <circle cx="388" cy="219" r="7" fill="#1b222c"/>
+        <text x="388" y="222.5" font-size="8.5" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1</text><rect x="164" y="234" width="236" height="26" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <circle cx="176" cy="247" r="3.4" fill="#5cc8b6"/>
+        <text x="188" y="251" font-size="10.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reviewer</text>
+        <circle cx="388" cy="247" r="7" fill="#1b222c"/>
+        <text x="388" y="250.5" font-size="8.5" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">2</text><rect x="164" y="262" width="236" height="26" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <circle cx="176" cy="275" r="3.4" fill="#a396ff"/>
+        <text x="188" y="279" font-size="10.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Operator</text>
+        <circle cx="388" cy="275" r="7" fill="#1b222c"/>
+        <text x="388" y="278.5" font-size="8.5" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">3</text><rect x="164" y="290" width="236" height="26" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <circle cx="176" cy="303" r="3.4" fill="#98a2b0"/>
+        <text x="188" y="307" font-size="10.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Read-only</text>
+        <circle cx="388" cy="303" r="7" fill="#1b222c"/>
+        <text x="388" y="306.5" font-size="8.5" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">4</text>
+
+  <text x="164" y="332" font-size="9" fill="#5c6675" letter-spacing="0.8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">WINDOW LAYOUT</text>
+  <rect x="164" y="342" width="42" height="22" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <text x="185" y="357.5" font-size="9" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Free</text><rect x="212" y="342" width="28" height="22" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <text x="226" y="357.5" font-size="9" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1×1</text><rect x="246" y="342" width="28" height="22" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <text x="260" y="357.5" font-size="9" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">2×1</text><rect x="280" y="342" width="28" height="22" rx="5" fill="#0d1014" stroke="#232a33"/>
+        <text x="294" y="357.5" font-size="9" fill="#828c9a" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1×2</text><rect x="314" y="342" width="28" height="22" rx="5" fill="#e0a44e" stroke="#e0a44e"/>
+        <text x="328" y="357.5" font-size="9" fill="#1a1305" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">2×2</text>
+  <rect x="164" y="376" width="124" height="66" fill="#0f1319" stroke="#2b3440" stroke-width="0.8"/>
+        <circle cx="176" cy="390" r="3" fill="#e0a44e"/>
+        <text x="185" y="393.5" font-size="9" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Admin</text><rect x="288" y="376" width="124" height="66" fill="#3a2f1e" stroke="#2b3440" stroke-width="0.8"/>
+        <circle cx="300" cy="390" r="3" fill="#5cc8b6"/>
+        <text x="309" y="393.5" font-size="9" fill="#e0a44e" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reviewer</text><rect x="164" y="442" width="124" height="66" fill="#0f1319" stroke="#2b3440" stroke-width="0.8"/>
+        <circle cx="176" cy="456" r="3" fill="#a396ff"/>
+        <text x="185" y="459.5" font-size="9" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Operator</text><rect x="288" y="442" width="124" height="66" fill="#0f1319" stroke="#2b3440" stroke-width="0.8"/>
+        <circle cx="300" cy="456" r="3" fill="#98a2b0"/>
+        <text x="309" y="459.5" font-size="9" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Read-only</text>
+
+  <rect x="164" y="560" width="118" height="34" rx="7" fill="#e0a44e"/>
+  <text x="223" y="582" font-size="12" fill="#1a1305" text-anchor="middle" font-weight="500" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Run scene</text>
+  <text x="164" y="616" font-size="10" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Drag a member onto a cell to place it.</text>
+  <text x="164" y="634" font-size="10" fill="#828c9a" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Launch order = member order.</text>
+
+  <!-- marker 1: the scene launches the group -->
+  <circle cx="300" cy="577" r="9" fill="#e0a44e"/>
+  <text x="300" y="580.5" font-size="10" fill="#1a1305" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1</text>
+
+  <!-- ============ right: four isolated windows, tiled edge to edge ============ -->
+  
+    <rect x="440" y="110" width="360" height="300" fill="#0d1014"/>
+    <rect x="440" y="110" width="360" height="30" fill="url(#heroChrome)"/>
+    <circle cx="454" cy="125" r="3.6" fill="#e0a44e"/>
+    <text x="464" y="129.5" font-size="11.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Admin · primary</text>
+    <rect x="440" y="140" width="54" height="270" fill="#10141a"/>
+    <rect x="450" y="162" width="34" height="5" rx="2.5" fill="#2b3440"/><rect x="450" y="182" width="28" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="202" width="32" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="222" width="26" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="242" width="30" height="5" rx="2.5" fill="#1b222c"/>
+    <text x="506" y="162" font-size="12" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Orders</text>
+    <rect x="506" y="172" width="76" height="26" rx="4" fill="#151b23"/><rect x="590" y="172" width="76" height="26" rx="4" fill="#151b23"/><rect x="674" y="172" width="76" height="26" rx="4" fill="#151b23"/>
+    <rect x="506" y="210" width="280" height="94" rx="4" fill="#11161d"/>
+    <rect x="506" y="210" width="280" height="18" fill="#171e26"/>
+    <rect x="506" y="228" width="130" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="228" width="44" height="6" rx="3" fill="#171d25"/><rect x="506" y="247" width="118" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="247" width="62" height="6" rx="3" fill="#171d25"/><rect x="506" y="266" width="106" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="266" width="44" height="6" rx="3" fill="#171d25"/><rect x="506" y="285" width="94" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="285" width="62" height="6" rx="3" fill="#171d25"/>
+    <rect x="506" y="314" width="38" height="22" rx="5" fill="#1a212a" stroke="#2b3440"/>
+             <text x="525" y="329" font-size="9.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">New</text><rect x="550" y="314" width="40" height="22" rx="5" fill="#1a212a" stroke="#2b3440"/>
+             <text x="570" y="329" font-size="9.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Edit</text><rect x="596" y="314" width="52" height="22" rx="5" fill="#2a2115" stroke="#8a6720"/>
+             <text x="622" y="329" font-size="9.5" fill="#e0a44e" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Delete</text>
+    <text x="786" y="393" font-size="9" fill="#5c6675" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1 / 24</text>
+  
+    <rect x="800" y="110" width="360" height="300" fill="#0d1014"/>
+    <rect x="800" y="110" width="360" height="30" fill="url(#heroChrome)"/>
+    <circle cx="814" cy="125" r="3.6" fill="#5cc8b6"/>
+    <text x="824" y="129.5" font-size="11.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reviewer</text>
+    <rect x="800" y="140" width="54" height="270" fill="#10141a"/>
+    <rect x="810" y="162" width="34" height="5" rx="2.5" fill="#2b3440"/><rect x="810" y="182" width="28" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="202" width="32" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="222" width="26" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="242" width="30" height="5" rx="2.5" fill="#1b222c"/>
+    <text x="866" y="162" font-size="12" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Orders</text>
+    <rect x="866" y="172" width="76" height="26" rx="4" fill="#151b23"/><rect x="950" y="172" width="76" height="26" rx="4" fill="#151b23"/><rect x="1034" y="172" width="76" height="26" rx="4" fill="#151b23"/>
+    <rect x="866" y="210" width="280" height="94" rx="4" fill="#11161d"/>
+    <rect x="866" y="210" width="280" height="18" fill="#171e26"/>
+    <rect x="866" y="228" width="130" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="228" width="44" height="6" rx="3" fill="#171d25"/><rect x="866" y="247" width="118" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="247" width="62" height="6" rx="3" fill="#171d25"/><rect x="866" y="266" width="106" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="266" width="44" height="6" rx="3" fill="#171d25"/><rect x="866" y="285" width="94" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="285" width="62" height="6" rx="3" fill="#171d25"/>
+    <rect x="866" y="314" width="58" height="22" rx="5" fill="#1a212a" stroke="#2b3440"/>
+             <text x="895" y="329" font-size="9.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Approve</text><rect x="930" y="314" width="52" height="22" rx="5" fill="#1a212a" stroke="#2b3440"/>
+             <text x="956" y="329" font-size="9.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reject</text>
+    <text x="1146" y="393" font-size="9" fill="#5c6675" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1 / 24</text>
+  
+    <rect x="440" y="410" width="360" height="300" fill="#0d1014"/>
+    <rect x="440" y="410" width="360" height="30" fill="url(#heroChrome)"/>
+    <circle cx="454" cy="425" r="3.6" fill="#a396ff"/>
+    <text x="464" y="429.5" font-size="11.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Operator</text>
+    <rect x="440" y="440" width="54" height="270" fill="#10141a"/>
+    <rect x="450" y="462" width="34" height="5" rx="2.5" fill="#2b3440"/><rect x="450" y="482" width="28" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="502" width="32" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="522" width="26" height="5" rx="2.5" fill="#1b222c"/><rect x="450" y="542" width="30" height="5" rx="2.5" fill="#1b222c"/>
+    <text x="506" y="462" font-size="12" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Orders</text>
+    <rect x="506" y="472" width="76" height="26" rx="4" fill="#151b23"/><rect x="590" y="472" width="76" height="26" rx="4" fill="#151b23"/><rect x="674" y="472" width="76" height="26" rx="4" fill="#151b23"/>
+    <rect x="506" y="510" width="280" height="94" rx="4" fill="#11161d"/>
+    <rect x="506" y="510" width="280" height="18" fill="#171e26"/>
+    <rect x="506" y="528" width="130" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="528" width="44" height="6" rx="3" fill="#171d25"/><rect x="506" y="547" width="118" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="547" width="62" height="6" rx="3" fill="#171d25"/><rect x="506" y="566" width="106" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="566" width="44" height="6" rx="3" fill="#171d25"/><rect x="506" y="585" width="94" height="6" rx="3" fill="#1b222c"/>
+        <rect x="654" y="585" width="62" height="6" rx="3" fill="#171d25"/>
+    <rect x="506" y="614" width="52" height="22" rx="5" fill="#1a212a" stroke="#2b3440"/>
+             <text x="532" y="629" font-size="9.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Export</text>
+    <text x="786" y="693" font-size="9" fill="#5c6675" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1 / 24</text>
+  
+    <rect x="800" y="410" width="360" height="300" fill="#0d1014"/>
+    <rect x="800" y="410" width="360" height="30" fill="url(#heroChrome)"/>
+    <circle cx="814" cy="425" r="3.6" fill="#98a2b0"/>
+    <text x="824" y="429.5" font-size="11.5" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Read-only</text>
+    <rect x="800" y="440" width="54" height="270" fill="#10141a"/>
+    <rect x="810" y="462" width="34" height="5" rx="2.5" fill="#2b3440"/><rect x="810" y="482" width="28" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="502" width="32" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="522" width="26" height="5" rx="2.5" fill="#1b222c"/><rect x="810" y="542" width="30" height="5" rx="2.5" fill="#1b222c"/>
+    <text x="866" y="462" font-size="12" fill="#c9ced6" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Orders</text>
+    <rect x="866" y="472" width="76" height="26" rx="4" fill="#151b23"/><rect x="950" y="472" width="76" height="26" rx="4" fill="#151b23"/><rect x="1034" y="472" width="76" height="26" rx="4" fill="#151b23"/>
+    <rect x="866" y="510" width="280" height="94" rx="4" fill="#11161d"/>
+    <rect x="866" y="510" width="280" height="18" fill="#171e26"/>
+    <rect x="866" y="528" width="130" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="528" width="44" height="6" rx="3" fill="#171d25"/><rect x="866" y="547" width="118" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="547" width="62" height="6" rx="3" fill="#171d25"/><rect x="866" y="566" width="106" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="566" width="44" height="6" rx="3" fill="#171d25"/><rect x="866" y="585" width="94" height="6" rx="3" fill="#1b222c"/>
+        <rect x="1014" y="585" width="62" height="6" rx="3" fill="#171d25"/>
+    <rect x="866" y="614" width="150" height="22" rx="5" fill="none" stroke="#2b3440" stroke-dasharray="3 3"/>
+         <text x="941" y="629" font-size="9.5" fill="#5c6675" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">no actions</text>
+    <text x="1146" y="693" font-size="9" fill="#5c6675" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, sans-serif">1 / 24</text>
+
+  <!-- The only lines between windows are the frames themselves. -->
+  <path d="M800 110V710M440 410H1160" stroke="#303844" stroke-width="1.2"/>
+
+  <!-- ============ switcher floating over the desktop ============ -->
+  <g filter="url(#heroShadow)">
+    <rect x="452" y="480" width="172" height="196" rx="8" fill="#12151a" stroke="#3a434f"/>
+    <path d="M452 488a8 8 0 0 1 8-8h156a8 8 0 0 1 8 8v24H452z" fill="#171b21"/>
+  </g>
+  <g fill="#5a6270">
+    <circle cx="464" cy="492" r="1.5"/>
+    <circle cx="469" cy="492" r="1.5"/>
+    <circle cx="474" cy="492" r="1.5"/>
+  </g>
+  <text x="484" y="496" font-size="9.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">RUNNING</text>
+  <circle cx="543" cy="492" r="7.5" fill="#1d232b" stroke="#3a434f"/>
+  <text x="543" y="495.5" font-size="8.5" fill="#a3abb8" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif">4</text>
+  
+        <circle cx="472" cy="540" r="3" fill="#e0a44e"/>
+        <text x="482" y="544" font-size="10.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Admin</text><rect x="460" y="556" width="156" height="28" rx="5" fill="#5cc8b6" fill-opacity="0.13" stroke="#5cc8b6" stroke-opacity="0.5"/>
+        <circle cx="472" cy="570" r="3" fill="#5cc8b6"/>
+        <text x="482" y="574" font-size="10.5" fill="#eef0f3" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reviewer</text>
+        <circle cx="472" cy="600" r="3" fill="#a396ff"/>
+        <text x="482" y="604" font-size="10.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Operator</text>
+        <circle cx="472" cy="630" r="3" fill="#98a2b0"/>
+        <text x="482" y="634" font-size="10.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Read-only</text>
+  <text x="464" y="660" font-size="9" fill="#5c6675" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Click to switch</text>
+
+  <!-- marker 2: switching raises a window and highlights its row -->
+  <circle cx="638" cy="488" r="9" fill="#e0a44e"/>
+  <text x="638" y="491.5" font-size="10" fill="#1a1305" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, sans-serif">2</text>
+
+  <!-- ============ switch receipt over the raised window (centred near its top) ============ -->
+  <g filter="url(#heroShadow)">
+    <rect x="934" y="150" width="140" height="44" rx="8" fill="url(#heroPill)" stroke="#3a434f"/>
+    <circle cx="952" cy="172" r="4" fill="#5cc8b6"/>
+    <text x="964" y="170" font-size="12" fill="#eef0f3" font-weight="500" font-family="system-ui, -apple-system, Segoe UI, sans-serif">Reviewer</text>
+    <text x="964" y="184" font-size="9.5" fill="#a3abb8" font-family="system-ui, -apple-system, Segoe UI, sans-serif">review · Order service</text>
+  </g>
+  <rect x="952" y="204" width="104" height="28" rx="8" fill="none" stroke="#5cc8b6" stroke-opacity="0.4" stroke-dasharray="4 4"/>
+
+  <!-- marker 3: the label is transient, not a permanent badge -->
+  <circle cx="1092" cy="172" r="9" fill="#e0a44e"/>
+  <text x="1092" y="175.5" font-size="10" fill="#1a1305" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, sans-serif">3</text>
+
+  <!-- ============ captions ============ -->
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="11.5" fill="#828c9a">
+    <circle cx="62" cy="737" r="8" fill="#e0a44e"/>
+      <text x="62" y="740.5" font-size="9.5" fill="#1a1305" text-anchor="middle" font-weight="600">1</text>
+      <text x="80" y="741" font-size="11" fill="#828c9a">A scene launches the group</text><circle cx="468" cy="737" r="8" fill="#e0a44e"/>
+      <text x="468" y="740.5" font-size="9.5" fill="#1a1305" text-anchor="middle" font-weight="600">2</text>
+      <text x="486" y="741" font-size="11" fill="#828c9a">The switcher highlights the window in front</text><circle cx="806" cy="737" r="8" fill="#e0a44e"/>
+      <text x="806" y="740.5" font-size="9.5" fill="#1a1305" text-anchor="middle" font-weight="600">3</text>
+      <text x="824" y="741" font-size="11" fill="#828c9a">The account name confirms the switch</text>
+  </g>
+</svg>

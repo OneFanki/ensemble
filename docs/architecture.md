@@ -31,6 +31,16 @@
 - `src/main/mcp/server.ts`：本机 MCP 端点（AI 接入），只依赖 `WorkspaceService`；
 - `src/shared/transfer.ts`：导入导出文件的格式校验，纯数据、无 IO。
 
+界面有两个窗口，共用同一份构建产物与同一个 preload：
+
+- 控制台（默认路由）：环境 / 身份 / 场景 / 设置；
+- 运行实例悬浮条：`index.html#overlay` 挂载 `overlay/OverlayApp.vue`，无边框、置顶、
+  跳过任务栏。它不持有多余状态，只订阅同一份 `WorkspaceSnapshot`，点一下通过
+  `Page.bringToFront` 把对应浏览器窗口提到最前（最小化则先恢复）。
+
+悬浮条的位置保存在 `userData/overlay.json`（纯窗口偏好，不进入可导出的工作区文件）；
+显示开关是 `settings.overlayEnabled`。
+
 `src/core` 不依赖 Electron，所以能在纯 Node 下跑单元测试，也能被未来的 CLI 或 CI
 直接复用。浏览器窗口不是 Electron 的 `BrowserWindow`，而是由 `spawn` 启动的独立
 系统浏览器进程。
@@ -48,8 +58,13 @@ Playwright 是自动化测试库，它默认会接管对话框、下载和文件
 1. 导航（`Page.navigate` 或重定向）
 2. 登录表单填充（`Runtime.evaluate` + 原生 value setter + `input` / `change` 事件，
    支持账号密码之外按标签匹配的额外字段）
-3. 登录态检测（页面内 `fetch` 携带 Cookie）与窗口定位
-   （`Browser.getWindowForTarget` + `Browser.setWindowBounds`）
+3. 登录态检测（页面内 `fetch` 携带 Cookie）、窗口定位
+   （`Browser.getWindowForTarget` + `Browser.setWindowBounds`）与窗口切换
+   （`Page.bringToFront`，最小化的先恢复）
+
+批量登录态检测（`checkAllAuth`）对每个身份执行同一段检测，最多 3 个并发——不同身份
+是独立浏览器与独立 CDP 连接，唯一共享的是被测站点本身——并在整批结束后只写一次
+`workspace.json`、广播一次快照。
 
 对话框、下载、上传、扩展、原生密码管理器、Google SSO 全部保持浏览器原生行为。
 

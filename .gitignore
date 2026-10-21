@@ -32,8 +32,12 @@ Thumbs.db
 .temp*.mjs
 .temp*.png
 
-# Landing page assets are assembled from build/ and docs/screenshots/ at deploy
-# time (see .github/workflows/pages.yml); committed copies would drift from the
-# README screenshots.
+# Landing page assets are assembled from build/, docs/screenshots/ and
+# docs/diagrams/ at deploy time (see .github/workflows/pages.yml); committed
+# copies would drift from the sources.
 site/assets/
 site/screenshots/
+site/diagrams/
+
+# Release body the publish job writes from CHANGELOG.md.
+release-notes.md

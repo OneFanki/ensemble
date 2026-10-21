@@ -9,6 +9,7 @@ on:
     paths:
       - "site/**"
       - "docs/screenshots/**"
+      - "docs/diagrams/**"
       - "build/icon.png"
       # The version badge is injected from this file, so a release bump must
       # redeploy the page even when nothing else changed.
@@ -35,9 +36,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Assemble static assets
         run: |
-          mkdir -p site/assets site/screenshots
+          mkdir -p site/assets site/screenshots site/diagrams
           cp build/icon.png site/assets/icon.png
           cp docs/screenshots/*.png site/screenshots/
+          # Diagrams illustrate scenes that cannot be photographed (tiling, a
+          # transient overlay); they are committed as SVG so they stay sharp.
+          cp docs/diagrams/*.svg site/diagrams/
           # The badge reads package.json so it can never drift from the release.
           version="$(node -p "require('./package.json').version")"
           sed -i "s/__VERSION__/${version}/g" site/index.html

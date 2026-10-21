@@ -51,17 +51,33 @@ docs(readme): 补充 Wayland 窗口定位限制
 再拆分到 major。现在的判定从宽：只要用户需要重新导入配置或重建 profile，就必须升 minor，
 并在 Release notes 里写清迁移方式。
 
-操作方式：
+### Release notes come from CHANGELOG.md
+
+GitHub Release 的正文不是自动生成的提交列表，而是从仓库根目录的 `CHANGELOG.md` 抽取的
+对应版本小节。所以**升版本号必须同时写 changelog**，否则发布流程会直接失败（`version` job
+会提示缺少哪一节）。
+
+准备发版时做两件事：
 
 ```bash
-pnpm version patch --no-git-tag-version   # 或 minor / 手动改成 0.2.0
-git add package.json
-git commit -m "chore(build): 版本号 0.2.1"
+# 1. 把 [未发布] 改成正式版本号，并把改动归到这一节
+#    ## [未发布]  ->  ## [0.4.0] - 2026-10-21
+# 2. 顶部补一个新的空 [未发布] 小节
+pnpm version patch --no-git-tag-version   # 或 minor / 手动改
+git add package.json CHANGELOG.md
+git commit -m "chore(build): 版本号 0.4.0"
 ```
+
+写作约定：
+
+- 每个版本都要有 `### 中文` 和 `### English` 两部分，仓库与展示页面向中英两种读者。
+- 只写用户能感知的改动（新功能、行为变化、修复、升级注意），内部重构与 CI 可以合并成一条。
+- 破坏性变更或需要重建 profile / 重新导入配置的改动，放在小节开头并写清怎么办。
 
 `--no-git-tag-version` 只改文件、不自动打 tag。**正常发布时不要手动推送 `v*` tag**：
 tag 由 `.github/workflows/release.yml` 在构建成功后创建，手动推会让版本号和产物脱节。
-只有需要重跑某个已发布版本时，才推一个与 `package.json` 完全一致的 tag。
+只有需要重跑某个已发布版本时，才推一个与 `package.json` 完全一致的 tag；这种情况下 Release
+正文会用当前 `CHANGELOG.md` 的内容覆盖，方便修正写错的说明。
 
 一个 PR 只在需要发布时改版本号。多个 PR 一起合入时，由最后一个合入的 PR 负责 bump，
 避免同一版本号被并发合入的 PR 重复使用。

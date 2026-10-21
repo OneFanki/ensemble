@@ -346,6 +346,16 @@
         height: auto;
       }
 
+      /* The hero figure is a diagram, so it gets a one-line reading order
+         underneath instead of being left to speak for itself. */
+      .shot figcaption {
+        padding: 12px 18px 14px;
+        border-top: 1px solid var(--line-soft);
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--faint);
+      }
+
       /* ---------- sections ---------- */
 
       section.block {
@@ -484,6 +494,29 @@
         display: block;
         width: 100%;
         height: auto;
+      }
+
+      /* Small windows such as the overlay would be blown up to full gallery
+         width; keep them at their natural size and pair them with the caption. */
+      .gallery .compact {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0;
+      }
+
+      .gallery .compact img {
+        width: 340px;
+        max-width: 100%;
+        margin: 26px 10px 26px 26px;
+        border-radius: 8px;
+        box-shadow: 0 14px 40px rgb(0 0 0 / 45%);
+      }
+
+      .gallery .compact figcaption {
+        border-top: 0;
+        border-left: 1px solid var(--line-soft);
+        padding: 18px 22px;
       }
 
       .gallery figcaption {
@@ -730,6 +763,8 @@
         <nav class="links">
           <a href="#concepts" data-zh>核心概念</a>
           <a href="#concepts" data-en>Concepts</a>
+          <a href="#scenarios" data-zh>适用场景</a>
+          <a href="#scenarios" data-en>Use cases</a>
           <a href="#features" data-zh>能力</a>
           <a href="#features" data-en>Features</a>
           <a href="#screens" data-zh>界面</a>
@@ -777,15 +812,15 @@
           </h1>
 
           <p class="lede" data-zh>
-            测权限和协作时，你总得同时开着管理员、审核员、普通用户几个窗口，反复退出登录、清
-            Cookie、找回密码。Ensemble 把这些窗口变成一张可以编排的台面：每个账号一个完全独立的
-            浏览器 Profile，一键拉起一组，边到边平铺，关掉就回收。
+            同一套系统里，不同账号看到的东西本来就不一样：谁多一个删除按钮、租户之间的数据该不该互相
+            可见、灰度功能有没有按名单放开。Ensemble 把这些窗口变成一张可以编排的台面：每个账号一个
+            完全独立的浏览器 Profile，一键拉起一组，边到边平铺，关掉就回收。
           </p>
           <p class="lede" data-en>
-            Testing permissions and collaboration means keeping an admin, a reviewer and a regular
-            user signed in at once — and logging out, clearing cookies and hunting passwords in
-            between. Ensemble turns those windows into one orchestrated stage: every account gets
-            its own isolated browser profile, launched as a group and tiled edge to edge.
+            The same system looks different depending on who is signed in: an extra delete button, data
+            that must stay inside a tenant, a feature flag that reaches only part of the accounts.
+            Ensemble turns those windows into one orchestrated stage: every account gets its own
+            isolated browser profile, launched as a group and tiled edge to edge.
           </p>
 
           <div class="hero-actions">
@@ -813,11 +848,20 @@
 
           <figure class="shot">
             <img
-              src="./screenshots/identities.png"
-              alt="身份列表"
-              data-zh-src="./screenshots/identities.png"
-              data-en-src="./screenshots/identities-en.png"
+              src="./diagrams/hero.zh.svg"
+              alt="左侧一个场景编排四个账号，右侧四个独立 Profile 的窗口边到边平铺，悬浮条高亮当前窗口并短暂显示账号名"
+              data-zh-src="./diagrams/hero.zh.svg"
+              data-en-src="./diagrams/hero.svg"
             />
+            <figcaption data-zh>
+              一个场景拉起一组账号 → 各自独立的浏览器 Profile 边到边平铺 → 悬浮条切换并高亮当前窗口 →
+              切换后账号名短暂浮现。
+            </figcaption>
+            <figcaption data-en>
+              One scene launches a group of accounts → each in its own browser profile, tiled edge to
+              edge → the switcher raises and highlights the current window → the account name confirms
+              the switch.
+            </figcaption>
           </figure>
         </div>
       </section>
@@ -888,6 +932,68 @@
         </div>
       </section>
 
+      <section class="block" id="scenarios">
+        <div class="wrap">
+          <div class="section-head">
+            <span class="kicker">Use cases</span>
+            <h2 data-zh>权限只是一个例子</h2>
+            <h2 data-en>Permissions are only the example</h2>
+            <p data-zh>
+              凡是「同一套系统、多个身份、需要确认差异」的场合都用得上。共同点是必须让这些身份同时在场：
+              串行地退出再登录既慢，也会漏掉切换之后才出现的问题。
+            </p>
+            <p data-en>
+              Any case with one system, several identities and a difference to confirm fits. What they
+              share: the identities have to be present at the same time. Logging out and back in is slow
+              and hides anything that only appears after a switch.
+            </p>
+          </div>
+
+          <div class="features">
+            <article class="feature">
+              <h3 data-zh>角色与权限</h3>
+              <h3 data-en>Roles and permissions</h3>
+              <p data-zh>删除按钮是不是只有管理员能看到？普通成员是不是真的被挡住了？</p>
+              <p data-en>Is the delete button really admin-only? Is a regular member actually blocked?</p>
+            </article>
+
+            <article class="feature">
+              <h3 data-zh>多租户与数据隔离</h3>
+              <h3 data-en>Tenants and data isolation</h3>
+              <p data-zh>租户 A 的账号会不会看到租户 B 的数据？搜索、导出、详情页都要查一遍。</p>
+              <p data-en>
+                Can tenant A's account see tenant B's data? Check search, exports and detail pages.
+              </p>
+            </article>
+
+            <article class="feature">
+              <h3 data-zh>功能开关与灰度</h3>
+              <h3 data-en>Feature flags and rollouts</h3>
+              <p data-zh>同一个功能，对灰度名单里的账号按预期放开，对名单外真的关闭。</p>
+              <p data-en>The same feature: on for the rollout list, genuinely off for everyone else.</p>
+            </article>
+
+            <article class="feature">
+              <h3 data-zh>套餐与等级差异</h3>
+              <h3 data-en>Plan and tier differences</h3>
+              <p data-zh>免费版和付费版的功能边界是否与定价页一致，升级后是否立即生效。</p>
+              <p data-en>
+                Do the free and paid boundaries match the pricing page, and take effect on upgrade?
+              </p>
+            </article>
+
+            <article class="feature">
+              <h3 data-zh>跨账号协作</h3>
+              <h3 data-en>Multi-account collaboration</h3>
+              <p data-zh>A 提交后 B 是否收到待办、审批后 C 看到的状态是否同步正确。</p>
+              <p data-en>
+                After A submits, does B receive it; after approval, does C see the right state?
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
       <section class="block" id="features">
         <div class="wrap">
           <div class="section-head">
@@ -897,6 +1003,70 @@
           </div>
 
           <div class="features">
+            <article class="feature">
+              <span class="icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <rect x="3" y="5" width="18" height="12" rx="2" />
+                  <path d="M8 21h8M12 17v4" />
+                </svg>
+              </span>
+              <h3 data-zh>运行实例悬浮条</h3>
+              <h3 data-en>Running-instances overlay</h3>
+              <p data-zh>
+                桌面上一个始终置顶的小条，列出所有运行中的身份。点一下就切到对应窗口，最小化也会恢复，
+                不重启、不重载页面；十来个窗口也不用去任务栏里找。当前真正在前台的那一行会实时高亮。
+                用不到时收成一个只显示数量的小方块，不占桌面，拖动后自动贴边。
+              </p>
+              <p data-en>
+                A small always-on-top strip lists every running identity. One click raises that window —
+                restoring it if minimized, without a relaunch or reload. No hunting through the taskbar
+                with a dozen windows open, and the row of the window actually in front is highlighted live.
+                Collapse it into a small square showing only a count; drag it and it snaps to the edge.
+              </p>
+            </article>
+
+            <article class="feature">
+              <span class="icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="7" rx="2" />
+                  <rect x="3" y="13" width="18" height="7" rx="2" />
+                  <path d="M8 7.5h.01M8 16.5h.01" />
+                </svg>
+              </span>
+              <h3 data-zh>批量启动</h3>
+              <h3 data-en>Batch launch</h3>
+              <p data-zh>
+                账户页进入多选模式，勾几个账号一次按默认布局铺开。不必逐个点击，也不会在点下一个时
+                被刚弹出的窗口挡住；已在运行的身份会自动跳过。
+              </p>
+              <p data-en>
+                A selection mode on the identities page opens several accounts at once in the default
+                layout, so you are not clicking one card at a time while each new window covers the next.
+                Identities already running are skipped.
+              </p>
+            </article>
+
+            <article class="feature">
+              <span class="icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="3" />
+                  <rect x="6" y="6" width="12" height="4" rx="2" />
+                  <path d="M9 15h6" />
+                </svg>
+              </span>
+              <h3 data-zh>切换回执</h3>
+              <h3 data-en>Switch receipt</h3>
+              <p data-zh>
+                页面全都一样时，切过去也看不出切到了谁。切换后目标窗口上方会短暂浮出账号名，约两秒淡出；
+                浮层不挡鼠标、不抢焦点，也不向被测页面注入任何东西。
+              </p>
+              <p data-en>
+                Identical pages make it impossible to tell which account a window holds. After a switch the
+                account name floats over the target window for about two seconds, then fades. It never blocks
+                clicks or takes focus, and injects nothing into the page under test.
+              </p>
+            </article>
+
             <article class="feature">
               <span class="icon">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
@@ -990,6 +1160,44 @@
             <article class="feature">
               <span class="icon">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <path d="M3 12h4l2.5-6 4 12 2.5-6h5" />
+                </svg>
+              </span>
+              <h3 data-zh>会话健康中心</h3>
+              <h3 data-en>Session health</h3>
+              <p data-zh>
+                一屏看清当前环境里谁正常、谁掉线、谁还没确认。一键检测全部，或一键为所有过期身份
+                打开登录页并填好凭据。窗口没开的身份也会在后台悄悄检测，不会多出一堆窗口。
+              </p>
+              <p data-en>
+                One screen shows who is signed in, who expired and who is unconfirmed. Check
+                everyone at once, or open the login page and fill credentials for every expired
+                identity. Identities with no window open are checked in a hidden browser too, so no
+                extra windows pile up.
+              </p>
+            </article>
+
+            <article class="feature">
+              <span class="icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />
+                </svg>
+              </span>
+              <h3 data-zh>恢复上次场景</h3>
+              <h3 data-en>Restore last scene</h3>
+              <p data-zh>
+                设置里开启后，冷启动自动按原布局拉起上次的场景，不用重新选、重新摆窗口。默认关闭，
+                不会在升级后突然弹出一堆窗口。
+              </p>
+              <p data-en>
+                Turn it on and a cold start reopens the last scene in its saved layout. Off by default,
+                so an upgrade never dumps several windows on the screen unannounced.
+              </p>
+            </article>
+
+            <article class="feature">
+              <span class="icon">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
                   <rect x="4" y="10" width="16" height="11" rx="2" />
                   <path d="M8 10V7a4 4 0 0 1 8 0v3" />
                 </svg>
@@ -1077,6 +1285,25 @@
           </div>
 
           <div class="gallery">
+            <figure class="compact">
+              <img
+                src="./screenshots/overlay.png"
+                alt="运行实例悬浮条"
+                data-zh-src="./screenshots/overlay.png"
+                data-en-src="./screenshots/overlay-en.png"
+              />
+              <figcaption data-zh>
+                <strong>运行实例悬浮条</strong><br />
+                始终置顶，按账号列出所有窗口；点一下即切换，最小化也会恢复，不重启、不重载页面。
+                收起后是一个只显示数量的小方块，拖动后自动贴边。
+              </figcaption>
+              <figcaption data-en>
+                <strong>Running-instances overlay</strong><br />
+                Always on top, one row per account. Click to switch; minimized windows are restored
+                without a relaunch or reload. Collapsed, it is a small square showing only the count,
+                and it snaps to the screen edge after a drag.
+              </figcaption>
+            </figure>
             <figure>
               <img
                 src="./screenshots/environments.png"
@@ -1088,6 +1315,58 @@
               <figcaption data-en>
                 Environments: identity and scene counts, default credentials and engine at a glance;
                 open a clean session that belongs to no environment.
+              </figcaption>
+            </figure>
+            <figure>
+              <img
+                src="./screenshots/identities.png"
+                alt="身份列表"
+                data-zh-src="./screenshots/identities.png"
+                data-en-src="./screenshots/identities-en.png"
+              />
+              <figcaption data-zh>
+                身份页：角色、账号、登录态与运行状态各占一列；点运行中的身份即切过去，停止是独立按钮。
+              </figcaption>
+              <figcaption data-en>
+                Identities: role, account, session status and running state in one row. Clicking a
+                running identity switches to it; stopping is its own button.
+              </figcaption>
+            </figure>
+
+            <figure>
+              <img
+                src="./diagrams/overlay-switch.zh.svg"
+                data-zh-src="./diagrams/overlay-switch.zh.svg"
+                data-en-src="./diagrams/overlay-switch.svg"
+                alt="从悬浮条切换窗口，并在目标窗口上显示账号名"
+              />
+              <figcaption data-zh>
+                <strong>页面都一样时，也能确认切到了谁</strong><br />
+                悬浮条实时高亮当前真正在前台的窗口；切换后目标窗口上方短暂浮出账号名，约两秒淡出。
+                浮层不挡鼠标、不抢焦点，也不向被测页面注入任何东西。
+              </figcaption>
+              <figcaption data-en>
+                <strong>Know which account you landed on</strong><br />
+                The strip highlights the window that actually owns the foreground; after a switch the
+                account name floats briefly over the target window. It is click-through, never takes
+                focus, and injects nothing into the page.
+              </figcaption>
+            </figure>
+            <figure>
+              <img
+                src="./diagrams/layout-grid.zh.svg"
+                data-zh-src="./diagrams/layout-grid.zh.svg"
+                data-en-src="./diagrams/layout-grid.svg"
+                alt="四宫格平铺：窗口边到边贴合，没有留白"
+              />
+              <figcaption data-zh>
+                <strong>边到边平铺</strong><br />
+                窗口之间没有留白，唯一的分隔线就是窗口自己的边框；每个窗口的身份色点与悬浮条里的一致。
+              </figcaption>
+              <figcaption data-en>
+                <strong>Tiled edge to edge</strong><br />
+                No gutter between windows — the only line between them is the window frame itself. The
+                identity dot on each window matches the one in the strip.
               </figcaption>
             </figure>
 

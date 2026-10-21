@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="四个浏览器窗口以 2×2 平铺，边到边贴合">
+  <title>2×2 平铺，没有间隙</title>
+  <defs>
+    <linearGradient id="stage" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12151a"/>
+      <stop offset="1" stop-color="#0b0d10"/>
+    </linearGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b212a"/>
+      <stop offset="1" stop-color="#151a21"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="720" rx="18" fill="url(#stage)"/>
+  <rect x="0.5" y="0.5" width="1199" height="719" rx="17.5" fill="none" stroke="#232a33"/>
+
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <text x="130" y="62" font-size="22" fill="#eef0f3" font-weight="600">2 × 2</text>
+    <text x="196" y="62" font-size="13" fill="#a3abb8">四个账号，一块屏幕</text>
+    <text x="130" y="86" font-size="12" fill="#828c9a">每个窗口一个独立 Profile；布局是预设，不是手工摆出来的。</text>
+  </g>
+
+  <rect x="130" y="108" width="940" height="504" fill="#0b0d10" stroke="#303844" stroke-width="1.5"/>
+
+    <rect x="130" y="108" width="470" height="252" fill="#0d1014"/>
+    <rect x="130" y="108" width="470" height="30" fill="url(#chrome)"/>
+    <circle cx="146" cy="123" r="4" fill="#e0a44e"/>
+    <text x="157" y="128" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#c9ced6">管理员</text>
+    <g fill="#171b21">
+      <rect x="150" y="158" width="190" height="10" rx="3"/><rect x="150" y="178" width="300" height="10" rx="3"/><rect x="150" y="198" width="248" height="10" rx="3"/>
+      <rect x="150" y="222" width="120" height="22" rx="5" fill="#1f2733"/>
+      <rect x="283" y="222" width="86" height="22" rx="5" fill="#1a212a"/>
+    </g>
+
+    <rect x="600" y="108" width="470" height="252" fill="#0d1014"/>
+    <rect x="600" y="108" width="470" height="30" fill="url(#chrome)"/>
+    <circle cx="616" cy="123" r="4" fill="#5cc8b6"/>
+    <text x="627" y="128" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#c9ced6">审核员</text>
+    <g fill="#171b21">
+      <rect x="620" y="158" width="164" height="10" rx="3"/><rect x="620" y="178" width="280" height="10" rx="3"/><rect x="620" y="198" width="212" height="10" rx="3"/>
+      <rect x="620" y="222" width="86" height="22" rx="5" fill="#1a212a"/>
+    </g>
+
+    <rect x="130" y="360" width="470" height="252" fill="#0d1014"/>
+    <rect x="130" y="360" width="470" height="30" fill="url(#chrome)"/>
+    <circle cx="146" cy="375" r="4" fill="#a396ff"/>
+    <text x="157" y="380" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#c9ced6">运营</text>
+    <g fill="#171b21">
+      <rect x="150" y="410" width="220" height="10" rx="3"/><rect x="150" y="430" width="286" height="10" rx="3"/>
+      <rect x="150" y="454" width="104" height="22" rx="5" fill="#1f2733"/>
+    </g>
+
+    <rect x="600" y="360" width="470" height="252" fill="#0d1014"/>
+    <rect x="600" y="360" width="470" height="30" fill="url(#chrome)"/>
+    <circle cx="616" cy="375" r="4" fill="#98a2b0"/>
+    <text x="627" y="380" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="12" fill="#c9ced6">只读</text>
+    <g fill="#171b21">
+      <rect x="620" y="410" width="182" height="10" rx="3"/><rect x="620" y="430" width="256" height="10" rx="3"/><rect x="620" y="450" width="210" height="10" rx="3"/>
+    </g>
+
+  <path d="M600 108V612M130 360H1070" stroke="#303844" stroke-width="1.5"/>
+
+  <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+    <g transform="translate(130 652)">
+      <rect x="0" y="0" width="34" height="26" fill="none" stroke="#e0a44e" stroke-width="1.2"/>
+      <path d="M17 0v26" stroke="#e0a44e" stroke-width="1.2"/>
+      <rect x="15" y="10" width="4" height="6" fill="#e0a44e"/>
+    </g>
+    <text x="176" y="669" font-size="12" fill="#c9ced6">
+      <tspan fill="#e0a44e" font-weight="600">0 px</tspan>
+      <tspan fill="#828c9a"> 间隙——窗口边框互相贴合，两者之间唯一的线就是边框本身。</tspan>
+    </text>
+
+    <g transform="translate(130 690)">
+      <circle cx="4" cy="0" r="4" fill="#e0a44e"/>
+      <circle cx="18" cy="0" r="4" fill="#5cc8b6"/>
+      <circle cx="32" cy="0" r="4" fill="#a396ff"/>
+      <circle cx="46" cy="0" r="4" fill="#98a2b0"/>
+      <text x="62" y="4" font-size="12" fill="#828c9a">身份色——悬浮条里名字前面的圆点也是它</text>
+    </g>
+  </g>
+</svg>

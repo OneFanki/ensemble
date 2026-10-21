@@ -1,6 +1,6 @@
 # Ensemble
 
-**Many identities. One stage.** A local multi-account browser workbench for testing permission systems and multi-user collaboration flows.
+**Many identities. One stage.** A local multi-account browser workbench: keep several identities present in the same system at once, work in parallel and compare side by side, to confirm that each one sees and can do what it should.
 
 [中文](README.md) · [Architecture](docs/architecture.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
@@ -9,13 +9,29 @@
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-42B883?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-![Identity list](docs/screenshots/identities-en.png)
+![Ensemble overview: a scene on the left, four isolated browser profiles tiled edge to edge on the right, with the switcher highlighting the current window and briefly showing its account name](docs/diagrams/hero.svg)
+
+In one sentence: **one scene launches a group of accounts, each in its own browser profile, tiled edge to edge** — every window is usable and comparable, and switching never leaves you guessing which account you are looking at.
 
 ## Why
 
-When you test permissions, you keep several accounts open at once — admin, reviewer, regular user — and keep logging out, clearing cookies, and looking passwords up again. Multiple browser windows often leak sessions into each other.
+The same system looks different depending on who is signed in: an admin gets a delete button, tenant A must never see tenant B's data, a feature flag reaches only part of the accounts, and the free and paid plans stop at different boundaries. Confirming those differences means keeping several windows open at once — and logging out, clearing cookies and hunting passwords in between. Multiple windows of the same browser often leak sessions into each other.
 
 Ensemble turns those windows into a stage you can arrange: every account gets its own browser profile, and you launch a whole group at once, tiled automatically and reclaimed on close. It **does not bundle a browser**. It launches the real Chrome, Edge, Brave or Firefox installed on your machine, so cookies, extensions, downloads and the native password manager behave exactly as they would for a human.
+
+## Typical scenarios
+
+Permissions are only the easiest example. Any case with one system, several identities and a difference to confirm fits:
+
+| Scenario | The question it answers |
+| --- | --- |
+| **Roles and permissions** | Is the delete button really admin-only? Is a regular member actually blocked? |
+| **Tenants and data isolation** | Can tenant A's account see tenant B's data — in search, in exports, on detail pages? |
+| **Feature flags and rollouts** | Is the feature on for the rollout list and genuinely off for everyone else? |
+| **Plan and tier differences** | Do the free and paid boundaries match the pricing page, and change on upgrade? |
+| **Multi-account collaboration** | After A submits, does B receive it; after approval, does C see the right state? |
+
+What these have in common: **they can only be verified with the identities present at the same time**. Logging out and back in is slow and hides anything that only appears once you switch.
 
 ## Concepts
 
@@ -31,8 +47,18 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
   <img src="docs/screenshots/environments-en.png" alt="Environment management" width="900" />
 </p>
 
+The identities page is where most of the day is spent: one card per identity with its role, account, session status and running state. Clicking a running identity switches to it; stopping has its own button.
+
+<p align="center">
+  <img src="docs/screenshots/identities-en.png" alt="Identity list" width="900" />
+</p>
+
 ## Features
 
+- **Running-instances overlay**: a small always-on-top strip on the desktop lists every running identity, grouped by environment. One click raises that browser window, restoring it if minimized — no relaunch, no reload. The row of the window that actually owns the OS foreground is highlighted live, so taskbar and Alt+Tab switches follow too. When you do not need it, it collapses into a small square showing only the window count, and snaps to the screen edge after a drag
+- **One-click cleanup**: close every instance at once from the bottom of the overlay, the running dock, or the tray menu; stopping a scene closes only that scene's windows, never another scene's
+- **Batch launch**: a selection mode on the identities page opens several accounts at once in the default layout, instead of clicking one by one while every new window covers the next card
+- **Switch receipt**: after switching from the overlay, the account name floats briefly (~2 s) over the window that was raised, so the right account is obvious even when every page looks the same. The pill is click-through, never takes focus, and injects nothing into the page
 - **Fill on launch**: credentials are typed in as soon as the login form appears; the app names any input still unconfigured
 - **Fields beyond username and password**: tenant or company codes are matched by label, defined per environment and overridable per identity
 - **Real browser isolation**: each identity has its own profile, so sessions, cookies and extensions never mix
@@ -41,6 +67,8 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Custom layouts**: built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`, plus a drag-and-drop editor for your own saved presets; boxes snap to the stage edges and to each other, with alignment guides
 - **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
 - **Reopen a single member**: closed one account by mistake? Reopen just that window from the scene detail instead of relaunching the whole scene
+- **Session health**: one screen shows who is signed in, who expired and who is unconfirmed in the current environment; check everyone with one click, or open the login page and fill credentials for every expired identity. Identities with no window open are checked in a hidden browser that reads their own profile and closes again
+- **Restore last scene**: when enabled in Settings, a cold start reopens the last scene in its saved layout, so you never re-pick a scene or re-arrange windows
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
 - **Clean sessions**: throwaway windows that never log in and are deleted on close; the environments page can also open a blank one that belongs to no environment
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
@@ -48,13 +76,41 @@ Environment 1—N identities, environment 1—N scenes, scene N—N identities. 
 - **Let an AI do the data entry**: a built-in MCP endpoint receives environments, identities and scenes from your AI client
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
 - **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
-- **Version check**: Settings → About compares the running version with the latest GitHub release and links straight to the download page; updates are installed by running the newer installer
+- **Automatic updates**: the app checks for a new version in the background, shows a short summary when one exists, and downloads, verifies and installs it in one click — then restarts itself. No manual GitHub download, and no browser download warning to get past
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />
 </p>
 
+With a dozen windows open there is no need to hunt through the taskbar: the running-instances overlay stays on top, and one click raises the window for that account.
+When it is in the way, collapse it into a small square that shows only the window count, takes almost no room, and snaps to the screen edge after you drag it; click it to expand again. "Close all" at the bottom of the list closes every window at once.
+
+<p align="center">
+  <img src="docs/screenshots/overlay-en.png" alt="Running-instances overlay" width="340" />
+  <img src="docs/screenshots/overlay-ball.png" alt="The collapsed square" width="48" />
+</p>
+
+**When every page looks identical, how do you know you switched to the right account?** That is the practical problem with multiple accounts. The overlay highlights the row that actually owns the OS foreground, so raising a window from the taskbar or Alt+Tab moves the highlight too. After a click, the account name briefly floats over the window that was raised and fades after two seconds:
+
+<p align="center">
+  <img src="docs/diagrams/overlay-switch.svg" alt="Switching from the overlay, with the account name over the target window" width="900" />
+</p>
+
+The pill is click-through, never takes focus, and injects nothing into the page under test, so the system behaves exactly as it does for a real user.
+
+An expired session no longer requires opening each window: the session health panel groups the current environment into signed in / expired / unconfirmed, checks everyone at once, and can sign every expired identity back in. An identity with no window open is still checkable — a hidden browser reads its own profile, answers, and closes, so no extra windows pile up.
+
+<p align="center">
+  <img src="docs/screenshots/session-health-en.png" alt="Session health" width="820" />
+</p>
+
 The scenes view is a list on the left and a detail pane on the right: select a scene to see its members and layout, adjusting the tiling never launches anything, and only "Run scene" opens the windows. A single window opens centered so it stays comfortable to work in.
+
+Tiling really is edge to edge: no gutter between windows, the only line between them is the window frame itself. Each window carries its identity in the colour dot at the top left, the same dot that appears in the overlay:
+
+<p align="center">
+  <img src="docs/diagrams/layout-grid.svg" alt="2×2 tiling with no gaps between windows" width="900" />
+</p>
 
 <p align="center">
   <img src="docs/screenshots/scenes-en.png" alt="Scene orchestration and window layout" width="900" />
@@ -170,6 +226,7 @@ pnpm test       # unit tests
 pnpm test:e2e   # real-browser end-to-end (needs an installed Chromium browser)
 pnpm build      # build to out/
 pnpm screenshots # regenerate the README screenshots (needs a prior build)
+pnpm diagrams    # regenerate the SVG diagrams (both languages, no build needed)
 pnpm dist       # package the installer into release/
 ```
 

@@ -1,7 +1,7 @@
 /**
- * Assembles the landing page for a local look: copies the icon and the README
- * screenshots into site/, substitutes the version badge in memory, and serves
- * the result on a loopback port.
+ * Assembles the landing page for a local look: copies the icon, the README
+ * screenshots and the SVG diagrams into site/, substitutes the version badge in
+ * memory, and serves the result on a loopback port.
  *
  *   pnpm site
  */
@@ -14,10 +14,16 @@ const PORT = Number(process.env["SITE_PORT"] ?? 4173);
 
 mkdirSync(join(ROOT, "assets"), { recursive: true });
 mkdirSync(join(ROOT, "screenshots"), { recursive: true });
+mkdirSync(join(ROOT, "diagrams"), { recursive: true });
 copyFileSync("build/icon.png", join(ROOT, "assets", "icon.png"));
 for (const file of readdirSync("docs/screenshots")) {
   if (file.endsWith(".png")) {
     copyFileSync(join("docs/screenshots", file), join(ROOT, "screenshots", file));
+  }
+}
+for (const file of readdirSync("docs/diagrams")) {
+  if (file.endsWith(".svg")) {
+    copyFileSync(join("docs/diagrams", file), join(ROOT, "diagrams", file));
   }
 }
 

@@ -234,33 +234,49 @@ export function evaluateUpdate(
 /**
  * Picks the summary section for one language.
  *
- * A release-notes file holds `## 中文` and `## English` sections so the same body
- * serves both audiences; the dialog shows only the section matching the UI
- * language. Inside a section, only the part before the first level-4 heading is
- * the summary — that is where the full change list starts, and the change list
- * belongs on the release page, not in a dialog nobody reads. A body without
- * those headings is returned unchanged, which keeps hand-written notes and older
- * releases readable.
+ * A release body holds a `中文` / `English` section per language, so the dialog
+ * shows only the part matching the UI language. Inside a section, only the text
+ * before the "full changes" heading is the summary — the detailed list belongs on
+ * the release page, not in a dialog nobody reads.
+ *
+ * Heading depth is deliberately not fixed: the same body is correct at `##` when
+ * it is read as a changelog chapter, but GitHub renders it one level deeper
+ * (`### 中文`, `### English`) because it sits under the release's own title. Both
+ * shapes must work, so the level is inferred from the language heading itself and
+ * the summary ends at the next heading of the same or shallower depth.
+ *
+ * A body with no language headings is returned unchanged, which keeps
+ * hand-written notes and older releases readable.
  */
 export function selectUpdateNotes(notes: string | undefined, locale: "zh" | "en"): string {
   if (!notes) return "";
   const alias = locale === "zh" ? /^(中文|chinese|zh)$/i : /^(english|en)$/i;
   const lines = notes.split(/\r?\n/);
+  let level = 0;
   let collecting = false;
   const picked: string[] = [];
-  let sawHeading = false;
   for (const line of lines) {
-    const heading = /^(#{2,3})\s+(.+?)\s*$/.exec(line);
+    const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
     if (heading) {
-      sawHeading = true;
-      collecting = heading[1] === "##" ? alias.test(heading[2] ?? "") : collecting;
+      const depth = heading[1]?.length ?? 0;
+      const title = heading[2] ?? "";
+      const isLanguageHeading = depth <= 3 && alias.test(title);
+      if (isLanguageHeading) {
+        // The first language heading decides the document's section depth.
+        if (level === 0) level = depth;
+        if (depth === level) {
+          collecting = true;
+          continue;
+        }
+      }
+      if (collecting) {
+        // "Full changes" style headings and any sibling section end the summary.
+        if (depth <= level || /完整变更|full changes/i.test(title)) break;
+      }
       continue;
     }
-    // Level-4 headings mark the detailed changelog inside a language section.
-    if (collecting && /^####\s+/.test(line)) break;
     if (collecting) picked.push(line);
   }
-  if (!sawHeading) return notes.trim();
   const body = picked.join("\n").trim();
   return body.length > 0 ? body : notes.trim();
 }

@@ -170,6 +170,24 @@ describe("update summary selection", () => {
     expect(selectUpdateNotes(body, "en")).toBe("- Fixed A\n- Added B");
   });
 
+  // GitHub renders the release body under its own title, so the same section
+  // arrives one level deeper than it appears in CHANGELOG.md. Missing this made
+  // the dialog fall back to the entire body — the exact thing it must not show.
+  it("works when a release body arrives with deeper headings", () => {
+    const rendered = body
+      .split("\n")
+      .map((line) => (line.startsWith("## ") ? `#${line}` : line))
+      .join("\n");
+    expect(selectUpdateNotes(rendered, "zh")).toBe("- 修复 A\n- 新增 B");
+    expect(selectUpdateNotes(rendered, "en")).toBe("- Fixed A\n- Added B");
+  });
+
+  it("stops at the next sibling section even without a full-changes heading", () => {
+    const withoutDetail = ["### 中文", "- 只有摘要", "### English", "- Summary only"].join("\n");
+    expect(selectUpdateNotes(withoutDetail, "zh")).toBe("- 只有摘要");
+    expect(selectUpdateNotes(withoutDetail, "en")).toBe("- Summary only");
+  });
+
   it("returns a body without sections unchanged", () => {
     expect(selectUpdateNotes("- one change", "en")).toBe("- one change");
     expect(selectUpdateNotes(undefined, "en")).toBe("");

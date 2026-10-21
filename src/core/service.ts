@@ -13,6 +13,7 @@ import {
 } from "@shared/transfer";
 import type {
   AppSettings,
+  AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
   CredentialPresence,
@@ -28,9 +29,12 @@ import type {
   LoginField,
   PasswordOwner,
   Platform,
+  ReloginBatchResult,
+  ReloginResult,
   RunningInstance,
   Scene,
   SceneDraft,
+  SceneRestoreOutcome,
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
@@ -46,8 +50,27 @@ import {
 } from "./credentials/vault";
 import { mergeManualEngines, scanEngines } from "./engines";
 import { t } from "./i18n/translate";
+import { findInstanceByPid } from "./launch/active-instance";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
-import { computeSlots, fullWorkArea, type Rect, singleWindowRect } from "./layout/grid";
+import {
+  openHeadlessSession,
+  supportsHeadlessSession,
+  type HeadlessSession,
+} from "./launch/headless";
+import {
+  activateWindowForPid,
+  type FrameInset,
+  measureFrameInset,
+  type ScreenRect,
+  windowRectForPid,
+} from "./launch/window-focus";
+import {
+  computeSlots,
+  fullWorkArea,
+  inflateRect,
+  type Rect,
+  singleWindowRect,
+} from "./layout/grid";
 import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
@@ -76,6 +99,12 @@ export interface WorkspaceServiceOptions {
   onChange?: () => void;
   /** Reports the outcome of a best-effort fill that ran after a window opened. */
   onAutoFill?: (report: AutoFillReport) => void;
+  /**
+   * Allow session checks to launch a hidden browser for identities with no
+   * window. On by default; unit tests turn it off so a batch check cannot start
+   * eight real browsers.
+   */
+  headlessAuthCheck?: boolean;
 }
 
 export class WorkspaceService {
@@ -96,6 +125,22 @@ export class WorkspaceService {
    * files. Never blocks window close: the promise only keeps the retry alive.
    */
   private readonly cleanProfileRetries = new Map<string, Promise<void>>();
+  /**
+   * Bounds we last applied to each window. Used to tell "still where the layout
+   * put it" from "the user moved or resized it", so a new window never undoes
+   * that work.
+   */
+  private readonly placedBounds = new Map<string, Rect>();
+  /** In-flight single launches, so a double click cannot open two browsers. */
+  private readonly pendingIdentityLaunches = new Map<string, Promise<LaunchResult>>();
+  /**
+   * Measured once per launch from Windows' real window frame. Undefined until
+   * the first browser reports it, and always undefined on platforms that place
+   * windows exactly where they are told.
+   */
+  private frameInset: FrameInset | undefined;
+  /** Startup restore only makes sense once per process. */
+  private restoreAttempted = false;
 
   constructor(private readonly options: WorkspaceServiceOptions) {
     this.store = new JsonStore(join(options.userDataDir, "workspace.json"), emptyWorkspace);
@@ -303,6 +348,9 @@ export class WorkspaceService {
         void this.stopInstance(instance.id);
       }
     }
+    const removedSceneIds = new Set(
+      this.data.scenes.filter((scene) => scene.environmentId === id).map((scene) => scene.id),
+    );
     this.data.environments = this.data.environments.filter((item) => item.id !== id);
     this.data.identities = this.data.identities.filter((item) => item.environmentId !== id);
     this.data.scenes = this.data.scenes.filter((item) => item.environmentId !== id);
@@ -310,6 +358,10 @@ export class WorkspaceService {
       this.vault.clear({ kind: "identity", id: identityId });
     }
     this.vault.clearEnvironment(id);
+    if (this.settings.lastSceneId && removedSceneIds.has(this.settings.lastSceneId)) {
+      delete this.settings.lastSceneId;
+      this.settingsStore.write(this.settings);
+    }
     this.persist();
   }
 
@@ -480,6 +532,10 @@ export class WorkspaceService {
 
   deleteScene(id: string): void {
     this.data.scenes = this.data.scenes.filter((item) => item.id !== id);
+    if (this.settings.lastSceneId === id) {
+      delete this.settings.lastSceneId;
+      this.settingsStore.write(this.settings);
+    }
     this.persist();
   }
 
@@ -848,14 +904,42 @@ export class WorkspaceService {
     return engine;
   }
 
+  /**
+   * The work area of the 主 window's display, in the same unit system the
+   * browser uses for window bounds (Electron DIPs == Chromium CSS pixels on
+   * Windows; verified at 150% scaling).
+   *
+   * Deliberately not `screen.avail*` from a browser page: that reports the
+   * display the *browser window* happens to be on, and a launch that lands on a
+   * secondary monitor would then lay out every slot with the wrong width.
+   */
   private workArea(): Rect {
     return this.options.workArea?.() ?? { x: 0, y: 0, width: 1440, height: 900 };
+  }
+
+  /**
+   * Learns the transparent window border once, from a window that is already
+   * open. Before this runs, slots use the raw rectangles: the first window of a
+   * session opens centred anyway, and the retile after this finishes corrects it.
+   */
+  private async learnFrameInset(instance: RunningInstance): Promise<void> {
+    if (this.frameInset) return;
+    if (instance.mode !== "cdp") return;
+    try {
+      this.frameInset = await measureFrameInset(instance.pid);
+    } catch {
+      // Unmeasurable frames are treated as zero: windows may keep a small gap,
+      // which is cosmetic and never breaks placement.
+    }
   }
 
   /** Bounds for one window under a preset; "no layout" means full work area. */
   private slotBounds(preset: LayoutPreset, area: Rect, index: number): Rect {
     if (isFreeLayout(preset)) return fullWorkArea(area);
-    return computeSlots(preset, area)[index] ?? fullWorkArea(area);
+    const rect = computeSlots(preset, area)[index] ?? fullWorkArea(area);
+    // Windows insets the visible frame inside the bounds we set, so edge-to-edge
+    // slots would still show a gap. Grow by the measured border to close it.
+    return inflateRect(rect, this.frameInset);
   }
 
   /**
@@ -886,7 +970,88 @@ export class WorkspaceService {
     return fallback % preset.slots.length;
   }
 
+  /**
+   * Picks a slot no other window of the same preset occupies yet. Overlapping a
+   * newcomer on top of an existing window is worse than an uneven grid: the
+   * user cannot tell which window they are looking at.
+   */
+  private firstFreeSlotIndex(preset: LayoutPreset): number {
+    if (isFreeLayout(preset)) return 0;
+    const taken = new Set<number>();
+    for (const instance of this.liveInstances.values()) {
+      if (instance.layoutId !== preset.id) continue;
+      if (typeof instance.slotIndex === "number") taken.add(instance.slotIndex);
+    }
+    for (let index = 0; index < preset.slots.length; index += 1) {
+      if (!taken.has(index)) return index;
+    }
+    return this.liveInstances.size % preset.slots.length;
+  }
+
+  /**
+   * True when every window of this preset still sits exactly where the layout
+   * put it. Windows the user has since moved, resized, maximized or minimized
+   * count as theirs: opening one more window (or a clean session) must not
+   * undo that work.
+   */
+  private async windowsUntouched(preset: LayoutPreset): Promise<boolean> {
+    const candidates = [...this.liveInstances.values()].filter(
+      (instance) =>
+        instance.mode === "cdp" &&
+        instance.targetId &&
+        instance.layoutId === preset.id &&
+        this.placedBounds.has(instance.id),
+    );
+    for (const instance of candidates) {
+      const expected = this.placedBounds.get(instance.id);
+      const entry = cdpRegistry.get(instance.id);
+      if (!expected || !entry || !instance.targetId) continue;
+      try {
+        const info = await entry.browser.send<{
+          bounds: {
+            left: number;
+            top: number;
+            width: number;
+            height: number;
+            windowState?: string;
+          };
+        }>("Browser.getWindowForTarget", { targetId: instance.targetId });
+        if (info.bounds.windowState && info.bounds.windowState !== "normal") return false;
+        const moved =
+          Math.abs(info.bounds.left - expected.x) > 2 ||
+          Math.abs(info.bounds.top - expected.y) > 2 ||
+          Math.abs(info.bounds.width - expected.width) > 2 ||
+          Math.abs(info.bounds.height - expected.height) > 2;
+        if (moved) return false;
+      } catch {
+        // A window that cannot be queried is most likely gone; leave it alone.
+        return false;
+      }
+    }
+    return true;
+  }
+
   async launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult> {
+    // A second click while the first window is still connecting must not start a
+    // second browser: Chromium would forward its URL into the first window as an
+    // extra tab. Both callers share the one launch and get the same instance.
+    const pending = this.pendingIdentityLaunches.get(identityId);
+    if (pending) return pending;
+    const job = this.launchIdentityNow(identityId, pathOverride);
+    this.pendingIdentityLaunches.set(identityId, job);
+    try {
+      return await job;
+    } finally {
+      if (this.pendingIdentityLaunches.get(identityId) === job) {
+        this.pendingIdentityLaunches.delete(identityId);
+      }
+    }
+  }
+
+  private async launchIdentityNow(
+    identityId: string,
+    pathOverride?: string,
+  ): Promise<LaunchResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
     const environment = this.data.environments.find((item) => item.id === identity.environmentId);
@@ -906,16 +1071,16 @@ export class WorkspaceService {
     );
     const area = this.workArea();
     const preset = this.presetFor(this.settings.layout);
-    const slotIndex =
-      this.liveInstances.size === 0
-        ? 0
-        : this.liveInstances.size % Math.max(1, isFreeLayout(preset) ? 1 : preset.slots.length);
+    const slotIndex = this.liveInstances.size === 0 ? 0 : this.firstFreeSlotIndex(preset);
     // The first window is the one being worked in, so it opens centered and
     // large; later windows follow the configured preset.
     const bounds =
       this.liveInstances.size === 0
         ? singleWindowRect(area)
         : this.slotBounds(preset, area, slotIndex);
+    // Decide before opening anything: if the user already moved or resized one
+    // of this layout's windows, adding another must leave all of them alone.
+    const canRetile = await this.windowsUntouched(preset);
 
     const outcome = await launchBrowser({
       environmentId: environment.id,
@@ -935,7 +1100,9 @@ export class WorkspaceService {
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
     this.scheduleAutoFill(identity, environment, outcome.instance);
-    await this.tileInstances(preset, [...this.liveInstances.values()]);
+    await this.learnFrameInset(outcome.instance);
+    this.placedBounds.set(outcome.instance.id, bounds);
+    if (canRetile) await this.tileInstances(preset, [...this.liveInstances.values()]);
     return { instance: outcome.instance, identities: [identity] };
   }
 
@@ -950,8 +1117,64 @@ export class WorkspaceService {
       .filter((identity): identity is Identity => Boolean(identity));
     if (members.length === 0) throw new Error(t("error.sceneMembers"));
 
+    const result = await this.launchGroup(
+      environment,
+      members,
+      this.presetFor(scene.layoutId),
+      scene.slotAssignments,
+      (identity) => scene.paths[identity.id],
+    );
+    // Remember the scene for "restore on next start". Written only after every
+    // window opened, so a half-failed launch never becomes the restore target.
+    this.settings.lastSceneId = scene.id;
+    this.settingsStore.write(this.settings);
+    return result;
+  }
+
+  /**
+   * Launches a hand-picked set of identities with the default layout.
+   *
+   * This is the identities page's batch action: the same tiling and the same
+   * launch interval as a scene, but the group is a selection rather than a saved
+   * scene, and nothing is remembered for restore-on-start. Starting them one by
+   * one instead means every new window covers the cards you are still clicking.
+   */
+  async launchIdentities(identityIds: string[]): Promise<LaunchResult> {
+    const wanted = new Set(identityIds.map(String));
+    const members = this.data.identities.filter((identity) => wanted.has(identity.id));
+    if (members.length === 0) throw new Error(t("error.sceneMembers"));
+    const environmentId = members[0]?.environmentId;
+    // One layout describes one screen, so a batch spanning two environments would
+    // have no sensible tiling; the UI only ever offers the active environment.
+    if (members.some((identity) => identity.environmentId !== environmentId)) {
+      throw new Error(t("error.batchMixedEnvironments"));
+    }
+    const environment = this.data.environments.find((item) => item.id === environmentId);
+    if (!environment) throw new Error(t("error.environmentMissing"));
+    return this.launchGroup(
+      environment,
+      members,
+      this.presetFor(this.settings.layout),
+      {},
+      (identity) => identity.startPath,
+    );
+  }
+
+  /**
+   * Opens a set of windows into one layout.
+   *
+   * Already-running identities are reused rather than relaunched, and a failure
+   * halfway rolls back only the windows this call opened, so the screen never
+   * ends up with a half-applied layout.
+   */
+  private async launchGroup(
+    environment: Environment,
+    members: Identity[],
+    preset: LayoutPreset,
+    assignments: Record<string, number>,
+    pathFor: (identity: Identity) => string | undefined,
+  ): Promise<LaunchResult> {
     const area = this.workArea();
-    const preset = this.presetFor(scene.layoutId);
     const launched: RunningInstance[] = [];
     const startedHere: RunningInstance[] = [];
     const takenSlots = new Set<number>();
@@ -962,7 +1185,7 @@ export class WorkspaceService {
         const slotIndex = this.resolveSlotIndex(
           preset,
           identity,
-          scene.slotAssignments,
+          assignments,
           takenSlots,
           index,
         );
@@ -981,7 +1204,7 @@ export class WorkspaceService {
         const engine = this.resolveEngine(identity, environment);
         const startUrl = joinUrl(
           environment.baseUrl,
-          scene.paths[identity.id] ?? identity.startPath ?? environment.loginPath ?? "/",
+          pathFor(identity) ?? identity.startPath ?? environment.loginPath ?? "/",
         );
         const outcome = await launchBrowser({
           environmentId: environment.id,
@@ -1002,10 +1225,15 @@ export class WorkspaceService {
         startedHere.push(outcome.instance);
         slotByInstance.set(outcome.instance.id, slotIndex);
         this.scheduleAutoFill(identity, environment, outcome.instance);
-        await new Promise((resolve) => setTimeout(resolve, 350));
+        // The first window of the session also tells us the real frame inset;
+        // the retile at the end of the loop then applies it to every window.
+        await this.learnFrameInset(outcome.instance);
+        if (this.settings.launchIntervalMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.settings.launchIntervalMs));
+        }
       }
     } catch (error) {
-      // A scene is all-or-nothing for the windows it opened itself, so a partial
+      // A group is all-or-nothing for the windows it opened itself, so a partial
       // failure does not leave a confusing half-launched ensemble behind.
       if (startedHere.length > 0) {
         await stopInstances(startedHere);
@@ -1016,11 +1244,51 @@ export class WorkspaceService {
     }
 
     this.persist();
-    // Only this scene's windows are rearranged; unrelated instances keep their
-    // position, which matters when several scenes run side by side.
-    const sceneInstances = launched.filter((instance) => this.liveInstances.has(instance.id));
-    await this.tileInstances(preset, sceneInstances, slotByInstance);
+    // Only this group's windows are rearranged; unrelated instances keep their
+    // position, which matters when several groups run side by side.
+    const groupInstances = launched.filter((instance) => this.liveInstances.has(instance.id));
+    await this.tileInstances(preset, groupInstances, slotByInstance);
     return { instance: launched[0] as RunningInstance, identities: members };
+  }
+
+  /**
+   * Reopens the scene that was launched last, once per process. Callers should
+   * have the window on screen already: this only starts browsers.
+   */
+  async restoreLastScene(): Promise<SceneRestoreOutcome> {
+    if (this.restoreAttempted) return { restored: false, reason: "already-attempted" };
+    this.restoreAttempted = true;
+    if (!this.settings.restoreLastScene) return { restored: false, reason: "disabled" };
+
+    const sceneId = this.settings.lastSceneId;
+    if (!sceneId) return { restored: false, reason: "no-scene" };
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    const environment = scene
+      ? this.data.environments.find((item) => item.id === scene.environmentId)
+      : undefined;
+    if (!scene || !environment) {
+      // The workspace changed while the app was closed. Drop the dangling id
+      // instead of retrying it on every start.
+      delete this.settings.lastSceneId;
+      this.settingsStore.write(this.settings);
+      this.emit();
+      return { restored: false, reason: "missing" };
+    }
+
+    // Engine scanning runs in the background; launching before it finishes can
+    // pick no engine at all on a cold start with an empty cache.
+    await this.maintenanceDone;
+    try {
+      await this.launchScene(sceneId);
+      return { restored: true, sceneId, sceneName: scene.name };
+    } catch (error) {
+      return {
+        restored: false,
+        sceneId,
+        sceneName: scene.name,
+        reason: (error as Error).message,
+      };
+    }
   }
 
   /**
@@ -1067,13 +1335,14 @@ export class WorkspaceService {
       environment.baseUrl,
       scene.paths[identity.id] ?? identity.startPath ?? environment.loginPath ?? "/",
     );
+    const bounds = this.slotBounds(preset, this.workArea(), slotIndex);
     const outcome = await launchBrowser({
       environmentId: environment.id,
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: identity.id,
       startUrl,
-      windowBounds: this.slotBounds(preset, this.workArea(), slotIndex),
+      windowBounds: bounds,
       label: identity.name,
       identityId: identity.id,
       instanceId: randomUUID(),
@@ -1083,6 +1352,8 @@ export class WorkspaceService {
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
+    await this.learnFrameInset(outcome.instance);
+    this.placedBounds.set(outcome.instance.id, bounds);
     this.scheduleAutoFill(identity, environment, outcome.instance);
     return { instance: outcome.instance, identities: [identity] };
   }
@@ -1106,14 +1377,14 @@ export class WorkspaceService {
 
     const area = this.workArea();
     const preset = this.presetFor(this.settings.layout);
-    const slotIndex =
-      this.liveInstances.size === 0
-        ? 0
-        : this.liveInstances.size % Math.max(1, isFreeLayout(preset) ? 1 : preset.slots.length);
+    const slotIndex = this.liveInstances.size === 0 ? 0 : this.firstFreeSlotIndex(preset);
     const slot =
       this.liveInstances.size === 0
         ? singleWindowRect(area)
         : this.slotBounds(preset, area, slotIndex);
+    // Opening a throwaway window used to re-tile every other window, silently
+    // undoing positions the user had just set by hand.
+    const canRetile = await this.windowsUntouched(preset);
     const instanceId = randomUUID();
 
     const outcome = await launchBrowser({
@@ -1137,7 +1408,9 @@ export class WorkspaceService {
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
-    await this.tileInstances(preset, [...this.liveInstances.values()]);
+    await this.learnFrameInset(outcome.instance);
+    this.placedBounds.set(outcome.instance.id, slot);
+    if (canRetile) await this.tileInstances(preset, [...this.liveInstances.values()]);
     return { instance: outcome.instance, identities: [] };
   }
 
@@ -1147,6 +1420,7 @@ export class WorkspaceService {
     await stopInstances([instance]);
     await this.disposeCleanProfile(instance);
     this.liveInstances.delete(instanceId);
+    this.placedBounds.delete(instanceId);
     this.persist();
   }
 
@@ -1155,6 +1429,34 @@ export class WorkspaceService {
     await stopInstances(instances);
     await Promise.all(instances.map((instance) => this.disposeCleanProfile(instance)));
     this.liveInstances.clear();
+    this.placedBounds.clear();
+    this.persist();
+  }
+
+  /**
+   * Closes only the windows one scene opened.
+   *
+   * Membership is the scene's current identity list, not the instance's layout:
+   * a window launched by hand for an identity that is also in the scene is still
+   * that identity's window, and the user asked for "this scene's pages" to go
+   * away. Instances started as part of another scene are left alone.
+   */
+  async stopScene(sceneId: string): Promise<void> {
+    const scene = this.data.scenes.find((item) => item.id === sceneId);
+    if (!scene) throw new Error(t("error.sceneMissing"));
+    const members = new Set(scene.identityIds);
+    // Clean sessions and blank windows carry no identity, so they can never be
+    // part of a scene; a missing id simply matches nothing.
+    const instances = [...this.liveInstances.values()].filter(
+      (instance) => instance.identityId !== undefined && members.has(instance.identityId),
+    );
+    if (instances.length === 0) return;
+    await stopInstances(instances);
+    await Promise.all(instances.map((instance) => this.disposeCleanProfile(instance)));
+    for (const instance of instances) {
+      this.liveInstances.delete(instance.id);
+      this.placedBounds.delete(instance.id);
+    }
     this.persist();
   }
 
@@ -1172,6 +1474,7 @@ export class WorkspaceService {
     // then resurrect, re-dispose or double-persist anything.
     if (!this.liveInstances.has(instance.id)) return;
     this.liveInstances.delete(instance.id);
+    this.placedBounds.delete(instance.id);
     cdpRegistry.delete(instance.id);
     await this.disposeCleanProfile(instance);
     this.persist();
@@ -1208,6 +1511,7 @@ export class WorkspaceService {
         const slotIndex = slotByInstance?.get(instance.id) ?? instance.slotIndex ?? index;
         const bounds = this.slotBounds(preset, this.workArea(), slotIndex);
         await setWindowBounds(entry.browser, targetId, bounds).catch(() => {});
+        this.placedBounds.set(instance.id, bounds);
       }),
     );
   }
@@ -1236,9 +1540,11 @@ export class WorkspaceService {
   private retryCleanProfile(dir: string): void {
     if (this.cleanProfileRetries.has(dir)) return;
     const job = (async () => {
-      // ~12s ceiling: long enough for a busy machine to flush handles, short
-      // enough that a stuck directory falls through to the startup sweep.
-      for (let attempt = 0; attempt < 24; attempt += 1) {
+      // ~20s ceiling: a busy machine can take a while to flush Chromium's file
+      // handles, and giving up early leaves the directory for the next startup
+      // sweep. Short enough that a permanently stuck directory still falls
+      // through to that sweep.
+      for (let attempt = 0; attempt < 40; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         try {
           await rm(dir, { recursive: true, force: true });
@@ -1296,46 +1602,291 @@ export class WorkspaceService {
   async checkAuth(identityId: string): Promise<AuthCheckResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
-    const environment = this.requireEnvironment(identity);
-    const instance = this.findInstance(identityId);
+    const { result, changed } = await this.runAuthCheck(identity);
+    if (changed) this.persist();
+    return result;
+  }
+
+  /**
+   * Inspects one identity without persisting. Batch checks touch workspace.json
+   * once at the end instead of once per identity, which matters for a scene of
+   * eight windows.
+   */
+  private async runAuthCheck(identity: Identity): Promise<{
+    result: AuthCheckResult;
+    changed: boolean;
+  }> {
     const checkedAt = new Date().toISOString();
+    const unknown = (detail: string): { result: AuthCheckResult; changed: boolean } => ({
+      result: { identityId: identity.id, status: "unknown", checkedAt, detail },
+      changed: false,
+    });
 
-    if (!environment.authCheckPath) {
-      return { identityId, status: "unknown", checkedAt, detail: t("auth.noCheckPath") };
-    }
-    if (!instance) {
-      return { identityId, status: "unknown", checkedAt, detail: t("auth.notRunning") };
-    }
-    const entry = cdpRegistry.get(instance.id);
-    if (!entry) {
-      return { identityId, status: "unknown", checkedAt, detail: t("auth.noCdp") };
+    const environment = this.data.environments.find((item) => item.id === identity.environmentId);
+    if (!environment) return unknown(t("error.environmentMissing"));
+    const checkPath = environment.authCheckPath;
+    if (!checkPath) return unknown(t("auth.noCheckPath"));
+
+    const instance = this.findInstance(identity.id);
+    if (instance) {
+      const entry = cdpRegistry.get(instance.id);
+      if (!entry) return unknown(t("auth.noCdp"));
+      return this.checkInOpenWindow(identity, environment, checkPath, entry.page, checkedAt, unknown);
     }
 
+    // No window: run the same check in a temporary headless session over this
+    // identity's own profile. This is the case the feature exists for — the user
+    // should not have to open eight windows to learn that two of them expired.
+    if (this.options.headlessAuthCheck === false) return unknown(t("auth.notRunning"));
+    return this.checkHeadless(identity, environment, checkPath, checkedAt, unknown);
+  }
+
+  /** Reads the verdict from a page that is already open in a visible window. */
+  private async checkInOpenWindow(
+    identity: Identity,
+    environment: Environment,
+    checkPath: string,
+    page: Parameters<typeof evaluate>[0],
+    checkedAt: string,
+    unknown: (detail: string) => { result: AuthCheckResult; changed: boolean },
+  ): Promise<{ result: AuthCheckResult; changed: boolean }> {
     try {
-      const location = await evaluate<string>(entry.page, "location.href");
-      if (!sameOrigin(location, environment.baseUrl)) {
-        return { identityId, status: "unknown", checkedAt, detail: t("auth.crossOrigin") };
-      }
+      const location = await evaluate<string>(page, "location.href");
+      if (!sameOrigin(location, environment.baseUrl)) return unknown(t("auth.crossOrigin"));
       const result = await evaluate<{ status: number; ok: boolean; url: string }>(
-        entry.page,
-        buildAuthCheckExpression(environment.authCheckPath),
+        page,
+        buildAuthCheckExpression(checkPath),
         { awaitPromise: true },
       );
-      const signedIn = result.status >= 200 && result.status < 300;
-      const status = signedIn ? "signed-in" : "expired";
-      identity.status = status;
-      identity.lastCheckedAt = checkedAt;
-      identity.updatedAt = checkedAt;
-      this.persist();
-      return { identityId, status, checkedAt, detail: `HTTP ${result.status}` };
+      return this.recordStatus(identity, checkedAt, result.status);
     } catch (error) {
-      return {
-        identityId,
-        status: "unknown",
-        checkedAt,
-        detail: (error as Error).message,
-      };
+      return unknown((error as Error).message);
     }
+  }
+
+  /**
+   * Opens a windowless session over the identity's profile, asks the check
+   * endpoint, and closes it again. The window is never shown, so this works for
+   * identities the user has not launched.
+   */
+  private async checkHeadless(
+    identity: Identity,
+    environment: Environment,
+    checkPath: string,
+    checkedAt: string,
+    unknown: (detail: string) => { result: AuthCheckResult; changed: boolean },
+  ): Promise<{ result: AuthCheckResult; changed: boolean }> {
+    let engine: Engine;
+    try {
+      engine = this.resolveEngine(identity, environment);
+    } catch (error) {
+      return unknown((error as Error).message);
+    }
+    if (!supportsHeadlessSession(engine)) return unknown(t("auth.noHeadless", { brand: engine.brand }));
+
+    const base = environment.baseUrl.replace(/\/+$/, "");
+    const startUrl = `${base}${checkPath}`;
+    let session: HeadlessSession | undefined;
+    try {
+      session = await openHeadlessSession({
+        engine,
+        profileRoot: this.options.profileRoot,
+        environmentId: environment.id,
+        profileKey: identity.id,
+        userAgent: this.settings.headlessCheckUa,
+      });
+      // The check runs on the site's own origin, so `credentials: include` sees
+      // the profile's real cookies. Navigating first also makes a cross-origin
+      // redirect visible instead of silently checking the wrong site.
+      await navigateAndWait(session.page, startUrl, 15_000);
+      const location = await evaluate<string>(session.page, "location.href");
+      if (!sameOrigin(location, environment.baseUrl)) return unknown(t("auth.crossOrigin"));
+      const result = await evaluate<{ status: number; ok: boolean; url: string }>(
+        session.page,
+        buildAuthCheckExpression(checkPath),
+        { awaitPromise: true },
+      );
+      return this.recordStatus(identity, checkedAt, result.status);
+    } catch (error) {
+      return unknown((error as Error).message);
+    } finally {
+      await session?.close();
+    }
+  }
+
+  /** Stores one verdict and reports whether the workspace needs a save. */
+  private recordStatus(
+    identity: Identity,
+    checkedAt: string,
+    httpStatus: number,
+  ): { result: AuthCheckResult; changed: boolean } {
+    const signedIn = httpStatus >= 200 && httpStatus < 300;
+    const status = signedIn ? "signed-in" : "expired";
+    identity.status = status;
+    identity.lastCheckedAt = checkedAt;
+    identity.updatedAt = checkedAt;
+    return {
+      result: { identityId: identity.id, status, checkedAt, detail: `HTTP ${httpStatus}` },
+      changed: true,
+    };
+  }
+
+  /**
+   * Runs the login check for one environment (or every identity when omitted).
+   * Three at a time: each identity owns a separate browser and CDP socket, so the
+   * only shared resource is the page's own server.
+   */
+  async checkAllAuth(environmentId?: string): Promise<AuthBatchResult> {
+    const identities = this.data.identities.filter(
+      (identity) => !environmentId || identity.environmentId === environmentId,
+    );
+    const results: AuthCheckResult[] = new Array(identities.length);
+    let cursor = 0;
+    let changed = false;
+    const workers = Math.min(3, identities.length);
+
+    await Promise.all(
+      Array.from({ length: workers }, async () => {
+        for (;;) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= identities.length) return;
+          const identity = identities[index] as Identity;
+          const outcome = await this.runAuthCheck(identity);
+          results[index] = outcome.result;
+          if (outcome.changed) changed = true;
+        }
+      }),
+    );
+
+    if (changed) this.persist();
+    const totals = { signedIn: 0, expired: 0, unknown: 0 };
+    for (const result of results) {
+      if (result.status === "signed-in") totals.signedIn += 1;
+      else if (result.status === "expired") totals.expired += 1;
+      else totals.unknown += 1;
+    }
+    return {
+      ...(environmentId ? { environmentId } : {}),
+      checkedAt: new Date().toISOString(),
+      totals,
+      results,
+    };
+  }
+
+  /**
+   * Opens the login page for every expired identity and fills the saved
+   * credentials. Sequential on purpose: each launch opens a visible browser
+   * window, and starting them together would both overwhelm the machine and make
+   * failures impossible to attribute.
+   */
+  async reloginExpired(environmentId?: string): Promise<ReloginBatchResult> {
+    const targets = this.data.identities.filter(
+      (identity) =>
+        (!environmentId || identity.environmentId === environmentId) &&
+        identity.status === "expired",
+    );
+    const results: ReloginResult[] = [];
+    for (const [index, identity] of targets.entries()) {
+      if (index > 0 && this.settings.launchIntervalMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.settings.launchIntervalMs));
+      }
+      try {
+        await this.fillLogin(identity.id);
+        results.push({ identityId: identity.id, label: identity.name, ok: true });
+      } catch (error) {
+        results.push({
+          identityId: identity.id,
+          label: identity.name,
+          ok: false,
+          detail: (error as Error).message,
+        });
+      }
+    }
+    return {
+      attempted: targets.length,
+      succeeded: results.filter((result) => result.ok).length,
+      results,
+    };
+  }
+
+  /** Looks up the live instance owned by a browser process. */
+  findInstanceByPid(pid: number): RunningInstance | undefined {
+    return findInstanceByPid(this.liveInstances.values(), pid);
+  }
+
+  /**
+   * Visible frame of an instance's window, used to place the transient identity
+   * label. CDP knows the window it drives; external browsers are measured by the
+   * OS helper instead.
+   */
+  async instanceWindowRect(instanceId: string): Promise<ScreenRect | undefined> {
+    const instance = this.liveInstances.get(instanceId);
+    if (!instance) return undefined;
+    const entry = cdpRegistry.get(instanceId);
+    if (entry && instance.targetId) {
+      try {
+        const info = await entry.browser.send<{
+          bounds: {
+            left: number;
+            top: number;
+            width: number;
+            height: number;
+            windowState?: string;
+          };
+        }>("Browser.getWindowForTarget", { targetId: instance.targetId });
+        const { left, top, width, height, windowState } = info.bounds;
+        if (windowState && windowState !== "normal") return undefined;
+        if (width > 0 && height > 0) return { x: left, y: top, width, height };
+      } catch {
+        // Fall through to the OS measurement.
+      }
+    }
+    return windowRectForPid(instance.pid);
+  }
+
+  /**
+   * Raises a running browser window.
+   *
+   * CDP can only activate the tab, and window managers may ignore that while
+   * another application owns the foreground — Windows refuses foreground
+   * changes from background processes outright. The OS-level activation below
+   * is what actually raises the window, and it also covers external-mode
+   * browsers that have no CDP connection.
+   */
+  async focusInstance(instanceId: string): Promise<boolean> {
+    const instance = this.liveInstances.get(instanceId);
+    if (!instance) return false;
+    const entry = cdpRegistry.get(instanceId);
+
+    if (entry) {
+      try {
+        if (instance.targetId) {
+          const info = await entry.browser
+            .send<{ windowId: number; bounds: { windowState?: string } }>(
+              "Browser.getWindowForTarget",
+              { targetId: instance.targetId },
+            )
+            .catch(() => undefined);
+          if (info?.bounds.windowState === "minimized") {
+            await entry.browser
+              .send("Browser.setWindowBounds", {
+                windowId: info.windowId,
+                bounds: { windowState: "normal" },
+              })
+              .catch(() => {});
+          }
+        }
+        await entry.page.send("Page.bringToFront").catch(() => {});
+      } catch {
+        // Fall through to the platform activation below.
+      }
+    }
+
+    if (await activateWindowForPid(instance.pid)) return true;
+    // External windows and platforms without a focus helper still count as
+    // "handled" when CDP did activate the tab.
+    return Boolean(entry);
   }
 
   async fillLogin(identityId: string): Promise<AuthCheckResult> {
@@ -1407,16 +1958,22 @@ export class WorkspaceService {
     // few seconds on a loaded machine; giving up early reads as "autofill broke".
     const deadline = Date.now() + 15_000;
     let last: FillOutcome | undefined;
+    let failed = false;
     while (Date.now() < deadline) {
       try {
         last = await this.tryFill(identity, environment, entry.page);
+        failed = false;
       } catch {
-        return { ...base, skipped: "failed" };
+        // A navigation can destroy the execution context between two polls.
+        // That is transient during startup, so retry until the deadline instead
+        // of reporting a broken fill on the first hiccup.
+        failed = true;
       }
-      if (last.ok || last.reason !== "password-field-not-found") break;
+      if (last?.ok || (last && last.reason !== "password-field-not-found")) break;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
+    if (failed && !last) return { ...base, skipped: "failed" };
     if (!last?.ok) {
       // A form that never appears usually means the window opened already signed in.
       if (last?.reason === "cross-origin") return { ...base, skipped: "cross-origin" };

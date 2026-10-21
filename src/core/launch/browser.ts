@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Engine, RunningInstance } from "@shared/types";
 import { CdpClient } from "../cdp/client";
@@ -89,10 +89,39 @@ function spawnBrowser(engine: Engine, args: string[]): ChildProcess {
   return child;
 }
 
-export async function launchBrowser(request: LaunchRequest): Promise<LaunchOutcome> {
+/**
+ * Launches in progress, keyed by profile directory. A double click, a scene
+ * start racing a manual launch, or an AI call landing at the same moment would
+ * otherwise spawn a second process for the same profile: Chromium then forwards
+ * its URL to the running instance as an extra tab and the second launch fails
+ * after the DevTools timeout.
+ */
+const inFlightLaunches = new Map<string, Promise<LaunchOutcome>>();
+
+export function launchBrowser(request: LaunchRequest): Promise<LaunchOutcome> {
   const { engine } = request;
   const profileRoot = resolveProfileRoot(engine, request.profileRoot);
   const profileDir = instanceProfileDir(profileRoot, request.environmentId, request.profileKey);
+
+  const pending = inFlightLaunches.get(profileDir);
+  if (pending) return pending;
+
+  const job = launchBrowserNow(request, profileDir);
+  inFlightLaunches.set(profileDir, job);
+  void job
+    .finally(() => {
+      if (inFlightLaunches.get(profileDir) === job) inFlightLaunches.delete(profileDir);
+    })
+    // The caller owns the rejection; this only keeps the cleanup chain quiet.
+    .catch(() => {});
+  return job;
+}
+
+async function launchBrowserNow(
+  request: LaunchRequest,
+  profileDir: string,
+): Promise<LaunchOutcome> {
+  const { engine } = request;
   await mkdir(profileDir, { recursive: true });
 
   if (engine.family === "webkit") {
@@ -117,11 +146,44 @@ export async function launchBrowser(request: LaunchRequest): Promise<LaunchOutco
   return launchChromium(request, profileDir);
 }
 
+/**
+ * Chromium remembers "Continue where you left off" in the profile. When that is
+ * on, a launch with a URL restores the old session *and* opens the URL, which
+ * shows up as two identical tabs. These profiles are managed entirely by
+ * Ensemble, so the startup mode is pinned to "new tab page": the only page that
+ * opens is the URL passed on this launch.
+ */
+export async function pinStartupMode(profileDir: string): Promise<void> {
+  const defaultDir = join(profileDir, "Default");
+  const file = join(defaultDir, "Preferences");
+  let prefs: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      prefs = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // A missing or half-written Preferences file is normal on a fresh profile.
+  }
+  const session =
+    prefs["session"] && typeof prefs["session"] === "object"
+      ? (prefs["session"] as Record<string, unknown>)
+      : {};
+  if (session["restore_on_startup"] === 5) return;
+  await mkdir(defaultDir, { recursive: true });
+  prefs["session"] = { ...session, restore_on_startup: 5 };
+  await writeFile(file, JSON.stringify(prefs), { mode: 0o600 });
+}
+
 async function launchChromium(request: LaunchRequest, profileDir: string): Promise<LaunchOutcome> {
   const { engine } = request;
   // A previous run may have left a stale DevToolsActivePort behind; reading it would
   // point us at a dead port and make the launch fail with "fetch failed".
   await rm(join(profileDir, "DevToolsActivePort"), { force: true });
+  // Must happen before the browser starts: Chromium rewrites Preferences on exit.
+  await pinStartupMode(profileDir).catch(() => {
+    // An unreadable profile only risks an extra restored tab, never a dead launch.
+  });
   const child = spawnBrowser(
     engine,
     buildChromiumArgs({
@@ -186,7 +248,7 @@ async function launchChromium(request: LaunchRequest, profileDir: string): Promi
  * `child.pid` can be dead before the window appears. CDP knows the real browser
  * process, which is what a forced kill needs.
  */
-async function resolveBrowserPid(browser: CdpClient, fallback: number): Promise<number> {
+export async function resolveBrowserPid(browser: CdpClient, fallback: number): Promise<number> {
   try {
     const result = await browser.send<{ processInfo?: Array<{ type: string; id: number }> }>(
       "SystemInfo.getProcessInfo",
@@ -274,9 +336,11 @@ export async function stopInstances(
   await Promise.all(
     instances.map(async (instance) => {
       const entry = cdpRegistry.get(instance.id);
+      let graceful = false;
       if (entry) {
         try {
           await entry.browser.send("Browser.close", {}, { timeoutMs });
+          graceful = true;
         } catch {
           // Fall through to a PID based kill.
         }
@@ -284,9 +348,33 @@ export async function stopInstances(
         entry.browser.close();
         cdpRegistry.delete(instance.id);
       }
+      // Browser.close is a graceful request; the process still has to flush the
+      // profile on its way out — cookies written into the cookie DB, preferences,
+      // local storage. Killing it immediately skips that flush, and on Windows a
+      // SIGTERM is in fact an immediate termination, so a profile stopped this way
+      // silently loses the login state a background check would need later.
+      if (graceful) await waitForProcessExit(instance.pid, EXIT_GRACE_MS);
       await killIfAlive(instance.pid, timeoutMs);
     }),
   );
+}
+
+/** How long a browser may take to finish exiting on its own after Browser.close. */
+const EXIT_GRACE_MS = 2_500;
+
+/** Waits for the process to disappear, returning false when the deadline passes. */
+export async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  if (!pid) return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  return false;
 }
 
 export async function closeInstanceCdp(instanceId: string): Promise<void> {

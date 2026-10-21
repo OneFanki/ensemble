@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type EnsembleApi } from "@shared/ipc";
-import type { AutoFillReport, WorkspaceSnapshot } from "@shared/types";
+import type { AutoFillReport, FocusLabelPayload, SceneRestoreOutcome, WorkspaceSnapshot } from "@shared/types";
+import type { UpdateCheckResult, UpdateProgress } from "@shared/update";
 
 const api: EnsembleApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.workspaceGet),
@@ -47,25 +48,62 @@ const api: EnsembleApi = {
 
   launchIdentity: (identityId, pathOverride) =>
     ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride),
+  launchIdentities: (identityIds) => ipcRenderer.invoke(IPC.instanceLaunchBatch, identityIds),
   launchScene: (sceneId) => ipcRenderer.invoke(IPC.instanceLaunchScene, sceneId),
   launchSceneMember: (sceneId, identityId) =>
     ipcRenderer.invoke(IPC.instanceLaunchSceneMember, sceneId, identityId),
   launchCleanSession: (environmentId) => ipcRenderer.invoke(IPC.instanceClean, environmentId),
   stopInstance: (id) => ipcRenderer.invoke(IPC.instanceStop, id),
   stopAll: () => ipcRenderer.invoke(IPC.instanceStopAll),
+  stopScene: (sceneId) => ipcRenderer.invoke(IPC.instanceStopScene, sceneId),
+  focusInstance: (id) => ipcRenderer.invoke(IPC.instanceFocus, id),
+  onActiveInstance: (listener: (instanceId: string | null) => void) => {
+    const handler = (_event: unknown, instanceId: string | null) => listener(instanceId);
+    ipcRenderer.on(IPC.instanceActive, handler);
+    return () => ipcRenderer.removeListener(IPC.instanceActive, handler);
+  },
+  onFocusLabelShow: (listener: (payload: FocusLabelPayload) => void) => {
+    const handler = (_event: unknown, payload: FocusLabelPayload) => listener(payload);
+    ipcRenderer.on(IPC.focusLabelShow, handler);
+    return () => ipcRenderer.removeListener(IPC.focusLabelShow, handler);
+  },
   checkAuth: (identityId) => ipcRenderer.invoke(IPC.authCheck, identityId),
+  checkAllAuth: (environmentId) => ipcRenderer.invoke(IPC.authCheckAll, environmentId),
+  reloginExpired: (environmentId) => ipcRenderer.invoke(IPC.authReloginExpired, environmentId),
   fillLogin: (identityId) => ipcRenderer.invoke(IPC.authFill, identityId),
   onAutoFilled: (listener: (report: AutoFillReport) => void) => {
     const handler = (_event: unknown, report: AutoFillReport) => listener(report);
     ipcRenderer.on(IPC.authAutoFilled, handler);
     return () => ipcRenderer.removeListener(IPC.authAutoFilled, handler);
   },
+  onSceneRestored: (listener: (outcome: SceneRestoreOutcome) => void) => {
+    const handler = (_event: unknown, outcome: SceneRestoreOutcome) => listener(outcome);
+    ipcRenderer.on(IPC.sceneRestored, handler);
+    return () => ipcRenderer.removeListener(IPC.sceneRestored, handler);
+  },
+
+  resizeOverlay: (size) => ipcRenderer.invoke(IPC.overlayResize, size),
+  setOverlayCompact: (compact) => ipcRenderer.invoke(IPC.overlayCompact, compact),
+  moveOverlay: (position) => ipcRenderer.invoke(IPC.overlayMove, position),
+  hideOverlay: () => ipcRenderer.invoke(IPC.overlayHide),
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),
   quitApp: () => ipcRenderer.invoke(IPC.appQuit),
   openExternal: (url) => ipcRenderer.invoke(IPC.appOpenExternal, url),
   checkUpdate: () => ipcRenderer.invoke(IPC.appCheckUpdate),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.appDownloadUpdate),
+  installUpdate: () => ipcRenderer.invoke(IPC.appInstallUpdate),
+  onUpdateAvailable: (listener: (result: UpdateCheckResult) => void) => {
+    const handler = (_event: unknown, result: UpdateCheckResult) => listener(result);
+    ipcRenderer.on(IPC.appUpdateAvailable, handler);
+    return () => ipcRenderer.removeListener(IPC.appUpdateAvailable, handler);
+  },
+  onUpdateProgress: (listener: (progress: UpdateProgress) => void) => {
+    const handler = (_event: unknown, progress: UpdateProgress) => listener(progress);
+    ipcRenderer.on(IPC.appUpdateProgress, handler);
+    return () => ipcRenderer.removeListener(IPC.appUpdateProgress, handler);
+  },
 
   minimizeWindow: () => ipcRenderer.invoke(IPC.windowMinimize),
   toggleMaximizeWindow: () => ipcRenderer.invoke(IPC.windowToggleMaximize),

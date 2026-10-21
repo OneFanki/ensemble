@@ -76,10 +76,18 @@ export const settingsPatchSchema = z.object({
   locale: z.enum(["zh", "en"]).optional(),
   lastEnvironmentId: z.string().optional(),
   lastView: z.enum(["environments", "identities", "scenes"]).optional(),
+  lastSceneId: z.string().optional(),
+  restoreLastScene: z.boolean().optional(),
+  overlayEnabled: z.boolean().optional(),
+  headlessCheckUa: z.enum(["desktop", "headless"]).optional(),
+  focusLabelEnabled: z.boolean().optional(),
+  launchIntervalMs: z.number().int().min(0).max(5000).optional(),
   layout: z.string().min(1).max(64).optional(),
   autoFillOnLaunch: z.boolean().optional(),
   closeToTray: z.boolean().optional(),
   onboardingVersion: z.number().int().min(0).max(999).optional(),
+  autoCheckUpdates: z.boolean().optional(),
+  dismissedUpdateVersion: z.string().max(32).optional(),
 });
 
 export const passwordOwnerSchema = z.object({

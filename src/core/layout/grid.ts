@@ -8,10 +8,40 @@ export interface Rect {
 }
 
 /**
+ * Expands a target rect so the *visible* frame lands on it.
+ *
+ * Windows draws an invisible resize border around every Chromium window; the
+ * bounds we set include it, so two windows placed edge to edge still show a gap
+ * of two insets between their visible frames. Growing the outer rect by the
+ * inset on each side cancels that out. Neighbouring slots each grow by the same
+ * amount, so they meet exactly.
+ */
+export function inflateRect(rect: Rect, inset: Partial<FrameInset> | undefined): Rect {
+  if (!inset) return rect;
+  const left = inset.left ?? 0;
+  const right = inset.right ?? 0;
+  const top = inset.top ?? 0;
+  const bottom = inset.bottom ?? 0;
+  if (left + right + top + bottom === 0) return rect;
+  return {
+    x: Math.round(rect.x - left),
+    y: Math.round(rect.y - top),
+    width: Math.max(1, Math.round(rect.width + left + right)),
+    height: Math.max(1, Math.round(rect.height + top + bottom)),
+  };
+}
+
+export interface FrameInset {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/**
  * Turns a preset's normalized slots into absolute rectangles on the work area.
  * The conversion is edge-to-edge: no outer padding and no gaps, so a 2×2 preset
- * uses every pixel the screen offers. Adjacent windows keep their own 1px border,
- * which is enough separation without stealing usable space.
+ * uses every pixel the screen offers.
  */
 export function computeSlots(preset: LayoutPreset, area: Rect): Rect[] {
   return preset.slots.map((slot) => {

@@ -125,11 +125,59 @@ export interface RunningInstance {
   clean?: boolean;
 }
 
+/**
+ * Content of the short-lived label shown over a browser window right after it
+ * is raised. Separate pages look identical, so the label is the only thing that
+ * tells the user which account that window belongs to.
+ */
+export interface FocusLabelPayload {
+  label: string;
+  role?: string;
+  color: RoleColor;
+  /** Only set when several environments are running at once. */
+  environment?: string;
+  /** Bumped by the sender so the renderer can restart the fade animation. */
+  seq: number;
+}
+
 export interface AuthCheckResult {
   identityId: string;
   status: IdentityStatus;
   checkedAt: string;
   detail?: string;
+}
+
+export interface AuthBatchTotals {
+  signedIn: number;
+  expired: number;
+  unknown: number;
+}
+
+export interface AuthBatchResult {
+  environmentId?: string;
+  checkedAt: string;
+  totals: AuthBatchTotals;
+  results: AuthCheckResult[];
+}
+
+export interface ReloginResult {
+  identityId: string;
+  label: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface ReloginBatchResult {
+  attempted: number;
+  succeeded: number;
+  results: ReloginResult[];
+}
+
+export interface SceneRestoreOutcome {
+  restored: boolean;
+  sceneId?: string;
+  sceneName?: string;
+  reason?: string;
 }
 
 export interface LaunchResult {
@@ -155,6 +203,37 @@ export interface AppSettings {
   locale: "zh" | "en";
   lastEnvironmentId?: string;
   lastView: "environments" | "identities" | "scenes";
+  /**
+   * Scene launched most recently. Only used when {@link restoreLastScene} is on;
+   * it is not the "selected scene in the UI" and may point at another environment.
+   */
+  lastSceneId?: string;
+  /** Reopen {@link lastSceneId} once the app finishes starting. */
+  restoreLastScene: boolean;
+  /** Show the always-on-top switcher that lists running instances. */
+  overlayEnabled: boolean;
+  /**
+   * User agent a headless session check presents to the site.
+   *
+   * "desktop" (default) sends the normal desktop UA, which is what a user's own
+   * browser sends; "headless" sends Chromium's honest headless UA. Overriding the
+   * UA is a basic browser feature (devtools can do it), not fingerprint
+   * spoofing, and it keeps a background check from looking like a crawler to the
+   * site under test.
+   */
+  headlessCheckUa: "desktop" | "headless";
+  /**
+   * After switching windows, briefly show the account name over the window that
+   * was just raised. Identical pages otherwise make it impossible to tell which
+   * account a window belongs to.
+   */
+  focusLabelEnabled: boolean;
+  /**
+   * Delay between two windows of the same scene, in milliseconds. 0 by default:
+   * launchers are cheap, and the old 350ms made an eight-member scene feel slow.
+   * Users on a constrained machine can raise it.
+   */
+  launchIntervalMs: number;
   /** Preset used when identities are launched outside a scene. */
   layout: LayoutId;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
@@ -167,6 +246,19 @@ export interface AppSettings {
   closeToTray: boolean;
   /** Version of the onboarding tour the user has already seen. */
   onboardingVersion: number;
+  /**
+   * Check GitHub for a newer release shortly after launch and every few hours.
+   * On by default: finding out about updates should not depend on remembering to
+   * press a button. Only the check is automatic — downloading and installing
+   * always start from an explicit click.
+   */
+  autoCheckUpdates: boolean;
+  /**
+   * Version the user chose to postpone. Suppresses the update prompt for that
+   * exact version until a newer one is published, so "later" is not asked again
+   * on every launch.
+   */
+  dismissedUpdateVersion?: string;
 }
 
 export interface CredentialPresence {
@@ -249,10 +341,18 @@ export type SettingsPatch = Partial<
     | "locale"
     | "lastEnvironmentId"
     | "lastView"
+    | "lastSceneId"
+    | "restoreLastScene"
+    | "overlayEnabled"
+    | "headlessCheckUa"
+    | "focusLabelEnabled"
+    | "launchIntervalMs"
     | "layout"
     | "autoFillOnLaunch"
     | "closeToTray"
     | "onboardingVersion"
+    | "autoCheckUpdates"
+    | "dismissedUpdateVersion"
   >
 >;
 

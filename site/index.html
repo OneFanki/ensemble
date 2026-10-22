@@ -6,12 +6,12 @@
     <title>Ensemble · 同台 — 多个身份，同一个舞台</title>
     <meta
       name="description"
-      content="同台（Ensemble）— 本地多账号浏览器工作台：每个账号独立 Profile，一键拉起并边到边平铺；内置 MCP 端点，AI 可直接录入环境、身份与场景。"
+      content="同台（Ensemble）— 本地多身份浏览器工作台：内置浏览器一块屏幕并排多个身份，外部真实浏览器边到边平铺；内置 MCP 端点，AI 可直接驱动页面，也能录入站点、身份与视图。"
     />
     <meta property="og:title" content="Ensemble · 同台" />
     <meta
       property="og:description"
-      content="本地多账号浏览器工作台：独立 Profile、场景编排、边到边平铺，内置 MCP 端点。"
+      content="本地多身份浏览器工作台：内置浏览器并排、视图编排、独立 Profile、内置 MCP 端点。"
     />
     <meta property="og:type" content="website" />
     <link rel="icon" href="./assets/icon.png" />
@@ -838,7 +838,7 @@
           </div>
 
           <p class="hero-note" data-zh>
-            不内置浏览器，启动的是系统里的 Chrome / Edge / Brave / Vivaldi / Firefox；
+            主界面就是内置浏览器，不弹系统窗口；需要保真复核时，也能启动系统里的 Chrome / Edge / Brave / Vivaldi / Firefox。
             不放云端、不需要登录。
           </p>
           <p class="hero-note" data-en>
@@ -849,12 +849,12 @@
           <figure class="shot">
             <img
               src="./diagrams/hero.zh.svg"
-              alt="左侧一个场景编排四个账号，右侧四个独立 Profile 的窗口边到边平铺，悬浮条高亮当前窗口并短暂显示账号名"
+              alt="左侧一个视图编排四个身份，右侧四个独立 Profile 的窗口边到边平铺，悬浮条高亮当前窗口并短暂显示账号名"
               data-zh-src="./diagrams/hero.zh.svg"
               data-en-src="./diagrams/hero.svg"
             />
             <figcaption data-zh>
-              一个场景拉起一组账号 → 各自独立的浏览器 Profile 边到边平铺 → 悬浮条切换并高亮当前窗口 →
+              一个视图拉起一组身份 → 各自独立的浏览器 Profile 边到边平铺 → 悬浮条切换并高亮当前窗口 →
               切换后账号名短暂浮现。
             </figcaption>
             <figcaption data-en>
@@ -873,29 +873,28 @@
             <h2 data-zh>三层模型，一个作用域一条隔离线</h2>
             <h2 data-en>Three layers, one isolation boundary</h2>
             <p data-zh>
-              环境是被测目标，身份是账号，场景是一次编排。换环境不会串登录态，换身份不会带出别人的
+              站点是被测目标，身份是账号，视图是一块共享屏幕。换站点不会串登录态，换身份不会带出别人的
               Cookie。
             </p>
             <p data-en>
-              An environment is the target, an identity is an account, a scene is one run. Switching
-              environments never mixes sessions; switching identities never leaks someone else's
-              cookies.
+              A site is the target, an identity is an account, a view is one shared screen. Switching
+              sites never mixes sessions; switching identities never leaks someone else's cookies.
             </p>
           </div>
 
           <div class="concepts">
             <article class="concept">
               <span class="num">01</span>
-              <h3 data-zh>环境</h3>
-              <h3 data-en>Environment</h3>
+              <h3 data-zh>站点</h3>
+              <h3 data-en>Site</h3>
               <p class="scope" data-zh>作用域 · 不隔离</p>
               <p class="scope" data-en>Scope · not isolated</p>
               <p data-zh>
-                站点地址、登录入口、登录检测地址与默认凭据。左侧导航第一项，切换环境同时切换身份与场景。
+                站点地址、登录入口、登录检测地址与默认凭据；可用标签归类。切换站点同时切换身份与视图。
               </p>
               <p data-en>
-                Base URL, login path, session-check endpoint and default credentials. It is the first
-                item in the rail; switching it switches the identities and scenes you see.
+                Base URL, login path, session-check endpoint and default credentials, groupable with
+                tags. Switching it switches the identities and views you see.
               </p>
             </article>
 
@@ -916,16 +915,16 @@
 
             <article class="concept">
               <span class="num">03</span>
-              <h3 data-zh>场景</h3>
-              <h3 data-en>Scene</h3>
+              <h3 data-zh>视图</h3>
+              <h3 data-en>View</h3>
               <p class="scope" data-zh>编排 · 不隔离</p>
               <p class="scope" data-en>Orchestration · not isolated</p>
               <p data-zh>
-                一次要同时拉起的身份组合与窗口布局。把成员拖到槽位即可指定位置，换位后正在运行的窗口跟着移动。
+                一块共享屏幕区域：同时显示哪几个身份、用哪个布局。建一个视图，把标签拖进去。
               </p>
               <p data-en>
-                The set of identities to launch together and how they tile. Drag a member onto a
-                slot to place it; open windows follow when you reassign.
+                One shared screen region: which identities appear together and in which layout.
+                Create one view, then drag tabs into it.
               </p>
             </article>
           </div>
@@ -1036,7 +1035,7 @@
               <h3 data-zh>批量启动</h3>
               <h3 data-en>Batch launch</h3>
               <p data-zh>
-                账户页进入多选模式，勾几个账号一次按默认布局铺开。不必逐个点击，也不会在点下一个时
+                身份页进入多选模式，勾几个身份一次按默认布局铺开。不必逐个点击，也不会在点下一个时
                 被刚弹出的窗口挡住；已在运行的身份会自动跳过。
               </p>
               <p data-en>
@@ -1076,7 +1075,7 @@
               <h3 data-zh>启动即填</h3>
               <h3 data-en>Fill on launch</h3>
               <p data-zh>
-                窗口打开后自动填入账号密码；租户名、公司码等字段按标签匹配，环境级下发、身份级覆盖。
+                窗口打开后自动填入账号密码；租户名、公司码等字段按标签匹配，站点级下发、身份级覆盖。
               </p>
               <p data-en>
                 Credentials are typed in as the window opens. Tenant or company codes are matched by
@@ -1111,7 +1110,7 @@
                   <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1" />
                 </svg>
               </span>
-              <h3 data-zh>场景编排</h3>
+              <h3 data-zh>视图编排</h3>
               <h3 data-en>Scene orchestration</h3>
               <p data-zh>
                 一键拉起一组身份，按布局边到边平铺，不留无用外边距；启动失败会回收本次已开的窗口。
@@ -1150,7 +1149,7 @@
               </span>
               <h3 data-zh>误关可单开</h3>
               <h3 data-en>Reopen one member</h3>
-              <p data-zh>关掉某个账号的窗口不必重启整幕，在场景详情里单独重开即可，位置也保持原槽位。</p>
+              <p data-zh>关掉某个身份的窗口不必重启整组，在视图详情里单独重开即可，位置也保持原槽位。</p>
               <p data-en>
                 Closed one account by mistake? Reopen just that window from the scene detail; it
                 returns to its assigned slot.
@@ -1166,7 +1165,7 @@
               <h3 data-zh>会话健康中心</h3>
               <h3 data-en>Session health</h3>
               <p data-zh>
-                一屏看清当前环境里谁正常、谁掉线、谁还没确认。一键检测全部，或一键为所有过期身份
+                一屏看清当前站点里谁正常、谁掉线、谁还没确认。一键检测全部，或一键为所有过期身份
                 打开登录页并填好凭据。窗口没开的身份也会在后台悄悄检测，不会多出一堆窗口。
               </p>
               <p data-en>
@@ -1183,10 +1182,10 @@
                   <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" />
                 </svg>
               </span>
-              <h3 data-zh>恢复上次场景</h3>
+              <h3 data-zh>恢复上次视图</h3>
               <h3 data-en>Restore last scene</h3>
               <p data-zh>
-                设置里开启后，冷启动自动按原布局拉起上次的场景，不用重新选、重新摆窗口。默认关闭，
+                设置里开启后，冷启动在内置浏览器里按原布局恢复上次的视图。默认关闭，
                 不会在升级后突然弹出一堆窗口。
               </p>
               <p data-en>
@@ -1224,7 +1223,7 @@
               <h3 data-zh>干净会话</h3>
               <h3 data-en>Clean sessions</h3>
               <p data-zh>
-                不登录、关闭即自动删除的临时窗口；也能开一个不属于任何环境的空白会话，单独验证一条链接。
+                不登录、关闭即自动删除的临时窗口；也能开一个不属于任何站点的空白会话，单独验证一条链接。
               </p>
               <p data-en>
                 A throwaway window that never logs in and is deleted on close — including a blank one
@@ -1242,7 +1241,7 @@
               <h3 data-zh>AI 直接录入</h3>
               <h3 data-en>AI does the data entry</h3>
               <p data-zh>
-                内置 MCP 端点。账号在容器或数据库里建好后，AI 可以直接写入环境、身份与场景，不必手填。
+                内置 MCP 端点。账号在容器或数据库里建好后，AI 可以直接写入站点、身份与视图，也能直接驱动内置浏览器，不必手填。
               </p>
               <p data-en>
                 A built-in MCP endpoint. Once accounts exist in your container or database, an AI
@@ -1277,7 +1276,7 @@
             <span class="kicker">Interface</span>
             <h2 data-zh>界面</h2>
             <h2 data-en>Interface</h2>
-            <p data-zh>左侧管环境 / 身份 / 场景 / 设置，顶栏只做环境切换，运行中的窗口在右侧一览。</p>
+            <p data-zh>左侧管浏览器 / 站点 / 身份 / 视图 / 设置，顶栏只做站点切换，运行中的页面与窗口在右侧一览。</p>
             <p data-en>
               The rail manages environments, identities, scenes and settings; the title bar only
               switches environments, and running windows are listed on the right.
@@ -1306,15 +1305,15 @@
             </figure>
             <figure>
               <img
-                src="./screenshots/environments.png"
-                alt="环境管理"
-                data-zh-src="./screenshots/environments.png"
-                data-en-src="./screenshots/environments-en.png"
+                src="./screenshots/browser.png"
+                alt="浏览器页"
+                data-zh-src="./screenshots/browser.png"
+                data-en-src="./screenshots/browser-en.png"
               />
-              <figcaption data-zh>环境页：身份数、场景数、默认凭据与引擎一览，可开一个不属于任何环境的干净会话。</figcaption>
+              <figcaption data-zh>浏览器页：四宫格视图、格位标题与右侧运行栏；点台下标签就换进聚焦格位。</figcaption>
               <figcaption data-en>
-                Environments: identity and scene counts, default credentials and engine at a glance;
-                open a clean session that belongs to no environment.
+                The browser page: a 2×2 view, slot headers and the running dock; clicking an off-stage
+                tab swaps it into the focused slot.
               </figcaption>
             </figure>
             <figure>
@@ -1373,12 +1372,12 @@
             <div class="pair">
               <figure>
                 <img
-                  src="./screenshots/scenes.png"
-                  alt="场景编排"
-                  data-zh-src="./screenshots/scenes.png"
-                  data-en-src="./screenshots/scenes-en.png"
+                  src="./screenshots/views.png"
+                  alt="视图编排"
+                  data-zh-src="./screenshots/views.png"
+                  data-en-src="./screenshots/views-en.png"
                 />
-                <figcaption data-zh>场景页：成员、布局与槽位分配，改布局不会重新拉起窗口。</figcaption>
+                <figcaption data-zh>视图页：成员、布局与槽位分配；改布局不会重新拉起窗口。</figcaption>
                 <figcaption data-en>
                   Scenes: members, layout and slot assignment. Changing the layout never relaunches
                   anything.
@@ -1413,7 +1412,7 @@
           <div class="ai">
             <div>
               <p data-zh>
-                在你本机的回环地址上开一个 MCP 端点，AI 客户端可以列出、创建和修改环境、身份、场景与布局，
+                在你本机的回环地址上开一个 MCP 端点，AI 客户端可以列出、创建和修改站点、身份、视图与布局，也能直接驱动内置浏览器，
                 也可以启动窗口、检测登录态。端点只绑 127.0.0.1，必须带 Bearer Token，并校验 Host 与 Origin。
               </p>
               <p data-en>

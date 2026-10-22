@@ -9,15 +9,20 @@
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-42B883?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-![Ensemble overview: a scene on the left, four isolated browser profiles tiled edge to edge on the right, with the switcher highlighting the current window and briefly showing its account name](docs/diagrams/hero.svg)
+![Ensemble overview: a view on the left, four isolated browser profiles tiled edge to edge on the right](docs/diagrams/hero.svg)
 
-In one sentence: **one scene launches a group of accounts, each in its own browser profile, tiled edge to edge** — every window is usable and comparable, and switching never leaves you guessing which account you are looking at.
+In one sentence: **one view brings a group of accounts on stage, each with its own browser profile** — inside the app they share one screen, in real browsers they tile edge to edge, and switching never leaves you guessing which account you are looking at.
 
 ## Why
 
 The same system looks different depending on who is signed in: an admin gets a delete button, tenant A must never see tenant B's data, a feature flag reaches only part of the accounts, and the free and paid plans stop at different boundaries. Confirming those differences means keeping several windows open at once — and logging out, clearing cookies and hunting passwords in between. Multiple windows of the same browser often leak sessions into each other.
 
-Ensemble turns those windows into a stage you can arrange: every account gets its own browser profile, and you launch a whole group at once, tiled automatically and reclaimed on close. It **does not bundle a browser**. It launches the real Chrome, Edge, Brave or Firefox installed on your machine, so cookies, extensions, downloads and the native password manager behave exactly as they would for a human.
+Ensemble turns those windows into a stage you can arrange: every account gets its own browser profile, and you launch a whole group at once, tiled automatically and reclaimed on close. It has two browser surfaces:
+
+- **Built-in browser (the main surface)**: pages run inside the app window, so nothing pops up as a system window. One screen can show several identities at once (1×1 up to 3×1, or a custom layout), and an AI client can read, click, type and screenshot through MCP while you watch and take over at any moment.
+- **External real browser**: when you need to confirm “it behaves the same for a real user”, launch the same group in the Chrome, Edge, Brave or Firefox installed on your machine. Cookies, extensions, downloads and the native password manager behave exactly as they would for a human.
+
+Both surfaces share the same sites, accounts, credentials and views. Switching surfaces means signing in again — each keeps its own sessions.
 
 ## Typical scenarios
 
@@ -37,17 +42,19 @@ What these have in common: **they can only be verified with the identities prese
 
 | Concept | Meaning | Isolated |
 | --- | --- | --- |
-| **Environment** | The target under test: base URL, login path, auth-check path, default credentials | No — it is a scope |
-| **Identity** | One account plus one dedicated browser profile | Yes, fully |
-| **Scene** | A group of identities and a window layout to launch together | No — it is orchestration |
+| **Site** | The target under test: base URL, login path, auth-check path, default credentials; groupable with tags | No — it is a scope |
+| **Identity** | One login plus one dedicated browser profile; may reference an identity on another site | Yes, fully |
+| **View** | One shared screen region: which accounts appear together, in which layout | No — it is orchestration |
 
-Environment 1—N identities, environment 1—N scenes, scene N—N identities. Testing one account against two environments means two identities. Switching environments switches both the identities and scenes views — the clearest signal of the isolation boundary — so the rail lists environments as the first entry:
+Site 1—N identities, site 1—N views. A view is optional: without one the surface behaves like a plain browser, and views are created explicitly from the running dock. Switching sites switches what the identities and views pages show — the clearest signal of the isolation boundary.
 
 <p align="center">
-  <img src="docs/screenshots/environments-en.png" alt="Environment management" width="900" />
+  <img src="docs/screenshots/browser-en.png" alt="Browser page: a 2×2 view and the running dock" width="900" />
 </p>
 
-The identities page is where most of the day is spent: one card per identity with its role, account, session status and running state. Clicking a running identity switches to it; stopping has its own button.
+**The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock on the right lists which accounts are open and in which slot — on every page, always. The left rail collapses to an icon strip by default and expands when the pointer reaches the left edge.
+
+The identities page is where most of the day is spent: one card per identity with its role, login, session status and running state. Clicking a running identity switches to it; stopping has its own button.
 
 <p align="center">
   <img src="docs/screenshots/identities-en.png" alt="Identity list" width="900" />
@@ -55,25 +62,34 @@ The identities page is where most of the day is spent: one card per identity wit
 
 ## Features
 
-- **Running-instances overlay**: a small always-on-top strip on the desktop lists every running identity, grouped by environment. One click raises that browser window, restoring it if minimized — no relaunch, no reload. The row of the window that actually owns the OS foreground is highlighted live, so taskbar and Alt+Tab switches follow too. When you do not need it, it collapses into a small square showing only the window count, and snaps to the screen edge after a drag
-- **One-click cleanup**: close every instance at once from the bottom of the overlay, the running dock, or the tray menu; stopping a scene closes only that scene's windows, never another scene's
-- **Batch launch**: a selection mode on the identities page opens several accounts at once in the default layout, instead of clicking one by one while every new window covers the next card
+- **Running-instances overlay**: a small always-on-top strip on the desktop lists every running identity, grouped by site. One click raises that browser window, restoring it if minimized — no relaunch, no reload. The row of the window that actually owns the OS foreground is highlighted live, so taskbar and Alt+Tab switches follow too. When you do not need it, it collapses into a small square showing only the window count, and snaps to the screen edge after a drag
+- **One-click cleanup**: close every instance at once from the bottom of the overlay, the running dock, or the tray menu; stopping a view closes only the tabs it launched, never hand-made or AI-added pages
+- **Batch launch**: a selection mode on the identities page opens several identities at once in the default layout, instead of clicking one by one while every new window covers the next card
 - **Switch receipt**: after switching from the overlay, the account name floats briefly (~2 s) over the window that was raised, so the right account is obvious even when every page looks the same. The pill is click-through, never takes focus, and injects nothing into the page
 - **Fill on launch**: credentials are typed in as soon as the login form appears; the app names any input still unconfigured
-- **Fields beyond username and password**: tenant or company codes are matched by label, defined per environment and overridable per identity
+- **Fields beyond username and password**: tenant or company codes are matched by label, defined per site and overridable per identity
+- **Built-in browser**: pages live inside the app window, so nothing pops up; several identities share one screen, and an AI client can read, click, type and screenshot while you watch and take over
+- **A view is one shared screen region**: create one from the running dock, then drag tabs into it (the drop point decides side by side or stacked), switch layouts, drag the seams to re-proportion slots; only one view is on stage at a time and the rest keep running off screen
+- **One slot = one browser instance**: a page opened from a page (`target="_blank"`, an OAuth popup) stays inside the same instance and just becomes the page that slot shows — it never takes an extra slot. The dock lists one row per instance, with that instance's other pages indented beneath it
+- **On stage / off stage / focused**: a view shows only as many instances as it has slots; one click on an off-stage instance swaps it into the focused slot, and clicking again swaps back. Slot numbers make “which pages are on screen right now” a readable fact; an empty slot is a dashed cell with an “add a page here” button that drops a focused tab straight into that cell
+- **Running dock**: views, loose tabs and external instances in one place; views are blocks, instances are rows, collapsible as a whole; one click brings the page or window to the front
+- **Two browser surfaces**: the built-in one is the main surface, the external real browser is the fidelity check; both share the same accounts, credentials and layouts
+- **Identity references**: an identity can reference one on another site — username, password, display name and role stay in sync while sessions and profiles stay independent; detach when they need to differ
+- **Address-change detection**: a site remembers the address that last signed in successfully; if it changes, filling the password requires one explicit confirmation
+- **Copy a view to another site**: members that already exist there are reused, the rest become reference identities
 - **Real browser isolation**: each identity has its own profile, so sessions, cookies and extensions never mix
-- **Scene orchestration**: launch a group of identities, tiled edge to edge with no wasted margin
+- **View orchestration**: launch a group of identities, tiled edge to edge with no wasted margin
 - **Place windows by role**: drag a member onto a slot to decide who sits where; open windows move with it
-- **Custom layouts**: built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`, plus a drag-and-drop editor for your own saved presets; boxes snap to the stage edges and to each other, with alignment guides
+- **Custom layouts**: external windows use the built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`; the built-in browser uses `No layout (= 1×1) / 2×1 / 1×2 / 2×2 / 3×1` and lets you drag the seams between slots. Either way you can draw your own layout and save it as a preset; boxes snap to the stage edges and to each other, with alignment guides
 - **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
-- **Reopen a single member**: closed one account by mistake? Reopen just that window from the scene detail instead of relaunching the whole scene
-- **Session health**: one screen shows who is signed in, who expired and who is unconfirmed in the current environment; check everyone with one click, or open the login page and fill credentials for every expired identity. Identities with no window open are checked in a hidden browser that reads their own profile and closes again
-- **Restore last scene**: when enabled in Settings, a cold start reopens the last scene in its saved layout, so you never re-pick a scene or re-arrange windows
+- **Reopen a single member**: closed one identity by mistake? Reopen just that window from the view detail instead of relaunching the whole group
+- **Session health**: one screen shows who is signed in, who expired and who is unconfirmed in the current site; check everyone with one click, or open the login page and fill credentials for every expired account. Accounts with no window open are checked in a hidden browser that reads their own profile and closes again
+- **Restore last view**: when enabled in Settings, a cold start reopens the last view in its saved layout inside the built-in browser
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
-- **Clean sessions**: throwaway windows that never log in and are deleted on close; the environments page can also open a blank one that belongs to no environment
+- **Clean sessions**: throwaway windows that never log in and are deleted on close; the sites page can also open a blank one that belongs to no site
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
-- **One entry per job**: the rail navigates environments / identities / scenes / settings; the title bar only switches environments
-- **Let an AI do the data entry**: a built-in MCP endpoint receives environments, identities and scenes from your AI client
+- **One entry per job**: the rail navigates browser / sites / identities / views / settings; the title bar only switches sites
+- **Let an AI do the data entry**: a built-in MCP endpoint receives sites, identities and views from your AI client, and drives the built-in browser directly
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
 - **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
 - **Automatic updates**: the app checks for a new version in the background, shows a short summary when one exists, and downloads, verifies and installs it in one click — then restarts itself. No manual GitHub download, and no browser download warning to get past
@@ -98,28 +114,28 @@ When it is in the way, collapse it into a small square that shows only the windo
 
 The pill is click-through, never takes focus, and injects nothing into the page under test, so the system behaves exactly as it does for a real user.
 
-An expired session no longer requires opening each window: the session health panel groups the current environment into signed in / expired / unconfirmed, checks everyone at once, and can sign every expired identity back in. An identity with no window open is still checkable — a hidden browser reads its own profile, answers, and closes, so no extra windows pile up.
+An expired session no longer requires opening each window: the session health panel groups the current site into signed in / expired / unconfirmed, checks everyone at once, and can sign every expired identity back in. An identity with no window open is still checkable — a hidden browser reads its own profile, answers, and closes, so no extra windows pile up.
 
 <p align="center">
   <img src="docs/screenshots/session-health-en.png" alt="Session health" width="820" />
 </p>
 
-The scenes view is a list on the left and a detail pane on the right: select a scene to see its members and layout, adjusting the tiling never launches anything, and only "Run scene" opens the windows. A single window opens centered so it stays comfortable to work in.
+The views page is a list on the left and a detail pane on the right: select a view to see its members and layout; adjusting the tiling never launches anything. The primary action opens it in the built-in browser, laid out into slots; the secondary action uses real browser windows as a fidelity check.
 
-Tiling really is edge to edge: no gutter between windows, the only line between them is the window frame itself. Each window carries its identity in the colour dot at the top left, the same dot that appears in the overlay:
+Tiling really is edge to edge: no gutter between windows, the only line between them is the window frame itself. Each account is marked by the colour dot at the top left, the same dot used in the dock and the overlay:
 
 <p align="center">
   <img src="docs/diagrams/layout-grid.svg" alt="2×2 tiling with no gaps between windows" width="900" />
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/scenes-en.png" alt="Scene orchestration and window layout" width="900" />
+  <img src="docs/screenshots/views-en.png" alt="View orchestration and window layout" width="900" />
 </p>
 
-Environment switching lives in a single title-bar menu: it only changes the current scope, while managing and creating environments lives on the environments page.
+Site switching lives in a single title-bar menu: it only changes the current scope, while managing and creating sites lives on the sites page.
 
 <p align="center">
-  <img src="docs/screenshots/env-menu.png" alt="Environment switcher" width="640" />
+  <img src="docs/screenshots/env-menu.png" alt="Site switcher" width="640" />
 </p>
 
 The light theme matches the dark one, down to the native title-bar buttons:
@@ -134,7 +150,7 @@ Have your AI create the accounts in a container, then record them in Ensemble wi
 
 1. Turn on "AI access" in settings to get the loopback URL and a Bearer token;
 2. Paste the config snippet into any MCP-capable client (Claude Code, ZCode, …);
-3. The AI calls `create_environment`, `create_identities`, `create_scene`, then `launch_scene`.
+3. The AI calls `create_site`, `create_identities`, `create_view`, then `open_browser_view` (built-in browser) or `launch_view` (external windows).
 
 The server is plain local HTTP + JSON-RPC (a subset of MCP 2025-06-18), bound to `127.0.0.1`.
 It validates `Host`/`Origin` against DNS rebinding, and every request needs the Bearer token.
@@ -144,10 +160,10 @@ Permissions are three switches in settings:
 
 | Permission | Tools | Default |
 | --- | --- | --- |
-| Read | List environments / identities / scenes / layouts, workspace summary | Always on |
-| Write | Create and edit environments, identities, scenes, layouts; store passwords | On |
+| Read | List sites / identities / views / layouts, workspace summary | Always on |
+| Write | Create and edit sites, identities, views, layouts; store passwords | On |
 | Run | Launch / stop windows, check sessions | On |
-| Delete | Delete environments / identities / scenes | Off |
+| Delete | Delete sites / identities / views | Off |
 
 Hard boundaries:
 
@@ -162,14 +178,14 @@ Hard boundaries:
 
 ## Import and export
 
-The migration path for a local-first app: settings → Data → export one JSON file with environments,
-identities, scenes and layout presets. Browser profiles and sessions are never exported.
+The migration path for a local-first app: settings → Data → export one JSON file with sites,
+identities, views and layout presets. Browser profiles and sessions are never exported.
 
 - Passwords are excluded by default. With "include passwords", they are sealed with your passphrase
   (scrypt + AES-256-GCM) inside the same file. Importing requires the same passphrase; a wrong one
   rejects the whole file instead of importing half of it.
-- Import merges by id: same id overwrites, new entries are appended, and identities or scenes whose
-  environment is missing are skipped and counted.
+- Import merges by id: same id overwrites, new entries are appended, and identities or views whose
+  site is missing are skipped and counted.
 - Running instances and login status are never part of an export.
 
 ## Tray mode

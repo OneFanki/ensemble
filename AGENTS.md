@@ -34,14 +34,14 @@ pnpm dist             # 打包三平台产物到 release/
 
 ## 强制约束
 
-1. **被测浏览器不由 Electron 渲染。** 管理台用 Electron 自己的 WebView 渲染；被测站点必须由外部真实浏览器进程承载。禁止把被测页面塞进 `BrowserWindow` 或 `webview`，否则兼容性结论失真。
+1. **浏览器有两种表面：内置为默认，外部为保真校验**（ADR `0006-embedded-browser-first`）。内置用 `WebContentsView` 承载被测页面，服务 AI 驱动、静默运行、录制与并排对比；外部驱动系统真实浏览器，用于确认「在用户真实环境里也一样」。两种表面共用身份/凭据/场景模型，**切换必须由用户显式触发**，不得静默重建登录态。内置 view 必须 `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`，不挂带权限的 preload；被测页面不得塞进管理台自己的 `BrowserWindow` 渲染进程。
 2. **`src/core/` 不允许 import `electron`。** 核心层要能在纯 Node 下测试，并为未来 CLI/CI 复用保留可能性。系统能力（safeStorage、screen、clipboard）由主进程注入。由 `tests/contracts/core-isolation.test.ts` 守护。
 3. **每个身份一个独立 profile 目录**，路径 `<userData>/profiles/<envId>/<identityId>`。禁止两个身份共用 profile，禁止指向用户日常浏览器的 profile。
 4. **凭据绝不进入渲染进程。** IPC 不返回明文密码；填充在主进程通过 CDP 完成；日志不打印密码或页面内容。
 5. **进程清理只按 profile 路径归属。** 只清理命令行 `--user-data-dir` 指向自有 `profiles/` 根目录的进程，禁止按进程名批量杀浏览器。由 `tests/contracts/process-ownership.test.ts` 守护关键解析函数。
 6. **场景启动必须原子。** 中途失败要回收本次已拉起的窗口，不能留下半套实例。
 7. **不打包浏览器。** 引擎来自系统安装，版本由厂商更新；不要把 Playwright 自带浏览器或 Chromium 二进制放进安装包。由 `tests/contracts/no-bundled-browser.test.ts` 守护。
-8. **主链路不用 Playwright 驱动人工窗口。** Playwright 会默认接管对话框与下载，会改变被测环境。它只能用于管理台自身的无头 E2E 测试。
+8. **主链路不用 Playwright 驱动人工窗口。** Playwright 会默认接管对话框与下载，会改变被测环境。AI 控制内置表面走进程内 `webContents.debugger`；Playwright 只允许通过显式开启的调试端口接管内置表面，或用于管理台自身的 E2E 测试。
 9. **渲染层传给主进程的参数必须是可结构化克隆的纯数据。** Vue `reactive` 对象里的嵌套结构仍是 Proxy，IPC 会抛 `An object could not be cloned`。发 IPC 前先转换。
 10. **浮层层级统一编号**：遮罩 70、弹窗内容 71、toast 100。新增浮层先对齐，不要各自取号。
 11. **字体栈不得以泛型 `monospace` 结尾。** Windows 会把中文回退成宋体；等宽栈必须显式列出 CJK 无衬线字体。
@@ -59,6 +59,7 @@ pnpm dist             # 打包三平台产物到 release/
 - 碰到报错或诡异行为，先查 `docs/engineering/踩坑库.md`；解决后当场追加条目（含日期）。
 - 公共接口、目录结构或核心模式变化后，同步更新 `docs/architecture.md`；重大架构决策写 ADR 到 `docs/architecture/adr/`，**被否方案必填**。
 - 修改看似冗余的代码前，先 `git log -p -S <符号>` 查原始意图；确认是防御性设计就保留并注释原因。
+- 内置浏览器表面的改动（视图、分区、CDP 门面）必须在实机里用真实页面验证，不能只靠单测：分区是否真的隔离、截图在最小化后是否还能出图，都只能靠跑起来看。
 - 单文件膨胀到难以阅读时主动拆分，不在失衡结构上无限追加补丁。
 - 文档改一次压缩一次：过时信息当场删除、重复合并、同一结论只留一个详细版本。
 

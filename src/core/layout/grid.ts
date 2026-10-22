@@ -59,7 +59,7 @@ export function computeSlots(preset: LayoutPreset, area: Rect): Rect[] {
 }
 
 /**
- * Placement for a single window launched outside a scene. A lone identity is the
+ * Placement for a single window launched outside a view. A lone identity is the
  * one you are actively working in, so it gets a comfortable centered window
  * instead of a grid slot pinned to the top-left quarter.
  */

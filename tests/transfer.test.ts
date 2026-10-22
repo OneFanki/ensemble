@@ -30,16 +30,16 @@ afterEach(() => {
 });
 
 function seed() {
-  const environment = service.saveEnvironment({
+  const site = service.saveSite({
     name: "订单服务-测试环境",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     autoSubmit: true,
     extraFields: [{ label: "租户名", value: "acme" }],
   });
-  service.setPassword({ kind: "environment", id: environment.id }, "env-secret");
+  service.setPassword({ kind: "site", id: site.id }, "env-secret");
   const identity = service.saveIdentity({
-    environmentId: environment.id,
+    siteId: site.id,
     name: "管理员 · 主账号",
     username: "admin",
     role: "admin",
@@ -47,8 +47,8 @@ function seed() {
     passwordMode: "inherit",
     startPath: "/",
   });
-  const scene = service.saveScene({
-    environmentId: environment.id,
+  const view = service.saveView({
+    siteId: site.id,
     name: "权限矩阵",
     identityIds: [identity.id],
     layoutId: "2x2",
@@ -62,7 +62,7 @@ function seed() {
       { x: 0.6, y: 0, width: 0.4, height: 1 },
     ],
   });
-  return { environment, identity, scene };
+  return { site, identity, view };
 }
 
 describe("workspace export", () => {
@@ -72,7 +72,7 @@ describe("workspace export", () => {
     expect(file.format).toBe(EXPORT_FORMAT);
     expect(secretsIncluded).toBe(false);
     expect(file.secrets).toBeUndefined();
-    expect(counts).toEqual({ environments: 1, identities: 1, scenes: 1, layoutPresets: 1 });
+    expect(counts).toEqual({ sites: 1, identities: 1, views: 1, layoutPresets: 1 });
     // Session state belongs to this machine and must not travel.
     expect(file.identities[0]?.status).toBe("unknown");
     expect(file.identities[0]?.id).toBe(identity.id);
@@ -92,7 +92,7 @@ describe("workspace export", () => {
     const { file } = service.exportWorkspace("correct horse battery");
     const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
     expect(parsed.identities).toHaveLength(1);
-    expect(parsed.scenes[0]?.slotAssignments).toBeTruthy();
+    expect(parsed.views[0]?.slotAssignments).toBeTruthy();
   });
 });
 
@@ -113,9 +113,9 @@ describe("workspace import", () => {
     expect(result.added).toBeGreaterThan(0);
     expect(result.importedSecrets).toBe(1);
     const snapshot = service.snapshot();
-    expect(snapshot.environments).toHaveLength(1);
+    expect(snapshot.sites).toHaveLength(1);
     expect(snapshot.identities).toHaveLength(1);
-    expect(snapshot.scenes).toHaveLength(1);
+    expect(snapshot.views).toHaveLength(1);
     expect(snapshot.layoutPresets).toHaveLength(1);
   });
 
@@ -129,7 +129,7 @@ describe("workspace import", () => {
     expect(() =>
       service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(file))), "wrong"),
     ).toThrow(/口令/);
-    expect(service.snapshot().environments).toHaveLength(0);
+    expect(service.snapshot().sites).toHaveLength(0);
   });
 
   it("can be retried with the right passphrase after a wrong one", () => {
@@ -150,25 +150,25 @@ describe("workspace import", () => {
   });
 
   it("updates entries with the same id instead of duplicating them", () => {
-    const { environment } = seed();
+    const { site } = seed();
     const { file } = service.exportWorkspace();
-    file.environments[0] = { ...file.environments[0]!, name: "改名后的环境" };
+    file.sites[0] = { ...file.sites[0]!, name: "改名后的环境" };
     const result = service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(file))));
     expect(result.updated).toBeGreaterThan(0);
-    expect(service.snapshot().environments).toHaveLength(1);
-    expect(service.snapshot().environments[0]?.name).toBe("改名后的环境");
-    expect(service.snapshot().environments[0]?.id).toBe(environment.id);
+    expect(service.snapshot().sites).toHaveLength(1);
+    expect(service.snapshot().sites[0]?.name).toBe("改名后的环境");
+    expect(service.snapshot().sites[0]?.id).toBe(site.id);
   });
 
-  it("skips identities whose environment is missing from the file", () => {
+  it("skips identities whose site is missing from the file", () => {
     seed();
     const { file } = service.exportWorkspace();
     const identity = file.identities[0]!;
     const orphan = {
       ...file,
-      environments: [],
-      scenes: [],
-      identities: [{ ...identity, id: "orphan", environmentId: "missing-env" }],
+      sites: [],
+      views: [],
+      identities: [{ ...identity, id: "orphan", siteId: "missing-env" }],
     };
     const result = service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(orphan))));
     expect(result.skipped).toBe(1);
@@ -182,12 +182,12 @@ describe("parseExportFile", () => {
   });
 
   it("rejects a version from the future", () => {
-    expect(() => parseExportFile({ format: EXPORT_FORMAT, version: 99, environments: [] })).toThrow(
+    expect(() => parseExportFile({ format: EXPORT_FORMAT, version: 99, sites: [] })).toThrow(
       /版本/,
     );
   });
 
-  it("requires environments to be present", () => {
-    expect(() => parseExportFile({ format: EXPORT_FORMAT, version: 1 })).toThrow(/environments/);
+  it("requires sites to be present", () => {
+    expect(() => parseExportFile({ format: EXPORT_FORMAT, version: 1 })).toThrow(/sites/);
   });
 });

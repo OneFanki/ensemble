@@ -1,4 +1,4 @@
-import type { Environment, Identity, LayoutPreset, Scene, SlotRect } from "./types";
+import type { Site, Identity, LayoutPreset, View, SlotRect } from "./types";
 
 /**
  * Portable workspace snapshot. IDs are preserved so re-importing an export on the
@@ -19,17 +19,17 @@ export interface WorkspaceExportFile {
   format: typeof EXPORT_FORMAT;
   version: number;
   exportedAt: string;
-  environments: Environment[];
+  sites: Site[];
   identities: Identity[];
-  scenes: Scene[];
+  views: View[];
   layoutPresets: LayoutPreset[];
   secrets?: SealedSecrets;
 }
 
 export interface ExportCounts {
-  environments: number;
+  sites: number;
   identities: number;
-  scenes: number;
+  views: number;
   layoutPresets: number;
 }
 
@@ -44,7 +44,7 @@ export interface ImportResult extends ExportCounts {
   updated: number;
   added: number;
   importedSecrets: number;
-  /** Identities whose environment is missing from both file and workspace. */
+  /** Identities whose site is missing from both file and workspace. */
   skipped: number;
 }
 
@@ -67,12 +67,12 @@ function optionalText(value: unknown, max = 400): string | undefined {
   return trimmed ? trimmed.slice(0, max) : undefined;
 }
 
-function sanitizeEnvironment(raw: unknown): Environment {
-  if (!isRecord(raw)) throw new Error("环境条目格式错误");
-  const id = text(raw["id"], "环境 id", 80);
+function sanitizeSite(raw: unknown): Site {
+  if (!isRecord(raw)) throw new Error("站点条目格式错误");
+  const id = text(raw["id"], "站点 id", 80);
   return {
     id,
-    name: text(raw["name"], "环境名称", 80),
+    name: text(raw["name"], "站点名称", 80),
     baseUrl: text(raw["baseUrl"], "站点地址", 500),
     loginPath: text(raw["loginPath"], "登录入口", 300),
     ...(optionalText(raw["authCheckPath"], 300)
@@ -95,7 +95,7 @@ function sanitizeIdentity(raw: unknown): Identity {
     : "slate";
   return {
     id: text(raw["id"], "身份 id", 80),
-    environmentId: text(raw["environmentId"], "身份所属环境", 80),
+    siteId: text(raw["siteId"], "身份所属站点", 80),
     name: text(raw["name"], "身份名称", 80),
     username: text(raw["username"], "账号", 200),
     role: optionalText(raw["role"], 60) ?? "member",
@@ -115,16 +115,16 @@ function sanitizeIdentity(raw: unknown): Identity {
   };
 }
 
-function sanitizeScene(raw: unknown): Scene {
-  if (!isRecord(raw)) throw new Error("场景条目格式错误");
+function sanitizeView(raw: unknown): View {
+  if (!isRecord(raw)) throw new Error("视图条目格式错误");
   const identityIds = Array.isArray(raw["identityIds"])
     ? raw["identityIds"].filter((id): id is string => typeof id === "string" && id.length > 0)
     : [];
   const assignments = isRecord(raw["slotAssignments"]) ? raw["slotAssignments"] : {};
   return {
-    id: text(raw["id"], "场景 id", 80),
-    environmentId: text(raw["environmentId"], "场景所属环境", 80),
-    name: text(raw["name"], "场景名称", 80),
+    id: text(raw["id"], "视图 id", 80),
+    siteId: text(raw["siteId"], "视图所属站点", 80),
+    name: text(raw["name"], "视图名称", 80),
     identityIds,
     layoutId: optionalText(raw["layoutId"], 64) ?? "2x2",
     slotAssignments: Object.fromEntries(
@@ -171,13 +171,13 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
   if (typeof input["version"] !== "number" || input["version"] > EXPORT_VERSION) {
     throw new Error("配置版本过新，请升级 Ensemble 后再导入");
   }
-  if (!Array.isArray(input["environments"])) throw new Error("缺少 environments");
+  if (!Array.isArray(input["sites"])) throw new Error("缺少 sites");
 
-  const environments = input["environments"].map(sanitizeEnvironment);
+  const sites = input["sites"].map(sanitizeSite);
   const identities = Array.isArray(input["identities"])
     ? input["identities"].map(sanitizeIdentity)
     : [];
-  const scenes = Array.isArray(input["scenes"]) ? input["scenes"].map(sanitizeScene) : [];
+  const views = Array.isArray(input["views"]) ? input["views"].map(sanitizeView) : [];
   const layoutPresets = Array.isArray(input["layoutPresets"])
     ? input["layoutPresets"]
         .map(sanitizePreset)
@@ -191,9 +191,9 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     format: EXPORT_FORMAT,
     version: input["version"],
     exportedAt: optionalText(input["exportedAt"]) ?? new Date().toISOString(),
-    environments,
+    sites,
     identities,
-    scenes,
+    views,
     layoutPresets,
     ...(secrets && typeof secrets.payload === "string" ? { secrets } : {}),
   };
@@ -201,9 +201,9 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
 
 export function exportCounts(file: WorkspaceExportFile): ExportCounts {
   return {
-    environments: file.environments.length,
+    sites: file.sites.length,
     identities: file.identities.length,
-    scenes: file.scenes.length,
+    views: file.views.length,
     layoutPresets: file.layoutPresets.length,
   };
 }

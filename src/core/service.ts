@@ -18,8 +18,10 @@ import type {
   AutoFillReport,
   CredentialPresence,
   Engine,
-  Environment,
-  EnvironmentDraft,
+  Site,
+  SiteDraft,
+  SiteTag,
+  SiteTagDraft,
   Identity,
   IdentityDraft,
   LaunchResult,
@@ -27,14 +29,16 @@ import type {
   LayoutPreset,
   LayoutPresetDraft,
   LoginField,
+  OriginChangedNotice,
   PasswordOwner,
   Platform,
   ReloginBatchResult,
   ReloginResult,
   RunningInstance,
-  Scene,
-  SceneDraft,
-  SceneRestoreOutcome,
+  View,
+  ViewCopyResult,
+  ViewDraft,
+  ViewRestoreOutcome,
   SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
@@ -117,6 +121,11 @@ export class WorkspaceService {
   private engines: Engine[] = [];
   private enginesReady = false;
   private needsOrphanSweep = false;
+  /**
+   * Set when a fill was refused because the site's address differs from the one
+   * its password was last used with. The UI reads it once and asks the user.
+   */
+  private pendingOriginConfirmation: OriginChangedNotice | undefined;
   /** Resolves once startup cleanup finished; clean sessions wait on it. */
   private maintenanceDone: Promise<void> = Promise.resolve();
   private readonly liveInstances = new Map<string, RunningInstance>();
@@ -157,7 +166,7 @@ export class WorkspaceService {
     const vaultStore = new JsonStore<VaultFile>(join(options.userDataDir, "vault.json"), () => ({
       version: 2,
       mode: "os",
-      environment: {},
+      site: {},
       identity: {},
     }));
     this.vault = new CredentialVault({
@@ -255,9 +264,10 @@ export class WorkspaceService {
 
   snapshot(): WorkspaceSnapshot {
     return {
-      environments: this.data.environments,
+      sites: this.data.sites,
+      siteTags: this.data.siteTags,
       identities: this.data.identities,
-      scenes: this.data.scenes,
+      views: this.data.views,
       engines: this.engines,
       enginesReady: this.enginesReady,
       instances: [...this.liveInstances.values()],
@@ -287,7 +297,7 @@ export class WorkspaceService {
       locked: this.vault.locked,
       canManageMaster: mode === "master" || this.vault.secure,
       ...(warning ? { warning } : {}),
-      environment: presence.environment,
+      site: presence.site,
       identity: presence.identity,
     };
   }
@@ -301,13 +311,14 @@ export class WorkspaceService {
     this.options.onChange?.();
   }
 
-  // ---------- environments ----------
+  // ---------- sites ----------
 
-  saveEnvironment(draft: EnvironmentDraft): Environment {
+  saveSite(draft: SiteDraft): Site {
     const now = new Date().toISOString();
+    const tagIds = this.resolveTagIds(draft.tagIds);
     if (draft.id) {
-      const existing = this.data.environments.find((item) => item.id === draft.id);
-      if (!existing) throw new Error(t("error.environmentMissing"));
+      const existing = this.data.sites.find((item) => item.id === draft.id);
+      if (!existing) throw new Error(t("error.siteMissing"));
       Object.assign(existing, {
         name: draft.name,
         baseUrl: trimTrailingSlash(draft.baseUrl),
@@ -316,13 +327,14 @@ export class WorkspaceService {
         defaultEngineId: draft.defaultEngineId,
         autoSubmit: draft.autoSubmit,
         extraFields: sanitizeLoginFields(draft.extraFields),
+        tagIds,
         updatedAt: now,
       });
       this.persist();
       return existing;
     }
 
-    const environment: Environment = {
+    const site: Site = {
       id: randomUUID(),
       name: draft.name,
       baseUrl: trimTrailingSlash(draft.baseUrl),
@@ -331,35 +343,86 @@ export class WorkspaceService {
       defaultEngineId: draft.defaultEngineId,
       autoSubmit: draft.autoSubmit,
       extraFields: sanitizeLoginFields(draft.extraFields),
+      tagIds,
       createdAt: now,
       updatedAt: now,
     };
-    this.data.environments.push(environment);
+    this.data.sites.push(site);
     this.persist();
-    return environment;
+    return site;
   }
 
-  deleteEnvironment(id: string): void {
+  /**
+   * Keeps only tag ids that exist. An unknown id is dropped rather than stored:
+   * a stale reference would make the site silently disappear from every group.
+   */
+  private resolveTagIds(tagIds: string[] | undefined): string[] | undefined {
+    if (!tagIds) return undefined;
+    const known = new Set(this.data.siteTags.map((tag) => tag.id));
+    const kept = [...new Set(tagIds.filter((id) => known.has(id)))];
+    return kept.length > 0 ? kept : undefined;
+  }
+
+  /** Creates or renames a site tag. Tags are display-only; nothing else changes. */
+  saveSiteTag(draft: SiteTagDraft): SiteTag {
+    const name = draft.name.trim();
+    if (!name) throw new Error(t("error.tagName"));
+    const duplicate = this.data.siteTags.find(
+      (tag) => tag.id !== draft.id && tag.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) throw new Error(t("error.tagDuplicate"));
+    if (draft.id) {
+      const existing = this.data.siteTags.find((tag) => tag.id === draft.id);
+      if (!existing) throw new Error(t("error.tagMissing"));
+      existing.name = name;
+      existing.color = draft.color;
+      this.persist();
+      return existing;
+    }
+    const tag: SiteTag = {
+      id: randomUUID(),
+      name,
+      color: draft.color,
+      createdAt: new Date().toISOString(),
+    };
+    this.data.siteTags.push(tag);
+    this.persist();
+    return tag;
+  }
+
+  /** Removes a tag and unlinks it from every site. Sites themselves are kept. */
+  deleteSiteTag(id: string): void {
+    this.data.siteTags = this.data.siteTags.filter((tag) => tag.id !== id);
+    for (const site of this.data.sites) {
+      if (!site.tagIds?.includes(id)) continue;
+      const kept = site.tagIds.filter((tagId) => tagId !== id);
+      site.tagIds = kept.length > 0 ? kept : undefined;
+      site.updatedAt = new Date().toISOString();
+    }
+    this.persist();
+  }
+
+  deleteSite(id: string): void {
     const identityIds = this.data.identities
-      .filter((identity) => identity.environmentId === id)
+      .filter((identity) => identity.siteId === id)
       .map((identity) => identity.id);
     for (const instance of [...this.liveInstances.values()]) {
-      if (instance.environmentId === id) {
+      if (instance.siteId === id) {
         void this.stopInstance(instance.id);
       }
     }
-    const removedSceneIds = new Set(
-      this.data.scenes.filter((scene) => scene.environmentId === id).map((scene) => scene.id),
+    const removedViewIds = new Set(
+      this.data.views.filter((view) => view.siteId === id).map((view) => view.id),
     );
-    this.data.environments = this.data.environments.filter((item) => item.id !== id);
-    this.data.identities = this.data.identities.filter((item) => item.environmentId !== id);
-    this.data.scenes = this.data.scenes.filter((item) => item.environmentId !== id);
+    this.data.sites = this.data.sites.filter((item) => item.id !== id);
+    this.data.identities = this.data.identities.filter((item) => item.siteId !== id);
+    this.data.views = this.data.views.filter((item) => item.siteId !== id);
     for (const identityId of identityIds) {
       this.vault.clear({ kind: "identity", id: identityId });
     }
-    this.vault.clearEnvironment(id);
-    if (this.settings.lastSceneId && removedSceneIds.has(this.settings.lastSceneId)) {
-      delete this.settings.lastSceneId;
+    this.vault.clearSite(id);
+    if (this.settings.lastViewId && removedViewIds.has(this.settings.lastViewId)) {
+      delete this.settings.lastViewId;
       this.settingsStore.write(this.settings);
     }
     this.persist();
@@ -368,40 +431,54 @@ export class WorkspaceService {
   // ---------- identities ----------
 
   saveIdentity(draft: IdentityDraft, password?: string): Identity {
-    const environment = this.data.environments.find((item) => item.id === draft.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
+    const site = this.data.sites.find((item) => item.id === draft.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
     const now = new Date().toISOString();
+    // A reference reuses the source wholesale, so validate it before writing
+    // anything: pointing at a missing or second-hand reference would produce an
+    // identity that cannot log in and gives no clue why.
+    const source = this.resolveCredentialSource(draft);
 
     let identity: Identity;
     if (draft.id) {
       const existing = this.data.identities.find((item) => item.id === draft.id);
       if (!existing) throw new Error(t("error.identityMissing"));
+      // An identity other identities point at cannot become a reference itself:
+      // that would create a chain, and chains are deliberately not supported.
+      if (source && this.data.identities.some((item) => item.credentialFrom === existing.id)) {
+        throw new Error(t("error.referenceHasDependents"));
+      }
       Object.assign(existing, {
-        name: draft.name,
-        username: draft.username,
-        role: draft.role,
-        color: draft.color,
+        name: source ? source.name : draft.name,
+        username: source ? source.username : draft.username,
+        role: source ? source.role : draft.role,
+        color: source ? source.color : draft.color,
         engineId: draft.engineId,
         startPath: draft.startPath,
         passwordMode: draft.passwordMode,
+        credentialFrom: draft.passwordMode === "reference" ? draft.credentialFrom : undefined,
+        // Extra login fields are site-specific, so they never follow a reference.
         extraFields: sanitizeLoginFields(draft.extraFields),
-        note: draft.note,
+        note: source ? source.note : draft.note,
         updatedAt: now,
       });
       identity = existing;
     } else {
       identity = {
         id: randomUUID(),
-        environmentId: draft.environmentId,
-        name: draft.name,
-        username: draft.username,
-        role: draft.role,
-        color: draft.color,
+        siteId: draft.siteId,
+        name: source ? source.name : draft.name,
+        username: source ? source.username : draft.username,
+        role: source ? source.role : draft.role,
+        color: source ? source.color : draft.color,
         engineId: draft.engineId,
         startPath: draft.startPath,
         passwordMode: draft.passwordMode,
+        ...(draft.passwordMode === "reference" && draft.credentialFrom
+          ? { credentialFrom: draft.credentialFrom }
+          : {}),
         extraFields: sanitizeLoginFields(draft.extraFields),
-        note: draft.note,
+        note: source ? source.note : draft.note,
         status: "unknown",
         createdAt: now,
         updatedAt: now,
@@ -415,6 +492,61 @@ export class WorkspaceService {
     if (draft.passwordMode === "inherit") {
       this.vault.clear({ kind: "identity", id: identity.id });
     }
+    // A reference is "exactly the same account", so editing the source has to
+    // reach everyone pointing at it. Without this the copied fields drift and the
+    // UI cannot explain why two identities that share a login show different names.
+    if (identity.passwordMode !== "reference") this.syncDependents(identity);
+    this.persist();
+    return identity;
+  }
+
+  /** Copies the synced fields of a reference source onto everyone referencing it. */
+  private syncDependents(source: Identity): void {
+    for (const dependent of this.data.identities) {
+      if (dependent.credentialFrom !== source.id) continue;
+      dependent.name = source.name;
+      dependent.username = source.username;
+      dependent.role = source.role;
+      dependent.color = source.color;
+      dependent.note = source.note;
+      dependent.updatedAt = source.updatedAt;
+    }
+  }
+
+  /**
+   * Validates and returns the identity a reference points at.
+   *
+   * Returns undefined for non-reference modes. A reference must name an existing
+   * identity that is not itself a reference, and may not point at itself.
+   */
+  private resolveCredentialSource(draft: IdentityDraft): Identity | undefined {
+    if (draft.passwordMode !== "reference") return undefined;
+    const sourceId = draft.credentialFrom;
+    if (!sourceId) throw new Error(t("error.referenceMissing"));
+    if (sourceId === draft.id) throw new Error(t("error.referenceSelf"));
+    const source = this.data.identities.find((item) => item.id === sourceId);
+    if (!source) throw new Error(t("error.referenceMissing"));
+    if (source.passwordMode === "reference") throw new Error(t("error.referenceChain"));
+    return source;
+  }
+
+  /**
+   * Turns a reference into an independent copy.
+   *
+   * The resolved password is written as the identity's own `custom` credential, so
+   * detaching can never fall back to the site default and silently change which
+   * password is used. Synced display fields keep their current values.
+   */
+  detachReference(id: string): Identity {
+    const identity = this.data.identities.find((item) => item.id === id);
+    if (!identity) throw new Error(t("error.identityMissing"));
+    if (identity.passwordMode !== "reference") return identity;
+    const resolved = resolvePassword(this.vault, identity, identity.siteId, this.data.identities);
+    if (!resolved.password) throw new Error(t("error.referenceMissing"));
+    this.vault.set({ kind: "identity", id: identity.id }, resolved.password);
+    identity.passwordMode = "custom";
+    identity.credentialFrom = undefined;
+    identity.updatedAt = new Date().toISOString();
     this.persist();
     return identity;
   }
@@ -423,13 +555,28 @@ export class WorkspaceService {
     for (const instance of [...this.liveInstances.values()]) {
       if (instance.identityId === id) void this.stopInstance(instance.id);
     }
-    this.data.identities = this.data.identities.filter((item) => item.id !== id);
-    for (const scene of this.data.scenes) {
-      scene.identityIds = scene.identityIds.filter((identityId) => identityId !== id);
-      delete scene.slotAssignments[id];
-      delete scene.paths[id];
+    // Identities referencing this one would otherwise have no way to log in and
+    // no visible reason why. Materialise the resolved password into each of them
+    // before the source disappears.
+    const dependents = this.data.identities.filter((item) => item.credentialFrom === id);
+    const resolved = resolvePassword(this.vault, { id, passwordMode: "custom" }, "", this.data.identities);
+    for (const dependent of dependents) {
+      if (resolved.password) {
+        this.vault.set({ kind: "identity", id: dependent.id }, resolved.password);
+        dependent.passwordMode = "custom";
+      } else {
+        dependent.passwordMode = "inherit";
+      }
+      dependent.credentialFrom = undefined;
+      dependent.updatedAt = new Date().toISOString();
     }
-    this.data.scenes = this.data.scenes.filter((scene) => scene.identityIds.length > 0);
+    this.data.identities = this.data.identities.filter((item) => item.id !== id);
+    for (const view of this.data.views) {
+      view.identityIds = view.identityIds.filter((identityId) => identityId !== id);
+      delete view.slotAssignments[id];
+      delete view.paths[id];
+    }
+    this.data.views = this.data.views.filter((view) => view.identityIds.length > 0);
     this.vault.clear({ kind: "identity", id });
     this.persist();
   }
@@ -448,7 +595,7 @@ export class WorkspaceService {
       await this.stopInstance(running.id);
     }
 
-    const dir = join(this.options.profileRoot, identity.environmentId, identity.id);
+    const dir = join(this.options.profileRoot, identity.siteId, identity.id);
     await rm(dir, { recursive: true, force: true });
 
     identity.status = "unknown";
@@ -457,7 +604,7 @@ export class WorkspaceService {
     this.persist();
   }
 
-  // ---------- scenes ----------
+  // ---------- views ----------
 
   private presetFor(layoutId: LayoutId): LayoutPreset {
     return findLayout(layoutId, this.data.layoutPresets);
@@ -466,7 +613,7 @@ export class WorkspaceService {
   /**
    * Keeps assignments honest: only member ids survive, and only slot indices that
    * exist in the referenced preset. Missing entries are filled at launch time in
-   * member order, so an old scene without assignments still opens sensibly.
+   * member order, so an old view without assignments still opens sensibly.
    */
   private sanitizeAssignments(
     layout: LayoutPreset,
@@ -485,23 +632,22 @@ export class WorkspaceService {
     return result;
   }
 
-  saveScene(draft: SceneDraft): Scene {
-    const environment = this.data.environments.find((item) => item.id === draft.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
-    const known = new Set(
-      this.data.identities
-        .filter((identity) => identity.environmentId === draft.environmentId)
-        .map((identity) => identity.id),
-    );
+  saveView(draft: ViewDraft): View {
+    const site = this.data.sites.find((item) => item.id === draft.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    // Members may come from any site: a view is one screen, not one deployment.
+    // `siteId` stays the view's home — it decides where the definition is listed
+    // and which site's accounts the picker opens by default.
+    const known = new Set(this.data.identities.map((identity) => identity.id));
     const identityIds = draft.identityIds.filter((id) => known.has(id));
-    if (identityIds.length === 0) throw new Error(t("error.sceneMembers"));
+    if (identityIds.length === 0) throw new Error(t("error.viewMembers"));
 
     const layout = this.presetFor(draft.layoutId);
     const slotAssignments = this.sanitizeAssignments(layout, identityIds, draft.slotAssignments);
     const now = new Date().toISOString();
     if (draft.id) {
-      const existing = this.data.scenes.find((item) => item.id === draft.id);
-      if (!existing) throw new Error(t("error.sceneMissing"));
+      const existing = this.data.views.find((item) => item.id === draft.id);
+      if (!existing) throw new Error(t("error.viewMissing"));
       Object.assign(existing, {
         name: draft.name,
         identityIds,
@@ -514,9 +660,9 @@ export class WorkspaceService {
       return existing;
     }
 
-    const scene: Scene = {
+    const view: View = {
       id: randomUUID(),
-      environmentId: draft.environmentId,
+      siteId: draft.siteId,
       name: draft.name,
       identityIds,
       layoutId: layout.id,
@@ -525,57 +671,144 @@ export class WorkspaceService {
       createdAt: now,
       updatedAt: now,
     };
-    this.data.scenes.push(scene);
+    this.data.views.push(view);
     this.persist();
-    return scene;
+    return view;
   }
 
-  deleteScene(id: string): void {
-    this.data.scenes = this.data.scenes.filter((item) => item.id !== id);
-    if (this.settings.lastSceneId === id) {
-      delete this.settings.lastSceneId;
+  /**
+   * Copies a view to another site, resolving each member to an identity there.
+   *
+   * Matching is by username: if the target site already has that account the view
+   * just uses it. Otherwise a new identity is created on the target that *references*
+   * the source identity's credentials, so the two keep sharing a password until the
+   * user detaches one. Session state is never shared — each side has its own
+   * profile and partition.
+   *
+   * The copy is independent (`copiedFrom` records provenance only); syncing later
+   * is an explicit action, not live linkage.
+   */
+  copyViewToSite(sourceViewId: string, targetSiteId: string): ViewCopyResult {
+    const source = this.data.views.find((item) => item.id === sourceViewId);
+    if (!source) throw new Error(t("error.viewMissing"));
+    const target = this.data.sites.find((item) => item.id === targetSiteId);
+    if (!target) throw new Error(t("error.siteMissing"));
+    if (target.id === source.siteId) throw new Error(t("error.copySameSite"));
+
+    const createdReferences: string[] = [];
+    const reused: string[] = [];
+    const skipped: string[] = [];
+    const mapped: string[] = [];
+
+    for (const sourceIdentityId of source.identityIds) {
+      const from = this.data.identities.find((item) => item.id === sourceIdentityId);
+      if (!from) {
+        skipped.push(sourceIdentityId);
+        continue;
+      }
+      const existing = this.data.identities.find(
+        (item) => item.siteId === target.id && item.username === from.username,
+      );
+      if (existing) {
+        mapped.push(existing.id);
+        reused.push(from.username);
+        continue;
+      }
+      if (from.passwordMode === "reference") {
+        // The source has no credentials of its own, so there is nothing to share;
+        // copying it would produce a reference to a reference.
+        skipped.push(from.username);
+        continue;
+      }
+      const now = new Date().toISOString();
+      const created: Identity = {
+        id: randomUUID(),
+        siteId: target.id,
+        name: from.name,
+        username: from.username,
+        role: from.role,
+        color: from.color,
+        passwordMode: "reference",
+        credentialFrom: from.id,
+        ...(from.startPath ? { startPath: from.startPath } : {}),
+        ...(from.engineId ? { engineId: from.engineId } : {}),
+        status: "unknown",
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.data.identities.push(created);
+      mapped.push(created.id);
+      createdReferences.push(from.username);
+    }
+
+    if (mapped.length === 0) throw new Error(t("error.copyNoMembers"));
+
+    const layout = this.presetFor(source.layoutId);
+    const view: View = {
+      id: randomUUID(),
+      siteId: target.id,
+      name: source.name,
+      identityIds: mapped,
+      layoutId: layout.id,
+      // Slot assignments are by identity id, so they are rebuilt from member order
+      // rather than copied over — the ids are different people on this site.
+      slotAssignments: {},
+      paths: {},
+      copiedFrom: { siteId: source.siteId, viewId: source.id },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.data.views.push(view);
+    this.persist();
+    return { view, createdReferences, reused, skipped };
+  }
+
+  deleteView(id: string): void {
+    this.data.views = this.data.views.filter((item) => item.id !== id);
+    if (this.settings.lastViewId === id) {
+      delete this.settings.lastViewId;
       this.settingsStore.write(this.settings);
     }
     this.persist();
   }
 
   /** Switching the preset clears assignments that no longer point at a real slot. */
-  setSceneLayout(sceneId: string, layoutId: LayoutId): void {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) throw new Error(t("error.sceneMissing"));
+  setViewLayout(viewId: string, layoutId: LayoutId): void {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) throw new Error(t("error.viewMissing"));
     const layout = this.presetFor(layoutId);
-    scene.layoutId = layout.id;
-    scene.slotAssignments = this.sanitizeAssignments(
+    view.layoutId = layout.id;
+    view.slotAssignments = this.sanitizeAssignments(
       layout,
-      scene.identityIds,
-      scene.slotAssignments,
+      view.identityIds,
+      view.slotAssignments,
     );
-    scene.updatedAt = new Date().toISOString();
+    view.updatedAt = new Date().toISOString();
     this.persist();
   }
 
-  setSceneSlotAssignments(sceneId: string, assignments: Record<string, number>): void {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) throw new Error(t("error.sceneMissing"));
-    const layout = this.presetFor(scene.layoutId);
-    scene.slotAssignments = this.sanitizeAssignments(layout, scene.identityIds, assignments);
-    scene.updatedAt = new Date().toISOString();
+  setViewSlotAssignments(viewId: string, assignments: Record<string, number>): void {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) throw new Error(t("error.viewMissing"));
+    const layout = this.presetFor(view.layoutId);
+    view.slotAssignments = this.sanitizeAssignments(layout, view.identityIds, assignments);
+    view.updatedAt = new Date().toISOString();
     this.persist();
   }
 
   /**
-   * Moves the windows a scene already has open to match its slot assignments.
+   * Moves the windows a view already has open to match its slot assignments.
    * Dragging a member to another slot is pointless if the browser window does not
    * follow, so this is called right after an assignment change.
    */
-  async retileScene(sceneId: string): Promise<void> {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) return;
-    const preset = this.presetFor(scene.layoutId);
+  async retileView(viewId: string): Promise<void> {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) return;
+    const preset = this.presetFor(view.layoutId);
     const area = this.workArea();
     const taken = new Set<number>();
     await Promise.all(
-      scene.identityIds.map(async (identityId, index) => {
+      view.identityIds.map(async (identityId, index) => {
         const instance = [...this.liveInstances.values()].find(
           (item) => item.identityId === identityId,
         );
@@ -585,7 +818,7 @@ export class WorkspaceService {
         const slotIndex = this.resolveSlotIndex(
           preset,
           identity,
-          scene.slotAssignments,
+          view.slotAssignments,
           taken,
           index,
         );
@@ -642,12 +875,12 @@ export class WorkspaceService {
     const preset = this.data.layoutPresets.find((item) => item.id === id);
     if (!preset) return;
     this.data.layoutPresets = this.data.layoutPresets.filter((item) => item.id !== id);
-    // Scenes must never dangle on a deleted preset; fall back to the default grid.
-    for (const scene of this.data.scenes) {
-      if (scene.layoutId !== id) continue;
-      scene.layoutId = "2x2";
-      scene.slotAssignments = {};
-      scene.updatedAt = new Date().toISOString();
+    // Views must never dangle on a deleted preset; fall back to the default grid.
+    for (const view of this.data.views) {
+      if (view.layoutId !== id) continue;
+      view.layoutId = "2x2";
+      view.slotAssignments = {};
+      view.updatedAt = new Date().toISOString();
     }
     this.persist();
   }
@@ -669,12 +902,12 @@ export class WorkspaceService {
       format: EXPORT_FORMAT,
       version: EXPORT_VERSION,
       exportedAt: new Date().toISOString(),
-      environments: this.data.environments.map((item) => ({ ...item })),
+      sites: this.data.sites.map((item) => ({ ...item })),
       identities: this.data.identities.map((item) => {
         const { lastCheckedAt: _checked, ...rest } = item;
         return { ...rest, status: "unknown" as const };
       }),
-      scenes: this.data.scenes.map((item) => ({
+      views: this.data.views.map((item) => ({
         ...item,
         identityIds: [...item.identityIds],
         slotAssignments: { ...item.slotAssignments },
@@ -689,12 +922,12 @@ export class WorkspaceService {
     if (passphrase) {
       if (this.vault.locked) throw new Error(t("vault.locked"));
       const secrets = {
-        environment: {} as Record<string, string>,
+        site: {} as Record<string, string>,
         identity: {} as Record<string, string>,
       };
-      for (const environment of this.data.environments) {
-        const password = this.vault.get({ kind: "environment", id: environment.id });
-        if (password) secrets.environment[environment.id] = password;
+      for (const site of this.data.sites) {
+        const password = this.vault.get({ kind: "site", id: site.id });
+        if (password) secrets.site[site.id] = password;
       }
       for (const identity of this.data.identities) {
         const password = this.vault.get({ kind: "identity", id: identity.id });
@@ -709,22 +942,22 @@ export class WorkspaceService {
 
   /**
    * Merges a validated export into the current workspace. Entries whose
-   * environment is missing are skipped rather than attached to the wrong scope.
+   * site is missing are skipped rather than attached to the wrong scope.
    */
   importWorkspace(file: WorkspaceExportFile, passphrase?: string): ImportResult {
     let secrets:
-      | { environment: Record<string, string>; identity: Record<string, string> }
+      | { site: Record<string, string>; identity: Record<string, string> }
       | undefined;
     if (file.secrets) {
       if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
       try {
         const key = deriveKey(passphrase, file.secrets.kdf);
         const parsed = JSON.parse(open(key, file.secrets.payload)) as {
-          environment?: Record<string, string>;
+          site?: Record<string, string>;
           identity?: Record<string, string>;
         };
         secrets = {
-          environment: parsed.environment ?? {},
+          site: parsed.site ?? {},
           identity: parsed.identity ?? {},
         };
       } catch {
@@ -738,21 +971,21 @@ export class WorkspaceService {
     let added = 0;
     let updated = 0;
 
-    for (const environment of file.environments) {
-      const existing = this.data.environments.find((item) => item.id === environment.id);
+    for (const site of file.sites) {
+      const existing = this.data.sites.find((item) => item.id === site.id);
       if (existing) {
-        Object.assign(existing, environment, { updatedAt: new Date().toISOString() });
+        Object.assign(existing, site, { updatedAt: new Date().toISOString() });
         updated += 1;
       } else {
-        this.data.environments.push({ ...environment });
+        this.data.sites.push({ ...site });
         added += 1;
       }
     }
 
-    const environmentIds = new Set(this.data.environments.map((item) => item.id));
+    const siteIds = new Set(this.data.sites.map((item) => item.id));
     let skipped = 0;
     for (const identity of file.identities) {
-      if (!environmentIds.has(identity.environmentId)) {
+      if (!siteIds.has(identity.siteId)) {
         skipped += 1;
         continue;
       }
@@ -767,29 +1000,29 @@ export class WorkspaceService {
     }
 
     const identityIds = new Set(this.data.identities.map((item) => item.id));
-    for (const scene of file.scenes) {
-      if (!environmentIds.has(scene.environmentId)) {
+    for (const view of file.views) {
+      if (!siteIds.has(view.siteId)) {
         skipped += 1;
         continue;
       }
-      const members = scene.identityIds.filter((id) => identityIds.has(id));
+      const members = view.identityIds.filter((id) => identityIds.has(id));
       if (members.length === 0) {
         skipped += 1;
         continue;
       }
       const slots = Object.fromEntries(
-        Object.entries(scene.slotAssignments).filter(([id]) => members.includes(id)),
+        Object.entries(view.slotAssignments).filter(([id]) => members.includes(id)),
       );
-      const existing = this.data.scenes.find((item) => item.id === scene.id);
+      const existing = this.data.views.find((item) => item.id === view.id);
       if (existing) {
-        Object.assign(existing, scene, {
+        Object.assign(existing, view, {
           identityIds: members,
           slotAssignments: slots,
           updatedAt: new Date().toISOString(),
         });
         updated += 1;
       } else {
-        this.data.scenes.push({ ...scene, identityIds: members, slotAssignments: slots });
+        this.data.views.push({ ...view, identityIds: members, slotAssignments: slots });
         added += 1;
       }
     }
@@ -809,9 +1042,9 @@ export class WorkspaceService {
 
     let importedSecrets = 0;
     if (secrets) {
-      for (const [id, password] of Object.entries(secrets.environment)) {
-        if (!environmentIds.has(id)) continue;
-        this.vault.set({ kind: "environment", id }, password);
+      for (const [id, password] of Object.entries(secrets.site)) {
+        if (!siteIds.has(id)) continue;
+        this.vault.set({ kind: "site", id }, password);
         importedSecrets += 1;
       }
       for (const [id, password] of Object.entries(secrets.identity)) {
@@ -858,6 +1091,20 @@ export class WorkspaceService {
     return this.vault.get(owner);
   }
 
+  /**
+   * Password an identity would log in with, following references.
+   *
+   * Kept in the main process: the embedded login resolver needs the resolved value
+   * but the renderer must never see it.
+   */
+  resolvedPassword(identityId: string): string | undefined {
+    this.guardVaultUnlocked();
+    const identity = this.data.identities.find((item) => item.id === identityId);
+    if (!identity) return undefined;
+    return resolvePassword(this.vault, identity, identity.siteId, this.data.identities)
+      .password;
+  }
+
   unlockVault(password: string): boolean {
     const unlocked = this.vault.unlock(password);
     this.emit();
@@ -894,8 +1141,8 @@ export class WorkspaceService {
 
   // ---------- launching ----------
 
-  private resolveEngine(identity: Identity, environment: Environment): Engine {
-    const engineId = identity.engineId ?? environment.defaultEngineId;
+  private resolveEngine(identity: Identity, site: Site): Engine {
+    const engineId = identity.engineId ?? site.defaultEngineId;
     const engine =
       this.engines.find((item) => item.id === engineId) ?? this.engines.find((item) => item.cdp);
     if (!engine) throw new Error(t("error.noEngine"));
@@ -1054,9 +1301,9 @@ export class WorkspaceService {
   ): Promise<LaunchResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
-    const environment = this.data.environments.find((item) => item.id === identity.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
-    const engine = this.resolveEngine(identity, environment);
+    const site = this.data.sites.find((item) => item.id === identity.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    const engine = this.resolveEngine(identity, site);
 
     const running = [...this.liveInstances.values()].find(
       (instance) => instance.identityId === identityId,
@@ -1066,8 +1313,8 @@ export class WorkspaceService {
     }
 
     const startUrl = joinUrl(
-      environment.baseUrl,
-      pathOverride ?? identity.startPath ?? environment.loginPath ?? "/",
+      site.baseUrl,
+      pathOverride ?? identity.startPath ?? site.loginPath ?? "/",
     );
     const area = this.workArea();
     const preset = this.presetFor(this.settings.layout);
@@ -1083,7 +1330,7 @@ export class WorkspaceService {
     const canRetile = await this.windowsUntouched(preset);
 
     const outcome = await launchBrowser({
-      environmentId: environment.id,
+      siteId: site.id,
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: identity.id,
@@ -1099,60 +1346,79 @@ export class WorkspaceService {
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);
     this.persist();
-    this.scheduleAutoFill(identity, environment, outcome.instance);
+    this.scheduleAutoFill(identity, site, outcome.instance);
     await this.learnFrameInset(outcome.instance);
     this.placedBounds.set(outcome.instance.id, bounds);
     if (canRetile) await this.tileInstances(preset, [...this.liveInstances.values()]);
     return { instance: outcome.instance, identities: [identity] };
   }
 
-  async launchScene(sceneId: string): Promise<LaunchResult> {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) throw new Error(t("error.sceneMissing"));
-    const environment = this.data.environments.find((item) => item.id === scene.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
+  async launchView(viewId: string): Promise<LaunchResult> {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) throw new Error(t("error.viewMissing"));
+    const site = this.data.sites.find((item) => item.id === view.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
 
-    const members = scene.identityIds
+    const members = view.identityIds
       .map((id) => this.data.identities.find((identity) => identity.id === id))
       .filter((identity): identity is Identity => Boolean(identity));
-    if (members.length === 0) throw new Error(t("error.sceneMembers"));
+    if (members.length === 0) throw new Error(t("error.viewMembers"));
+    // External windows are one launch per site (different engines and start
+    // URLs), so a view that spans sites is only supported on the built-in
+    // surface, where every tab is its own WebContentsView.
+    const sites = new Set(members.map((identity) => identity.siteId));
+    if (sites.size > 1) throw new Error(t("error.viewMixedSitesExternal"));
 
     const result = await this.launchGroup(
-      environment,
+      site,
       members,
-      this.presetFor(scene.layoutId),
-      scene.slotAssignments,
-      (identity) => scene.paths[identity.id],
+      this.presetFor(view.layoutId),
+      view.slotAssignments,
+      (identity) => view.paths[identity.id],
     );
-    // Remember the scene for "restore on next start". Written only after every
+    // Remember the view for "restore on next start". Written only after every
     // window opened, so a half-failed launch never becomes the restore target.
-    this.settings.lastSceneId = scene.id;
+    this.settings.lastViewId = view.id;
     this.settingsStore.write(this.settings);
     return result;
+  }
+
+  /**
+   * Records a view as the restore target without launching anything.
+   *
+   * The built-in surface opens views itself, so it has to tell the workspace
+   * which view was last used; otherwise "restore last view" would only ever
+   * remember external launches.
+   */
+  rememberLaunchedView(viewId: string): void {
+    if (!this.data.views.some((view) => view.id === viewId)) return;
+    if (this.settings.lastViewId === viewId) return;
+    this.settings.lastViewId = viewId;
+    this.settingsStore.write(this.settings);
   }
 
   /**
    * Launches a hand-picked set of identities with the default layout.
    *
    * This is the identities page's batch action: the same tiling and the same
-   * launch interval as a scene, but the group is a selection rather than a saved
-   * scene, and nothing is remembered for restore-on-start. Starting them one by
+   * launch interval as a view, but the group is a selection rather than a saved
+   * view, and nothing is remembered for restore-on-start. Starting them one by
    * one instead means every new window covers the cards you are still clicking.
    */
   async launchIdentities(identityIds: string[]): Promise<LaunchResult> {
     const wanted = new Set(identityIds.map(String));
     const members = this.data.identities.filter((identity) => wanted.has(identity.id));
-    if (members.length === 0) throw new Error(t("error.sceneMembers"));
-    const environmentId = members[0]?.environmentId;
-    // One layout describes one screen, so a batch spanning two environments would
-    // have no sensible tiling; the UI only ever offers the active environment.
-    if (members.some((identity) => identity.environmentId !== environmentId)) {
-      throw new Error(t("error.batchMixedEnvironments"));
+    if (members.length === 0) throw new Error(t("error.viewMembers"));
+    const siteId = members[0]?.siteId;
+    // One layout describes one screen, so a batch spanning two sites would
+    // have no sensible tiling; the UI only ever offers the active site.
+    if (members.some((identity) => identity.siteId !== siteId)) {
+      throw new Error(t("error.batchMixedSites"));
     }
-    const environment = this.data.environments.find((item) => item.id === environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
+    const site = this.data.sites.find((item) => item.id === siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
     return this.launchGroup(
-      environment,
+      site,
       members,
       this.presetFor(this.settings.layout),
       {},
@@ -1168,7 +1434,7 @@ export class WorkspaceService {
    * ends up with a half-applied layout.
    */
   private async launchGroup(
-    environment: Environment,
+    site: Site,
     members: Identity[],
     preset: LayoutPreset,
     assignments: Record<string, number>,
@@ -1201,13 +1467,13 @@ export class WorkspaceService {
           running.slotIndex = slotIndex;
           continue;
         }
-        const engine = this.resolveEngine(identity, environment);
+        const engine = this.resolveEngine(identity, site);
         const startUrl = joinUrl(
-          environment.baseUrl,
-          pathFor(identity) ?? identity.startPath ?? environment.loginPath ?? "/",
+          site.baseUrl,
+          pathFor(identity) ?? identity.startPath ?? site.loginPath ?? "/",
         );
         const outcome = await launchBrowser({
-          environmentId: environment.id,
+          siteId: site.id,
           profileRoot: this.options.profileRoot,
           engine,
           profileKey: identity.id,
@@ -1224,7 +1490,7 @@ export class WorkspaceService {
         launched.push(outcome.instance);
         startedHere.push(outcome.instance);
         slotByInstance.set(outcome.instance.id, slotIndex);
-        this.scheduleAutoFill(identity, environment, outcome.instance);
+        this.scheduleAutoFill(identity, site, outcome.instance);
         // The first window of the session also tells us the real frame inset;
         // the retile at the end of the loop then applies it to every window.
         await this.learnFrameInset(outcome.instance);
@@ -1252,24 +1518,24 @@ export class WorkspaceService {
   }
 
   /**
-   * Reopens the scene that was launched last, once per process. Callers should
+   * Reopens the view that was launched last, once per process. Callers should
    * have the window on screen already: this only starts browsers.
    */
-  async restoreLastScene(): Promise<SceneRestoreOutcome> {
+  async restoreLastView(): Promise<ViewRestoreOutcome> {
     if (this.restoreAttempted) return { restored: false, reason: "already-attempted" };
     this.restoreAttempted = true;
-    if (!this.settings.restoreLastScene) return { restored: false, reason: "disabled" };
+    if (!this.settings.restoreLastView) return { restored: false, reason: "disabled" };
 
-    const sceneId = this.settings.lastSceneId;
-    if (!sceneId) return { restored: false, reason: "no-scene" };
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    const environment = scene
-      ? this.data.environments.find((item) => item.id === scene.environmentId)
+    const viewId = this.settings.lastViewId;
+    if (!viewId) return { restored: false, reason: "no-view" };
+    const view = this.data.views.find((item) => item.id === viewId);
+    const site = view
+      ? this.data.sites.find((item) => item.id === view.siteId)
       : undefined;
-    if (!scene || !environment) {
+    if (!view || !site) {
       // The workspace changed while the app was closed. Drop the dangling id
       // instead of retrying it on every start.
-      delete this.settings.lastSceneId;
+      delete this.settings.lastViewId;
       this.settingsStore.write(this.settings);
       this.emit();
       return { restored: false, reason: "missing" };
@@ -1279,13 +1545,13 @@ export class WorkspaceService {
     // pick no engine at all on a cold start with an empty cache.
     await this.maintenanceDone;
     try {
-      await this.launchScene(sceneId);
-      return { restored: true, sceneId, sceneName: scene.name };
+      await this.launchView(viewId);
+      return { restored: true, viewId, viewName: view.name };
     } catch (error) {
       return {
         restored: false,
-        sceneId,
-        sceneName: scene.name,
+        viewId,
+        viewName: view.name,
         reason: (error as Error).message,
       };
     }
@@ -1293,51 +1559,51 @@ export class WorkspaceService {
 
   /**
    * Reopens one member after the user closed its window. Without this the only
-   * recovery was relaunching the whole scene, which also restarted windows that
+   * recovery was relaunching the whole view, which also restarted windows that
    * were still alive.
    */
-  async launchSceneMember(sceneId: string, identityId: string): Promise<LaunchResult> {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) throw new Error(t("error.sceneMissing"));
+  async launchViewMember(viewId: string, identityId: string): Promise<LaunchResult> {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) throw new Error(t("error.viewMissing"));
     const identity = this.data.identities.find(
-      (item) => item.id === identityId && item.environmentId === scene.environmentId,
+      (item) => item.id === identityId && item.siteId === view.siteId,
     );
     if (!identity) throw new Error(t("error.identityMissing"));
-    const environment = this.data.environments.find((item) => item.id === scene.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
+    const site = this.data.sites.find((item) => item.id === view.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
 
     const running = [...this.liveInstances.values()].find(
       (instance) => instance.identityId === identityId,
     );
     if (running) return { instance: running, identities: [identity] };
 
-    const preset = this.presetFor(scene.layoutId);
+    const preset = this.presetFor(view.layoutId);
     const taken = new Set<number>();
-    for (const memberId of scene.identityIds) {
+    for (const memberId of view.identityIds) {
       if (memberId === identityId) continue;
       const instance = [...this.liveInstances.values()].find(
         (item) => item.identityId === memberId,
       );
-      const assigned = scene.slotAssignments[memberId];
+      const assigned = view.slotAssignments[memberId];
       if (instance && typeof assigned === "number") taken.add(assigned);
     }
-    const fallback = Math.max(0, scene.identityIds.indexOf(identityId));
+    const fallback = Math.max(0, view.identityIds.indexOf(identityId));
     const slotIndex = this.resolveSlotIndex(
       preset,
       identity,
-      scene.slotAssignments,
+      view.slotAssignments,
       taken,
       fallback,
     );
 
-    const engine = this.resolveEngine(identity, environment);
+    const engine = this.resolveEngine(identity, site);
     const startUrl = joinUrl(
-      environment.baseUrl,
-      scene.paths[identity.id] ?? identity.startPath ?? environment.loginPath ?? "/",
+      site.baseUrl,
+      view.paths[identity.id] ?? identity.startPath ?? site.loginPath ?? "/",
     );
     const bounds = this.slotBounds(preset, this.workArea(), slotIndex);
     const outcome = await launchBrowser({
-      environmentId: environment.id,
+      siteId: site.id,
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: identity.id,
@@ -1354,24 +1620,24 @@ export class WorkspaceService {
     this.persist();
     await this.learnFrameInset(outcome.instance);
     this.placedBounds.set(outcome.instance.id, bounds);
-    this.scheduleAutoFill(identity, environment, outcome.instance);
+    this.scheduleAutoFill(identity, site, outcome.instance);
     return { instance: outcome.instance, identities: [identity] };
   }
 
   /**
-   * Opens a disposable browser window. With an environment it starts on that
+   * Opens a disposable browser window. With an site it starts on that
    * login page; without one it opens a blank tab, for the cases where all the
-   * user wants is a throwaway browser that belongs to no environment at all.
+   * user wants is a throwaway browser that belongs to no site at all.
    */
-  async launchCleanSession(environmentId?: string): Promise<LaunchResult> {
+  async launchCleanSession(siteId?: string): Promise<LaunchResult> {
     // Reuse of a directory the startup sweep is about to delete must not happen.
     await this.maintenanceDone;
-    const environment = environmentId
-      ? this.data.environments.find((item) => item.id === environmentId)
+    const site = siteId
+      ? this.data.sites.find((item) => item.id === siteId)
       : undefined;
-    if (environmentId && !environment) throw new Error(t("error.environmentMissing"));
+    if (siteId && !site) throw new Error(t("error.siteMissing"));
     const engine =
-      this.engines.find((item) => item.id === environment?.defaultEngineId) ??
+      this.engines.find((item) => item.id === site?.defaultEngineId) ??
       this.engines.find((item) => item.cdp);
     if (!engine) throw new Error(t("error.noEngine"));
 
@@ -1388,14 +1654,14 @@ export class WorkspaceService {
     const instanceId = randomUUID();
 
     const outcome = await launchBrowser({
-      // Environment-free sessions live in their own segment so deleting an
-      // environment can never adopt or stop them.
-      environmentId: environment?.id ?? CLEAN_SESSION_SEGMENT,
+      // Site-free sessions live in their own segment so deleting an
+      // site can never adopt or stop them.
+      siteId: site?.id ?? CLEAN_SESSION_SEGMENT,
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: `${CLEAN_PROFILE_PREFIX}${instanceId}`,
-      startUrl: environment
-        ? joinUrl(environment.baseUrl, environment.loginPath || "/")
+      startUrl: site
+        ? joinUrl(site.baseUrl, site.loginPath || "/")
         : "about:blank",
       windowBounds: slot,
       label: t("instance.cleanLabel"),
@@ -1434,19 +1700,19 @@ export class WorkspaceService {
   }
 
   /**
-   * Closes only the windows one scene opened.
+   * Closes only the windows one view opened.
    *
-   * Membership is the scene's current identity list, not the instance's layout:
-   * a window launched by hand for an identity that is also in the scene is still
-   * that identity's window, and the user asked for "this scene's pages" to go
-   * away. Instances started as part of another scene are left alone.
+   * Membership is the view's current identity list, not the instance's layout:
+   * a window launched by hand for an identity that is also in the view is still
+   * that identity's window, and the user asked for "this view's pages" to go
+   * away. Instances started as part of another view are left alone.
    */
-  async stopScene(sceneId: string): Promise<void> {
-    const scene = this.data.scenes.find((item) => item.id === sceneId);
-    if (!scene) throw new Error(t("error.sceneMissing"));
-    const members = new Set(scene.identityIds);
+  async stopView(viewId: string): Promise<void> {
+    const view = this.data.views.find((item) => item.id === viewId);
+    if (!view) throw new Error(t("error.viewMissing"));
+    const members = new Set(view.identityIds);
     // Clean sessions and blank windows carry no identity, so they can never be
-    // part of a scene; a missing id simply matches nothing.
+    // part of a view; a missing id simply matches nothing.
     const instances = [...this.liveInstances.values()].filter(
       (instance) => instance.identityId !== undefined && members.has(instance.identityId),
     );
@@ -1487,7 +1753,7 @@ export class WorkspaceService {
    * ignored per window: Wayland compositors may refuse absolute placement, and a
    * window that moved nowhere is still usable.
    *
-   * `slotByInstance` carries the slots resolved for a scene: without it the index
+   * `slotByInstance` carries the slots resolved for a view: without it the index
    * of the launch order would silently overwrite drag-and-drop assignments.
    */
   private async tileInstances(
@@ -1593,10 +1859,10 @@ export class WorkspaceService {
     return [...this.liveInstances.values()].find((instance) => instance.identityId === identityId);
   }
 
-  private requireEnvironment(identity: Identity): Environment {
-    const environment = this.data.environments.find((item) => item.id === identity.environmentId);
-    if (!environment) throw new Error(t("error.environmentMissing"));
-    return environment;
+  private requireSite(identity: Identity): Site {
+    const site = this.data.sites.find((item) => item.id === identity.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    return site;
   }
 
   async checkAuth(identityId: string): Promise<AuthCheckResult> {
@@ -1609,7 +1875,7 @@ export class WorkspaceService {
 
   /**
    * Inspects one identity without persisting. Batch checks touch workspace.json
-   * once at the end instead of once per identity, which matters for a scene of
+   * once at the end instead of once per identity, which matters for a view of
    * eight windows.
    */
   private async runAuthCheck(identity: Identity): Promise<{
@@ -1622,29 +1888,29 @@ export class WorkspaceService {
       changed: false,
     });
 
-    const environment = this.data.environments.find((item) => item.id === identity.environmentId);
-    if (!environment) return unknown(t("error.environmentMissing"));
-    const checkPath = environment.authCheckPath;
+    const site = this.data.sites.find((item) => item.id === identity.siteId);
+    if (!site) return unknown(t("error.siteMissing"));
+    const checkPath = site.authCheckPath;
     if (!checkPath) return unknown(t("auth.noCheckPath"));
 
     const instance = this.findInstance(identity.id);
     if (instance) {
       const entry = cdpRegistry.get(instance.id);
       if (!entry) return unknown(t("auth.noCdp"));
-      return this.checkInOpenWindow(identity, environment, checkPath, entry.page, checkedAt, unknown);
+      return this.checkInOpenWindow(identity, site, checkPath, entry.page, checkedAt, unknown);
     }
 
     // No window: run the same check in a temporary headless session over this
     // identity's own profile. This is the case the feature exists for — the user
     // should not have to open eight windows to learn that two of them expired.
     if (this.options.headlessAuthCheck === false) return unknown(t("auth.notRunning"));
-    return this.checkHeadless(identity, environment, checkPath, checkedAt, unknown);
+    return this.checkHeadless(identity, site, checkPath, checkedAt, unknown);
   }
 
   /** Reads the verdict from a page that is already open in a visible window. */
   private async checkInOpenWindow(
     identity: Identity,
-    environment: Environment,
+    site: Site,
     checkPath: string,
     page: Parameters<typeof evaluate>[0],
     checkedAt: string,
@@ -1652,7 +1918,7 @@ export class WorkspaceService {
   ): Promise<{ result: AuthCheckResult; changed: boolean }> {
     try {
       const location = await evaluate<string>(page, "location.href");
-      if (!sameOrigin(location, environment.baseUrl)) return unknown(t("auth.crossOrigin"));
+      if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
       const result = await evaluate<{ status: number; ok: boolean; url: string }>(
         page,
         buildAuthCheckExpression(checkPath),
@@ -1671,27 +1937,27 @@ export class WorkspaceService {
    */
   private async checkHeadless(
     identity: Identity,
-    environment: Environment,
+    site: Site,
     checkPath: string,
     checkedAt: string,
     unknown: (detail: string) => { result: AuthCheckResult; changed: boolean },
   ): Promise<{ result: AuthCheckResult; changed: boolean }> {
     let engine: Engine;
     try {
-      engine = this.resolveEngine(identity, environment);
+      engine = this.resolveEngine(identity, site);
     } catch (error) {
       return unknown((error as Error).message);
     }
     if (!supportsHeadlessSession(engine)) return unknown(t("auth.noHeadless", { brand: engine.brand }));
 
-    const base = environment.baseUrl.replace(/\/+$/, "");
+    const base = site.baseUrl.replace(/\/+$/, "");
     const startUrl = `${base}${checkPath}`;
     let session: HeadlessSession | undefined;
     try {
       session = await openHeadlessSession({
         engine,
         profileRoot: this.options.profileRoot,
-        environmentId: environment.id,
+        siteId: site.id,
         profileKey: identity.id,
         userAgent: this.settings.headlessCheckUa,
       });
@@ -1700,7 +1966,7 @@ export class WorkspaceService {
       // redirect visible instead of silently checking the wrong site.
       await navigateAndWait(session.page, startUrl, 15_000);
       const location = await evaluate<string>(session.page, "location.href");
-      if (!sameOrigin(location, environment.baseUrl)) return unknown(t("auth.crossOrigin"));
+      if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
       const result = await evaluate<{ status: number; ok: boolean; url: string }>(
         session.page,
         buildAuthCheckExpression(checkPath),
@@ -1732,13 +1998,13 @@ export class WorkspaceService {
   }
 
   /**
-   * Runs the login check for one environment (or every identity when omitted).
+   * Runs the login check for one site (or every identity when omitted).
    * Three at a time: each identity owns a separate browser and CDP socket, so the
    * only shared resource is the page's own server.
    */
-  async checkAllAuth(environmentId?: string): Promise<AuthBatchResult> {
+  async checkAllAuth(siteId?: string): Promise<AuthBatchResult> {
     const identities = this.data.identities.filter(
-      (identity) => !environmentId || identity.environmentId === environmentId,
+      (identity) => !siteId || identity.siteId === siteId,
     );
     const results: AuthCheckResult[] = new Array(identities.length);
     let cursor = 0;
@@ -1767,7 +2033,7 @@ export class WorkspaceService {
       else totals.unknown += 1;
     }
     return {
-      ...(environmentId ? { environmentId } : {}),
+      ...(siteId ? { siteId } : {}),
       checkedAt: new Date().toISOString(),
       totals,
       results,
@@ -1780,10 +2046,10 @@ export class WorkspaceService {
    * window, and starting them together would both overwhelm the machine and make
    * failures impossible to attribute.
    */
-  async reloginExpired(environmentId?: string): Promise<ReloginBatchResult> {
+  async reloginExpired(siteId?: string): Promise<ReloginBatchResult> {
     const targets = this.data.identities.filter(
       (identity) =>
-        (!environmentId || identity.environmentId === environmentId) &&
+        (!siteId || identity.siteId === siteId) &&
         identity.status === "expired",
     );
     const results: ReloginResult[] = [];
@@ -1892,29 +2158,30 @@ export class WorkspaceService {
   async fillLogin(identityId: string): Promise<AuthCheckResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
-    const environment = this.requireEnvironment(identity);
-    const resolved = resolvePassword(this.vault, identity, environment.id);
+    const site = this.requireSite(identity);
+    const resolved = resolvePassword(this.vault, identity, site.id, this.data.identities);
     if (!resolved.password) throw new Error(t("error.noPassword"));
 
     let instance = this.findInstance(identityId);
     if (!instance) {
-      const result = await this.launchIdentity(identityId, environment.loginPath);
+      const result = await this.launchIdentity(identityId, site.loginPath);
       instance = result.instance;
     }
     const entry = cdpRegistry.get(instance.id);
     if (!entry) throw new Error(t("auth.noCdp"));
 
     const location = await evaluate<string>(entry.page, "location.href");
-    if (!sameOrigin(location, environment.baseUrl)) {
+    if (!sameOrigin(location, site.baseUrl)) {
       throw new Error(t("auth.crossOrigin"));
     }
-    if (!location.includes(environment.loginPath)) {
-      await navigateAndWait(entry.page, joinUrl(environment.baseUrl, environment.loginPath));
+    if (!location.includes(site.loginPath)) {
+      await navigateAndWait(entry.page, joinUrl(site.baseUrl, site.loginPath));
     }
 
-    const outcome = await this.tryFill(identity, environment, entry.page);
+    const outcome = await this.tryFill(identity, site, entry.page);
     if (!outcome.ok) {
       if (outcome.reason === "cross-origin") throw new Error(t("auth.crossOrigin"));
+      if (outcome.reason === "origin-changed") throw new Error(t("auth.originChanged"));
       throw new Error(t("error.fillFailed", { reason: outcome.reason ?? "unknown" }));
     }
 
@@ -1937,7 +2204,7 @@ export class WorkspaceService {
    */
   private async autoFillAfterLaunch(
     identity: Identity,
-    environment: Environment,
+    site: Site,
     instance: RunningInstance,
   ): Promise<AutoFillReport> {
     const base = {
@@ -1950,7 +2217,7 @@ export class WorkspaceService {
     };
     const entry = cdpRegistry.get(instance.id);
     if (!entry) return { ...base, skipped: "external" };
-    if (!resolvePassword(this.vault, identity, environment.id).password) {
+    if (!resolvePassword(this.vault, identity, site.id, this.data.identities).password) {
       return { ...base, skipped: "no-password" };
     }
 
@@ -1961,7 +2228,7 @@ export class WorkspaceService {
     let failed = false;
     while (Date.now() < deadline) {
       try {
-        last = await this.tryFill(identity, environment, entry.page);
+        last = await this.tryFill(identity, site, entry.page);
         failed = false;
       } catch {
         // A navigation can destroy the execution context between two polls.
@@ -1977,6 +2244,7 @@ export class WorkspaceService {
     if (!last?.ok) {
       // A form that never appears usually means the window opened already signed in.
       if (last?.reason === "cross-origin") return { ...base, skipped: "cross-origin" };
+      if (last?.reason === "origin-changed") return { ...base, skipped: "origin-changed" };
       return { ...base, skipped: "not-login-page" };
     }
     return {
@@ -1991,17 +2259,17 @@ export class WorkspaceService {
   /** Shared fill path used by the explicit action and the post-launch attempt. */
   private async tryFill(
     identity: Identity,
-    environment: Environment,
+    site: Site,
     page: Parameters<typeof evaluate>[0],
   ): Promise<FillOutcome> {
-    const resolved = resolvePassword(this.vault, identity, environment.id);
+    const resolved = resolvePassword(this.vault, identity, site.id, this.data.identities);
     if (!resolved.password) {
       throw new Error(t("error.noPassword"));
     }
     // The page may have redirected to an SSO domain between the launch and now;
     // typing the password into a foreign origin would leak it to that site.
     const location = await evaluate<string>(page, "location.href");
-    if (!sameOrigin(location, environment.baseUrl)) {
+    if (!sameOrigin(location, site.baseUrl)) {
       return {
         ok: false,
         reason: "cross-origin",
@@ -2012,28 +2280,79 @@ export class WorkspaceService {
         unmatchedInputs: [],
       };
     }
+    // The site's own address is editable, so "same origin as baseUrl" only proves
+    // the page matches the *current* config. If the origin differs from the one
+    // this site last used, the address itself was changed — refuse until the user
+    // confirms, otherwise a quiet edit would redirect the password elsewhere.
+    const expected = site.lastOrigin;
+    const currentOrigin = new URL(site.baseUrl).origin;
+    if (expected && expected !== currentOrigin) {
+      this.pendingOriginConfirmation = {
+        identityId: identity.id,
+        siteId: site.id,
+        siteName: site.name,
+        expectedOrigin: expected,
+        currentOrigin,
+      };
+      return {
+        ok: false,
+        reason: "origin-changed",
+        filledUsername: false,
+        submitted: false,
+        filledExtra: [],
+        missingExtra: [],
+        unmatchedInputs: [],
+      };
+    }
+    this.recordSiteOrigin(site, currentOrigin);
     return evaluate<FillOutcome>(
       page,
       buildFillExpression({
         username: identity.username,
         password: resolved.password,
-        submit: environment.autoSubmit,
-        extraFields: resolveLoginFields(environment, identity),
+        submit: site.autoSubmit,
+        extraFields: resolveLoginFields(site, identity),
       }),
     );
   }
 
+  /** Records the origin a site just authenticated against. */
+  private recordSiteOrigin(site: Site, origin: string): void {
+    if (site.lastOrigin === origin) return;
+    site.lastOrigin = origin;
+    this.persist();
+  }
+
   /**
-   * Runs the post-launch fill off the critical path: a scene of four windows must
+   * The origin mismatch that blocked the last fill, if any.
+   *
+   * The UI reads this to show "the address changed" and, once the user accepts,
+   * calls {@link acceptSiteOrigin} before retrying.
+   */
+  takeOriginNotice(): OriginChangedNotice | undefined {
+    const notice = this.pendingOriginConfirmation;
+    this.pendingOriginConfirmation = undefined;
+    return notice;
+  }
+
+  /** Accepts the current address and records it as the site's trusted origin. */
+  acceptSiteOrigin(siteId: string): void {
+    const site = this.data.sites.find((item) => item.id === siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    this.recordSiteOrigin(site, new URL(site.baseUrl).origin);
+  }
+
+  /**
+   * Runs the post-launch fill off the critical path: a view of four windows must
    * not wait eight seconds per identity before the UI reports success.
    */
   private scheduleAutoFill(
     identity: Identity,
-    environment: Environment,
+    site: Site,
     instance: RunningInstance,
   ): void {
     if (!this.settings.autoFillOnLaunch) return;
-    void this.autoFillAfterLaunch(identity, environment, instance)
+    void this.autoFillAfterLaunch(identity, site, instance)
       .then((report) => this.options.onAutoFill?.(report))
       .catch(() => {});
   }
@@ -2048,12 +2367,20 @@ export class WorkspaceService {
     return this.data.identities.find((item) => item.id === id);
   }
 
+  findSite(id: string): Site | undefined {
+    return this.data.sites.find((item) => item.id === id);
+  }
+
+  findView(id: string): View | undefined {
+    return this.data.views.find((item) => item.id === id);
+  }
+
   profileDirFor(identityId: string): string | undefined {
     const instance = this.findInstance(identityId);
     if (instance) return instance.profileDir;
     const identity = this.findIdentity(identityId);
     if (!identity) return undefined;
-    return join(this.options.profileRoot, identity.environmentId, identity.id);
+    return join(this.options.profileRoot, identity.siteId, identity.id);
   }
 
   profileDirExists(identityId: string): boolean {

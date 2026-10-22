@@ -14,7 +14,7 @@ import type { Rect } from "../layout/grid";
 import { buildChromiumArgs, buildFirefoxArgs, safeProfileSegment } from "./args";
 
 export interface LaunchRequest {
-  environmentId: string;
+  siteId: string;
   profileRoot: string;
   engine: Engine;
   profileKey: string;
@@ -65,10 +65,10 @@ export const cdpRegistry = new CdpRegistry();
 
 export function instanceProfileDir(
   profileRoot: string,
-  environmentId: string,
+  siteId: string,
   key: string,
 ): string {
-  return join(profileRoot, safeProfileSegment(environmentId), safeProfileSegment(key));
+  return join(profileRoot, safeProfileSegment(siteId), safeProfileSegment(key));
 }
 
 export function resolveProfileRoot(engine: Engine, profileRoot: string): string {
@@ -90,7 +90,7 @@ function spawnBrowser(engine: Engine, args: string[]): ChildProcess {
 }
 
 /**
- * Launches in progress, keyed by profile directory. A double click, a scene
+ * Launches in progress, keyed by profile directory. A double click, a view
  * start racing a manual launch, or an AI call landing at the same moment would
  * otherwise spawn a second process for the same profile: Chromium then forwards
  * its URL to the running instance as an extra tab and the second launch fails
@@ -101,7 +101,7 @@ const inFlightLaunches = new Map<string, Promise<LaunchOutcome>>();
 export function launchBrowser(request: LaunchRequest): Promise<LaunchOutcome> {
   const { engine } = request;
   const profileRoot = resolveProfileRoot(engine, request.profileRoot);
-  const profileDir = instanceProfileDir(profileRoot, request.environmentId, request.profileKey);
+  const profileDir = instanceProfileDir(profileRoot, request.siteId, request.profileKey);
 
   const pending = inFlightLaunches.get(profileDir);
   if (pending) return pending;
@@ -272,7 +272,7 @@ function buildInstance(
     id: request.instanceId,
     identityId: request.identityId,
     label: request.label,
-    environmentId: request.environmentId,
+    siteId: request.siteId,
     engineId: engine.id,
     pid,
     profileDir,

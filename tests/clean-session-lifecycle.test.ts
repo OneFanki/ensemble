@@ -48,7 +48,7 @@ function seedInstance(
     {
       id: instance.id,
       label: instance.id,
-      environmentId: "env",
+      siteId: "env",
       engineId: "chromium:test",
       pid: 0,
       profileDir: instance.profileDir,
@@ -153,15 +153,15 @@ describe("clean session lifecycle", () => {
   );
 });
 
-describe("environment-free clean sessions", () => {
-  it("uses a dedicated root segment outside every environment", () => {
-    // Deleting an environment stops instances by environmentId, so a blank clean
+describe("site-free clean sessions", () => {
+  it("uses a dedicated root segment outside every site", () => {
+    // Deleting an site stops instances by siteId, so a blank clean
     // session must not borrow a real one.
     expect(CLEAN_SESSION_SEGMENT).toBe("clean");
     expect(isCleanProfileDir(join("profiles", CLEAN_SESSION_SEGMENT, "clean-123"))).toBe(true);
   });
 
-  it("is swept on startup alongside environment-scoped clean profiles", async () => {
+  it("is swept on startup alongside site-scoped clean profiles", async () => {
     const { profileRoot } = await makeService();
     const scoped = join(profileRoot, "env-1", "clean-a");
     const unscoped = join(profileRoot, CLEAN_SESSION_SEGMENT, "clean-b");

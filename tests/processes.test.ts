@@ -38,10 +38,11 @@ describe("process registry", () => {
   });
 
   it("sanitizes partial workspace data", () => {
-    const clean = sanitizeWorkspace({ environments: undefined, manualEngines: undefined });
-    expect(clean.environments).toEqual([]);
+    const clean = sanitizeWorkspace({ sites: undefined, manualEngines: undefined });
+    expect(clean.sites).toEqual([]);
     expect(clean.manualEngines).toEqual([]);
-    expect(clean.version).toBe(1);
+    // v2 is the site/view rename; v1 files are upgraded on read.
+    expect(clean.version).toBe(2);
   });
 });
 

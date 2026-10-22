@@ -5,8 +5,8 @@ import { basename, join } from "node:path";
 export const CLEAN_PROFILE_PREFIX = "clean-";
 
 /**
- * Profile-root segment for clean sessions that belong to no environment. Keeping
- * them out of `<root>/<envId>/` means deleting an environment can never stop or
+ * Profile-root segment for clean sessions that belong to no site. Keeping
+ * them out of `<root>/<envId>/` means deleting an site can never stop or
  * adopt a throwaway window, and the startup sweep still finds them.
  */
 export const CLEAN_SESSION_SEGMENT = "clean";
@@ -20,14 +20,14 @@ export function isCleanProfileDir(profileDir: string): boolean {
 
 export async function removeCleanProfiles(roots: string[]): Promise<void> {
   for (const root of new Set(roots)) {
-    let environmentDirs: string[];
+    let siteDirs: string[];
     try {
-      environmentDirs = await readdir(root);
+      siteDirs = await readdir(root);
     } catch {
       continue;
     }
-    for (const environmentDir of environmentDirs) {
-      const dir = join(root, environmentDir);
+    for (const siteDir of siteDirs) {
+      const dir = join(root, siteDir);
       let entries: string[];
       try {
         entries = await readdir(dir);

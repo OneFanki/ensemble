@@ -3,10 +3,12 @@ import type { AppSettings } from "@shared/types";
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark",
   locale: "zh",
-  lastView: "identities",
+  // The browser is the default page: it is where the work happens, and every
+  // other page is a management view the user returns from.
+  lastView: "browser",
   // Off by default: an upgrade that suddenly opens several browsers on first
   // launch looks like a malfunction, and it slows startup down.
-  restoreLastScene: false,
+  restoreLastView: false,
   overlayEnabled: true,
   // Desktop UA by default: a background check should look like the user's own
   // browser, not like a crawler.

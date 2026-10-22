@@ -7,7 +7,7 @@ describe("login field resolution", () => {
     expect(normalizeFieldLabel("Tenant Code")).toBe("tenantcode");
   });
 
-  it("uses environment fields when the identity adds none", () => {
+  it("uses site fields when the identity adds none", () => {
     const fields = resolveLoginFields({ extraFields: [{ label: "租户名", value: "acme" }] }, {});
     expect(fields).toEqual([{ label: "租户名", value: "acme" }]);
   });

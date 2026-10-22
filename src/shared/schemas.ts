@@ -29,7 +29,7 @@ const slotRectSchema = z
     message: "窗口必须落在屏幕范围内",
   });
 
-export const environmentDraftSchema = z.object({
+export const siteDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(80),
   baseUrl: httpUrl,
@@ -38,26 +38,34 @@ export const environmentDraftSchema = z.object({
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
+  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
+});
+
+export const siteTagDraftSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().trim().min(1).max(40),
+  color: z.enum(["amber", "teal", "violet", "rose", "blue", "slate"]),
 });
 
 export const identityDraftSchema = z.object({
   id: z.string().optional(),
-  environmentId: z.string().min(1),
+  siteId: z.string().min(1),
   name: z.string().trim().min(1).max(80),
   username: z.string().trim().min(1).max(200),
   role: z.string().trim().min(1).max(60),
   color: z.enum(["amber", "teal", "violet", "rose", "blue", "slate"]),
   engineId: z.string().optional(),
   startPath: pathValue.optional(),
-  passwordMode: z.enum(["inherit", "custom"]),
+  passwordMode: z.enum(["inherit", "custom", "reference"]),
+  credentialFrom: z.string().min(1).optional(),
   password: z.string().max(500).optional(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
   note: z.string().max(1000).optional(),
 });
 
-export const sceneDraftSchema = z.object({
+export const viewDraftSchema = z.object({
   id: z.string().optional(),
-  environmentId: z.string().min(1),
+  siteId: z.string().min(1),
   name: z.string().trim().min(1).max(80),
   identityIds: z.array(z.string().min(1)).min(1).max(8),
   layoutId: z.string().min(1).max(64),
@@ -74,10 +82,10 @@ export const layoutPresetDraftSchema = z.object({
 export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(["zh", "en"]).optional(),
-  lastEnvironmentId: z.string().optional(),
-  lastView: z.enum(["environments", "identities", "scenes"]).optional(),
-  lastSceneId: z.string().optional(),
-  restoreLastScene: z.boolean().optional(),
+  lastSiteId: z.string().optional(),
+  lastView: z.enum(["browser", "sites", "identities", "views"]).optional(),
+  lastViewId: z.string().optional(),
+  restoreLastView: z.boolean().optional(),
   overlayEnabled: z.boolean().optional(),
   headlessCheckUa: z.enum(["desktop", "headless"]).optional(),
   focusLabelEnabled: z.boolean().optional(),
@@ -91,6 +99,6 @@ export const settingsPatchSchema = z.object({
 });
 
 export const passwordOwnerSchema = z.object({
-  kind: z.enum(["environment", "identity"]),
+  kind: z.enum(["site", "identity"]),
   id: z.string().min(1),
 });

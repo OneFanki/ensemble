@@ -2,12 +2,20 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { clampSlot } from "@shared/layouts";
-import type { Environment, Engine, Identity, LayoutPreset, Scene, SlotRect } from "@shared/types";
+import type {
+  Site,
+  SiteTag,
+  Engine,
+  Identity,
+  LayoutPreset,
+  View,
+  SlotRect,
+} from "@shared/types";
 
 export interface StoredInstance {
   id: string;
   identityId?: string;
-  environmentId: string;
+  siteId: string;
   engineId: string;
   pid: number;
   profileDir: string;
@@ -143,10 +151,11 @@ export function profileExists(profileDir: string): boolean {
 }
 
 export interface WorkspaceData {
-  version: 1;
-  environments: Environment[];
+  version: 2;
+  sites: Site[];
+  siteTags: SiteTag[];
   identities: Identity[];
-  scenes: Scene[];
+  views: View[];
   instances: StoredInstance[];
   manualEngines: string[];
   layoutPresets: LayoutPreset[];
@@ -160,50 +169,51 @@ export interface EngineCache {
 
 export function emptyWorkspace(): WorkspaceData {
   return {
-    version: 1,
-    environments: [],
+    version: 2,
+    sites: [],
+    siteTags: [],
     identities: [],
-    scenes: [],
+    views: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
   };
 }
 
-/** Older files stored a fixed layout key (`1x1`, `2x2`, …) on each scene. */
-type LegacyScene = Partial<Scene> & { layout?: string };
+/** Older files stored a fixed layout key (`1x1`, `2x2`, …) on each view. */
+type LegacyView = Partial<View> & { layout?: string };
 
-function sanitizeScenes(input: unknown): Scene[] {
+function sanitizeViews(input: unknown): View[] {
   if (!Array.isArray(input)) return [];
-  return (input as LegacyScene[])
+  return (input as LegacyView[])
     .filter(
-      (scene): scene is LegacyScene & { id: string; environmentId: string } =>
-        typeof scene?.id === "string" && typeof scene.environmentId === "string",
+      (view): view is LegacyView & { id: string; siteId: string } =>
+        typeof view?.id === "string" && typeof view.siteId === "string",
     )
-    .map((scene) => {
+    .map((view) => {
       const assignments =
-        scene.slotAssignments && typeof scene.slotAssignments === "object"
+        view.slotAssignments && typeof view.slotAssignments === "object"
           ? Object.fromEntries(
-              Object.entries(scene.slotAssignments).filter(
+              Object.entries(view.slotAssignments).filter(
                 ([key, value]) => typeof key === "string" && Number.isInteger(value) && value >= 0,
               ),
             )
           : {};
       return {
-        id: scene.id,
-        environmentId: scene.environmentId,
-        name: typeof scene.name === "string" ? scene.name : "",
-        identityIds: Array.isArray(scene.identityIds) ? scene.identityIds : [],
+        id: view.id,
+        siteId: view.siteId,
+        name: typeof view.name === "string" ? view.name : "",
+        identityIds: Array.isArray(view.identityIds) ? view.identityIds : [],
         layoutId:
-          typeof scene.layoutId === "string" && scene.layoutId
-            ? scene.layoutId
-            : typeof scene.layout === "string" && scene.layout
-              ? scene.layout
+          typeof view.layoutId === "string" && view.layoutId
+            ? view.layoutId
+            : typeof view.layout === "string" && view.layout
+              ? view.layout
               : "2x2",
         slotAssignments: assignments,
-        paths: scene.paths && typeof scene.paths === "object" ? scene.paths : {},
-        createdAt: scene.createdAt ?? new Date().toISOString(),
-        updatedAt: scene.updatedAt ?? new Date().toISOString(),
+        paths: view.paths && typeof view.paths === "object" ? view.paths : {},
+        createdAt: view.createdAt ?? new Date().toISOString(),
+        updatedAt: view.updatedAt ?? new Date().toISOString(),
       };
     });
 }
@@ -233,23 +243,95 @@ function sanitizeLayoutPresets(input: unknown): LayoutPreset[] {
 }
 
 /** Strips fields from older schema versions so they cannot leak back into storage. */
-function sanitizeEnvironments(input: unknown): Environment[] {
+function sanitizeSites(input: unknown): Site[] {
   if (!Array.isArray(input)) return [];
-  return (input as Array<Environment & { kind?: string }>).map((environment) => {
-    const { kind: _kind, ...rest } = environment;
-    return rest;
+  return (input as Array<Site & { kind?: string }>).map((site) => {
+    const { kind: _kind, ...rest } = site;
+    // Tag references are display-only; anything malformed is dropped rather than
+    // failing the whole workspace.
+    const tagIds = Array.isArray(rest.tagIds)
+      ? rest.tagIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : undefined;
+    return { ...rest, ...(tagIds && tagIds.length > 0 ? { tagIds } : { tagIds: undefined }) };
   });
+}
+
+function sanitizeSiteTags(input: unknown): SiteTag[] {
+  if (!Array.isArray(input)) return [];
+  const colors = new Set(["amber", "teal", "violet", "rose", "blue", "slate"]);
+  const tags: SiteTag[] = [];
+  const seen = new Set<string>();
+  for (const raw of input as SiteTag[]) {
+    if (!raw || typeof raw.id !== "string" || typeof raw.name !== "string") continue;
+    if (!raw.name.trim() || seen.has(raw.id)) continue;
+    seen.add(raw.id);
+    tags.push({
+      id: raw.id,
+      name: raw.name.trim(),
+      color: colors.has(raw.color) ? raw.color : "slate",
+      createdAt: raw.createdAt ?? new Date().toISOString(),
+    });
+  }
+  return tags;
+}
+
+/**
+ * Drops tag references that no longer have a tag, so a deleted tag cannot leave
+ * sites pointing at nothing.
+ */
+function pruneDanglingTags(sites: Site[], tags: SiteTag[]): Site[] {
+  const known = new Set(tags.map((tag) => tag.id));
+  return sites.map((site) => {
+    if (!site.tagIds) return site;
+    const kept = site.tagIds.filter((id) => known.has(id));
+    return { ...site, tagIds: kept.length > 0 ? kept : undefined };
+  });
+}
+
+/**
+ * Reads a workspace file written by the previous 0.x schema.
+ *
+ * The v1 file used `environments` / `scenes` and `environmentId` on every
+ * identity and scene. Nothing else changed, so the upgrade is a key rename: ids,
+ * credentials and profile directories all keep working. This exists so an
+ * existing workspace opens instead of appearing empty — not as a long-term
+ * compatibility layer, which the project does not carry before 1.0.
+ */
+function upgradeV1(raw: Record<string, unknown>): Partial<WorkspaceData> {
+  const rename = (list: unknown, key: string): unknown => {
+    if (!Array.isArray(list)) return list;
+    return list.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const { environmentId, ...rest } = item as Record<string, unknown>;
+      return { ...rest, [key]: environmentId };
+    });
+  };
+  return {
+    sites: raw["environments"] as Site[] | undefined,
+    identities: rename(raw["identities"], "siteId") as Identity[] | undefined,
+    views: rename(raw["scenes"], "siteId") as View[] | undefined,
+    instances: raw["instances"] as StoredInstance[] | undefined,
+    manualEngines: raw["manualEngines"] as string[] | undefined,
+    layoutPresets: raw["layoutPresets"] as LayoutPreset[] | undefined,
+  };
 }
 
 export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData {
   const base = emptyWorkspace();
+  const raw = input as Partial<WorkspaceData> & Record<string, unknown>;
+  // A v1 file has no `sites` key but does have `environments`; treat anything
+  // without the current shape as the previous schema.
+  const source =
+    Array.isArray(raw.sites) || !("environments" in raw) ? raw : upgradeV1(raw);
+  const siteTags = sanitizeSiteTags(source.siteTags);
   return {
-    version: 1,
-    environments: sanitizeEnvironments(input.environments),
-    identities: Array.isArray(input.identities) ? input.identities : base.identities,
-    scenes: sanitizeScenes(input.scenes),
-    instances: Array.isArray(input.instances) ? input.instances : base.instances,
-    manualEngines: Array.isArray(input.manualEngines) ? input.manualEngines : base.manualEngines,
-    layoutPresets: sanitizeLayoutPresets(input.layoutPresets),
+    version: 2,
+    sites: pruneDanglingTags(sanitizeSites(source.sites), siteTags),
+    siteTags,
+    identities: Array.isArray(source.identities) ? source.identities : base.identities,
+    views: sanitizeViews(source.views),
+    instances: Array.isArray(source.instances) ? source.instances : base.instances,
+    manualEngines: Array.isArray(source.manualEngines) ? source.manualEngines : base.manualEngines,
+    layoutPresets: sanitizeLayoutPresets(source.layoutPresets),
   };
 }

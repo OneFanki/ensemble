@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
 import { DEFAULT_SETTINGS } from "@shared/defaults";
-import type { EnvironmentDraft, IdentityDraft, SceneDraft } from "@shared/types";
+import type { SiteDraft, IdentityDraft, ViewDraft } from "@shared/types";
 import { afterEach, describe, expect, it } from "vitest";
 
 const plainBox: SecretBox = {
@@ -42,7 +42,7 @@ async function makeService(): Promise<{
   return { service, changes: () => changes };
 }
 
-const environmentDraft = (): EnvironmentDraft => ({
+const siteDraft = (): SiteDraft => ({
   name: "测试环境",
   baseUrl: "http://localhost:3000",
   loginPath: "/login",
@@ -50,8 +50,8 @@ const environmentDraft = (): EnvironmentDraft => ({
   autoSubmit: false,
 });
 
-const identityDraft = (environmentId: string, name: string): IdentityDraft => ({
-  environmentId,
+const identityDraft = (siteId: string, name: string): IdentityDraft => ({
+  siteId,
   name,
   username: name.toLowerCase(),
   role: "member",
@@ -60,11 +60,11 @@ const identityDraft = (environmentId: string, name: string): IdentityDraft => ({
 });
 
 function seedIdentities(service: WorkspaceService, count: number): string {
-  const environment = service.saveEnvironment(environmentDraft());
+  const site = service.saveSite(siteDraft());
   for (let index = 0; index < count; index += 1) {
-    service.saveIdentity(identityDraft(environment.id, `账号${index + 1}`));
+    service.saveIdentity(identityDraft(site.id, `账号${index + 1}`));
   }
-  return environment.id;
+  return site.id;
 }
 
 afterEach(async () => {
@@ -74,10 +74,10 @@ afterEach(async () => {
 describe("session health", () => {
   it("reports identities without a window as unknown and writes nothing", async () => {
     const { service, changes } = await makeService();
-    const environmentId = seedIdentities(service, 8);
+    const siteId = seedIdentities(service, 8);
     const before = changes();
 
-    const batch = await service.checkAllAuth(environmentId);
+    const batch = await service.checkAllAuth(siteId);
 
     expect(batch.results).toHaveLength(8);
     expect(batch.totals).toEqual({ signedIn: 0, expired: 0, unknown: 8 });
@@ -87,26 +87,26 @@ describe("session health", () => {
     expect(batch.results.every((result) => result.detail?.includes("未在运行"))).toBe(true);
   });
 
-  it("aggregates only the requested environment", async () => {
+  it("aggregates only the requested site", async () => {
     const { service } = await makeService();
     const first = seedIdentities(service, 2);
     seedIdentities(service, 3);
 
     const batch = await service.checkAllAuth(first);
 
-    expect(batch.environmentId).toBe(first);
+    expect(batch.siteId).toBe(first);
     expect(batch.results).toHaveLength(2);
   });
 
   it("reports a failed relogin instead of aborting the batch", async () => {
     const { service } = await makeService();
-    const environmentId = seedIdentities(service, 2);
+    const siteId = seedIdentities(service, 2);
     const [, second] = service.snapshot().identities;
     if (!second) throw new Error("missing identity");
     // No saved password: the fill must fail, and the batch must say so.
     second.status = "expired";
 
-    const result = await service.reloginExpired(environmentId);
+    const result = await service.reloginExpired(siteId);
 
     expect(result.attempted).toBe(1);
     expect(result.succeeded).toBe(0);
@@ -115,65 +115,65 @@ describe("session health", () => {
   });
 });
 
-describe("restore last scene", () => {
+describe("restore last view", () => {
   it("does nothing when the setting is off", async () => {
     const { service } = await makeService();
     seedIdentities(service, 1);
 
-    expect(await service.restoreLastScene()).toEqual({ restored: false, reason: "disabled" });
+    expect(await service.restoreLastView()).toEqual({ restored: false, reason: "disabled" });
   });
 
-  it("drops a scene id that no longer exists", async () => {
+  it("drops a view id that no longer exists", async () => {
     const { service } = await makeService();
-    const environmentId = seedIdentities(service, 1);
-    service.saveScene({
-      environmentId,
+    const siteId = seedIdentities(service, 1);
+    service.saveView({
+      siteId,
       name: "场景",
       identityIds: [service.snapshot().identities[0]?.id as string],
       layoutId: "2x2",
       slotAssignments: {},
       paths: {},
-    } satisfies SceneDraft);
-    service.saveSettings({ lastSceneId: "deleted-scene", restoreLastScene: true });
+    } satisfies ViewDraft);
+    service.saveSettings({ lastViewId: "deleted-view", restoreLastView: true });
 
-    const outcome = await service.restoreLastScene();
+    const outcome = await service.restoreLastView();
 
     expect(outcome).toEqual({ restored: false, reason: "missing" });
-    expect(service.settingsSnapshot().lastSceneId).toBeUndefined();
+    expect(service.settingsSnapshot().lastViewId).toBeUndefined();
   });
 
   it("only attempts once per process", async () => {
     const { service } = await makeService();
 
-    await service.restoreLastScene();
-    expect(await service.restoreLastScene()).toEqual({
+    await service.restoreLastView();
+    expect(await service.restoreLastView()).toEqual({
       restored: false,
       reason: "already-attempted",
     });
   });
 
-  it("forgets which scene was last when that scene is deleted", async () => {
+  it("forgets which view was last when that view is deleted", async () => {
     const { service } = await makeService();
-    const environmentId = seedIdentities(service, 1);
-    const scene = service.saveScene({
-      environmentId,
+    const siteId = seedIdentities(service, 1);
+    const view = service.saveView({
+      siteId,
       name: "场景",
       identityIds: [service.snapshot().identities[0]?.id as string],
       layoutId: "2x2",
       slotAssignments: {},
       paths: {},
-    } satisfies SceneDraft);
-    service.saveSettings({ lastSceneId: scene.id });
+    } satisfies ViewDraft);
+    service.saveSettings({ lastViewId: view.id });
 
-    service.deleteScene(scene.id);
+    service.deleteView(view.id);
 
-    expect(service.settingsSnapshot().lastSceneId).toBeUndefined();
+    expect(service.settingsSnapshot().lastViewId).toBeUndefined();
   });
 });
 
 describe("new settings defaults", () => {
   it("keeps automatic restore off and the overlay on", () => {
-    expect(DEFAULT_SETTINGS.restoreLastScene).toBe(false);
+    expect(DEFAULT_SETTINGS.restoreLastView).toBe(false);
     expect(DEFAULT_SETTINGS.overlayEnabled).toBe(true);
   });
 });

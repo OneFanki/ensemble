@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { BUILTIN_LAYOUTS, findLayout, resolveSlotAssignments } from "@shared/layouts";
 import { emptyWorkspace, sanitizeWorkspace } from "@core/processes/registry";
-import type { Scene } from "@shared/types";
+import type { View } from "@shared/types";
 
-const environment = {
+const site = {
   id: "env-1",
   name: "订单服务-测试环境",
   baseUrl: "http://localhost:3000",
@@ -15,7 +15,7 @@ const environment = {
 
 const identity = {
   id: "id-1",
-  environmentId: "env-1",
+  siteId: "env-1",
   name: "管理员 · 主账号",
   username: "admin",
   role: "admin",
@@ -26,9 +26,9 @@ const identity = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
-const scene = (overrides: Partial<Scene> = {}): Scene => ({
-  id: "scene-1",
-  environmentId: "env-1",
+const view = (overrides: Partial<View> = {}): View => ({
+  id: "view-1",
+  siteId: "env-1",
   name: "权限矩阵",
   identityIds: ["id-1"],
   layoutId: "2x2",
@@ -44,34 +44,65 @@ describe("sanitizeWorkspace", () => {
     expect(sanitizeWorkspace({})).toEqual(emptyWorkspace());
   });
 
-  it("migrates a scene stored with the old fixed layout key", () => {
+  it("upgrades a v1 file that still uses environments and scenes", () => {
+    // A workspace written before the rename: `environments`, `scenes`, and
+    // `environmentId` on both identities and scenes. Ids must survive untouched
+    // so credentials and profile directories keep resolving.
     const legacy = {
-      ...scene(),
-      layoutId: undefined,
-      layout: "3x1",
-    } as unknown as Scene & { layout: string };
-    const result = sanitizeWorkspace({ scenes: [legacy] });
-    expect(result.scenes[0]?.layoutId).toBe("3x1");
-    expect(result.scenes[0]?.slotAssignments).toEqual({});
+      version: 1,
+      environments: [{ ...site, id: "env-1" }],
+      identities: [{ ...identity, environmentId: "env-1", siteId: undefined }],
+      scenes: [{ ...view(), environmentId: "env-1", siteId: undefined }],
+      instances: [],
+      manualEngines: [],
+      layoutPresets: [],
+    } as unknown as Parameters<typeof sanitizeWorkspace>[0];
+
+    const result = sanitizeWorkspace(legacy);
+    expect(result.version).toBe(2);
+    expect(result.sites).toHaveLength(1);
+    expect(result.sites[0]?.id).toBe("env-1");
+    expect(result.identities[0]?.siteId).toBe("env-1");
+    expect(result.identities[0]).not.toHaveProperty("environmentId");
+    expect(result.views[0]?.siteId).toBe("env-1");
+    expect(result.views[0]).not.toHaveProperty("environmentId");
   });
 
-  it("drops the retired environment kind field so it cannot come back", () => {
+  it("does not touch an already-current file", () => {
+    const current = { sites: [site], views: [view()] };
+    const result = sanitizeWorkspace(current);
+    expect(result.sites[0]?.id).toBe("env-1");
+    expect(result.views[0]?.siteId).toBe("env-1");
+  });
+
+  it("migrates a view stored with the old fixed layout key", () => {
+    const legacy = {
+      ...view(),
+      layoutId: undefined,
+      layout: "3x1",
+    } as unknown as View & { layout: string };
+    const result = sanitizeWorkspace({ views: [legacy] });
+    expect(result.views[0]?.layoutId).toBe("3x1");
+    expect(result.views[0]?.slotAssignments).toEqual({});
+  });
+
+  it("drops the retired site kind field so it cannot come back", () => {
     const result = sanitizeWorkspace({
-      environments: [{ ...environment, kind: "local" } as typeof environment],
+      sites: [{ ...site, kind: "local" } as typeof site],
     });
-    expect(result.environments[0]).not.toHaveProperty("kind");
-    expect(result.environments[0]?.name).toBe("订单服务-测试环境");
+    expect(result.sites[0]).not.toHaveProperty("kind");
+    expect(result.sites[0]?.name).toBe("订单服务-测试环境");
   });
 
   it("drops non-integer and negative slot assignments", () => {
     const result = sanitizeWorkspace({
-      scenes: [
-        scene({
+      views: [
+        view({
           slotAssignments: { "id-1": 1, "id-2": -1, "id-3": 1.5 } as Record<string, number>,
         }),
       ],
     });
-    expect(result.scenes[0]?.slotAssignments).toEqual({ "id-1": 1 });
+    expect(result.views[0]?.slotAssignments).toEqual({ "id-1": 1 });
   });
 
   it("keeps only well-formed custom presets and clamps their slots", () => {
@@ -119,7 +150,7 @@ describe("resolveSlotAssignments", () => {
     expect(result).toEqual({ a: 0, b: 1 });
   });
 
-  it("ignores members that are no longer in the scene", () => {
+  it("ignores members that are no longer in the view", () => {
     const result = resolveSlotAssignments(preset, ["a"], { gone: 2 });
     expect(result).toEqual({ a: 0 });
   });

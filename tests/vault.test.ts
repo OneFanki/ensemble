@@ -21,12 +21,12 @@ function makeVault(options: { initial?: VaultFile; box?: MemorySecretBox } = {})
 }
 
 describe("CredentialVault", () => {
-  it("stores environment and identity credentials separately", () => {
+  it("stores site and identity credentials separately", () => {
     const { vault } = makeVault();
-    vault.set({ kind: "environment", id: "env-1" }, "env-secret");
+    vault.set({ kind: "site", id: "env-1" }, "env-secret");
     vault.set({ kind: "identity", id: "id-1" }, "id-secret");
 
-    expect(vault.get({ kind: "environment", id: "env-1" })).toBe("env-secret");
+    expect(vault.get({ kind: "site", id: "env-1" })).toBe("env-secret");
     expect(vault.get({ kind: "identity", id: "id-1" })).toBe("id-secret");
     expect(vault.get({ kind: "identity", id: "missing" })).toBeUndefined();
   });
@@ -39,26 +39,26 @@ describe("CredentialVault", () => {
 
   it("clears a single credential without touching the other bucket", () => {
     const { vault } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "a");
+    vault.set({ kind: "site", id: "env" }, "a");
     vault.set({ kind: "identity", id: "id" }, "b");
     vault.clear({ kind: "identity", id: "id" });
     expect(vault.get({ kind: "identity", id: "id" })).toBeUndefined();
-    expect(vault.get({ kind: "environment", id: "env" })).toBe("a");
+    expect(vault.get({ kind: "site", id: "env" })).toBe("a");
   });
 
   it("reports presence without decrypting", () => {
     const { vault } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "a");
+    vault.set({ kind: "site", id: "env" }, "a");
     const presence = vault.presence();
-    expect(presence.environment["env"]).toBe(true);
+    expect(presence.site["env"]).toBe(true);
     expect(presence.identity["env"]).toBeUndefined();
   });
 
-  it("resolves identity overrides over environment defaults", () => {
+  it("resolves identity overrides over site defaults", () => {
     const { vault } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "env-pass");
+    vault.set({ kind: "site", id: "env" }, "env-pass");
     const inherited = resolvePassword(vault, { id: "id", passwordMode: "inherit" }, "env");
-    expect(inherited).toEqual({ password: "env-pass", source: "environment" });
+    expect(inherited).toEqual({ password: "env-pass", source: "site" });
 
     vault.set({ kind: "identity", id: "id" }, "id-pass");
     const custom = resolvePassword(vault, { id: "id", passwordMode: "custom" }, "env");
@@ -72,14 +72,14 @@ describe("CredentialVault", () => {
 describe("master password mode", () => {
   it("re-encrypts everything and locks on restart", () => {
     const { vault, persisted } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "env-pass");
+    vault.set({ kind: "site", id: "env" }, "env-pass");
     vault.set({ kind: "identity", id: "id" }, "id-pass");
     vault.setMasterPassword("correct horse battery");
 
     expect(vault.mode).toBe("master");
     expect(vault.hasMasterPassword).toBe(true);
     expect(vault.locked).toBe(false);
-    expect(vault.get({ kind: "environment", id: "env" })).toBe("env-pass");
+    expect(vault.get({ kind: "site", id: "env" })).toBe("env-pass");
 
     const stored = persisted() as VaultFile;
     expect(stored.version).toBe(2);
@@ -89,13 +89,13 @@ describe("master password mode", () => {
     // A fresh process reads the file but has no key until unlocked.
     const restarted = makeVault({ initial: stored });
     expect(restarted.vault.locked).toBe(true);
-    expect(() => restarted.vault.get({ kind: "environment", id: "env" })).toThrow(
+    expect(() => restarted.vault.get({ kind: "site", id: "env" })).toThrow(
       VaultLockedError,
     );
     expect(restarted.vault.unlock("wrong password")).toBe(false);
     expect(restarted.vault.locked).toBe(true);
     expect(restarted.vault.unlock("correct horse battery")).toBe(true);
-    expect(restarted.vault.get({ kind: "environment", id: "env" })).toBe("env-pass");
+    expect(restarted.vault.get({ kind: "site", id: "env" })).toBe("env-pass");
   });
 
   it("refuses to save credentials while locked", () => {
@@ -118,7 +118,7 @@ describe("master password mode", () => {
 
   it("changes the master password only with the current one", () => {
     const { vault, persisted } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "env-pass");
+    vault.set({ kind: "site", id: "env" }, "env-pass");
     vault.setMasterPassword("first password");
 
     expect(vault.changeMasterPassword("nope", "second password")).toBe(false);
@@ -132,19 +132,19 @@ describe("master password mode", () => {
     const afterChange = makeVault({ initial: changed });
     expect(afterChange.vault.unlock("first password")).toBe(false);
     expect(afterChange.vault.unlock("second password")).toBe(true);
-    expect(afterChange.vault.get({ kind: "environment", id: "env" })).toBe("env-pass");
+    expect(afterChange.vault.get({ kind: "site", id: "env" })).toBe("env-pass");
     expect(persisted()).toBeDefined();
   });
 
   it("falls back to the OS keychain when the master password is removed", () => {
     const { vault } = makeVault();
-    vault.set({ kind: "environment", id: "env" }, "env-pass");
+    vault.set({ kind: "site", id: "env" }, "env-pass");
     vault.setMasterPassword("first password");
     vault.removeMasterPassword();
 
     expect(vault.mode).toBe("os");
     expect(vault.locked).toBe(false);
-    expect(vault.get({ kind: "environment", id: "env" })).toBe("env-pass");
+    expect(vault.get({ kind: "site", id: "env" })).toBe("env-pass");
   });
 });
 
@@ -152,13 +152,13 @@ describe("legacy data", () => {
   it("migrates v1 plaintext payloads to the OS keychain", () => {
     const plain = `plain:${Buffer.from("legacy-secret", "utf8").toString("base64")}`;
     const { vault, persisted } = makeVault({
-      initial: { version: 1, environment: { env: plain }, identity: {} },
+      initial: { version: 1, site: { env: plain }, identity: {} },
     });
 
     expect(vault.hasLegacyPlaintext).toBe(true);
     expect(vault.migrateLegacyPlaintext()).toBe(true);
     expect(vault.hasLegacyPlaintext).toBe(false);
-    expect(vault.get({ kind: "environment", id: "env" })).toBe("legacy-secret");
+    expect(vault.get({ kind: "site", id: "env" })).toBe("legacy-secret");
     expect(JSON.stringify(persisted())).not.toContain("plain:");
   });
 

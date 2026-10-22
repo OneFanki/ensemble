@@ -63,9 +63,9 @@ export function clampSlot(slot: SlotRect): SlotRect {
 }
 
 /**
- * Fills in the slots a scene does not assign explicitly. Explicit entries win,
+ * Fills in the slots a view does not assign explicitly. Explicit entries win,
  * duplicates are ignored, and the remaining members take the remaining slots in
- * member order — so a scene saved before slot assignment existed still opens
+ * member order — so a view saved before slot assignment existed still opens
  * every window in a sensible place.
  */
 export function resolveSlotAssignments(

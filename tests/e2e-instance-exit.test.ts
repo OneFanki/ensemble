@@ -35,7 +35,7 @@ async function makeService() {
   const engine = engines.find((item) => item.family === "chromium" && item.cdp);
   if (!engine) throw new Error("需要至少一个可用的 Chromium 引擎");
 
-  const environment = service.saveEnvironment({
+  const site = service.saveSite({
     name: "exit",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/",
@@ -43,7 +43,7 @@ async function makeService() {
     autoSubmit: false,
   });
   const identity = service.saveIdentity({
-    environmentId: environment.id,
+    siteId: site.id,
     name: "closer",
     username: "closer@example.test",
     role: "member",
@@ -108,11 +108,11 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
 
   it("removes the profile of a clean session that was closed by the user", async () => {
     const { service } = await makeService();
-    const environments = service.snapshot().environments;
-    const environmentId = environments[0]?.id;
-    if (!environmentId) throw new Error("缺少环境");
+    const sites = service.snapshot().sites;
+    const siteId = sites[0]?.id;
+    if (!siteId) throw new Error("缺少环境");
 
-    const { instance } = await service.launchCleanSession(environmentId);
+    const { instance } = await service.launchCleanSession(siteId);
     await writeFile(join(instance.profileDir, "marker.txt"), "x", "utf8");
     expect(existsSync(instance.profileDir)).toBe(true);
 
@@ -161,12 +161,12 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
     expect(await service.focusInstance("missing")).toBe(false);
   });
 
-  it("closes only one scene's windows", async () => {
+  it("closes only one view's windows", async () => {
     const { service, identity } = await makeService();
-    const environmentId = service.snapshot().environments[0]?.id;
-    if (!environmentId) throw new Error("缺少环境");
+    const siteId = service.snapshot().sites[0]?.id;
+    if (!siteId) throw new Error("缺少环境");
     const other = service.saveIdentity({
-      environmentId,
+      siteId,
       name: "other",
       username: "other@example.test",
       role: "member",
@@ -174,16 +174,16 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
       passwordMode: "inherit",
       startPath: "/",
     });
-    const sceneDraft = (name: string, identityIds: string[]) => ({
-      environmentId,
+    const viewDraft = (name: string, identityIds: string[]) => ({
+      siteId,
       name,
       identityIds,
       layoutId: "2x2" as const,
       slotAssignments: {},
       paths: {},
     });
-    const first = service.saveScene(sceneDraft("first", [identity.id]));
-    service.saveScene(sceneDraft("second", [other.id]));
+    const first = service.saveView(viewDraft("first", [identity.id]));
+    service.saveView(viewDraft("second", [other.id]));
 
     const launched = await Promise.all([
       service.launchIdentity(identity.id),
@@ -191,10 +191,10 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
     ]);
     expect(service.snapshot().instances).toHaveLength(2);
 
-    await service.stopScene(first.id);
+    await service.stopView(first.id);
 
-    // Only the scene's own window is gone; the window that belongs to the other
-    // scene (or to no scene at all) is still running.
+    // Only the view's own window is gone; the window that belongs to the other
+    // view (or to no view at all) is still running.
     const remaining = service.snapshot().instances;
     expect(remaining).toHaveLength(1);
     expect(remaining[0]?.identityId).toBe(other.id);
@@ -203,10 +203,10 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
 
   it("batch-launches a selection with the default layout and reuses running windows", async () => {
     const { service, identity } = await makeService();
-    const environmentId = service.snapshot().environments[0]?.id;
-    if (!environmentId) throw new Error("缺少环境");
+    const siteId = service.snapshot().sites[0]?.id;
+    if (!siteId) throw new Error("缺少环境");
     const second = service.saveIdentity({
-      environmentId,
+      siteId,
       name: "second",
       username: "second@example.test",
       role: "member",

@@ -40,7 +40,7 @@ describe("clean profile handling", () => {
     expect(existsSync(join(identity, "Preferences"))).toBe(true);
   });
 
-  it("ignores missing roots and files at the environment level", async () => {
+  it("ignores missing roots and files at the site level", async () => {
     const root = await makeRoot();
     await writeFile(join(root, "notes.txt"), "not a profile dir");
 

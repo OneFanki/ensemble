@@ -103,7 +103,7 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     const { service: workspace, engine } = await makeService((report) => reports.push(report));
     service = workspace;
 
-    const environment = workspace.saveEnvironment({
+    const site = workspace.saveSite({
       name: "e2e",
       baseUrl,
       loginPath: "/login",
@@ -111,10 +111,10 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
       autoSubmit: true,
       extraFields: [{ label: "租户名", value: "acme" }],
     });
-    workspace.setPassword({ kind: "environment", id: environment.id }, "s3cret!");
+    workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
 
     const identity = workspace.saveIdentity({
-      environmentId: environment.id,
+      siteId: site.id,
       name: "admin",
       username: "admin",
       role: "admin",
@@ -149,7 +149,7 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
   }, 90_000);
 
   it("refuses to fill after a redirect to a foreign origin", async () => {
-    // The second server plays the SSO host. The environment lives on the first,
+    // The second server plays the SSO host. The site lives on the first,
     // so typing credentials there would leak them across origins.
     const ssoUrl = await listen((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -164,7 +164,7 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     const { service: workspace, engine } = await makeService((report) => reports.push(report));
     service = workspace;
 
-    const environment = workspace.saveEnvironment({
+    const site = workspace.saveSite({
       name: "sso",
       baseUrl: entryUrl,
       loginPath: "/login",
@@ -172,9 +172,9 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
       autoSubmit: false,
       extraFields: [],
     });
-    workspace.setPassword({ kind: "environment", id: environment.id }, "s3cret!");
+    workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
     const identity = workspace.saveIdentity({
-      environmentId: environment.id,
+      siteId: site.id,
       name: "leak",
       username: "admin",
       role: "admin",

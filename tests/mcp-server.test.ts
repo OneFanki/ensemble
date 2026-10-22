@@ -105,9 +105,9 @@ describe("MCP handshake", () => {
   it("exposes insertion tools but no read-back tool for secrets", async () => {
     const { json } = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const names = json.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toContain("create_environment");
+    expect(names).toContain("create_site");
     expect(names).toContain("create_identities");
-    expect(names).toContain("launch_scene");
+    expect(names).toContain("launch_view");
     // Writing a password is allowed; reading one back is not.
     expect(
       names.some((name: string) => /(get|read|copy|reveal)_(password|secret)/i.test(name)),
@@ -165,20 +165,20 @@ describe("MCP authentication", () => {
 });
 
 describe("MCP tools", () => {
-  it("creates an environment and identities, then reads them back", async () => {
+  it("creates an site and identities, then reads them back", async () => {
     const env = await rpc(
-      toolCall("create_environment", {
+      toolCall("create_site", {
         name: "订单服务-测试环境",
         baseUrl: "http://localhost:3000",
       }),
     );
     expect(env.json.result.isError).toBeUndefined();
-    const environment = JSON.parse(env.json.result.content[0].text);
-    expect(environment.id).toBeTruthy();
+    const site = JSON.parse(env.json.result.content[0].text);
+    expect(site.id).toBeTruthy();
 
     const batch = await rpc(
       toolCall("create_identities", {
-        environmentId: environment.id,
+        siteId: site.id,
         identities: [
           { name: "管理员", username: "admin", password: "s3cret!", role: "admin" },
           { name: "审核员", username: "reviewer", password: "s3cret!", role: "reviewer" },
@@ -189,7 +189,7 @@ describe("MCP tools", () => {
     expect(created.created).toHaveLength(2);
     expect(created.failures).toHaveLength(0);
 
-    const listed = await rpc(toolCall("list_identities", { environmentId: environment.id }));
+    const listed = await rpc(toolCall("list_identities", { siteId: site.id }));
     const identities = JSON.parse(listed.json.result.content[0].text);
     expect(identities).toHaveLength(2);
     expect(identities[0].hasPassword).toBe(true);
@@ -197,14 +197,14 @@ describe("MCP tools", () => {
     expect(JSON.stringify(identities)).not.toContain("s3cret!");
   });
 
-  it("creates a scene that references the created identities", async () => {
+  it("creates a view that references the created identities", async () => {
     const env = await rpc(
-      toolCall("create_environment", { name: "本地环境", baseUrl: "http://localhost:3000" }),
+      toolCall("create_site", { name: "本地环境", baseUrl: "http://localhost:3000" }),
     );
-    const environment = JSON.parse(env.json.result.content[0].text);
+    const site = JSON.parse(env.json.result.content[0].text);
     const batch = await rpc(
       toolCall("create_identities", {
-        environmentId: environment.id,
+        siteId: site.id,
         identities: [
           { name: "A", username: "a" },
           { name: "B", username: "b" },
@@ -214,15 +214,15 @@ describe("MCP tools", () => {
     const ids = JSON.parse(batch.json.result.content[0].text).created.map(
       (identity: { id: string }) => identity.id,
     );
-    const scene = await rpc(
-      toolCall("create_scene", {
-        environmentId: environment.id,
+    const view = await rpc(
+      toolCall("create_view", {
+        siteId: site.id,
         name: "双人对照",
         identityIds: ids,
         layoutId: "2x1",
       }),
     );
-    const created = JSON.parse(scene.json.result.content[0].text);
+    const created = JSON.parse(view.json.result.content[0].text);
     expect(created.identityIds).toEqual(ids);
     expect(created.layoutId).toBe("2x1");
   });
@@ -230,42 +230,79 @@ describe("MCP tools", () => {
   it("blocks writes when the write permission is disabled", async () => {
     await server.update({ allowWrite: false });
     const result = await rpc(
-      toolCall("create_environment", { name: "x", baseUrl: "http://localhost:3000" }),
+      toolCall("create_site", { name: "x", baseUrl: "http://localhost:3000" }),
     );
     expect(result.json.result.isError).toBe(true);
-    expect(service.snapshot().environments).toHaveLength(0);
+    expect(service.snapshot().sites).toHaveLength(0);
   });
 
   it("keeps delete disabled by default and requires an explicit confirm", async () => {
     const env = await rpc(
-      toolCall("create_environment", { name: "可删环境", baseUrl: "http://localhost:3000" }),
+      toolCall("create_site", { name: "可删环境", baseUrl: "http://localhost:3000" }),
     );
-    const environment = JSON.parse(env.json.result.content[0].text);
+    const site = JSON.parse(env.json.result.content[0].text);
 
-    const blocked = await rpc(toolCall("delete_environment", { id: environment.id }));
+    const blocked = await rpc(toolCall("delete_site", { id: site.id }));
     expect(blocked.json.result.isError).toBe(true);
-    expect(service.snapshot().environments).toHaveLength(1);
+    expect(service.snapshot().sites).toHaveLength(1);
 
     await server.update({ allowDelete: true });
-    const noConfirm = await rpc(toolCall("delete_environment", { id: environment.id }));
+    const noConfirm = await rpc(toolCall("delete_site", { id: site.id }));
     expect(noConfirm.json.result.isError).toBe(true);
-    expect(service.snapshot().environments).toHaveLength(1);
+    expect(service.snapshot().sites).toHaveLength(1);
 
     const confirmed = await rpc(
-      toolCall("delete_environment", { id: environment.id, confirm: true }),
+      toolCall("delete_site", { id: site.id, confirm: true }),
     );
     expect(confirmed.json.result.isError).toBeUndefined();
-    expect(service.snapshot().environments).toHaveLength(0);
+    expect(service.snapshot().sites).toHaveLength(0);
+  });
+
+  it("creates a site tag and lists it on the site", async () => {
+    const created = await rpc(
+      toolCall("save_site_tag", { name: "后台系统", color: "teal" }),
+    );
+    expect(created.json.result.isError).toBeUndefined();
+    const tag = JSON.parse(created.json.result.content[0].text) as { id: string };
+
+    const site = service.saveSite({
+      name: "本地站点",
+      baseUrl: "http://localhost:3000",
+      loginPath: "/login",
+      autoSubmit: false,
+      tagIds: [tag.id],
+    });
+
+    const listed = await rpc(toolCall("list_sites", {}));
+    const sites = JSON.parse(listed.json.result.content[0].text) as Array<{
+      id: string;
+      tags: string[];
+    }>;
+    // The list reports tag names, not ids: the AI should not have to join tables.
+    expect(sites.find((item) => item.id === site.id)?.tags).toEqual(["后台系统"]);
+  });
+
+  it("requires confirmation before deleting a tag", async () => {
+    const tag = service.saveSiteTag({ name: "后台系统", color: "teal" });
+    await server.update({ allowDelete: true });
+
+    const refused = await rpc(toolCall("delete_site_tag", { id: tag.id }));
+    expect(refused.json.result.isError).toBe(true);
+    expect(service.snapshot().siteTags).toHaveLength(1);
+
+    const confirmed = await rpc(toolCall("delete_site_tag", { id: tag.id, confirm: true }));
+    expect(confirmed.json.result.isError).toBeUndefined();
+    expect(service.snapshot().siteTags).toHaveLength(0);
   });
 
   it("logs tool calls but never the password", async () => {
     const env = await rpc(
-      toolCall("create_environment", { name: "审计环境", baseUrl: "http://localhost:3000" }),
+      toolCall("create_site", { name: "审计环境", baseUrl: "http://localhost:3000" }),
     );
-    const environment = JSON.parse(env.json.result.content[0].text);
+    const site = JSON.parse(env.json.result.content[0].text);
     await rpc(
       toolCall("create_identity", {
-        environmentId: environment.id,
+        siteId: site.id,
         name: "审计账号",
         username: "audit",
         password: "do-not-log-me",
@@ -277,17 +314,17 @@ describe("MCP tools", () => {
     expect(log).toContain("[redacted]");
   });
 
-  it("gates launches on the run permission instead of the environment name", async () => {
+  it("gates launches on the run permission instead of the site name", async () => {
     const env = await rpc(
-      toolCall("create_environment", {
+      toolCall("create_site", {
         name: "会员服务-生产环境",
         baseUrl: "http://localhost:3000",
       }),
     );
-    const environment = JSON.parse(env.json.result.content[0].text);
+    const site = JSON.parse(env.json.result.content[0].text);
     const identityResponse = await rpc(
       toolCall("create_identity", {
-        environmentId: environment.id,
+        siteId: site.id,
         name: "生产账号",
         username: "prod-user",
       }),
@@ -297,7 +334,7 @@ describe("MCP tools", () => {
     // The name alone must not fork the launch path: no extra confirmation field
     // exists, because guessing risk from a name was both unreliable and advisory.
     const tools = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json.result.tools;
-    for (const name of ["launch_scene", "launch_identity", "launch_clean_session"]) {
+    for (const name of ["launch_view", "launch_identity", "launch_clean_session"]) {
       const tool = tools.find((item: { name: string }) => item.name === name);
       expect(tool.inputSchema.properties).not.toHaveProperty("confirmProduction");
     }

@@ -103,7 +103,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     service = workspace;
     const engine = await chromiumEngine(workspace);
 
-    const environment = workspace.saveEnvironment({
+    const site = workspace.saveSite({
       name: "headless",
       baseUrl,
       loginPath: "/login",
@@ -113,7 +113,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       extraFields: [],
     });
     const identity = workspace.saveIdentity({
-      environmentId: environment.id,
+      siteId: site.id,
       name: "后台检测",
       username: "worker",
       role: "member",
@@ -154,7 +154,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     service = workspace;
     const engine = await chromiumEngine(workspace);
 
-    const environment = workspace.saveEnvironment({
+    const site = workspace.saveSite({
       name: "fresh",
       baseUrl,
       loginPath: "/login",
@@ -164,7 +164,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       extraFields: [],
     });
     const identity = workspace.saveIdentity({
-      environmentId: environment.id,
+      siteId: site.id,
       name: "从未登录",
       username: "nobody",
       role: "member",
@@ -180,13 +180,13 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     expect(workspace.snapshot().instances).toHaveLength(0);
   }, 120_000);
 
-  it("batch-checks a whole environment without opening any window", async () => {
+  it("batch-checks a whole site without opening any window", async () => {
     const { baseUrl } = await startServer();
     const workspace = await makeService();
     service = workspace;
     const engine = await chromiumEngine(workspace);
 
-    const environment = workspace.saveEnvironment({
+    const site = workspace.saveSite({
       name: "batch",
       baseUrl,
       loginPath: "/login",
@@ -197,7 +197,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     });
     for (const name of ["a", "b", "c"]) {
       workspace.saveIdentity({
-        environmentId: environment.id,
+        siteId: site.id,
         name,
         username: name,
         role: "member",
@@ -208,7 +208,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       });
     }
 
-    const batch = await workspace.checkAllAuth(environment.id);
+    const batch = await workspace.checkAllAuth(site.id);
     expect(batch.results).toHaveLength(3);
     expect(batch.totals.unknown).toBe(0);
     expect(workspace.snapshot().instances).toHaveLength(0);

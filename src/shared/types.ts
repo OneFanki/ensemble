@@ -31,7 +31,21 @@ export interface LoginField {
   value: string;
 }
 
-export interface Environment {
+/**
+ * A user-created label for grouping sites.
+ *
+ * Tags carry no behaviour: they only decide how the site list and the title-bar
+ * switcher are organised. A site may have many, and deleting a tag merely
+ * unlinks it — sites and identities are never touched.
+ */
+export interface SiteTag {
+  id: string;
+  name: string;
+  color: RoleColor;
+  createdAt: string;
+}
+
+export interface Site {
   id: string;
   name: string;
   baseUrl: string;
@@ -39,19 +53,36 @@ export interface Environment {
   authCheckPath?: string;
   defaultEngineId?: string;
   autoSubmit: boolean;
-  /** Login fields shared by every identity in this environment. */
+  /** Login fields shared by every identity in this site. */
   extraFields?: LoginField[];
+  /** Site tag ids; display grouping only. */
+  tagIds?: string[];
+  /**
+   * Origin credentials were last used against.
+   *
+   * Changing `baseUrl` is a normal edit, but it also redirects where the password
+   * gets typed. When the current origin differs from this one, filling asks for
+   * confirmation first — the same idea as SSH's `known_hosts`.
+   */
+  lastOrigin?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export type PasswordMode = "inherit" | "custom";
+/**
+ * How an identity gets its password.
+ *
+ * `reference` reuses another identity's credentials wholesale: username, password,
+ * display name, role, colour, note and extra fields all follow the source. Anything
+ * that needs to differ must be detached into its own copy first.
+ */
+export type PasswordMode = "inherit" | "custom" | "reference";
 export type IdentityStatus = "unknown" | "signed-in" | "expired";
 export type RoleColor = "amber" | "teal" | "violet" | "rose" | "blue" | "slate";
 
 export interface Identity {
   id: string;
-  environmentId: string;
+  siteId: string;
   name: string;
   username: string;
   role: string;
@@ -59,9 +90,14 @@ export interface Identity {
   engineId?: string;
   startPath?: string;
   passwordMode: PasswordMode;
+  /**
+   * Identity whose credentials this one reuses, used when `passwordMode` is
+   * `"reference"`. The source must not itself be a reference.
+   */
+  credentialFrom?: string;
   status: IdentityStatus;
   lastCheckedAt?: string;
-  /** Overrides environment fields with the same label; an empty value removes one. */
+  /** Overrides site fields with the same label; an empty value removes one. */
   extraFields?: LoginField[];
   note?: string;
   createdAt: string;
@@ -70,7 +106,7 @@ export interface Identity {
 
 /**
  * Built-in ids are stable strings such as "2x2" or "free". Custom presets use a
- * generated id, so scenes only ever reference a preset by id.
+ * generated id, so views only ever reference a preset by id.
  */
 export type LayoutId = string;
 
@@ -94,24 +130,40 @@ export interface LayoutPreset {
   builtin: boolean;
 }
 
-export interface Scene {
+export interface View {
   id: string;
-  environmentId: string;
+  siteId: string;
   name: string;
   identityIds: string[];
   layoutId: LayoutId;
   /** identityId -> slot index. Missing entries fall back to launch order. */
   slotAssignments: Record<string, number>;
   paths: Record<string, string>;
+  /**
+   * Set when this view was copied from another site. It records provenance only:
+   * the copy is independent, and "sync from source" is a manual action.
+   */
+  copiedFrom?: { siteId: string; viewId: string };
   createdAt: string;
   updatedAt: string;
+}
+
+/** Outcome of copying a view to another site. */
+export interface ViewCopyResult {
+  view: View;
+  /** Identities created on the target site as references to the source ones. */
+  createdReferences: string[];
+  /** Source members that already had a matching account on the target site. */
+  reused: string[];
+  /** Source members that could not be matched and were skipped. */
+  skipped: string[];
 }
 
 export interface RunningInstance {
   id: string;
   identityId?: string;
   label: string;
-  environmentId: string;
+  siteId: string;
   engineId: string;
   pid: number;
   profileDir: string;
@@ -134,8 +186,8 @@ export interface FocusLabelPayload {
   label: string;
   role?: string;
   color: RoleColor;
-  /** Only set when several environments are running at once. */
-  environment?: string;
+  /** Only set when several sites are running at once. */
+  site?: string;
   /** Bumped by the sender so the renderer can restart the fade animation. */
   seq: number;
 }
@@ -154,7 +206,7 @@ export interface AuthBatchTotals {
 }
 
 export interface AuthBatchResult {
-  environmentId?: string;
+  siteId?: string;
   checkedAt: string;
   totals: AuthBatchTotals;
   results: AuthCheckResult[];
@@ -173,10 +225,10 @@ export interface ReloginBatchResult {
   results: ReloginResult[];
 }
 
-export interface SceneRestoreOutcome {
+export interface ViewRestoreOutcome {
   restored: boolean;
-  sceneId?: string;
-  sceneName?: string;
+  viewId?: string;
+  viewName?: string;
   reason?: string;
 }
 
@@ -185,7 +237,7 @@ export interface LaunchResult {
   identities: Identity[];
 }
 
-/** Emitted after a best-effort fill that follows a launch or scene start. */
+/** Emitted after a best-effort fill that follows a launch or view start. */
 export interface AutoFillReport {
   identityId: string;
   label: string;
@@ -195,21 +247,27 @@ export interface AutoFillReport {
   missingFields: string[];
   /** Visible inputs the page has that no configuration describes yet. */
   unmatchedFields: string[];
-  skipped?: "no-password" | "not-login-page" | "cross-origin" | "external" | "failed";
+  skipped?:
+    | "no-password"
+    | "not-login-page"
+    | "cross-origin"
+    | "origin-changed"
+    | "external"
+    | "failed";
 }
 
 export interface AppSettings {
   theme: "dark" | "light" | "system";
   locale: "zh" | "en";
-  lastEnvironmentId?: string;
-  lastView: "environments" | "identities" | "scenes";
+  lastSiteId?: string;
+  lastView: "browser" | "sites" | "identities" | "views";
   /**
-   * Scene launched most recently. Only used when {@link restoreLastScene} is on;
-   * it is not the "selected scene in the UI" and may point at another environment.
+   * View launched most recently. Only used when {@link restoreLastView} is on;
+   * it is not the "selected view in the UI" and may point at another site.
    */
-  lastSceneId?: string;
-  /** Reopen {@link lastSceneId} once the app finishes starting. */
-  restoreLastScene: boolean;
+  lastViewId?: string;
+  /** Reopen {@link lastViewId} once the app finishes starting. */
+  restoreLastView: boolean;
   /** Show the always-on-top switcher that lists running instances. */
   overlayEnabled: boolean;
   /**
@@ -229,12 +287,12 @@ export interface AppSettings {
    */
   focusLabelEnabled: boolean;
   /**
-   * Delay between two windows of the same scene, in milliseconds. 0 by default:
-   * launchers are cheap, and the old 350ms made an eight-member scene feel slow.
+   * Delay between two windows of the same view, in milliseconds. 0 by default:
+   * launchers are cheap, and the old 350ms made an eight-member view feel slow.
    * Users on a constrained machine can raise it.
    */
   launchIntervalMs: number;
-  /** Preset used when identities are launched outside a scene. */
+  /** Preset used when identities are launched outside a view. */
   layout: LayoutId;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
@@ -270,14 +328,16 @@ export interface CredentialPresence {
   /** True when a master password can be set or changed right now. */
   canManageMaster: boolean;
   warning?: string;
-  environment: Record<string, boolean>;
+  site: Record<string, boolean>;
   identity: Record<string, boolean>;
 }
 
 export interface WorkspaceSnapshot {
-  environments: Environment[];
+  sites: Site[];
+  /** User-created site tags; ordering here is the display order. */
+  siteTags: SiteTag[];
   identities: Identity[];
-  scenes: Scene[];
+  views: View[];
   engines: Engine[];
   /** False while the background engine scan is still running. */
   enginesReady: boolean;
@@ -291,7 +351,7 @@ export interface WorkspaceSnapshot {
   userDataDir: string;
 }
 
-export interface EnvironmentDraft {
+export interface SiteDraft {
   id?: string;
   name: string;
   baseUrl: string;
@@ -300,11 +360,30 @@ export interface EnvironmentDraft {
   defaultEngineId?: string;
   autoSubmit: boolean;
   extraFields?: LoginField[];
+  tagIds?: string[];
+}
+
+export interface SiteTagDraft {
+  id?: string;
+  name: string;
+  color: RoleColor;
+}
+
+/**
+ * Raised when a fill targets a site whose address changed since the password was
+ * last used there. The UI must show the two origins and ask before proceeding.
+ */
+export interface OriginChangedNotice {
+  identityId: string;
+  siteId: string;
+  siteName: string;
+  expectedOrigin: string;
+  currentOrigin: string;
 }
 
 export interface IdentityDraft {
   id?: string;
-  environmentId: string;
+  siteId: string;
   name: string;
   username: string;
   role: string;
@@ -312,15 +391,17 @@ export interface IdentityDraft {
   engineId?: string;
   startPath?: string;
   passwordMode: PasswordMode;
+  /** Source identity when `passwordMode` is `"reference"`. */
+  credentialFrom?: string;
   /** Only sent when the user typed a new password. Never returned by the main process. */
   password?: string;
   extraFields?: LoginField[];
   note?: string;
 }
 
-export interface SceneDraft {
+export interface ViewDraft {
   id?: string;
-  environmentId: string;
+  siteId: string;
   name: string;
   identityIds: string[];
   layoutId: LayoutId;
@@ -339,10 +420,10 @@ export type SettingsPatch = Partial<
     AppSettings,
     | "theme"
     | "locale"
-    | "lastEnvironmentId"
+    | "lastSiteId"
     | "lastView"
-    | "lastSceneId"
-    | "restoreLastScene"
+    | "lastViewId"
+    | "restoreLastView"
     | "overlayEnabled"
     | "headlessCheckUa"
     | "focusLabelEnabled"
@@ -357,7 +438,7 @@ export type SettingsPatch = Partial<
 >;
 
 export interface PasswordOwner {
-  kind: "environment" | "identity";
+  kind: "site" | "identity";
   id: string;
 }
 

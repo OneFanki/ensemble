@@ -6,7 +6,7 @@ function instance(id: string, pid: number): RunningInstance {
   return {
     id,
     label: id,
-    environmentId: "env",
+    siteId: "env",
     engineId: "engine",
     pid,
     profileDir: `/profiles/${id}`,

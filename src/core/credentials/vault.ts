@@ -34,7 +34,7 @@ export class MemorySecretBox implements SecretBox {
 
 export interface VaultV1 {
   version: 1;
-  environment: Record<string, string>;
+  site: Record<string, string>;
   identity: Record<string, string>;
 }
 
@@ -45,7 +45,7 @@ export interface VaultV2 {
   kdf?: KdfParams;
   /** Encrypted canary used to verify the master password. */
   check?: string;
-  environment: Record<string, string>;
+  site: Record<string, string>;
   identity: Record<string, string>;
 }
 
@@ -141,7 +141,7 @@ export class CredentialVault {
   }
 
   private buckets(): Array<Record<string, string>> {
-    return [this.file.environment, this.file.identity];
+    return [this.file.site, this.file.identity];
   }
 
   private containsLegacyPlaintext(): boolean {
@@ -151,7 +151,7 @@ export class CredentialVault {
   }
 
   private bucket(owner: PasswordOwner): Record<string, string> {
-    return owner.kind === "environment" ? this.file.environment : this.file.identity;
+    return owner.kind === "site" ? this.file.site : this.file.identity;
   }
 
   has(owner: PasswordOwner): boolean {
@@ -185,19 +185,19 @@ export class CredentialVault {
     this.persist();
   }
 
-  clearEnvironment(environmentId: string): void {
-    delete this.file.environment[environmentId];
+  clearSite(siteId: string): void {
+    delete this.file.site[siteId];
     this.persist();
   }
 
   presence(): {
-    environment: Record<string, boolean>;
+    site: Record<string, boolean>;
     identity: Record<string, boolean>;
   } {
     const collect = (bucket: Record<string, string>) =>
       Object.fromEntries(Object.keys(bucket).map((key) => [key, Boolean(bucket[key])]));
     return {
-      environment: collect(this.file.environment),
+      site: collect(this.file.site),
       identity: collect(this.file.identity),
     };
   }
@@ -301,13 +301,13 @@ export class CredentialVault {
   private reencryptAll(
     source: SecretBox,
     target: SecretBox,
-  ): { environment: Record<string, string>; identity: Record<string, string> } {
+  ): { site: Record<string, string>; identity: Record<string, string> } {
     const move = (bucket: Record<string, string>) =>
       Object.fromEntries(
         Object.entries(bucket).map(([key, payload]) => [key, target.encrypt(source.decrypt(payload))]),
       );
     return {
-      environment: move(this.file.environment),
+      site: move(this.file.site),
       identity: move(this.file.identity),
     };
   }
@@ -319,7 +319,7 @@ export class CredentialVault {
 
 function normalize(initial?: VaultFile): VaultFile {
   if (!initial) {
-    return { version: 2, mode: "os", environment: {}, identity: {} };
+    return { version: 2, mode: "os", site: {}, identity: {} };
   }
   if (initial.version === 2) {
     return {
@@ -327,14 +327,14 @@ function normalize(initial?: VaultFile): VaultFile {
       mode: initial.mode === "master" ? "master" : "os",
       ...(initial.kdf ? { kdf: initial.kdf } : {}),
       ...(initial.check ? { check: initial.check } : {}),
-      environment: initial.environment ?? {},
+      site: initial.site ?? {},
       identity: initial.identity ?? {},
     };
   }
   return {
     version: 2,
     mode: "os",
-    environment: initial.environment ?? {},
+    site: initial.site ?? {},
     identity: initial.identity ?? {},
   };
 }
@@ -345,18 +345,44 @@ export function isMasterPayload(payload: string): boolean {
 }
 
 /**
- * Resolves the effective password for an identity.
- * Custom identity passwords win; otherwise the environment default applies.
+ * Resolves the password an identity logs in with.
+ *
+ * Three modes, in order of specificity:
+ *
+ * - `custom` — this identity stores its own password;
+ * - `reference` — this identity reuses another identity's password, so changing
+ *   the source changes every site that references it. References are one level
+ *   deep: the source may not itself be a reference, which keeps the chain acyclic;
+ * - `inherit` — fall back to the site default.
+ *
+ * `identities` is only needed to follow a reference. Omitting it makes a
+ * reference resolve as missing rather than silently falling back to the site
+ * default, which would log in with the wrong credentials.
  */
 export function resolvePassword(
   vault: CredentialVault,
-  identity: { id: string; passwordMode: "inherit" | "custom" },
-  environmentId: string,
-): { password?: string; source: "identity" | "environment" | "missing" } {
+  identity: {
+    id: string;
+    passwordMode: "inherit" | "custom" | "reference";
+    credentialFrom?: string;
+  },
+  siteId: string,
+  identities?: Array<{ id: string; passwordMode: "inherit" | "custom" | "reference" }>,
+): { password?: string; source: "identity" | "site" | "missing" } {
   if (identity.passwordMode === "custom") {
     const password = vault.get({ kind: "identity", id: identity.id });
     return password ? { password, source: "identity" } : { source: "missing" };
   }
-  const password = vault.get({ kind: "environment", id: environmentId });
-  return password ? { password, source: "environment" } : { source: "missing" };
+  if (identity.passwordMode === "reference") {
+    const sourceId = identity.credentialFrom;
+    if (!sourceId) return { source: "missing" };
+    const source = identities?.find((item) => item.id === sourceId);
+    // A source that is itself a reference is invalid by construction; treat it as
+    // missing instead of walking an arbitrary depth.
+    if (!source || source.passwordMode === "reference") return { source: "missing" };
+    const password = vault.get({ kind: "identity", id: sourceId });
+    return password ? { password, source: "identity" } : { source: "missing" };
+  }
+  const password = vault.get({ kind: "site", id: siteId });
+  return password ? { password, source: "site" } : { source: "missing" };
 }

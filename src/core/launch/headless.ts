@@ -15,7 +15,7 @@ import { resolveBrowserPid, waitForProcessExit } from "./browser";
  * Chromium profile at a time. So this path serves exactly the case where no
  * window is open for that identity: launch headless against its profile, read the
  * answer, shut down. Nothing is registered as a running instance — no overlay
- * row, no scene slot, no window the user has to close.
+ * row, no view slot, no window the user has to close.
  *
  * Measured on Windows: ~380ms against ~2s for a visible window, and the login
  * state comes from the same cookies a real visit uses. One honest limitation:
@@ -28,7 +28,7 @@ import { resolveBrowserPid, waitForProcessExit } from "./browser";
 export interface HeadlessSessionRequest {
   engine: Engine;
   profileRoot: string;
-  environmentId: string;
+  siteId: string;
   profileKey: string;
   /** UA the page should report; see AppSettings.headlessCheckUa. */
   userAgent: AppSettings["headlessCheckUa"];
@@ -74,7 +74,7 @@ export async function openHeadlessSession(
   const profileRoot = engine.profileBase ?? request.profileRoot;
   const profileDir = join(
     profileRoot,
-    safeProfileSegment(request.environmentId),
+    safeProfileSegment(request.siteId),
     safeProfileSegment(request.profileKey),
   );
   await mkdir(profileDir, { recursive: true });

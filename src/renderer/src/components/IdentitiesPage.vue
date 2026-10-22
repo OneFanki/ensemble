@@ -12,6 +12,7 @@ import {
   Square,
 } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
+import { useEmbeddedStore } from "../stores/embedded";
 import type { Identity, RoleColor } from "@shared/types";
 
 const emit = defineEmits<{
@@ -21,6 +22,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const embedded = useEmbeddedStore();
 const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
@@ -79,7 +81,7 @@ const roleVar = (color: RoleColor) => `var(--role-${color})`;
 
 const visibleIdentities = computed(() => {
   const term = query.value.trim().toLowerCase();
-  return store.environmentIdentities.filter((identity) => {
+  return store.siteIdentities.filter((identity) => {
     const running = Boolean(store.instanceFor(identity.id));
     if (filter.value === "running" && !running) return false;
     if (filter.value === "expired" && identity.status !== "expired") return false;
@@ -93,10 +95,10 @@ const visibleIdentities = computed(() => {
 });
 
 const runningCount = computed(
-  () => store.environmentIdentities.filter((i) => store.instanceFor(i.id)).length,
+  () => store.siteIdentities.filter((i) => store.instanceFor(i.id)).length,
 );
 const expiredCount = computed(
-  () => store.environmentIdentities.filter((i) => i.status === "expired").length,
+  () => store.siteIdentities.filter((i) => i.status === "expired").length,
 );
 
 const statusLabel = (identity: Identity): string => {
@@ -137,10 +139,19 @@ async function relogin(identity: Identity) {
     await store.fillLogin(identity.id);
     return;
   }
-  const launched = await store.launchIdentity(identity.id, store.activeEnvironment?.loginPath);
+  const launched = await store.launchIdentity(identity.id, store.activeSite?.loginPath);
   // A launch already fills on its own when the setting is on; filling again here
   // would type the same credentials twice and submit the form twice.
   if (launched && !store.settings.autoFillOnLaunch) await store.fillLogin(identity.id);
+}
+
+/**
+ * Opens this identity's page in the built-in browser, which gets its own
+ * persistent session partition. Opening the same identity again switches to the
+ * tab that is already there instead of stacking identical pages.
+ */
+async function openEmbedded(identity: Identity) {
+  await embedded.openIdentity(identity.id);
 }
 
 async function checkAuth(identity: Identity) {
@@ -148,6 +159,7 @@ async function checkAuth(identity: Identity) {
 }
 
 function passwordLabel(identity: Identity): string {
+  if (identity.passwordMode === "reference") return t("app.passwordReferenced");
   if (!store.identityPasswordSet(identity)) return t("app.passwordNotSet");
   return identity.passwordMode === "custom" ? t("app.passwordCustom") : t("app.passwordInherit");
 }
@@ -159,8 +171,8 @@ function passwordLabel(identity: Identity): string {
       <div class="head-copy">
         <h1>{{ $t("app.identities") }}</h1>
         <p class="mono">
-          {{ store.activeEnvironment?.baseUrl ?? "—" }} ·
-          {{ $t("app.identityCount", { count: store.environmentIdentities.length }) }}
+          {{ store.activeSite?.baseUrl ?? "—" }} ·
+          {{ $t("app.identityCount", { count: store.siteIdentities.length }) }}
           <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
         </p>
       </div>
@@ -190,7 +202,7 @@ function passwordLabel(identity: Identity): string {
           :aria-selected="filter === 'all'"
           @click="filter = 'all'"
         >
-          {{ $t("app.filterAll") }} <span class="num mono">{{ store.environmentIdentities.length }}</span>
+          {{ $t("app.filterAll") }} <span class="num mono">{{ store.siteIdentities.length }}</span>
         </button>
         <button
           type="button"
@@ -328,6 +340,7 @@ function passwordLabel(identity: Identity): string {
           </span>
           <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
           <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
+          <span @click.stop="openEmbedded(identity)">{{ $t("app.embeddedBrowser") }}</span>
           <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
         </div>
         <div v-else class="card-pick-note mono">
@@ -338,7 +351,7 @@ function passwordLabel(identity: Identity): string {
       </button>
 
       <div v-if="!visibleIdentities.length" class="empty">
-        <p>{{ store.environmentIdentities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
+        <p>{{ store.siteIdentities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
         <button class="btn primary" type="button" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}

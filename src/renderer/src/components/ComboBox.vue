@@ -14,6 +14,8 @@ const props = defineProps<{
   modelValue: string;
   suggestions: string[];
   placeholder?: string;
+  /** Read-only mode, used when a field is synced from a reference. */
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
@@ -119,14 +121,16 @@ function onKeydown(event: KeyboardEvent) {
         class="input"
         :value="modelValue"
         :placeholder="placeholder"
+        :disabled="disabled"
         autocomplete="off"
         role="combobox"
         :aria-expanded="open"
         @input="onInput"
-        @focus="open = true"
+        @focus="!disabled && (open = true)"
         @keydown="onKeydown"
       />
       <button
+        v-if="!disabled"
         type="button"
         class="chevron-btn"
         :aria-label="$t('app.roleSuggestions')"

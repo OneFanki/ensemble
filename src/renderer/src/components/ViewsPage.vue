@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
-import { useI18n } from "vue-i18n";
+import { isFreeLayout, resolveSlotAssignments } from "@shared/layouts";
+import type { Identity, LayoutPreset, View } from "@shared/types";
 import {
+  Copy,
   Globe,
   GripVertical,
   Layers,
@@ -12,72 +13,77 @@ import {
   Trash2,
   Wand2,
 } from "lucide-vue-next";
+import { computed, ref, watchEffect } from "vue";
+import { useI18n } from "vue-i18n";
+import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
-import { isFreeLayout, resolveSlotAssignments } from "@shared/layouts";
-import type { Identity, LayoutPreset, Scene } from "@shared/types";
+import Modal from "./Modal.vue";
+import SelectField from "./SelectField.vue";
 
 const emit = defineEmits<{
-  newScene: [];
-  editScene: [id: string];
-  deleteScene: [id: string];
-  editLayout: [preset?: LayoutPreset, sceneId?: string];
+  newView: [];
+  editView: [id: string];
+  deleteView: [id: string];
+  editLayout: [preset?: LayoutPreset, viewId?: string];
 }>();
 
 const store = useWorkspaceStore();
+const embedded = useEmbeddedStore();
 const { t } = useI18n();
 
-const selectedSceneId = ref("");
+const selectedViewId = ref("");
 const selectedMemberId = ref<string | null>(null);
 const draggedId = ref<string | null>(null);
 const dropTarget = ref<number | null>(null);
+/** Target site of the "copy to another site" dialog. */
+const copyTargetId = ref<string | null>(null);
 
-const selectedScene = computed<Scene | undefined>(
-  () =>
-    store.environmentScenes.find((scene) => scene.id === selectedSceneId.value) ??
-    store.environmentScenes[0],
+const selectedView = computed<View | undefined>(
+  () => store.siteViews.find((view) => view.id === selectedViewId.value) ?? store.siteViews[0],
 );
 
-// Keep the selection valid when scenes are added, renamed or deleted.
+// Keep the selection valid when views are added, renamed or deleted.
 watchEffect(() => {
-  const current = selectedScene.value;
-  if (current && current.id !== selectedSceneId.value) selectedSceneId.value = current.id;
+  const current = selectedView.value;
+  if (current && current.id !== selectedViewId.value) selectedViewId.value = current.id;
   if (!current) selectedMemberId.value = null;
 });
 
-const activePreset = computed<LayoutPreset>(() => store.presetById(selectedScene.value?.layoutId));
+const activePreset = computed<LayoutPreset>(() => store.presetById(selectedView.value?.layoutId));
 
 const isFree = computed(() => isFreeLayout(activePreset.value));
 
-function members(scene: Scene): Identity[] {
-  return scene.identityIds
+function members(view: View): Identity[] {
+  return view.identityIds
     .map((id) => store.identities.find((identity) => identity.id === id))
     .filter((identity): identity is NonNullable<typeof identity> => Boolean(identity));
 }
 
-function sceneStatus(scene: Scene): string {
-  const running = scene.identityIds.filter((id) => store.instanceFor(id)).length;
+function viewStatus(view: View): string {
+  if (openContainer(view)) return t("app.browserStage");
+  const running = view.identityIds.filter((id) => store.instanceFor(id)).length;
   if (running === 0) return t("app.notStarted");
-  return `${running} / ${scene.identityIds.length}`;
+  return `${running} / ${view.identityIds.length}`;
 }
 
 const runningMembers = computed(() =>
-  selectedScene.value
-    ? selectedScene.value.identityIds.filter((id) => store.instanceFor(id)).length
+  selectedView.value
+    ? selectedView.value.identityIds.filter((id) => store.instanceFor(id)).length
     : 0,
 );
 const isRunning = computed(() => runningMembers.value > 0);
 
 /**
  * Explicit assignments first, then the remaining members fill the remaining
- * slots in member order. This keeps old scenes (no assignments) working while
+ * slots in member order. This keeps old views (no assignments) working while
  * making drag-and-drop the source of truth once used.
  */
-function effectiveAssignments(scene: Scene, preset: LayoutPreset): Record<string, number> {
-  return resolveSlotAssignments(preset, scene.identityIds, scene.slotAssignments);
+function effectiveAssignments(view: View, preset: LayoutPreset): Record<string, number> {
+  return resolveSlotAssignments(preset, view.identityIds, view.slotAssignments);
 }
 
 const assignments = computed(() =>
-  selectedScene.value ? effectiveAssignments(selectedScene.value, activePreset.value) : {},
+  selectedView.value ? effectiveAssignments(selectedView.value, activePreset.value) : {},
 );
 
 function memberAt(slotIndex: number): Identity | undefined {
@@ -91,12 +97,12 @@ function canReopen(identity: Identity): boolean {
 }
 
 async function assign(identityId: string, slotIndex: number) {
-  const scene = selectedScene.value;
-  if (!scene) return;
+  const view = selectedView.value;
+  if (!view) return;
   const preset = activePreset.value;
   if (preset.slots.length === 0) return;
 
-  const current = { ...effectiveAssignments(scene, preset) };
+  const current = { ...effectiveAssignments(view, preset) };
   const previousOwner = Object.entries(current).find(([, slot]) => slot === slotIndex)?.[0];
   const previousSlot = current[identityId];
 
@@ -109,7 +115,7 @@ async function assign(identityId: string, slotIndex: number) {
     }
   }
   current[identityId] = slotIndex;
-  await store.setSceneSlots(scene.id, current);
+  await store.setViewSlots(view.id, current);
 }
 
 function onDrop(event: DragEvent, slotIndex: number) {
@@ -128,14 +134,14 @@ function onDrop(event: DragEvent, slotIndex: number) {
 
 /** Slot-to-slot drop swaps the two owners, which is how people reorder windows. */
 async function swapSlots(fromSlot: number, toSlot: number) {
-  const scene = selectedScene.value;
-  if (!scene) return;
+  const view = selectedView.value;
+  if (!view) return;
   const from = memberAt(fromSlot);
   const to = memberAt(toSlot);
   const current = { ...assignments.value };
   if (from) current[from.id] = toSlot;
   if (to) current[to.id] = fromSlot;
-  await store.setSceneSlots(scene.id, current);
+  await store.setViewSlots(view.id, current);
 }
 
 function onSlotClick(slotIndex: number) {
@@ -147,83 +153,139 @@ function selectMember(identityId: string) {
 }
 
 function chooseLayout(preset: LayoutPreset) {
-  const scene = selectedScene.value;
-  if (!scene || scene.layoutId === preset.id) return;
-  void store.setSceneLayout(scene.id, preset.id);
+  const view = selectedView.value;
+  if (!view || view.layoutId === preset.id) return;
+  void store.setViewLayout(view.id, preset.id);
 }
 
 function editActiveLayout() {
-  const scene = selectedScene.value;
-  if (!scene) return;
-  emit("editLayout", activePreset.value, scene.id);
+  const view = selectedView.value;
+  if (!view) return;
+  emit("editLayout", activePreset.value, view.id);
 }
 
-function launchSelected() {
-  const scene = selectedScene.value;
-  if (!scene) return;
-  // Stopping from here closes this scene's windows only. Other scenes and
-  // hand-launched windows are somebody else's work and stay open.
-  if (isRunning.value) void store.stopScene(scene.id);
-  else void store.launchScene(scene.id);
+/** The container this definition has open on the built-in surface, if any. */
+function openContainer(view: View) {
+  return embedded.views.find((item) => item.viewDefinitionId === view.id);
+}
+
+/** True when this view has pages anywhere: built-in container or external windows. */
+function viewRunning(view: View): boolean {
+  return Boolean(openContainer(view)) || view.identityIds.some((id) => store.instanceFor(id));
+}
+
+/**
+ * The primary action opens the built-in surface: it is the main surface, the one
+ * that keeps every account on one screen. External windows stay available as the
+ * fidelity check through the separate action beside it.
+ */
+async function launchSelected() {
+  const view = selectedView.value;
+  if (!view) return;
+  const container = openContainer(view);
+  if (container) {
+    await embedded.closeView(container.id, "opened");
+    return;
+  }
+  await embedded.openView(view.id);
+}
+
+/** Opens the same view as real browser windows, for checking native behaviour. */
+function launchExternal() {
+  const view = selectedView.value;
+  if (!view) return;
+  if (isRunning.value) void store.stopView(view.id);
+  else void store.launchView(view.id);
+}
+
+/** Other sites this view can be copied to; the source site is excluded. */
+const copyTargets = computed(() =>
+  store.sites.filter((site) => site.id !== selectedView.value?.siteId),
+);
+
+const copyTargetOptions = computed(() =>
+  copyTargets.value.map((site) => ({
+    value: site.id,
+    label: site.name,
+    hint: site.baseUrl,
+  })),
+);
+
+async function confirmCopy(): Promise<void> {
+  const view = selectedView.value;
+  const targetId = copyTargetId.value;
+  if (!view || !targetId) return;
+  const result = await store.copyViewToSite(view.id, targetId);
+  copyTargetId.value = null;
+  if (!result) return;
+  const parts = [
+    t("app.copyViewDone", { name: result.view.name }),
+    result.createdReferences.length
+      ? t("app.copyViewReferenced", { count: result.createdReferences.length })
+      : "",
+    result.reused.length ? t("app.copyViewReused", { count: result.reused.length }) : "",
+    result.skipped.length ? t("app.copyViewSkipped", { names: result.skipped.join("、") }) : "",
+  ].filter(Boolean);
+  store.notify(parts.join(" · "), result.skipped.length ? "info" : "success");
 }
 </script>
 
 <template>
-  <section class="scenes">
+  <section class="views">
     <header class="head">
       <div class="head-copy">
-        <h1>{{ $t("app.scenes") }}</h1>
-        <p class="head-note">{{ $t("app.scenesSubtitle") }}</p>
+        <h1>{{ $t("app.views") }}</h1>
+        <p class="head-note">{{ $t("app.viewsSubtitle") }}</p>
       </div>
       <div class="head-actions">
         <button class="btn" type="button" @click="store.launchScopedCleanSession()">
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
         </button>
-        <button class="btn primary" type="button" data-tour="new-scene" @click="emit('newScene')">
+        <button class="btn primary" type="button" data-tour="new-view" @click="emit('newView')">
           <Plus :size="13" />
-          {{ $t("app.newScene") }}
+          {{ $t("app.newView") }}
         </button>
       </div>
     </header>
 
-    <div v-if="!store.environmentScenes.length" class="empty">
+    <div v-if="!store.siteViews.length" class="empty">
       <Layers :size="22" />
-      <p>{{ $t("app.emptyScenes") }}</p>
-      <button class="btn primary" type="button" @click="emit('newScene')">
+      <p>{{ $t("app.emptyViews") }}</p>
+      <button class="btn primary" type="button" @click="emit('newView')">
         <Plus :size="13" />
-        {{ $t("app.newScene") }}
+        {{ $t("app.newView") }}
       </button>
     </div>
 
     <div v-else class="workspace">
-      <div class="scene-list" role="listbox" :aria-label="$t('app.sceneColumnName')">
+      <div class="view-list" role="listbox" :aria-label="$t('app.viewColumnName')">
         <button
-          v-for="(scene, index) in store.environmentScenes"
-          :key="scene.id"
+          v-for="(view, index) in store.siteViews"
+          :key="view.id"
           type="button"
           role="option"
-          class="scene-row"
-          :class="{ running: sceneStatus(scene) !== $t('app.notStarted'), selected: scene.id === selectedScene?.id }"
-          :aria-selected="scene.id === selectedScene?.id"
-          @click="selectedSceneId = scene.id"
+          class="view-row"
+          :class="{ running: viewStatus(view) !== $t('app.notStarted'), selected: view.id === selectedView?.id }"
+          :aria-selected="view.id === selectedView?.id"
+          @click="selectedViewId = view.id"
         >
           <span class="idx mono">{{ String(index + 1).padStart(2, "0") }}</span>
-          <span class="scene-copy">
-            <span class="scene-name">{{ scene.name }}</span>
-            <span class="scene-sub mono">{{ members(scene).map((m) => m.role).join(" · ") || "—" }}</span>
+          <span class="view-copy">
+            <span class="view-name">{{ view.name }}</span>
+            <span class="view-sub mono">{{ members(view).map((m) => m.role).join(" · ") || "—" }}</span>
           </span>
-          <span class="layout mono">{{ store.presetName(store.presetById(scene.layoutId)) }}</span>
-          <span class="state mono">{{ sceneStatus(scene) }}</span>
+          <span class="layout mono">{{ store.presetName(store.presetById(view.layoutId)) }}</span>
+          <span class="state mono">{{ viewStatus(view) }}</span>
         </button>
       </div>
 
-      <div v-if="selectedScene" class="detail">
+      <div v-if="selectedView" class="detail">
         <div class="detail-head">
           <div class="detail-copy">
-            <h2>{{ selectedScene.name }}</h2>
+            <h2>{{ selectedView.name }}</h2>
             <p class="detail-sub">
-              {{ $t("app.identityCount", { count: selectedScene.identityIds.length }) }} ·
+              {{ $t("app.identityCount", { count: selectedView.identityIds.length }) }} ·
               {{ store.presetName(activePreset) }}
             </p>
           </div>
@@ -231,19 +293,42 @@ function launchSelected() {
             <button
               class="btn small"
               type="button"
-              :class="{ running: isRunning }"
-              :disabled="store.busy === 'launch'"
+              :class="{ running: Boolean(openContainer(selectedView)) }"
               @click="launchSelected"
             >
-              <Square v-if="isRunning" :size="11" />
+              <Square v-if="openContainer(selectedView)" :size="11" />
               <Play v-else :size="11" />
-              {{ isRunning ? $t("app.closeSceneWindows") : $t("app.runScene") }}
+              {{
+                openContainer(selectedView)
+                  ? $t("app.browserStopView")
+                  : $t("app.runView")
+              }}
+            </button>
+            <button
+              class="btn small ghost"
+              type="button"
+              :class="{ running: isRunning }"
+              :disabled="store.busy === 'launch'"
+              :title="$t('app.runInExternal')"
+              @click="launchExternal"
+            >
+              {{ isRunning ? $t("app.closeViewWindows") : $t("app.runExternal") }}
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              :aria-label="$t('app.copyViewToSite')"
+              :title="$t('app.copyViewToSiteHint')"
+              :disabled="!copyTargets.length"
+              @click="copyTargetId = copyTargets[0]?.id ?? null"
+            >
+              <Copy :size="12" />
             </button>
             <button
               class="icon-btn"
               type="button"
               :aria-label="$t('app.edit')"
-              @click="emit('editScene', selectedScene.id)"
+              @click="emit('editView', selectedView.id)"
             >
               <Pencil :size="12" />
             </button>
@@ -251,7 +336,7 @@ function launchSelected() {
               class="icon-btn danger"
               type="button"
               :aria-label="$t('app.delete')"
-              @click="emit('deleteScene', selectedScene.id)"
+              @click="emit('deleteView', selectedView.id)"
             >
               <Trash2 :size="12" />
             </button>
@@ -260,7 +345,7 @@ function launchSelected() {
 
         <div class="member-pool">
           <div
-            v-for="identity in members(selectedScene)"
+            v-for="identity in members(selectedView)"
             :key="identity.id"
             class="mchip"
             :class="{
@@ -284,7 +369,7 @@ function launchSelected() {
               type="button"
               class="m-open"
               :disabled="store.busy === 'launch'"
-              @click.stop="store.launchSceneMember(selectedScene!.id, identity.id)"
+              @click.stop="store.launchViewMember(selectedView!.id, identity.id)"
             >
               {{ $t("app.reopen") }}
             </button>
@@ -302,7 +387,7 @@ function launchSelected() {
           </div>
           <div class="layout-picker">
             <button
-              v-for="preset in store.layoutPresets"
+              v-for="preset in store.viewLayoutPresets"
               :key="preset.id"
               type="button"
               class="layout-btn"
@@ -354,15 +439,53 @@ function launchSelected() {
             </div>
           </div>
 
-          <p class="layout-note">{{ $t("app.sceneOrderNote") }}</p>
+          <p class="layout-note">{{ $t("app.viewOrderNote") }}</p>
         </div>
       </div>
     </div>
+
+    <!-- Copying a view to another site is one explicit action: members are matched
+         by username, and accounts that do not exist there become references. -->
+    <Modal
+      v-if="copyTargetId && selectedView"
+      :open="true"
+      :title="$t('app.copyViewToSite')"
+      :description="$t('app.copyViewToSiteDesc')"
+      width="460px"
+      @close="copyTargetId = null"
+    >
+      <div class="copy-form">
+        <label class="copy-field">
+          <span class="copy-label">{{ $t("app.copyTargetSite") }}</span>
+          <SelectField
+            :model-value="copyTargetId ?? undefined"
+            :options="copyTargetOptions"
+            :aria-label="$t('app.copyTargetSite')"
+            @update:model-value="copyTargetId = $event ?? null"
+          />
+        </label>
+        <p class="copy-note">{{ $t("app.copyViewNote", { count: selectedView.identityIds.length }) }}</p>
+      </div>
+      <template #footer>
+        <span class="spacer"></span>
+        <button type="button" class="btn" @click="copyTargetId = null">
+          {{ $t("app.cancel") }}
+        </button>
+        <button
+          type="button"
+          class="btn primary"
+          :disabled="store.busy === 'view'"
+          @click="confirmCopy"
+        >
+          {{ $t("app.copy") }}
+        </button>
+      </template>
+    </Modal>
   </section>
 </template>
 
 <style scoped>
-.scenes {
+.views {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -385,7 +508,7 @@ h1 {
   letter-spacing: -0.015em;
 }
 
-/* Same guard as the environments page: the copy shrinks, the buttons never do. */
+/* Same guard as the sites page: the copy shrinks, the buttons never do. */
 .head-copy {
   min-width: 0;
   flex: 1 1 auto;
@@ -414,7 +537,7 @@ h1 {
   flex: 1 1 auto;
 }
 
-.scene-list {
+.view-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -423,7 +546,7 @@ h1 {
   padding-right: 2px;
 }
 
-.scene-row {
+.view-row {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr) auto auto;
   align-items: center;
@@ -437,18 +560,18 @@ h1 {
   color: var(--muted);
 }
 
-.scene-row:hover {
+.view-row:hover {
   border-color: var(--line);
   color: var(--text-secondary);
 }
 
-.scene-row.selected {
+.view-row.selected {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
   color: var(--text);
 }
 
-.scene-row.running .state {
+.view-row.running .state {
   color: var(--green);
 }
 
@@ -457,14 +580,14 @@ h1 {
   color: var(--faint);
 }
 
-.scene-copy {
+.view-copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 
-.scene-name {
+.view-name {
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -472,7 +595,7 @@ h1 {
   text-overflow: ellipsis;
 }
 
-.scene-sub {
+.view-sub {
   font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
@@ -832,6 +955,17 @@ h1 {
   padding: 6px 10px;
 }
 
+.btn.ghost {
+  background: transparent;
+  color: var(--faint);
+  font-size: 10.5px;
+  padding: 6px 8px;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
+
 .btn.running {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 35%, var(--line));
@@ -864,8 +998,48 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .scene-list {
+  .view-list {
     max-height: 180px;
   }
+}
+
+.copy-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.copy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copy-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.copy-input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  padding: 7px 9px;
+  font-size: 11.5px;
+  outline: 0;
+}
+
+.copy-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--faint);
+}
+
+.spacer {
+  flex: 1;
 }
 </style>

@@ -3,7 +3,7 @@ import type { AppSettings } from "@shared/types";
 /** Bump when the step list changes so existing installs see the new tour once. */
 export const TOUR_VERSION = 1;
 
-export type TourView = "environments" | "identities" | "scenes";
+export type TourView = "browser" | "sites" | "identities" | "views";
 
 export interface TourStep {
   id: string;
@@ -16,7 +16,7 @@ export interface TourStep {
 }
 
 /**
- * Seven steps, no settings page: the tour ends on the run dock after the scene
+ * Seven steps, no settings page: the tour ends on the run dock after the view
  * explanation. Settings remains reachable through the side rail.
  */
 export const TOUR_STEPS: TourStep[] = [
@@ -28,10 +28,10 @@ export const TOUR_STEPS: TourStep[] = [
     placement: "bottom",
   },
   {
-    id: "environment-switcher",
-    target: '[data-tour="environment-switcher"]',
-    titleKey: "app.tourEnvSwitcherTitle",
-    bodyKey: "app.tourEnvSwitcherBody",
+    id: "site-switcher",
+    target: '[data-tour="site-switcher"]',
+    titleKey: "app.tourSiteSwitcherTitle",
+    bodyKey: "app.tourSiteSwitcherBody",
     placement: "bottom",
   },
   {
@@ -42,11 +42,11 @@ export const TOUR_STEPS: TourStep[] = [
     placement: "right",
   },
   {
-    id: "new-environment",
-    view: "environments",
-    target: '[data-tour="new-environment"]',
-    titleKey: "app.tourNewEnvironmentTitle",
-    bodyKey: "app.tourNewEnvironmentBody",
+    id: "new-site",
+    view: "sites",
+    target: '[data-tour="new-site"]',
+    titleKey: "app.tourNewSiteTitle",
+    bodyKey: "app.tourNewSiteBody",
     placement: "bottom",
   },
   {
@@ -58,11 +58,11 @@ export const TOUR_STEPS: TourStep[] = [
     placement: "bottom",
   },
   {
-    id: "new-scene",
-    view: "scenes",
-    target: '[data-tour="new-scene"]',
-    titleKey: "app.tourNewSceneTitle",
-    bodyKey: "app.tourNewSceneBody",
+    id: "new-view",
+    view: "views",
+    target: '[data-tour="new-view"]',
+    titleKey: "app.tourNewViewTitle",
+    bodyKey: "app.tourNewViewBody",
     placement: "bottom",
   },
   {

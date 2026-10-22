@@ -1,77 +1,110 @@
 <script setup lang="ts">
+import type { IdentityDraft, LayoutPreset, SiteDraft, SlotRect, ViewDraft } from "@shared/types";
+import type { UpdateCheckResult } from "@shared/update";
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import TitleBar from "./components/TitleBar.vue";
-import Logo from "./components/Logo.vue";
-import SideRail from "./components/SideRail.vue";
-import EnvironmentsView from "./components/EnvironmentsView.vue";
-import IdentitiesView from "./components/IdentitiesView.vue";
-import ScenesView from "./components/ScenesView.vue";
-import SettingsView from "./components/SettingsView.vue";
-import RunDock from "./components/RunDock.vue";
-import SpotlightTour from "./components/SpotlightTour.vue";
-import ToastStack from "./components/ToastStack.vue";
-import EnvironmentDialog from "./components/EnvironmentDialog.vue";
+import BrowserPage from "./components/BrowserPage.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
+import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
-import SceneDialog from "./components/SceneDialog.vue";
 import LayoutEditor from "./components/LayoutEditor.vue";
+import Logo from "./components/Logo.vue";
+import RunDock from "./components/RunDock.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
+import SettingsPage from "./components/SettingsPage.vue";
+import SideRail from "./components/SideRail.vue";
+import SiteDialog from "./components/SiteDialog.vue";
+import SitesPage from "./components/SitesPage.vue";
+import SpotlightTour from "./components/SpotlightTour.vue";
+import TitleBar from "./components/TitleBar.vue";
+import ToastStack from "./components/ToastStack.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
-import { useWorkspaceStore } from "./stores/workspace";
-import { setLocale, tr, type Locale } from "./i18n";
+import ViewDialog from "./components/ViewDialog.vue";
+import ViewsPage from "./components/ViewsPage.vue";
+import { type Locale, setLocale, tr } from "./i18n";
 import {
+  shouldAutoStartTour,
   TOUR_STEPS,
   TOUR_VERSION,
-  shouldAutoStartTour,
   type TourView,
 } from "./onboarding/tourSteps";
-import type {
-  EnvironmentDraft,
-  IdentityDraft,
-  LayoutPreset,
-  SceneDraft,
-  SlotRect,
-} from "@shared/types";
-import type { UpdateCheckResult } from "@shared/update";
+import { useConfirmStore } from "./stores/confirm";
+import { useEmbeddedStore } from "./stores/embedded";
+import { useWorkspaceStore } from "./stores/workspace";
 
-type View = "environments" | "identities" | "scenes" | "settings";
+type View = "browser" | "sites" | "identities" | "views" | "settings";
 
 const store = useWorkspaceStore();
-const view = ref<View>("identities");
-const environmentDraft = ref<EnvironmentDraft | null>(null);
+const embedded = useEmbeddedStore();
+const confirm = useConfirmStore();
+const view = ref<View>("browser");
+const siteDraft = ref<SiteDraft | null>(null);
 const identityDraft = ref<IdentityDraft | null>(null);
-const sceneDraft = ref<SceneDraft | null>(null);
-const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; sceneId?: string } | null>(
+const viewDraft = ref<ViewDraft | null>(null);
+const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; viewId?: string } | null>(
   null,
 );
 const tourOpen = ref(false);
-const tourOriginView = ref<View>("identities");
+const tourOriginView = ref<View>("browser");
 /** Remount the tour on replay so it cannot keep the previous step index. */
 const tourSession = ref(0);
 const healthOpen = ref(false);
+/** True while an HTML overlay covers the browser stage. */
+const stageObscured = ref(false);
 /** Set by a background check, or by the manual check in Settings. */
 const updatePrompt = ref<UpdateCheckResult | null>(null);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
+/**
+ * Native pages paint above every piece of app HTML, so any modal that covers
+ * the stage has to freeze it first. Missing one dialog is not a cosmetic bug:
+ * the dialog renders behind a live page and looks broken.
+ */
+const overlayOpen = computed(
+  () =>
+    stageObscured.value ||
+    Boolean(
+      confirm.current ||
+        siteDraft.value ||
+        identityDraft.value ||
+        viewDraft.value ||
+        layoutEditor.value ||
+        healthOpen.value ||
+        updatePrompt.value ||
+        tourOpen.value,
+    ),
+);
+
 onMounted(async () => {
   await store.init();
+  await embedded.init();
   applyTheme(store.settings.theme);
   setLocale(store.settings.locale as Locale);
   const saved = store.settings.lastView;
-  view.value = saved === "scenes" || saved === "environments" ? saved : "identities";
+  // The browser is the default page; returning to where the user left off beats
+  // resetting them to a management page they only visited once.
+  view.value =
+    saved === "sites" || saved === "identities" || saved === "views" || saved === "browser"
+      ? saved
+      : "browser";
+  // The main process asks for the browser page when a tool or a shortcut opens a
+  // page in it, so the result is never hidden behind a management page.
+  window.ensemble.onEmbeddedPage(() => {
+    switchView("browser");
+  });
   if (shouldAutoStartTour(store.settings)) {
     tourOriginView.value = view.value;
     window.setTimeout(() => {
       tourOpen.value = true;
     }, 350);
   }
-  // The main process restores the last scene itself; the renderer only reports it
+  // The main process restores the last view itself; the renderer only reports it
   // so the user knows why several windows just appeared.
-  window.ensemble.onSceneRestored((outcome) => {
+  window.ensemble.onViewRestored((outcome) => {
     if (outcome.restored) {
-      store.notify(tr("app.toastSceneRestored", { name: outcome.sceneName ?? "" }), "success");
+      store.notify(tr("app.toastViewRestored", { name: outcome.viewName ?? "" }), "success");
     } else if (outcome.reason) {
-      store.notify(tr("app.toastSceneRestoreFailed", { reason: outcome.reason }), "error");
+      store.notify(tr("app.toastViewRestoreFailed", { reason: outcome.reason }), "error");
     }
   });
   // Background checks stay silent until they find something; the dialog also
@@ -110,7 +143,6 @@ function switchView(next: View) {
     void store.saveSettings({ lastView: next });
   }
 }
-
 function startTour() {
   tourOriginView.value = view.value;
   tourSession.value += 1;
@@ -129,8 +161,8 @@ function handleTourNavigate(next: TourView) {
   view.value = next;
 }
 
-function openNewEnvironment() {
-  environmentDraft.value = {
+function openNewSite() {
+  siteDraft.value = {
     name: "",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
@@ -138,15 +170,14 @@ function openNewEnvironment() {
     defaultEngineId: store.defaultEngine?.id,
     autoSubmit: false,
     extraFields: [],
+    tagIds: store.activeSite?.tagIds ?? [],
   };
 }
 
-function openEditEnvironment(environmentId?: string) {
-  const env = environmentId
-    ? store.environments.find((item) => item.id === environmentId)
-    : store.activeEnvironment;
+function openEditSite(siteId?: string) {
+  const env = siteId ? store.sites.find((item) => item.id === siteId) : store.activeSite;
   if (!env) return;
-  environmentDraft.value = {
+  siteDraft.value = {
     id: env.id,
     name: env.name,
     baseUrl: env.baseUrl,
@@ -155,18 +186,19 @@ function openEditEnvironment(environmentId?: string) {
     defaultEngineId: env.defaultEngineId,
     autoSubmit: env.autoSubmit,
     extraFields: env.extraFields ? env.extraFields.map((field) => ({ ...field })) : [],
+    tagIds: env.tagIds ? [...env.tagIds] : [],
   };
 }
 
 function openNewIdentity() {
-  const env = store.activeEnvironment;
+  const env = store.activeSite;
   if (!env) {
-    store.notify(tr("app.toastNeedEnvironment"), "error");
-    view.value = "environments";
+    store.notify(tr("app.toastNeedSite"), "error");
+    view.value = "sites";
     return;
   }
   identityDraft.value = {
-    environmentId: env.id,
+    siteId: env.id,
     name: "",
     username: "",
     role: "admin",
@@ -182,7 +214,7 @@ function openEditIdentity(identityId: string) {
   if (!identity) return;
   identityDraft.value = {
     id: identity.id,
-    environmentId: identity.environmentId,
+    siteId: identity.siteId,
     name: identity.name,
     username: identity.username,
     role: identity.role,
@@ -190,50 +222,50 @@ function openEditIdentity(identityId: string) {
     engineId: identity.engineId,
     startPath: identity.startPath,
     passwordMode: identity.passwordMode,
+    ...(identity.credentialFrom ? { credentialFrom: identity.credentialFrom } : {}),
     extraFields: identity.extraFields ? identity.extraFields.map((field) => ({ ...field })) : [],
     note: identity.note,
   };
 }
 
-function openNewScene() {
-  const env = store.activeEnvironment;
+function openNewView() {
+  const env = store.activeSite;
   if (!env) {
-    store.notify(tr("app.toastNeedEnvironment"), "error");
-    view.value = "environments";
+    store.notify(tr("app.toastNeedSite"), "error");
+    view.value = "sites";
     return;
   }
-  sceneDraft.value = {
-    environmentId: env.id,
+  viewDraft.value = {
+    siteId: env.id,
     name: "",
-    identityIds: store.environmentIdentities.slice(0, 3).map((identity) => identity.id),
+    identityIds: store.siteIdentities.slice(0, 3).map((identity) => identity.id),
     layoutId: store.settings.layout,
     slotAssignments: {},
     paths: {},
   };
 }
-
-function openEditScene(sceneId: string) {
-  const scene = store.scenes.find((item) => item.id === sceneId);
-  if (!scene) return;
-  sceneDraft.value = {
-    id: scene.id,
-    environmentId: scene.environmentId,
-    name: scene.name,
-    identityIds: [...scene.identityIds],
-    layoutId: scene.layoutId,
-    slotAssignments: { ...scene.slotAssignments },
-    paths: { ...scene.paths },
+function openEditView(viewId: string) {
+  const view = store.views.find((item) => item.id === viewId);
+  if (!view) return;
+  viewDraft.value = {
+    id: view.id,
+    siteId: view.siteId,
+    name: view.name,
+    identityIds: [...view.identityIds],
+    layoutId: view.layoutId,
+    slotAssignments: { ...view.slotAssignments },
+    paths: { ...view.paths },
   };
 }
 
-async function saveEnvironment(draft: EnvironmentDraft) {
-  const result = await store.saveEnvironment(draft);
+async function saveSite(draft: SiteDraft) {
+  const result = await store.saveSite(draft);
   if (result) {
-    environmentDraft.value = null;
+    siteDraft.value = null;
     const saved = draft.id
-      ? result.environments.find((env) => env.id === draft.id)
-      : result.environments.find((env) => env.name === draft.name);
-    if (saved) store.setActiveEnvironment(saved.id);
+      ? result.sites.find((env) => env.id === draft.id)
+      : result.sites.find((env) => env.name === draft.name);
+    if (saved) store.setActiveSite(saved.id);
   }
 }
 
@@ -242,29 +274,35 @@ async function saveIdentity(draft: IdentityDraft) {
   if (result) identityDraft.value = null;
 }
 
-async function saveScene(draft: SceneDraft) {
-  const result = await store.saveScene(draft);
-  if (result) sceneDraft.value = null;
+async function saveView(draft: ViewDraft) {
+  const result = await store.saveView(draft);
+  if (result) viewDraft.value = null;
 }
 
-async function deleteScene(sceneId: string) {
-  if (!window.confirm(tr("app.deleteSceneConfirm"))) return;
-  await store.deleteScene(sceneId);
+async function deleteView(viewId: string) {
+  const accepted = await confirm.ask({
+    title: tr("app.delete"),
+    body: tr("app.deleteViewConfirm"),
+    confirmLabel: tr("app.delete"),
+    tone: "danger",
+  });
+  if (!accepted) return;
+  await store.deleteView(viewId);
 }
 
-async function deleteEnvironment(environmentId: string) {
-  await store.deleteEnvironment(environmentId);
-  environmentDraft.value = null;
+async function deleteSite(siteId: string) {
+  await store.deleteSite(siteId);
+  siteDraft.value = null;
 }
 
-function openLayoutEditor(preset?: LayoutPreset, sceneId?: string) {
+function openLayoutEditor(preset?: LayoutPreset, viewId?: string) {
   // Built-in presets cannot be edited in place, so customizing one seeds a new
   // preset with its geometry instead of cloning the id.
   const editablePreset = preset && !preset.builtin ? preset : undefined;
   const seed = preset?.slots.map((slot) => ({ ...slot }));
   layoutEditor.value = {
     ...(editablePreset ? { preset: editablePreset } : {}),
-    ...(sceneId ? { sceneId } : {}),
+    ...(viewId ? { viewId } : {}),
     seed:
       seed && seed.length > 0
         ? seed
@@ -273,17 +311,23 @@ function openLayoutEditor(preset?: LayoutPreset, sceneId?: string) {
 }
 
 async function saveLayout(draft: { id?: string; name: string; slots: SlotRect[] }) {
-  const sceneId = layoutEditor.value?.sceneId;
+  const viewId = layoutEditor.value?.viewId;
   const saved = await store.saveLayoutPreset(draft);
   if (!saved) return;
   layoutEditor.value = null;
-  // When the editor was opened from a scene, switch that scene to the new preset
+  // When the editor was opened from a view, switch that view to the new preset
   // right away; otherwise the user would save a layout and see nothing change.
-  if (sceneId) await store.setSceneLayout(sceneId, saved.id);
+  if (viewId) await store.setViewLayout(viewId, saved.id);
 }
 
 async function deleteLayout(preset: LayoutPreset) {
-  if (!window.confirm(tr("app.confirmDeleteLayout", { name: preset.name }))) return;
+  const accepted = await confirm.ask({
+    title: tr("app.delete"),
+    body: tr("app.confirmDeleteLayout", { name: preset.name }),
+    confirmLabel: tr("app.delete"),
+    tone: "danger",
+  });
+  if (!accepted) return;
   await store.deleteLayoutPreset(preset.id);
   layoutEditor.value = null;
 }
@@ -306,7 +350,9 @@ async function handleLocale(locale: "zh" | "en") {
   <div class="app-shell" :data-platform="platform">
     <TitleBar
       :view="view"
-      @manage-environments="switchView('environments')"
+      @manage-sites="switchView('sites')"
+      @open-browser="switchView('browser')"
+      @menu-open="(open) => (stageObscured = open)"
     />
 
     <div v-if="store.loading" class="boot">
@@ -321,25 +367,26 @@ async function handleLocale(locale: "zh" | "en") {
       <SideRail :view="view" @navigate="switchView" />
 
       <main class="main-pane">
-        <EnvironmentsView
-          v-if="view === 'environments'"
-          @new-environment="openNewEnvironment"
-          @edit-environment="openEditEnvironment"
+        <BrowserPage v-if="view === 'browser'" :obscured="overlayOpen" />
+        <SitesPage
+          v-else-if="view === 'sites'"
+          @new-site="openNewSite"
+          @edit-site="openEditSite"
         />
-        <IdentitiesView
+        <IdentitiesPage
           v-else-if="view === 'identities'"
           @new-identity="openNewIdentity"
           @edit-identity="openEditIdentity"
           @session-health="healthOpen = true"
         />
-        <ScenesView
-          v-else-if="view === 'scenes'"
-          @new-scene="openNewScene"
-          @edit-scene="openEditScene"
-          @delete-scene="deleteScene"
+        <ViewsPage
+          v-else-if="view === 'views'"
+          @new-view="openNewView"
+          @edit-view="openEditView"
+          @delete-view="deleteView"
           @edit-layout="openLayoutEditor"
         />
-        <SettingsView
+        <SettingsPage
           v-else
           @theme="handleTheme"
           @locale="handleLocale"
@@ -353,10 +400,14 @@ async function handleLocale(locale: "zh" | "en") {
 
     <footer class="statusbar mono">
       <span class="status-group">
-        <span class="led" :class="{ idle: !store.instances.length }"></span>
-        {{ store.instances.length ? $t("app.statusConnected") : $t("app.statusReady") }}
+        <span class="led" :class="{ idle: !store.instances.length && !embedded.tabs.length }"></span>
+        {{
+          store.instances.length || embedded.tabs.length
+            ? $t("app.statusConnected")
+            : $t("app.statusReady")
+        }}
       </span>
-      <span>{{ $t("app.instancesCount", { count: store.instances.length }) }}</span>
+      <span>{{ $t("app.instancesCount", { count: store.instances.length + embedded.tabs.length }) }}</span>
       <span class="status-engines">
         <template v-for="(engine, index) in store.engines.slice(0, 4)" :key="engine.id">
           <span v-if="index > 0" class="sep">·</span>
@@ -371,14 +422,16 @@ async function handleLocale(locale: "zh" | "en") {
     </footer>
 
     <ToastStack />
+    <ConfirmDialog />
 
-    <EnvironmentDialog
-      v-if="environmentDraft"
-      :draft="environmentDraft"
+    <SiteDialog
+      v-if="siteDraft"
+      :draft="siteDraft"
       :engines="store.engines"
-      @close="environmentDraft = null"
-      @save="saveEnvironment"
-      @delete="deleteEnvironment(environmentDraft!.id!)"
+      :tags="store.snapshot?.siteTags ?? []"
+      @close="siteDraft = null"
+      @save="saveSite"
+      @delete="deleteSite(siteDraft!.id!)"
     />
 
     <IdentityDialog
@@ -391,14 +444,15 @@ async function handleLocale(locale: "zh" | "en") {
       @delete="store.deleteIdentity(identityDraft!.id!); identityDraft = null"
     />
 
-    <SceneDialog
-      v-if="sceneDraft"
-      :draft="sceneDraft"
-      :identities="store.environmentIdentities"
-      :presets="store.layoutPresets"
-      @close="sceneDraft = null"
-      @save="saveScene"
-      @delete="store.deleteScene(sceneDraft!.id!); sceneDraft = null"
+    <ViewDialog
+      v-if="viewDraft"
+      :draft="viewDraft"
+      :identities="store.identities"
+      :sites="store.sites"
+      :presets="store.viewLayoutPresets"
+      @close="viewDraft = null"
+      @save="saveView"
+      @delete="store.deleteView(viewDraft!.id!); viewDraft = null"
     />
 
     <SessionHealthDialog v-if="healthOpen" @close="healthOpen = false" />
@@ -469,11 +523,13 @@ async function handleLocale(locale: "zh" | "en") {
 .app-body {
   min-height: 0;
   display: grid;
-  grid-template-columns: var(--rail-width) minmax(0, 1fr) var(--dock-width);
+  /* The rail collapses to an icon strip and the dock to a badge, so both sides
+     size to their own content instead of to a fixed column. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .app-body.settings-mode {
-  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .main-pane {
@@ -535,14 +591,16 @@ async function handleLocale(locale: "zh" | "en") {
 }
 
 @media (max-width: 1180px) {
+  /* Below this width the browser still needs room for two panes, so the dock
+     gives up its fixed width first. */
   .app-body {
-    grid-template-columns: var(--rail-width) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 }
 
 @media (max-width: 900px) {
   .app-body {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
   }
 }
 </style>

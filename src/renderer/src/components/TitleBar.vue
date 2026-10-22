@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { onClickOutside } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
-import { Check, ChevronDown, Settings2 } from "lucide-vue-next";
+import { Check, ChevronDown, PanelsTopLeft, Settings2 } from "lucide-vue-next";
 import Logo from "./Logo.vue";
 import { useWorkspaceStore } from "../stores/workspace";
 
-defineProps<{ view: "environments" | "identities" | "scenes" | "settings" }>();
-const emit = defineEmits<{ manageEnvironments: [] }>();
+defineProps<{ view: "browser" | "sites" | "identities" | "views" | "settings" }>();
+const emit = defineEmits<{ manageSites: []; openBrowser: []; menuOpen: [boolean] }>();
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
@@ -20,6 +20,11 @@ onClickOutside(switcher, () => {
   open.value = false;
 });
 
+// A dropdown in the title bar extends over the browser stage, where the native
+// pages would paint on top of it. The browser page freezes its stage while this
+// is true so the menu stays readable.
+watch(open, (value) => emit("menuOpen", value));
+
 const engineLabel = computed(() => {
   if (!store.enginesReady) return t("app.scanningEngines");
   const engine = store.defaultEngine;
@@ -28,13 +33,17 @@ const engineLabel = computed(() => {
 });
 
 function choose(id: string) {
-  store.setActiveEnvironment(id);
+  store.setActiveSite(id);
   open.value = false;
 }
 
 function manage() {
   open.value = false;
-  emit("manageEnvironments");
+  emit("manageSites");
+}
+
+function openEmbedded() {
+  emit("openBrowser");
 }
 </script>
 
@@ -54,7 +63,7 @@ function manage() {
       <span class="version mono">{{ store.snapshot?.appVersion ?? "0.1" }}</span>
     </div>
 
-    <div ref="switcher" class="env-switcher no-drag" data-tour="environment-switcher">
+    <div ref="switcher" class="env-switcher no-drag" data-tour="site-switcher">
       <button
         class="env-switch"
         type="button"
@@ -63,20 +72,20 @@ function manage() {
         @click="open = !open"
       >
         <span class="dot"></span>
-        <span class="env-name">{{ store.activeEnvironment?.name ?? $t("app.notConfiguredEnv") }}</span>
+        <span class="env-name">{{ store.activeSite?.name ?? $t("app.notConfiguredSite") }}</span>
         <ChevronDown :size="11" class="chevron" :class="{ flip: open }" />
       </button>
 
       <div v-if="open" class="env-menu" role="listbox">
-        <p class="menu-title">{{ $t("app.switchEnvironment") }}</p>
+        <p class="menu-title">{{ $t("app.switchSite") }}</p>
         <button
-          v-for="env in store.environments"
+          v-for="env in store.sites"
           :key="env.id"
           type="button"
           role="option"
           class="menu-item"
-          :class="{ active: env.id === store.activeEnvironment?.id }"
-          :aria-selected="env.id === store.activeEnvironment?.id"
+          :class="{ active: env.id === store.activeSite?.id }"
+          :aria-selected="env.id === store.activeSite?.id"
           @click="choose(env.id)"
         >
           <span class="dot"></span>
@@ -84,19 +93,29 @@ function manage() {
             <span class="menu-name">{{ env.name }}</span>
             <span class="menu-url mono">{{ env.baseUrl }}</span>
           </span>
-          <Check v-if="env.id === store.activeEnvironment?.id" :size="12" class="check" />
+          <Check v-if="env.id === store.activeSite?.id" :size="12" class="check" />
         </button>
-        <p v-if="!store.environments.length" class="menu-empty">{{ $t("app.emptyEnvironments") }}</p>
+        <p v-if="!store.sites.length" class="menu-empty">{{ $t("app.emptySites") }}</p>
 
         <div class="menu-sep"></div>
         <button type="button" class="menu-action" @click="manage">
           <Settings2 :size="12" />
-          {{ $t("app.manageEnvironments") }}
+          {{ $t("app.manageSites") }}
         </button>
       </div>
     </div>
 
     <div class="right no-drag">
+      <button
+        v-if="view !== 'browser'"
+        type="button"
+        class="embedded-open"
+        :title="$t('app.embeddedBrowserHint')"
+        @click="openEmbedded"
+      >
+        <PanelsTopLeft :size="13" />
+        <span>{{ $t("app.embeddedBrowser") }}</span>
+      </button>
       <span class="engine-pill mono" :title="engineLabel">
         <span class="led" :class="{ idle: !store.enginesReady || !store.defaultEngine }"></span>
         <span class="engine-label">{{ engineLabel }}</span>
@@ -155,7 +174,7 @@ function manage() {
 }
 
 /*
- * Covers the draggable part of the bar while the environment menu is open.
+ * Covers the draggable part of the bar while the site menu is open.
  * Window controls live in the right padding, so they are excluded.
  */
 .dismiss-layer {
@@ -335,6 +354,25 @@ function manage() {
   margin-left: auto;
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+.embedded-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.embedded-open:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .engine-pill {

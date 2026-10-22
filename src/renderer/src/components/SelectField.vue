@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { Check, ChevronDown } from "lucide-vue-next";
 import { onClickOutside } from "@vueuse/core";
+import { Check, ChevronDown } from "lucide-vue-next";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 export interface SelectOption {
   value: string;
@@ -17,6 +17,8 @@ const props = defineProps<{
   /** Shown when nothing is selected. */
   placeholder?: string;
   ariaLabel?: string;
+  /** Dense variant for toolbars: shorter trigger, no padding around the text. */
+  compact?: boolean;
 }>();
 
 const emit = defineEmits<{ "update:modelValue": [value: string | undefined] }>();
@@ -54,7 +56,11 @@ function placePanel() {
     if (!height) return;
     const below = window.innerHeight - rect.bottom - margin;
     if (height > below && rect.top - margin > below) {
-      panelStyle.value = { left: `${left}px`, top: `${rect.top - 4 - height}px`, width: `${width}px` };
+      panelStyle.value = {
+        left: `${left}px`,
+        top: `${rect.top - 4 - height}px`,
+        width: `${width}px`,
+      };
     }
   });
 }
@@ -122,7 +128,7 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div ref="root" class="select" @keydown="onKeydown">
+  <div ref="root" class="select" :class="{ compact }" @keydown="onKeydown">
     <button
       type="button"
       class="select-trigger"
@@ -192,6 +198,25 @@ function onKeydown(event: KeyboardEvent) {
 
 .select-trigger:hover {
   border-color: color-mix(in srgb, var(--line) 65%, var(--accent));
+}
+
+.select.compact .select-trigger {
+  gap: 4px;
+  padding: 1px 4px;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 3px;
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
+.select.compact .select-trigger:hover {
+  border-color: var(--line);
+  color: var(--text-secondary);
+}
+
+.select.compact .chevron {
+  flex-basis: 10px;
 }
 
 .select-value {

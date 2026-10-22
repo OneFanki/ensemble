@@ -5,22 +5,31 @@ import { Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
 import SelectField from "./SelectField.vue";
-import type { Engine, EnvironmentDraft } from "@shared/types";
+import type { Engine, SiteDraft, SiteTag } from "@shared/types";
 
 const props = defineProps<{
-  draft: EnvironmentDraft;
+  draft: SiteDraft;
   engines: Engine[];
+  tags?: SiteTag[];
 }>();
 
 const emit = defineEmits<{
   close: [];
-  save: [draft: EnvironmentDraft];
+  save: [draft: SiteDraft];
   delete: [];
 }>();
 
-const form = reactive<EnvironmentDraft>({ ...props.draft });
+const form = reactive<SiteDraft>({ ...props.draft });
 const { t } = useI18n();
 const error = reactive<{ message: string | null }>({ message: null });
+const tags = computed(() => props.tags ?? []);
+
+function toggleTag(id: string) {
+  const current = form.tagIds ?? [];
+  form.tagIds = current.includes(id)
+    ? current.filter((tagId) => tagId !== id)
+    : [...current, id];
+}
 
 watch(
   () => props.draft,
@@ -30,11 +39,11 @@ watch(
 function submit() {
   error.message = null;
   if (!form.name.trim()) {
-    error.message = t("app.errEnvName");
+    error.message = t("app.errSiteName");
     return;
   }
   if (!/^https?:\/\/[^\s]+$/i.test(form.baseUrl.trim())) {
-    error.message = t("app.errEnvUrl");
+    error.message = t("app.errSiteUrl");
     return;
   }
   if (!form.loginPath.startsWith("/")) {
@@ -53,7 +62,7 @@ function submit() {
   });
 }
 
-const namePlaceholder = computed(() => t("app.envNameExample"));
+const namePlaceholder = computed(() => t("app.siteNameExample"));
 
 const engineOptions = computed(() => [
   { value: "__auto__", label: t("app.autoPickEngine") },
@@ -86,8 +95,8 @@ function normalizePath(event: Event) {
 <template>
   <Modal
     :open="true"
-    :title="form.id ? $t('app.editEnvironmentTitle') : $t('app.newEnvironmentTitle')"
-    :description="$t('app.envDialogDesc')"
+    :title="form.id ? $t('app.editSiteTitle') : $t('app.newSiteTitle')"
+    :description="$t('app.siteDialogDesc')"
     width="620px"
     @close="emit('close')"
   >
@@ -95,7 +104,7 @@ function normalizePath(event: Event) {
       <label class="field">
         <span class="label">{{ $t("app.envNameLabel") }}</span>
         <input v-model="form.name" class="input" :placeholder="namePlaceholder" />
-        <span class="hint">{{ $t("app.envNameHint") }}</span>
+        <span class="hint">{{ $t("app.siteNameHint") }}</span>
       </label>
 
       <div class="field">
@@ -107,6 +116,25 @@ function normalizePath(event: Event) {
             form.defaultEngineId = $event === '__auto__' ? undefined : $event
           "
         />
+      </div>
+
+      <div v-if="tags.length" class="field">
+        <span class="label">{{ $t("app.siteTags") }}</span>
+        <div class="tag-row">
+          <button
+            v-for="tag in tags"
+            :key="tag.id"
+            type="button"
+            class="tag-toggle"
+            :class="{ on: form.tagIds?.includes(tag.id) }"
+            :style="{ '--tag': `var(--role-${tag.color})` }"
+            @click="toggleTag(tag.id)"
+          >
+            <span class="tag-dot"></span>
+            {{ tag.name }}
+          </button>
+        </div>
+        <span class="hint">{{ $t("app.siteTagHint") }}</span>
       </div>
 
       <label class="field">
@@ -199,6 +227,44 @@ function normalizePath(event: Event) {
 .hint {
   font-size: 10.5px;
   color: var(--faint);
+}
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.tag-toggle.on {
+  color: var(--text-secondary);
+  border-color: color-mix(in srgb, var(--tag) 45%, var(--line));
+  background: color-mix(in srgb, var(--tag) 14%, transparent);
+}
+
+.tag-toggle .tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tag);
+  flex: 0 0 6px;
+  opacity: 0.55;
+}
+
+.tag-toggle.on .tag-dot {
+  opacity: 1;
 }
 
 .input {

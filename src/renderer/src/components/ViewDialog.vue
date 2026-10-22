@@ -5,23 +5,24 @@ import { GripVertical, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import LayoutPreview from "./LayoutPreview.vue";
 import { useWorkspaceStore } from "../stores/workspace";
-import type { Identity, LayoutPreset, SceneDraft } from "@shared/types";
+import type { Identity, LayoutPreset, Site, ViewDraft } from "@shared/types";
 
 const props = defineProps<{
-  draft: SceneDraft;
+  draft: ViewDraft;
   identities: Identity[];
+  sites: Site[];
   presets: LayoutPreset[];
 }>();
 
 const emit = defineEmits<{
   close: [];
-  save: [draft: SceneDraft];
+  save: [draft: ViewDraft];
   delete: [];
 }>();
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
-const form = reactive<SceneDraft>({
+const form = reactive<ViewDraft>({
   ...props.draft,
   identityIds: [...props.draft.identityIds],
   slotAssignments: { ...props.draft.slotAssignments },
@@ -43,6 +44,41 @@ const presetSlots = computed(() => selectedPreset.value.slots.length);
 const draggedId = ref<string | null>(null);
 /** Slot the pointer is over while dragging a member, for the drop highlight. */
 const dropSlot = ref<number | null>(null);
+
+/** Site of an identity, used to label members that come from elsewhere. */
+function siteName(identity: Identity): string {
+  return props.sites.find((site) => site.id === identity.siteId)?.name ?? "";
+}
+
+/**
+ * Members are grouped by site, so a cross-site view reads as one list with
+ * visible provenance instead of an undifferentiated wall of names.
+ */
+const groupedIdentities = computed(() => {
+  const groups: Array<{ siteId: string; siteName: string; identities: Identity[] }> = [];
+  for (const identity of props.identities) {
+    let group = groups.find((item) => item.siteId === identity.siteId);
+    if (!group) {
+      group = { siteId: identity.siteId, siteName: siteName(identity), identities: [] };
+      groups.push(group);
+    }
+    group.identities.push(identity);
+  }
+  return groups;
+});
+
+/**
+ * A cross-site view only works on the built-in surface: external windows are
+ * launched one site at a time. Saying so before saving beats a failure at launch.
+ */
+const crossSite = computed(() => {
+  const sites = new Set(
+    form.identityIds
+      .map((id) => props.identities.find((identity) => identity.id === id)?.siteId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  return sites.size > 1;
+});
 
 function toggle(id: string) {
   if (form.identityIds.includes(id)) {
@@ -129,11 +165,11 @@ function reorderMembers(targetId: string) {
 function submit() {
   error.message = null;
   if (!form.name.trim()) {
-    error.message = t("app.errSceneName");
+    error.message = t("app.errViewName");
     return;
   }
   if (form.identityIds.length === 0) {
-    error.message = t("app.errSceneMember");
+    error.message = t("app.errViewMember");
     return;
   }
   emit("save", {
@@ -147,53 +183,59 @@ function submit() {
 <template>
   <Modal
     :open="true"
-    :title="form.id ? $t('app.editSceneTitle') : $t('app.newSceneTitle')"
-    :description="$t('app.sceneDialogDesc')"
+    :title="form.id ? $t('app.editViewTitle') : $t('app.newViewTitle')"
+    :description="$t('app.viewDialogDesc')"
     width="620px"
     @close="emit('close')"
   >
     <div class="form">
       <label class="field">
-        <span class="label">{{ $t("app.sceneNameLabel") }}</span>
-        <input v-model="form.name" class="input" :placeholder="$t('app.sceneNameExample')" />
+        <span class="label">{{ $t("app.viewNameLabel") }}</span>
+        <input v-model="form.name" class="input" :placeholder="$t('app.viewNameExample')" />
       </label>
 
       <div class="field">
-        <span class="label">{{ $t("app.sceneMembersLabel") }}</span>
-        <p class="hint">{{ $t("app.sceneMemberDragHint") }}</p>
-        <div class="members">
-          <button
-            v-for="identity in identities"
-            :key="identity.id"
-            type="button"
-            class="member"
-            :class="{
-              on: form.identityIds.includes(identity.id),
-              dragging: draggedId === identity.id,
-            }"
-            :style="{ '--role': `var(--role-${identity.color})` }"
-            :draggable="form.identityIds.includes(identity.id)"
-            @dragstart="
-              draggedId = identity.id;
-              $event.dataTransfer?.setData('text/plain', identity.id)
-            "
-            @dragend="draggedId = null; dropSlot = null"
-            @dragover.prevent
-            @drop.prevent="reorderMembers(identity.id)"
-            @click="toggle(identity.id)"
-          >
-            <GripVertical v-if="form.identityIds.includes(identity.id)" :size="10" class="grip" />
-            <span class="d">{{ identity.name.slice(0, 1) }}</span>
-            <span class="m-copy">
-              <span class="m-name">{{ identity.name }}</span>
-              <span class="m-acct mono">{{ identity.role }}</span>
-            </span>
-            <span class="order mono" v-if="form.identityIds.includes(identity.id)">
-              {{ form.identityIds.indexOf(identity.id) + 1 }}
-            </span>
-          </button>
+        <span class="label">{{ $t("app.viewMembersLabel") }}</span>
+        <p class="hint">{{ $t("app.viewMemberDragHint") }}</p>
+        <!-- Grouped by site: a view may span deployments, and the group header is
+             the only place that provenance is visible before saving. -->
+        <div v-for="group in groupedIdentities" :key="group.siteId" class="member-group">
+          <span class="group-name mono">{{ group.siteName }}</span>
+          <div class="members">
+            <button
+              v-for="identity in group.identities"
+              :key="identity.id"
+              type="button"
+              class="member"
+              :class="{
+                on: form.identityIds.includes(identity.id),
+                dragging: draggedId === identity.id,
+              }"
+              :style="{ '--role': `var(--role-${identity.color})` }"
+              :draggable="form.identityIds.includes(identity.id)"
+              @dragstart="
+                draggedId = identity.id;
+                $event.dataTransfer?.setData('text/plain', identity.id)
+              "
+              @dragend="draggedId = null; dropSlot = null"
+              @dragover.prevent
+              @drop.prevent="reorderMembers(identity.id)"
+              @click="toggle(identity.id)"
+            >
+              <GripVertical v-if="form.identityIds.includes(identity.id)" :size="10" class="grip" />
+              <span class="d">{{ identity.name.slice(0, 1) }}</span>
+              <span class="m-copy">
+                <span class="m-name">{{ identity.name }}</span>
+                <span class="m-acct mono">{{ identity.role }}</span>
+              </span>
+              <span class="order mono" v-if="form.identityIds.includes(identity.id)">
+                {{ form.identityIds.indexOf(identity.id) + 1 }}
+              </span>
+            </button>
+          </div>
         </div>
-        <p v-if="!identities.length" class="note">{{ $t("app.sceneNoIdentities") }}</p>
+        <p v-if="!identities.length" class="note">{{ $t("app.viewNoIdentities") }}</p>
+        <p v-if="crossSite" class="note">{{ $t("app.viewCrossSiteNote") }}</p>
       </div>
 
       <div class="field">
@@ -232,10 +274,10 @@ function submit() {
             </div>
           </template>
         </LayoutPreview>
-        <p class="note">{{ $t("app.sceneLayoutNote", { count: presetSlots }) }}</p>
+        <p class="note">{{ $t("app.viewLayoutNote", { count: presetSlots }) }}</p>
       </div>
 
-      <p class="note">{{ $t("app.sceneOrderNote") }}</p>
+      <p class="note">{{ $t("app.viewOrderNote") }}</p>
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
     </div>
 
@@ -290,9 +332,20 @@ function submit() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
-  max-height: 190px;
-  overflow-y: auto;
   padding: 1px;
+}
+
+.member-group + .member-group {
+  margin-top: 8px;
+}
+
+.group-name {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 .member {

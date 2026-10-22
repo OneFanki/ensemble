@@ -1,13 +1,11 @@
-import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import type { EnsembleApi } from "@shared/ipc";
+import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, findLayout, isFreeLayout } from "@shared/layouts";
 import type {
   AppSettings,
   AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
   Engine,
-  Environment,
-  EnvironmentDraft,
   Identity,
   IdentityDraft,
   LayoutId,
@@ -16,14 +14,18 @@ import type {
   McpPatch,
   PasswordOwner,
   ReloginBatchResult,
-  Scene,
-  SceneDraft,
   SettingsPatch,
+  Site,
+  SiteDraft,
+  SiteTagDraft,
+  View,
+  ViewDraft,
   WorkspaceSnapshot,
 } from "@shared/types";
-import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, findLayout, isFreeLayout } from "@shared/layouts";
-import type { EnsembleApi } from "@shared/ipc";
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
 import { tr } from "../i18n";
+import { useConfirmStore } from "./confirm";
 
 declare global {
   interface Window {
@@ -42,19 +44,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const loading = ref(true);
   const busy = ref<string | null>(null);
   const toasts = ref<ToastMessage[]>([]);
-  const activeEnvironmentId = ref<string | null>(null);
+  const activeSiteId = ref<string | null>(null);
   let toastSeq = 0;
 
   const api = computed(() => window.ensemble);
+  const confirm = useConfirmStore();
 
   function apply(next: WorkspaceSnapshot) {
     snapshot.value = next;
-    if (
-      !activeEnvironmentId.value ||
-      !next.environments.some((env) => env.id === activeEnvironmentId.value)
-    ) {
-      activeEnvironmentId.value =
-        next.settings.lastEnvironmentId ?? next.environments[0]?.id ?? null;
+    if (!activeSiteId.value || !next.sites.some((env) => env.id === activeSiteId.value)) {
+      activeSiteId.value = next.settings.lastSiteId ?? next.sites[0]?.id ?? null;
     }
   }
 
@@ -74,6 +73,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       notify(tr("app.toastCrossOrigin", { name: report.label }), "error");
       return;
     }
+    if (report.skipped === "origin-changed") {
+      void confirmChangedOrigin(report);
+      return;
+    }
     if (!report.filled) return;
     const separator = tr("app.listSeparator");
     const notes = [tr("app.toastAutoFilled", { name: report.label })];
@@ -86,6 +89,39 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       );
     }
     notify(notes.join(" · "), report.missingFields.length > 0 ? "info" : "success");
+  }
+
+  /**
+   * The site's address changed since the last successful fill.
+   *
+   * The password is not sent until the user says "yes, this origin is still the
+   * intended site". Accepting records the new origin, so this asks once per real
+   * change rather than on every launch.
+   */
+  async function confirmChangedOrigin(report: AutoFillReport): Promise<void> {
+    const notice = await window.ensemble.takeOriginNotice();
+    if (!notice) {
+      notify(tr("app.toastOriginChanged", { name: report.label }), "error");
+      return;
+    }
+    const accepted = await confirm.ask({
+      title: tr("app.confirmOriginTitle"),
+      body: tr("app.confirmOriginChange", {
+        site: notice.siteName,
+        expected: notice.expectedOrigin,
+        current: notice.currentOrigin,
+      }),
+      confirmLabel: tr("app.confirmOriginAccept"),
+      tone: "danger",
+    });
+    if (!accepted) {
+      notify(tr("app.toastOriginRejected", { name: notice.siteName }), "error");
+      return;
+    }
+    const site = sites.value.find((item) => item.id === notice.siteId);
+    if (!site) return;
+    await acceptSiteOrigin(site.id);
+    notify(tr("app.toastOriginAccepted", { site: notice.siteName }), "success");
   }
 
   function notify(text: string, tone: ToastMessage["tone"] = "info") {
@@ -122,9 +158,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
-  const environments = computed<Environment[]>(() => snapshot.value?.environments ?? []);
+  const sites = computed<Site[]>(() => snapshot.value?.sites ?? []);
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
-  const scenes = computed<Scene[]>(() => snapshot.value?.scenes ?? []);
+  const views = computed<View[]>(() => snapshot.value?.views ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
   const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
   const settings = computed<AppSettings>(
@@ -133,7 +169,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         theme: "dark",
         locale: "zh",
         lastView: "identities",
-        restoreLastScene: false,
+        restoreLastView: false,
         overlayEnabled: true,
         headlessCheckUa: "desktop",
         focusLabelEnabled: true,
@@ -154,24 +190,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     ...(snapshot.value?.layoutPresets ?? []),
   ]);
 
-  const activeEnvironment = computed<Environment | undefined>(
-    () =>
-      environments.value.find((env) => env.id === activeEnvironmentId.value) ??
-      environments.value[0],
+  const activeSite = computed<Site | undefined>(
+    () => sites.value.find((env) => env.id === activeSiteId.value) ?? sites.value[0],
   );
 
-  const environmentIdentities = computed<Identity[]>(() => {
-    const envId = activeEnvironment.value?.id;
+  const siteIdentities = computed<Identity[]>(() => {
+    const envId = activeSite.value?.id;
     if (!envId) return [];
-    return identities.value.filter((identity) => identity.environmentId === envId);
+    return identities.value.filter((identity) => identity.siteId === envId);
   });
 
-  const environmentScenes = computed<Scene[]>(() =>
-    scenes.value.filter((scene) => scene.environmentId === activeEnvironment.value?.id),
+  const siteViews = computed<View[]>(() =>
+    views.value.filter((view) => view.siteId === activeSite.value?.id),
   );
 
   const defaultEngine = computed<Engine | undefined>(() => {
-    const preferredId = activeEnvironment.value?.defaultEngineId;
+    const preferredId = activeSite.value?.defaultEngineId;
     return (
       engines.value.find((engine) => engine.id === preferredId) ??
       engines.value.find((engine) => engine.cdp && engine.status === "ready") ??
@@ -179,17 +213,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     );
   });
 
-  function setActiveEnvironment(id: string) {
-    activeEnvironmentId.value = id;
-    void window.ensemble.saveSettings({ lastEnvironmentId: id });
+  function setActiveSite(id: string) {
+    activeSiteId.value = id;
+    void window.ensemble.saveSettings({ lastSiteId: id });
   }
 
   function identityPasswordSet(identity: Identity): boolean {
+    if (identity.passwordMode === "reference") {
+      // A reference never owns a credential: it resolves through its source,
+      // which may itself fall back to the source site's default password.
+      const source = identity.credentialFrom
+        ? identities.value.find((item) => item.id === identity.credentialFrom)
+        : undefined;
+      return source ? identityPasswordSet(source) : false;
+    }
     if (identity.passwordMode === "custom") {
       return Boolean(credentials.value?.identity[identity.id]);
     }
-    const envId = identity.environmentId;
-    return Boolean(credentials.value?.environment[envId]);
+    const siteId = identity.siteId;
+    return Boolean(credentials.value?.site[siteId]);
   }
 
   function instanceFor(identityId: string) {
@@ -197,13 +239,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   function engineFor(identity: Identity): Engine | undefined {
-    const id = identity.engineId ?? activeEnvironment.value?.defaultEngineId;
+    const id = identity.engineId ?? activeSite.value?.defaultEngineId;
     return engines.value.find((engine) => engine.id === id) ?? defaultEngine.value;
   }
 
   function presetById(id: LayoutId | undefined): LayoutPreset {
-    return findLayout(id, snapshot.value?.layoutPresets ?? []);
+    // "1 × 1" and "no layout" are the same single full-stage cell once embedded
+    // views exist, so legacy definitions that saved 1x1 read back as free.
+    return findLayout(id === "1x1" ? FREE_LAYOUT_ID : id, snapshot.value?.layoutPresets ?? []);
   }
+
+  /** Presets offered for a view: "1 × 1" is folded into "no layout". */
+  const viewLayoutPresets = computed<LayoutPreset[]>(() =>
+    layoutPresets.value.filter((preset) => preset.id !== "1x1"),
+  );
 
   /** The no-layout preset is the only built-in whose name needs translating. */
   function presetName(preset: LayoutPreset): string {
@@ -217,16 +266,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return JSON.parse(JSON.stringify(value)) as T;
   }
 
-  async function saveEnvironment(draft: EnvironmentDraft) {
-    return run(
-      "environment",
-      () => window.ensemble.saveEnvironment(toPlain(draft)),
-      tr("app.toastEnvSaved"),
-    );
+  async function saveSite(draft: SiteDraft) {
+    return run("site", () => window.ensemble.saveSite(toPlain(draft)), tr("app.toastSiteSaved"));
   }
 
-  async function deleteEnvironment(id: string) {
-    return run("environment", () => window.ensemble.deleteEnvironment(id));
+  async function deleteSite(id: string) {
+    return run("site", () => window.ensemble.deleteSite(id));
+  }
+
+  async function saveSiteTag(draft: SiteTagDraft) {
+    return run("site", () => window.ensemble.saveSiteTag(toPlain(draft)));
+  }
+
+  async function deleteSiteTag(id: string) {
+    return run("site", () => window.ensemble.deleteSiteTag(id));
   }
 
   async function saveIdentity(draft: IdentityDraft) {
@@ -249,30 +302,53 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     );
   }
 
-  async function saveScene(draft: SceneDraft) {
-    return run("scene", () => window.ensemble.saveScene(toPlain(draft)), tr("app.toastSceneSaved"));
+  /** Turns a reference into a standalone copy; the resolved password is kept. */
+  async function detachReference(id: string) {
+    return run(
+      "identity",
+      () => window.ensemble.detachReference(id),
+      tr("app.toastReferenceDetached"),
+    );
   }
 
-  async function deleteScene(id: string) {
-    return run("scene", () => window.ensemble.deleteScene(id));
+  /** Accepts a changed site address; the next fill is allowed again. */
+  async function acceptSiteOrigin(siteId: string) {
+    return run("site", () => window.ensemble.acceptSiteOrigin(siteId));
   }
 
-  /** Changes the stored preset of one scene without opening its dialog. */
-  async function setSceneLayout(sceneId: string, layoutId: LayoutId) {
-    return run("scene", () => window.ensemble.setSceneLayout(sceneId, layoutId));
+  async function takeOriginNotice() {
+    return window.ensemble.takeOriginNotice();
+  }
+
+  /** Copies a view onto another site, referencing accounts where needed. */
+  async function copyViewToSite(viewId: string, targetSiteId: string) {
+    return run("view", () => window.ensemble.copyViewToSite(viewId, targetSiteId));
+  }
+
+  async function saveView(draft: ViewDraft) {
+    return run("view", () => window.ensemble.saveView(toPlain(draft)), tr("app.toastViewSaved"));
+  }
+
+  async function deleteView(id: string) {
+    return run("view", () => window.ensemble.deleteView(id));
+  }
+
+  /** Changes the stored preset of one view without opening its dialog. */
+  async function setViewLayout(viewId: string, layoutId: LayoutId) {
+    return run("view", () => window.ensemble.setViewLayout(viewId, layoutId));
   }
 
   /** identityId -> slot index, written whenever a chip is dropped on a slot. */
-  async function setSceneSlots(sceneId: string, assignments: Record<string, number>) {
-    return run("scene", async () => {
-      const next = await window.ensemble.setSceneSlotAssignments(sceneId, toPlain(assignments));
+  async function setViewSlots(viewId: string, assignments: Record<string, number>) {
+    return run("view", async () => {
+      const next = await window.ensemble.setViewSlotAssignments(viewId, toPlain(assignments));
       // Windows already open should move with the chips, not wait for a relaunch.
       if (
         next.instances.some(
           (instance) => instance.identityId && assignments[instance.identityId] !== undefined,
         )
       ) {
-        await window.ensemble.retileScene(sceneId);
+        await window.ensemble.retileView(viewId);
       }
       return next;
     });
@@ -327,29 +403,29 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  async function launchScene(sceneId: string) {
-    return run("launch", () => window.ensemble.launchScene(sceneId), tr("app.toastSceneStarted"));
+  async function launchView(viewId: string) {
+    return run("launch", () => window.ensemble.launchView(viewId), tr("app.toastViewStarted"));
   }
 
-  async function launchSceneMember(sceneId: string, identityId: string) {
-    return run("launch", () => window.ensemble.launchSceneMember(sceneId, identityId));
+  async function launchViewMember(viewId: string, identityId: string) {
+    return run("launch", () => window.ensemble.launchViewMember(viewId, identityId));
   }
 
   /**
-   * Pass an environment id for a clean window on that login page; omit it for a
-   * blank tab that belongs to no environment.
+   * Pass an site id for a clean window on that login page; omit it for a
+   * blank tab that belongs to no site.
    */
-  async function launchCleanSession(environmentId?: string) {
+  async function launchCleanSession(siteId?: string) {
     return run("launch", async () => {
-      const result = await window.ensemble.launchCleanSession(environmentId);
+      const result = await window.ensemble.launchCleanSession(siteId);
       notify(tr("app.toastCleanOpened"), "success");
       return result;
     });
   }
 
-  /** Convenience wrapper for the views scoped to the active environment. */
+  /** Convenience wrapper for the views scoped to the active site. */
   async function launchScopedCleanSession() {
-    return launchCleanSession(activeEnvironment.value?.id);
+    return launchCleanSession(activeSite.value?.id);
   }
 
   async function stopInstance(id: string) {
@@ -368,11 +444,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  /** Closes only the windows this scene opened. */
-  async function stopScene(sceneId: string) {
+  /** Closes only the windows this view opened. */
+  async function stopView(viewId: string) {
     return run("stop", async () => {
-      await window.ensemble.stopScene(sceneId);
-      notify(tr("app.toastSceneClosed"), "success");
+      await window.ensemble.stopView(viewId);
+      notify(tr("app.toastViewClosed"), "success");
     });
   }
 
@@ -392,9 +468,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  async function checkAllAuth(environmentId?: string): Promise<AuthBatchResult | undefined> {
+  async function checkAllAuth(siteId?: string): Promise<AuthBatchResult | undefined> {
     return run("auth-check-all", async () => {
-      const result = await window.ensemble.checkAllAuth(environmentId);
+      const result = await window.ensemble.checkAllAuth(siteId);
       notify(
         tr("app.toastCheckedAll", {
           signedIn: result.totals.signedIn,
@@ -407,9 +483,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  async function reloginExpired(environmentId?: string): Promise<ReloginBatchResult | undefined> {
+  async function reloginExpired(siteId?: string): Promise<ReloginBatchResult | undefined> {
     return run("auth-relogin", async () => {
-      const result = await window.ensemble.reloginExpired(environmentId);
+      const result = await window.ensemble.reloginExpired(siteId);
       notify(
         tr("app.toastReloginDone", {
           succeeded: result.succeeded,
@@ -518,39 +594,46 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loading,
     busy,
     toasts,
-    environments,
+    sites,
     identities,
-    scenes,
+    views,
     engines,
     enginesReady,
     settings,
     instances,
     credentials,
-    activeEnvironment,
-    activeEnvironmentId,
-    environmentIdentities,
-    environmentScenes,
+    activeSite,
+    activeSiteId,
+    siteIdentities,
+    siteViews,
     defaultEngine,
     layoutPresets,
     api,
     init,
     notify,
-    setActiveEnvironment,
+    setActiveSite,
     identityPasswordSet,
     instanceFor,
     engineFor,
     presetById,
     presetName,
+    viewLayoutPresets,
     isFreeLayout,
-    saveEnvironment,
-    deleteEnvironment,
+    saveSite,
+    deleteSite,
+    saveSiteTag,
+    deleteSiteTag,
     saveIdentity,
     deleteIdentity,
     rebuildIdentityProfile,
-    saveScene,
-    deleteScene,
-    setSceneLayout,
-    setSceneSlots,
+    detachReference,
+    acceptSiteOrigin,
+    takeOriginNotice,
+    copyViewToSite,
+    saveView,
+    deleteView,
+    setViewLayout,
+    setViewSlots,
     saveLayoutPreset,
     deleteLayoutPreset,
     scanEngines,
@@ -558,13 +641,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeManualEngine,
     launchIdentity,
     launchIdentities,
-    launchScene,
-    launchSceneMember,
+    launchView,
+    launchViewMember,
     launchCleanSession,
     launchScopedCleanSession,
     stopInstance,
     stopAll,
-    stopScene,
+    stopView,
     focusInstance,
     checkAuth,
     checkAllAuth,

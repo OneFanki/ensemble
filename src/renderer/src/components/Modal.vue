@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { X } from "lucide-vue-next";
 import {
   DialogClose,
   DialogContent,
@@ -8,7 +9,6 @@ import {
   DialogRoot,
   DialogTitle,
 } from "reka-ui";
-import { X } from "lucide-vue-next";
 
 defineProps<{ open: boolean; title: string; description?: string; width?: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -92,6 +92,7 @@ const emit = defineEmits<{ close: [] }>();
   font-size: 11.5px;
   color: var(--faint);
   line-height: 1.5;
+  white-space: pre-line;
 }
 
 .close {

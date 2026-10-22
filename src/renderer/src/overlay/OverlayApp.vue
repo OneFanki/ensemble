@@ -26,21 +26,21 @@ const activeId = ref<string | null>(null);
 let disposeActive: (() => void) | undefined;
 
 const groups = computed(() => {
-  // Instances are grouped by environment so the same display name in two
-  // environments cannot be mistaken for one window.
+  // Instances are grouped by site so the same display name in two
+  // sites cannot be mistaken for one window.
   const map = new Map<string, { id: string; name: string; instances: RunningInstance[] }>();
   for (const instance of store.instances) {
-    const environment =
-      store.environments.find((item) => item.id === instance.environmentId)?.name ?? "";
-    const key = instance.environmentId;
+    const site =
+      store.sites.find((item) => item.id === instance.siteId)?.name ?? "";
+    const key = instance.siteId;
     const existing = map.get(key);
     if (existing) existing.instances.push(instance);
-    else map.set(key, { id: key, name: environment, instances: [instance] });
+    else map.set(key, { id: key, name: site, instances: [instance] });
   }
   return [...map.values()];
 });
 
-/** Only show the environment heading when more than one is running. */
+/** Only show the site heading when more than one is running. */
 const showGroupNames = computed(() => groups.value.length > 1);
 
 const colorOf = (instance: RunningInstance) =>

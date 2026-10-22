@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
+import type { ImportPreview, ImportResult } from "@shared/transfer";
+import type { McpStatus } from "@shared/types";
+import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   Bot,
   Copy,
@@ -18,11 +19,11 @@ import {
   Upload,
 } from "lucide-vue-next";
 import type { Component } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
-import type { ImportPreview, ImportResult } from "@shared/transfer";
-import type { McpStatus } from "@shared/types";
-import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 
 type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
 
@@ -45,6 +46,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useWorkspaceStore();
+const confirm = useConfirmStore();
 const { t } = useI18n();
 
 const scanning = computed(() => store.busy === "scan");
@@ -199,7 +201,13 @@ async function doApplyImport() {
 }
 
 async function quitApp() {
-  if (!window.confirm(t("app.quitConfirm"))) return;
+  const accepted = await confirm.ask({
+    title: t("app.confirmQuitTitle"),
+    body: t("app.quitConfirm"),
+    confirmLabel: t("app.confirmQuitAction"),
+    tone: "danger",
+  });
+  if (!accepted) return;
   await window.ensemble.quitApp();
 }
 
@@ -478,27 +486,27 @@ async function submitMaster() {
           {{ $t("app.autoFillLaunchNote") }}
         </p>
         <div class="option-row">
-          <span class="option-label">{{ $t("app.restoreScene") }}</span>
+          <span class="option-label">{{ $t("app.restoreView") }}</span>
           <div class="segmented">
             <button
               type="button"
               class="seg"
-              :class="{ on: store.settings.restoreLastScene }"
-              @click="store.saveSettings({ restoreLastScene: true })"
+              :class="{ on: store.settings.restoreLastView }"
+              @click="store.saveSettings({ restoreLastView: true })"
             >
               {{ $t("app.on") }}
             </button>
             <button
               type="button"
               class="seg"
-              :class="{ on: !store.settings.restoreLastScene }"
-              @click="store.saveSettings({ restoreLastScene: false })"
+              :class="{ on: !store.settings.restoreLastView }"
+              @click="store.saveSettings({ restoreLastView: false })"
             >
               {{ $t("app.off") }}
             </button>
           </div>
         </div>
-        <p class="fineprint">{{ $t("app.restoreSceneNote") }}</p>
+        <p class="fineprint">{{ $t("app.restoreViewNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
           <div class="segmented">
@@ -743,9 +751,9 @@ async function submitMaster() {
             <div v-if="importPreview" class="preview-box">
               <p class="preview-name mono">{{ importPreview.path }}</p>
               <dl class="preview-counts">
-                <div><dt>{{ $t("app.environments") }}</dt><dd class="mono">{{ importPreview.preview.environments }}</dd></div>
+                <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ importPreview.preview.sites }}</dd></div>
                 <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ importPreview.preview.identities }}</dd></div>
-                <div><dt>{{ $t("app.scenes") }}</dt><dd class="mono">{{ importPreview.preview.scenes }}</dd></div>
+                <div><dt>{{ $t("app.views") }}</dt><dd class="mono">{{ importPreview.preview.views }}</dd></div>
                 <div><dt>{{ $t("app.layoutPresets") }}</dt><dd class="mono">{{ importPreview.preview.layoutPresets }}</dd></div>
               </dl>
               <input
@@ -1228,7 +1236,7 @@ async function submitMaster() {
 .option-label {
   font-size: 11px;
   color: var(--muted);
-  /* Wide enough for the longest label ("Restore last scene on start") so the
+  /* Wide enough for the longest label ("Restore last view on start") so the
      switch column stays aligned instead of every row drifting. */
   flex: 0 0 132px;
 }

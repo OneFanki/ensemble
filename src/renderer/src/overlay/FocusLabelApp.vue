@@ -39,10 +39,10 @@ onUnmounted(() => dispose?.());
       <span class="dot"></span>
       <span class="copy">
         <span class="name">{{ payload.label }}</span>
-        <span v-if="payload.role || payload.environment" class="meta">
+        <span v-if="payload.role || payload.site" class="meta">
           <span v-if="payload.role" class="role">{{ payload.role }}</span>
-          <span v-if="payload.role && payload.environment" class="sep">·</span>
-          <span v-if="payload.environment" class="env">{{ payload.environment }}</span>
+          <span v-if="payload.role && payload.site" class="sep">·</span>
+          <span v-if="payload.site" class="env">{{ payload.site }}</span>
         </span>
       </span>
     </div>

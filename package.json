@@ -37,7 +37,16 @@
     "icon": "node scripts/make-icon.mjs",
     "diagrams": "node scripts/make-diagrams.mjs",
     "screenshots": "node scripts/capture-screenshots.mjs",
-    "site": "node scripts/preview-site.mjs"
+    "site": "node scripts/preview-site.mjs",
+    "e2e:embedded": "node scripts/e2e-embedded.mjs",
+    "e2e:browser-views": "node scripts/e2e-browser-views.mjs",
+    "e2e:restore-surface": "node scripts/e2e-restore-surface.mjs",
+    "e2e:v1-upgrade": "node scripts/e2e-v1-upgrade.mjs",
+    "e2e:site-tags": "node scripts/e2e-site-tags.mjs",
+    "e2e:tab-reorder": "node scripts/e2e-tab-reorder.mjs",
+    "e2e:instances": "node scripts/e2e-instances.mjs",
+    "e2e:empty-slot": "node scripts/e2e-empty-slot.mjs",
+    "e2e:overlay-freeze": "node scripts/e2e-overlay-freeze.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

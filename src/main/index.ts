@@ -1,7 +1,7 @@
+import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
 import type { SecretBox } from "@core/credentials/vault";
 import { setCoreLocale } from "@core/i18n/translate";
 import { nextActiveInstanceId } from "@core/launch/active-instance";
@@ -12,19 +12,22 @@ import {
   warmUpWindowFocus,
 } from "@core/launch/window-focus";
 import { WorkspaceService } from "@core/service";
+import { downloadUpdateAsset } from "@core/update/download";
+import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
+import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
 import { type ExportOutcome, type ImportPickOutcome, IPC } from "@shared/ipc";
 import {
-  environmentDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
   passwordOwnerSchema,
-  sceneDraftSchema,
   settingsPatchSchema,
+  siteDraftSchema,
+  siteTagDraftSchema,
+  viewDraftSchema,
 } from "@shared/schemas";
 import { parseExportFile } from "@shared/transfer";
 import type {
   AppSettings,
-  EnvironmentDraft,
   FocusLabelPayload,
   IdentityDraft,
   LayoutId,
@@ -32,8 +35,12 @@ import type {
   McpPatch,
   PasswordOwner,
   Platform,
-  SceneDraft,
+  RoleColor,
   SettingsPatch,
+  SiteDraft,
+  SiteTagDraft,
+  SlotRect,
+  ViewDraft,
   WorkspaceSnapshot,
 } from "@shared/types";
 import {
@@ -43,11 +50,6 @@ import {
   type UpdateCheckResult,
   type UpdateProgress,
 } from "@shared/update";
-import { downloadUpdateAsset } from "@core/update/download";
-import {
-  buildWindowsInstallScript,
-  updateFileName,
-} from "@core/update/install";
 import {
   app,
   BrowserWindow,
@@ -62,9 +64,16 @@ import {
   shell,
   Tray,
 } from "electron";
+import { EmbeddedBrowser } from "./embedded/browser";
 import { McpServer } from "./mcp/server";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
+
+// Lets an end-to-end check run against a throwaway workspace instead of the
+// user's real one. Must happen before app ready: Electron derives session and
+// partition storage from userData, so a late override would split the two.
+const userDataOverride = process.env["ENSEMBLE_USER_DATA"]?.trim();
+if (userDataOverride) app.setPath("userData", userDataOverride);
 
 class SafeStorageBox implements SecretBox {
   get available(): boolean {
@@ -117,6 +126,13 @@ let tray: Tray | null = null;
 let mcpServer: McpServer | null = null;
 /** Kept in sync so the close handler does not need the service to be initialized. */
 let settingsCache: AppSettings | null = null;
+
+/**
+ * The in-app browser surface. Created on first use so a user who never opens it
+ * pays nothing at startup; it owns its own window, tabs and per-identity session
+ * partitions.
+ */
+let embedded: EmbeddedBrowser | null = null;
 /** A parsed import file waiting for its confirmation, keyed by absolute path. */
 let pendingImport: { path: string; payload: ReturnType<typeof parseExportFile> } | null = null;
 
@@ -155,6 +171,175 @@ function userDataDir(): string {
 
 function profileRoot(): string {
   return join(userDataDir(), "profiles");
+}
+
+/**
+ * Creates the in-app browser surface on first use.
+ *
+ * Lazily constructed because a user who never opens it pays nothing at startup.
+ * It paints inside the main window, so it is re-attached whenever that window is
+ * recreated (the tray keeps the app alive after the window is closed).
+ * `service` is read through the closure so the surface always sees the live
+ * workspace; credentials never leave the main process.
+ */
+function ensureEmbeddedBrowser(): EmbeddedBrowser {
+  if (embedded) {
+    if (mainWindow && !mainWindow.isDestroyed()) embedded.attach(mainWindow);
+    return embedded;
+  }
+  embedded = new EmbeddedBrowser({
+    shotDir: join(userDataDir(), "screenshots"),
+    resolveLogin: async (identityId) => {
+      if (!service) return undefined;
+      const identity = service.findIdentity(identityId);
+      if (!identity) return undefined;
+      const site = service.findSite(identity.siteId);
+      if (!site) return undefined;
+      // The resolver mirrors the external launch path, including references.
+      const resolved = service.resolvedPassword(identityId);
+      if (!resolved) return undefined;
+      const siteFields = site.extraFields ?? [];
+      const identityFields = identity.extraFields ?? [];
+      const merged = new Map<string, string>();
+      for (const field of siteFields) merged.set(field.label, field.value);
+      for (const field of identityFields) merged.set(field.label, field.value);
+      return {
+        username: identity.username,
+        password: resolved,
+        submit: site.autoSubmit,
+        extraFields: [...merged.entries()].map(([label, value]) => ({ label, value })),
+        baseUrl: site.baseUrl,
+      };
+    },
+    onShowPage: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.embeddedPage);
+      }
+    },
+    // Dragging a layout picker in the sidebar edits the open container only for
+    // hand-made views; saved views persist the choice back to the definition.
+    onViewLayoutChange: (viewDefinitionId, layoutId) => {
+      try {
+        service?.setViewLayout(viewDefinitionId, layoutId);
+        broadcastWorkspace();
+      } catch {
+        // The definition may have been deleted while its container stayed open.
+      }
+    },
+    onFocusTab: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.embeddedPage);
+      }
+    },
+  });
+  if (mainWindow && !mainWindow.isDestroyed()) embedded.attach(mainWindow);
+  return embedded;
+}
+
+/**
+ * Start page of an identity inside the embedded surface.
+ *
+ * Kept next to the browser factory because both the restore path and the
+ * identity page use it; the external launcher has its own equivalent.
+ */
+function embeddedStartUrl(identityId: string): string | undefined {
+  if (!service) return undefined;
+  const identity = service.findIdentity(identityId);
+  if (!identity) return undefined;
+  const site = service.findSite(identity.siteId);
+  if (!site) return undefined;
+  const path = identity.startPath || site.loginPath || "/";
+  try {
+    return new URL(path, site.baseUrl).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opens (or merges into) the container of a saved view.
+ *
+ * Existing tabs are left alone so logins survive a relaunch; only missing members
+ * are created. The definition is single-site today, which keeps slot assignments
+ * meaningful, while the container itself has no site of its own.
+ */
+async function openEmbeddedView(viewId: string): Promise<ReturnType<EmbeddedBrowser["state"]>> {
+  if (!service) throw new Error("工作区尚未就绪");
+  const view = service.findView(viewId);
+  if (!view) throw new Error("视图不存在");
+  const browser = ensureEmbeddedBrowser();
+  const containerId = browser.ensureView({
+    viewDefinitionId: view.id,
+    name: view.name,
+    layoutId: view.layoutId,
+  });
+  for (const identityId of view.identityIds) {
+    if (browser.findIdentityTab(containerId, identityId)) continue;
+    const url = embeddedStartUrl(identityId);
+    if (!url) continue;
+    const identity = service.findIdentity(identityId);
+    await browser.createTab({
+      url,
+      identityId,
+      siteId: identity?.siteId ?? view.siteId,
+      label: identity?.name ?? "标签页",
+      ...(identity?.color ? { color: identity.color } : {}),
+      viewId: containerId,
+      origin: "view",
+    });
+  }
+  // The saved slot assignments are identity ids; map them onto the tabs that
+  // exist so a reopened view comes back in the same arrangement.
+  const slots: Record<string, number> = {};
+  for (const [identityId, index] of Object.entries(view.slotAssignments)) {
+    const tab = browser.findIdentityTab(containerId, identityId);
+    if (tab) slots[tab.id] = index;
+  }
+  browser.applySlotAssignments(containerId, slots);
+  const next = browser.activateView(containerId);
+  service.rememberLaunchedView(view.id);
+  browser.focusPage();
+  return next;
+}
+
+/** Outcome the renderer shows after a cold start asked to reopen the last view. */
+interface RestoreOutcome {
+  restored: boolean;
+  viewId?: string;
+  viewName?: string;
+  reason?: string;
+}
+
+let restoreAttempted = false;
+
+/**
+ * Reopens the last launched view on the built-in surface.
+ *
+ * The built-in surface is the main one, so restoring it there means no system
+ * windows appear at startup. The view definition is the source of truth: its
+ * layout and members are replayed into a fresh container.
+ */
+async function restoreLastSurface(): Promise<RestoreOutcome> {
+  if (restoreAttempted) return { restored: false, reason: "already-attempted" };
+  restoreAttempted = true;
+  if (!service) return { restored: false, reason: "disabled" };
+  const settings = service.settingsSnapshot();
+  if (!settings.restoreLastView) return { restored: false, reason: "disabled" };
+  const viewId = settings.lastViewId;
+  if (!viewId) return { restored: false, reason: "no-view" };
+  const view = service.findView(viewId);
+  if (!view) return { restored: false, reason: "missing" };
+  try {
+    await openEmbeddedView(view.id);
+    return { restored: true, viewId: view.id, viewName: view.name };
+  } catch (error) {
+    return {
+      restored: false,
+      viewId: view.id,
+      viewName: view.name,
+      reason: (error as Error).message,
+    };
+  }
 }
 
 function broadcastWorkspace(): void {
@@ -402,7 +587,9 @@ function ensureOverlay(): BrowserWindow {
       },
       { type: "separator" },
       {
-        label: zh ? "隐藏悬浮条（可在设置里重新开启）" : "Hide the strip (turn it back on in Settings)",
+        label: zh
+          ? "隐藏悬浮条（可在设置里重新开启）"
+          : "Hide the strip (turn it back on in Settings)",
         click: () => hideOverlay(),
       },
     ]).popup({ window: win });
@@ -463,10 +650,7 @@ function applyOverlayCompact(compact: boolean): void {
   // the list. The clamps use the display the overlay itself is on, not the main
   // window's, because the square can be parked on a second monitor.
   const ownBounds = overlayWindow.getBounds();
-  const area = overlayAreaAt(
-    ownBounds.x + ownBounds.width / 2,
-    ownBounds.y + ownBounds.height / 2,
-  );
+  const area = overlayAreaAt(ownBounds.x + ownBounds.width / 2, ownBounds.y + ownBounds.height / 2);
   const size = currentOverlaySize();
   const nextX = Math.min(currentX, area.x + area.width - size.width);
   const nextY = Math.min(currentY, area.y + area.height - size.height);
@@ -666,13 +850,13 @@ function flashFocusLabel(instanceId: string, rect: ScreenRect | undefined): void
   const instance = snapshot.instances.find((item) => item.id === instanceId);
   if (!instance) return;
   const identity = instance.identityId ? service.findIdentity(instance.identityId) : undefined;
-  const environment = snapshot.environments.find((item) => item.id === instance.environmentId);
+  const site = snapshot.sites.find((item) => item.id === instance.siteId);
   focusLabelSeq += 1;
   const payload: FocusLabelPayload = {
     label: instance.label,
     ...(identity?.role ? { role: identity.role } : {}),
     color: identity?.color ?? "slate",
-    ...(snapshot.environments.length > 1 && environment ? { environment: environment.name } : {}),
+    ...(snapshot.sites.length > 1 && site ? { site: site.name } : {}),
     seq: focusLabelSeq,
   };
   const win = ensureFocusLabel();
@@ -882,6 +1066,10 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
 
+  // Pages survive in the manager while the window is closed to the tray; hand
+  // them the new host so the next visit shows the same tabs.
+  embedded?.attach(mainWindow);
+
   // Setting the overlay only in the constructor leaves the caption buttons in the
   // default dark palette on some Windows builds; reapplying once the window exists
   // (and on every theme change) is what actually colors them.
@@ -997,7 +1185,7 @@ async function installDownloadedUpdate(): Promise<void> {
   const ready = downloadedUpdate;
   if (!ready) throw new Error("还没有下载完成的更新。");
   // In development the "installer" runs out of an unpacked build, and replacing
-  // the Electron binary under a dev session would break the environment. The
+  // the Electron binary under a dev session would break the site. The
   // escape hatch exists only so the flow can be exercised deliberately.
   if (!app.isPackaged && process.env["ENSEMBLE_ALLOW_DEV_UPDATE"] !== "1") {
     throw new Error("开发模式下不会执行安装。");
@@ -1089,6 +1277,10 @@ async function shutdownAndQuit(): Promise<void> {
     hideFocusLabel();
     if (focusLabelWindow && !focusLabelWindow.isDestroyed()) focusLabelWindow.destroy();
     focusLabelWindow = null;
+    // Embedded views are Chromium renderers inside this process, so they must be
+    // gone before the app quits; there is no external process to reclaim.
+    embedded?.dispose();
+    embedded = null;
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
     overlayWindow = null;
     disposeWindowFocus();
@@ -1146,14 +1338,26 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.enginesSnapshot();
   });
 
-  handle(IPC.environmentSave, (draft: EnvironmentDraft) => {
-    workspace.saveEnvironment(environmentDraftSchema.parse(draft));
+  handle(IPC.siteSave, (draft: SiteDraft) => {
+    workspace.saveSite(siteDraftSchema.parse(draft));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.environmentDelete, (id: string) => {
-    workspace.deleteEnvironment(String(id));
+  handle(IPC.siteDelete, (id: string) => {
+    workspace.deleteSite(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.siteTagSave, (draft: SiteTagDraft) => {
+    workspace.saveSiteTag(siteTagDraftSchema.parse(draft));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.siteTagDelete, (id: string) => {
+    workspace.deleteSiteTag(String(id));
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -1177,32 +1381,51 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.sceneSave, (draft: SceneDraft) => {
-    workspace.saveScene(sceneDraftSchema.parse(draft));
+  handle(IPC.identityDetachReference, (id: string) => {
+    workspace.detachReference(String(id));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.sceneDelete, (id: string) => {
-    workspace.deleteScene(String(id));
+  handle(IPC.viewCopyToSite, (viewId: string, targetSiteId: string) => {
+    const result = workspace.copyViewToSite(String(viewId), String(targetSiteId));
+    broadcastWorkspace();
+    return result;
+  });
+
+  handle(IPC.siteAcceptOrigin, (siteId: string) => {
+    workspace.acceptSiteOrigin(String(siteId));
+    broadcastWorkspace();
+  });
+
+  handle(IPC.siteOriginNotice, () => workspace.takeOriginNotice());
+
+  handle(IPC.viewSave, (draft: ViewDraft) => {
+    workspace.saveView(viewDraftSchema.parse(draft));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.sceneSetLayout, (sceneId: string, layoutId: LayoutId) => {
-    workspace.setSceneLayout(String(sceneId), String(layoutId));
+  handle(IPC.viewDelete, (id: string) => {
+    workspace.deleteView(String(id));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.sceneSetSlots, (sceneId: string, assignments: Record<string, number>) => {
-    workspace.setSceneSlotAssignments(String(sceneId), assignments);
+  handle(IPC.viewSetLayout, (viewId: string, layoutId: LayoutId) => {
+    workspace.setViewLayout(String(viewId), String(layoutId));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.sceneRetile, async (sceneId: string) => {
-    await workspace.retileScene(String(sceneId));
+  handle(IPC.viewSetSlots, (viewId: string, assignments: Record<string, number>) => {
+    workspace.setViewSlotAssignments(String(viewId), assignments);
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.viewRetile, async (viewId: string) => {
+    await workspace.retileView(String(viewId));
   });
 
   handle(IPC.layoutPresetSave, (draft: LayoutPresetDraft) => {
@@ -1278,22 +1501,20 @@ function registerIpc(workspace: WorkspaceService): void {
     return result;
   });
 
-  handle(IPC.instanceLaunchScene, async (sceneId: string) => {
-    const result = await workspace.launchScene(String(sceneId));
+  handle(IPC.instanceLaunchView, async (viewId: string) => {
+    const result = await workspace.launchView(String(viewId));
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceLaunchSceneMember, async (sceneId: string, identityId: string) => {
-    const result = await workspace.launchSceneMember(String(sceneId), String(identityId));
+  handle(IPC.instanceLaunchViewMember, async (viewId: string, identityId: string) => {
+    const result = await workspace.launchViewMember(String(viewId), String(identityId));
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceClean, async (environmentId?: string) => {
-    const result = await workspace.launchCleanSession(
-      environmentId ? String(environmentId) : undefined,
-    );
+  handle(IPC.instanceClean, async (siteId?: string) => {
+    const result = await workspace.launchCleanSession(siteId ? String(siteId) : undefined);
     broadcastWorkspace();
     return result;
   });
@@ -1308,8 +1529,8 @@ function registerIpc(workspace: WorkspaceService): void {
     broadcastWorkspace();
   });
 
-  handle(IPC.instanceStopScene, async (sceneId: string) => {
-    await workspace.stopScene(String(sceneId));
+  handle(IPC.instanceStopView, async (viewId: string) => {
+    await workspace.stopView(String(viewId));
     broadcastWorkspace();
   });
 
@@ -1334,17 +1555,15 @@ function registerIpc(workspace: WorkspaceService): void {
     return result;
   });
 
-  handle(IPC.authCheckAll, async (environmentId?: string) => {
-    const result = await workspace.checkAllAuth(environmentId ? String(environmentId) : undefined);
+  handle(IPC.authCheckAll, async (siteId?: string) => {
+    const result = await workspace.checkAllAuth(siteId ? String(siteId) : undefined);
     // One broadcast for the whole batch: the service persisted once.
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.authReloginExpired, async (environmentId?: string) => {
-    const result = await workspace.reloginExpired(
-      environmentId ? String(environmentId) : undefined,
-    );
+  handle(IPC.authReloginExpired, async (siteId?: string) => {
+    const result = await workspace.reloginExpired(siteId ? String(siteId) : undefined);
     broadcastWorkspace();
     return result;
   });
@@ -1413,9 +1632,9 @@ function registerIpc(workspace: WorkspaceService): void {
         version: payload.version,
         exportedAt: payload.exportedAt,
         hasSecrets: Boolean(payload.secrets),
-        environments: payload.environments.length,
+        sites: payload.sites.length,
         identities: payload.identities.length,
-        scenes: payload.scenes.length,
+        views: payload.views.length,
         layoutPresets: payload.layoutPresets.length,
       },
     } satisfies ImportPickOutcome;
@@ -1570,6 +1789,188 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.overlayHide, () => {
     hideOverlay();
   });
+
+  // ---- embedded browser surface ----
+
+  handle(IPC.embeddedStateGet, () => ensureEmbeddedBrowser().state());
+
+  handle(
+    IPC.embeddedOpen,
+    (input: {
+      url?: string;
+      identityId?: string;
+      siteId?: string;
+      label?: string;
+      color?: string;
+      viewId?: string | null;
+    }) => {
+      const browser = ensureEmbeddedBrowser();
+      // "+" while a view is on stage adds to that view; a loose tab would vanish
+      // off stage and look like the click did nothing. The dock's "Tabs" block
+      // passes `viewId: null` because there the answer is the opposite.
+      const explicit = input !== undefined && input !== null && "viewId" in input;
+      const viewId = explicit ? (input?.viewId ?? undefined) : browser.defaultViewId();
+      return browser.createTab({
+        ...(input?.url ? { url: input.url } : {}),
+        ...(input?.identityId ? { identityId: input.identityId } : {}),
+        ...(input?.siteId ? { siteId: input.siteId } : {}),
+        ...(input?.label ? { label: input.label } : {}),
+        ...(input?.color ? { color: input.color as RoleColor } : {}),
+        ...(viewId ? { viewId } : {}),
+        origin: "manual",
+      });
+    },
+  );
+
+  /**
+   * Opens a blank tab into a specific view.
+   *
+   * The sidebar's "+" on a view header means "add a page here", not "add a page
+   * to whatever is on stage", so it names the view explicitly.
+   */
+  handle(IPC.embeddedOpenInView, async (viewId: string) => {
+    const browser = ensureEmbeddedBrowser();
+    await browser.createTab({ viewId: String(viewId), origin: "manual" });
+    browser.focusPage();
+    return browser.state();
+  });
+
+  /**
+   * Opens a blank tab in one specific slot and focuses it.
+   *
+   * This is the empty slot's "add a page" button: the click says which cell the
+   * page belongs in, so the tab is pinned there rather than wherever the view's
+   * focus happened to be.
+   */
+  handle(IPC.embeddedOpenInSlot, async (viewId: string, slotIndex: number) => {
+    const browser = ensureEmbeddedBrowser();
+    const tab = await browser.createTab({ viewId: String(viewId), origin: "manual" });
+    const pinned = browser.pinTab(String(viewId), Number(slotIndex), tab.id);
+    browser.focusPage();
+    return pinned;
+  });
+
+  /**
+   * Opens an identity as a loose tab. Opening the same identity twice is a user
+   * choice, so the tab is created rather than merged — except when an identical
+   * loose tab is already on stage, which is almost always a double click.
+   */
+  handle(IPC.embeddedOpenIdentity, async (identityId: string) => {
+    if (!service) throw new Error("工作区尚未就绪");
+    const identity = service.findIdentity(String(identityId));
+    if (!identity) throw new Error("账号不存在");
+    const browser = ensureEmbeddedBrowser();
+    const existing = browser.findLooseIdentityTab(identity.id);
+    if (existing) {
+      browser.activate(existing.id);
+      browser.focusPage();
+      return browser.state();
+    }
+    const url = embeddedStartUrl(identity.id);
+    await browser.createTab({
+      ...(url ? { url } : {}),
+      identityId: identity.id,
+      siteId: identity.siteId,
+      label: identity.name,
+      ...(identity.color ? { color: identity.color } : {}),
+      origin: "manual",
+    });
+    browser.focusPage();
+    return browser.state();
+  });
+
+  handle(IPC.embeddedOpenView, (viewId: string) => openEmbeddedView(String(viewId)));
+
+  handle(IPC.embeddedClose, (tabId: string) => ensureEmbeddedBrowser().closeTab(String(tabId)));
+  handle(IPC.embeddedActivate, (tabId: string) => ensureEmbeddedBrowser().activate(String(tabId)));
+  handle(IPC.embeddedNavigate, (tabId: string, url: string) =>
+    ensureEmbeddedBrowser().navigate(String(tabId), String(url)),
+  );
+  handle(IPC.embeddedBack, (tabId: string) => {
+    ensureEmbeddedBrowser().back(String(tabId));
+  });
+  handle(IPC.embeddedForward, (tabId: string) => {
+    ensureEmbeddedBrowser().forward(String(tabId));
+  });
+  handle(IPC.embeddedReload, (tabId: string) => {
+    ensureEmbeddedBrowser().reload(String(tabId));
+  });
+  handle(IPC.embeddedViewActivate, (viewId: string | null) =>
+    ensureEmbeddedBrowser().activateView(viewId ? String(viewId) : null),
+  );
+  handle(IPC.embeddedViewCreate, (input?: { name?: string; layoutId?: LayoutId }) => {
+    const browser = ensureEmbeddedBrowser();
+    const state = browser.createView({
+      ...(input?.name ? { name: String(input.name) } : {}),
+      ...(input?.layoutId ? { layoutId: String(input.layoutId) } : {}),
+    });
+    // The dock is reachable from every page; a new empty view is invisible
+    // until the browser page is in front.
+    browser.focusPage();
+    return state;
+  });
+  handle(IPC.embeddedViewLayout, (viewId: string, layoutId: LayoutId) =>
+    ensureEmbeddedBrowser().setViewLayout(String(viewId), String(layoutId)),
+  );
+  handle(IPC.embeddedViewSlots, (viewId: string, rects: SlotRect[]) =>
+    ensureEmbeddedBrowser().setViewSlotRects(String(viewId), rects),
+  );
+  handle(IPC.embeddedViewPin, (viewId: string, slotIndex: number, tabId: string | null) =>
+    ensureEmbeddedBrowser().pinTab(String(viewId), Number(slotIndex), tabId ? String(tabId) : null),
+  );
+  handle(IPC.embeddedViewRename, (viewId: string, name: string) =>
+    ensureEmbeddedBrowser().renameView(String(viewId), String(name ?? "")),
+  );
+  handle(IPC.embeddedViewColor, (viewId: string, color: string | null) =>
+    ensureEmbeddedBrowser().setViewColor(
+      String(viewId),
+      color ? (String(color) as RoleColor) : null,
+    ),
+  );
+  handle(IPC.embeddedViewCollapse, (viewId: string, collapsed: boolean) =>
+    ensureEmbeddedBrowser().setViewCollapsed(String(viewId), Boolean(collapsed)),
+  );
+  handle(IPC.embeddedViewClose, (viewId: string, mode: "all" | "opened") =>
+    ensureEmbeddedBrowser().closeView(String(viewId), mode === "opened" ? "opened" : "all"),
+  );
+  handle(IPC.embeddedDropTab, (tabId: string, target: EmbeddedDropTarget) =>
+    ensureEmbeddedBrowser().dropTab(String(tabId), target),
+  );
+  handle(IPC.embeddedFill, (tabId: string) => ensureEmbeddedBrowser().fillLogin(String(tabId)));
+  handle(IPC.embeddedDevTools, (tabId: string) => {
+    ensureEmbeddedBrowser().openDevTools(String(tabId));
+  });
+  handle(
+    IPC.embeddedFind,
+    (tabId: string, text: string, options?: { forward?: boolean; findNext?: boolean }) =>
+      ensureEmbeddedBrowser().findInTab(String(tabId), String(text ?? ""), options ?? {}),
+  );
+  handle(IPC.embeddedStopFind, (tabId: string) => {
+    ensureEmbeddedBrowser().stopFind(String(tabId));
+  });
+  handle(IPC.embeddedFreeze, () => ensureEmbeddedBrowser().freeze());
+
+  // The chrome reports the content area it reserves for native views. `send`
+  // rather than `invoke`: it fires on every resize and needs no reply.
+  ipcMain.on(IPC.embeddedStage, (_event, stage: StageRect | null) => {
+    if (!embedded) return;
+    if (!stage || typeof stage !== "object") {
+      embedded.setStage(null);
+      return;
+    }
+    const width = Number(stage.width);
+    const height = Number(stage.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      embedded.setStage(null);
+      return;
+    }
+    embedded.setStage({
+      x: Number(stage.x) || 0,
+      y: Number(stage.y) || 0,
+      width,
+      height,
+    });
+  });
 }
 
 function dateStamp(): string {
@@ -1632,6 +2033,55 @@ if (!gotLock) {
       auditPath: join(userDataDir(), "mcp-audit.log"),
       service,
       appVersion: app.getVersion(),
+      embedded: {
+        state: () => ensureEmbeddedBrowser().state(),
+        createTab: (input) => {
+          const browser = ensureEmbeddedBrowser();
+          const viewId = browser.defaultViewId();
+          const created = browser.createTab({
+            ...(input.url ? { url: input.url } : {}),
+            ...(input.identityId ? { identityId: input.identityId } : {}),
+            ...(input.siteId ? { siteId: input.siteId } : {}),
+            ...(input.label ? { label: input.label } : {}),
+            ...(input.color ? { color: input.color as RoleColor } : {}),
+            // An AI opening pages for comparison expects them on stage together,
+            // so a new tab joins the view the user is looking at.
+            ...(viewId ? { viewId } : {}),
+            origin: "ai",
+          });
+          // Without this the page would be created off screen and the user would
+          // never see what the AI is doing; it also mounts the stage so the view
+          // gets real bounds.
+          browser.focusPage();
+          return created;
+        },
+        navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),
+        closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
+        activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
+        snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),
+        click: (tabId, selector) => ensureEmbeddedBrowser().click(tabId, selector),
+        type: (tabId, selector, text, options) =>
+          ensureEmbeddedBrowser().type(tabId, selector, text, options),
+        evaluate: (tabId, expression) => ensureEmbeddedBrowser().evaluate(tabId, expression),
+        screenshot: (tabId, options) => ensureEmbeddedBrowser().screenshot(tabId, options),
+        visibility: (tabId, selector) => ensureEmbeddedBrowser().visibility(tabId, selector),
+        setLayout: (layoutId, viewId) =>
+          ensureEmbeddedBrowser().setViewLayout(
+            viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
+            layoutId,
+          ),
+        pinTab: (slotIndex, tabId, viewId) =>
+          ensureEmbeddedBrowser().pinTab(
+            viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
+            slotIndex,
+            tabId,
+          ),
+        fillLogin: (tabId) => ensureEmbeddedBrowser().fillLogin(tabId),
+        defaultTabId: (requested) => ensureEmbeddedBrowser().defaultTabId(requested),
+        defaultViewId: () => ensureEmbeddedBrowser().defaultViewId(),
+        layoutTargetView: (layoutId) => ensureEmbeddedBrowser().layoutTargetView(layoutId),
+        openView: (viewId) => openEmbeddedView(viewId),
+      },
       onChange: broadcastWorkspace,
     });
 
@@ -1645,11 +2095,11 @@ if (!gotLock) {
     const restoreTarget = mainWindow;
     // Internal "nothing to do" reasons never reach the UI; an actual launch
     // failure does, because the user asked for the restore to happen.
-    const quietReasons = new Set(["disabled", "no-scene", "already-attempted", "missing"]);
-    void service.restoreLastScene().then((outcome) => {
+    const quietReasons = new Set(["disabled", "no-view", "already-attempted", "missing"]);
+    void restoreLastSurface().then((outcome) => {
       if (outcome.restored || (outcome.reason && !quietReasons.has(outcome.reason))) {
         if (restoreTarget && !restoreTarget.isDestroyed()) {
-          restoreTarget.webContents.send(IPC.sceneRestored, outcome);
+          restoreTarget.webContents.send(IPC.viewRestored, outcome);
         }
       }
       broadcastWorkspace();

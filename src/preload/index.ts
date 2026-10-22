@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC, type EnsembleApi } from "@shared/ipc";
-import type { AutoFillReport, FocusLabelPayload, SceneRestoreOutcome, WorkspaceSnapshot } from "@shared/types";
+import type { AutoFillReport, FocusLabelPayload, ViewRestoreOutcome, WorkspaceSnapshot } from "@shared/types";
 import type { UpdateCheckResult, UpdateProgress } from "@shared/update";
+import type { EmbeddedState } from "@shared/embedded";
 
 const api: EnsembleApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.workspaceGet),
@@ -15,17 +16,24 @@ const api: EnsembleApi = {
   addManualEngine: () => ipcRenderer.invoke(IPC.enginesAddManual),
   removeManualEngine: (exePath) => ipcRenderer.invoke(IPC.enginesRemoveManual, exePath),
 
-  saveEnvironment: (draft) => ipcRenderer.invoke(IPC.environmentSave, draft),
-  deleteEnvironment: (id) => ipcRenderer.invoke(IPC.environmentDelete, id),
+  saveSite: (draft) => ipcRenderer.invoke(IPC.siteSave, draft),
+  deleteSite: (id) => ipcRenderer.invoke(IPC.siteDelete, id),
+  saveSiteTag: (draft) => ipcRenderer.invoke(IPC.siteTagSave, draft),
+  deleteSiteTag: (id) => ipcRenderer.invoke(IPC.siteTagDelete, id),
   saveIdentity: (draft) => ipcRenderer.invoke(IPC.identitySave, draft),
   deleteIdentity: (id) => ipcRenderer.invoke(IPC.identityDelete, id),
   rebuildIdentityProfile: (id) => ipcRenderer.invoke(IPC.identityRebuildProfile, id),
-  saveScene: (draft) => ipcRenderer.invoke(IPC.sceneSave, draft),
-  deleteScene: (id) => ipcRenderer.invoke(IPC.sceneDelete, id),
-  setSceneLayout: (sceneId, layoutId) => ipcRenderer.invoke(IPC.sceneSetLayout, sceneId, layoutId),
-  setSceneSlotAssignments: (sceneId, assignments) =>
-    ipcRenderer.invoke(IPC.sceneSetSlots, sceneId, assignments),
-  retileScene: (sceneId) => ipcRenderer.invoke(IPC.sceneRetile, sceneId),
+  detachReference: (id) => ipcRenderer.invoke(IPC.identityDetachReference, id),
+  saveView: (draft) => ipcRenderer.invoke(IPC.viewSave, draft),
+  deleteView: (id) => ipcRenderer.invoke(IPC.viewDelete, id),
+  setViewLayout: (viewId, layoutId) => ipcRenderer.invoke(IPC.viewSetLayout, viewId, layoutId),
+  setViewSlotAssignments: (viewId, assignments) =>
+    ipcRenderer.invoke(IPC.viewSetSlots, viewId, assignments),
+  retileView: (viewId) => ipcRenderer.invoke(IPC.viewRetile, viewId),
+  copyViewToSite: (viewId, targetSiteId) =>
+    ipcRenderer.invoke(IPC.viewCopyToSite, viewId, targetSiteId),
+  acceptSiteOrigin: (siteId) => ipcRenderer.invoke(IPC.siteAcceptOrigin, siteId),
+  takeOriginNotice: () => ipcRenderer.invoke(IPC.siteOriginNotice),
   saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
   deleteLayoutPreset: (id) => ipcRenderer.invoke(IPC.layoutPresetDelete, id),
   exportWorkspace: (options) => ipcRenderer.invoke(IPC.dataExport, options),
@@ -49,13 +57,13 @@ const api: EnsembleApi = {
   launchIdentity: (identityId, pathOverride) =>
     ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride),
   launchIdentities: (identityIds) => ipcRenderer.invoke(IPC.instanceLaunchBatch, identityIds),
-  launchScene: (sceneId) => ipcRenderer.invoke(IPC.instanceLaunchScene, sceneId),
-  launchSceneMember: (sceneId, identityId) =>
-    ipcRenderer.invoke(IPC.instanceLaunchSceneMember, sceneId, identityId),
-  launchCleanSession: (environmentId) => ipcRenderer.invoke(IPC.instanceClean, environmentId),
+  launchView: (viewId) => ipcRenderer.invoke(IPC.instanceLaunchView, viewId),
+  launchViewMember: (viewId, identityId) =>
+    ipcRenderer.invoke(IPC.instanceLaunchViewMember, viewId, identityId),
+  launchCleanSession: (siteId) => ipcRenderer.invoke(IPC.instanceClean, siteId),
   stopInstance: (id) => ipcRenderer.invoke(IPC.instanceStop, id),
   stopAll: () => ipcRenderer.invoke(IPC.instanceStopAll),
-  stopScene: (sceneId) => ipcRenderer.invoke(IPC.instanceStopScene, sceneId),
+  stopView: (viewId) => ipcRenderer.invoke(IPC.instanceStopView, viewId),
   focusInstance: (id) => ipcRenderer.invoke(IPC.instanceFocus, id),
   onActiveInstance: (listener: (instanceId: string | null) => void) => {
     const handler = (_event: unknown, instanceId: string | null) => listener(instanceId);
@@ -68,24 +76,71 @@ const api: EnsembleApi = {
     return () => ipcRenderer.removeListener(IPC.focusLabelShow, handler);
   },
   checkAuth: (identityId) => ipcRenderer.invoke(IPC.authCheck, identityId),
-  checkAllAuth: (environmentId) => ipcRenderer.invoke(IPC.authCheckAll, environmentId),
-  reloginExpired: (environmentId) => ipcRenderer.invoke(IPC.authReloginExpired, environmentId),
+  checkAllAuth: (siteId) => ipcRenderer.invoke(IPC.authCheckAll, siteId),
+  reloginExpired: (siteId) => ipcRenderer.invoke(IPC.authReloginExpired, siteId),
   fillLogin: (identityId) => ipcRenderer.invoke(IPC.authFill, identityId),
   onAutoFilled: (listener: (report: AutoFillReport) => void) => {
     const handler = (_event: unknown, report: AutoFillReport) => listener(report);
     ipcRenderer.on(IPC.authAutoFilled, handler);
     return () => ipcRenderer.removeListener(IPC.authAutoFilled, handler);
   },
-  onSceneRestored: (listener: (outcome: SceneRestoreOutcome) => void) => {
-    const handler = (_event: unknown, outcome: SceneRestoreOutcome) => listener(outcome);
-    ipcRenderer.on(IPC.sceneRestored, handler);
-    return () => ipcRenderer.removeListener(IPC.sceneRestored, handler);
+  onViewRestored: (listener: (outcome: ViewRestoreOutcome) => void) => {
+    const handler = (_event: unknown, outcome: ViewRestoreOutcome) => listener(outcome);
+    ipcRenderer.on(IPC.viewRestored, handler);
+    return () => ipcRenderer.removeListener(IPC.viewRestored, handler);
   },
 
   resizeOverlay: (size) => ipcRenderer.invoke(IPC.overlayResize, size),
   setOverlayCompact: (compact) => ipcRenderer.invoke(IPC.overlayCompact, compact),
   moveOverlay: (position) => ipcRenderer.invoke(IPC.overlayMove, position),
   hideOverlay: () => ipcRenderer.invoke(IPC.overlayHide),
+
+  getEmbeddedState: () => ipcRenderer.invoke(IPC.embeddedStateGet),
+  onEmbeddedState: (listener: (state: EmbeddedState) => void) => {
+    const handler = (_event: unknown, state: EmbeddedState) => listener(state);
+    ipcRenderer.on(IPC.embeddedState, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedState, handler);
+  },
+  onEmbeddedPage: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.embeddedPage, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedPage, handler);
+  },
+  setEmbeddedStage: (stage) => {
+    ipcRenderer.send(IPC.embeddedStage, stage);
+  },
+  openEmbeddedTab: (input) => ipcRenderer.invoke(IPC.embeddedOpen, input),
+  openEmbeddedTabInView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenInView, viewId),
+  openEmbeddedTabInSlot: (viewId, slotIndex) =>
+    ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex),
+  openEmbeddedIdentity: (identityId) => ipcRenderer.invoke(IPC.embeddedOpenIdentity, identityId),
+  openEmbeddedView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenView, viewId),
+  closeEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedClose, tabId),
+  activateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedActivate, tabId),
+  navigateEmbeddedTab: (tabId, url) => ipcRenderer.invoke(IPC.embeddedNavigate, tabId, url),
+  embeddedBack: (tabId) => ipcRenderer.invoke(IPC.embeddedBack, tabId),
+  embeddedForward: (tabId) => ipcRenderer.invoke(IPC.embeddedForward, tabId),
+  reloadEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedReload, tabId),
+  activateEmbeddedView: (viewId) => ipcRenderer.invoke(IPC.embeddedViewActivate, viewId),
+  createEmbeddedView: (input) => ipcRenderer.invoke(IPC.embeddedViewCreate, input),
+  setEmbeddedViewLayout: (viewId, layoutId) =>
+    ipcRenderer.invoke(IPC.embeddedViewLayout, viewId, layoutId),
+  setEmbeddedViewSlots: (viewId, rects) =>
+    ipcRenderer.invoke(IPC.embeddedViewSlots, viewId, rects),
+  pinEmbeddedTab: (viewId, slotIndex, tabId) =>
+    ipcRenderer.invoke(IPC.embeddedViewPin, viewId, slotIndex, tabId),
+  renameEmbeddedView: (viewId, name) => ipcRenderer.invoke(IPC.embeddedViewRename, viewId, name),
+  colorEmbeddedView: (viewId, color) => ipcRenderer.invoke(IPC.embeddedViewColor, viewId, color),
+  collapseEmbeddedView: (viewId, collapsed) =>
+    ipcRenderer.invoke(IPC.embeddedViewCollapse, viewId, collapsed),
+  closeEmbeddedView: (viewId, mode) => ipcRenderer.invoke(IPC.embeddedViewClose, viewId, mode),
+  dropEmbeddedTab: (tabId, target) => ipcRenderer.invoke(IPC.embeddedDropTab, tabId, target),
+  fillEmbeddedLogin: (tabId) => ipcRenderer.invoke(IPC.embeddedFill, tabId),
+  openEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId),
+  findInEmbeddedTab: (tabId, text, options) =>
+    ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
+  stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),
+  freezeEmbedded: () => ipcRenderer.invoke(IPC.embeddedFreeze),
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),

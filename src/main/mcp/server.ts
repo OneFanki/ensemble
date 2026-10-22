@@ -1,25 +1,26 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { dirname } from "node:path";
+import type { WorkspaceService } from "@core/service";
+import { JsonStore } from "@core/storage/json-store";
 import {
-  environmentDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
-  sceneDraftSchema,
+  siteDraftSchema,
+  siteTagDraftSchema,
+  viewDraftSchema,
 } from "@shared/schemas";
 import type {
-  Environment,
-  EnvironmentDraft,
   Identity,
   IdentityDraft,
   McpSettings,
   McpStatus,
-  Scene,
-  SceneDraft,
+  Site,
+  SiteDraft,
+  View,
+  ViewDraft,
 } from "@shared/types";
-import type { WorkspaceService } from "@core/service";
-import { JsonStore } from "@core/storage/json-store";
 
 const DEFAULT_PORT = 47_821;
 const MAX_BODY_BYTES = 1_000_000;
@@ -33,6 +34,57 @@ interface ToolDefinition {
   kind: ToolKind;
   inputSchema: Record<string, unknown>;
   run: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+}
+
+/**
+ * What the MCP layer needs from the in-app browser.
+ *
+ * Declared structurally rather than importing `EmbeddedBrowser`: that class lives
+ * beside Electron, and the MCP server must stay constructible in a plain Node
+ * test. When the surface is absent the browser tools report it as unavailable.
+ */
+export interface EmbeddedSurface {
+  state(): {
+    tabs: Array<{ id: string; label: string; url: string; title: string; identityId?: string }>;
+    views?: Array<{ id: string; name: string; layoutId: string }>;
+    activeTabId?: string;
+    activeViewId?: string;
+  };
+  createTab(input: {
+    url?: string;
+    identityId?: string;
+    siteId?: string;
+    label?: string;
+    color?: string;
+  }): Promise<unknown>;
+  navigate(tabId: string, url: string): Promise<unknown>;
+  closeTab(tabId: string): unknown;
+  activate(tabId: string): unknown;
+  snapshotDom(tabId: string, options?: { maxNodes?: number }): Promise<unknown>;
+  click(tabId: string, selector: string): Promise<unknown>;
+  type(
+    tabId: string,
+    selector: string,
+    text: string,
+    options?: { submit?: boolean; clear?: boolean },
+  ): Promise<unknown>;
+  evaluate(tabId: string, expression: string): Promise<unknown>;
+  screenshot(
+    tabId: string,
+    options?: { format?: "png" | "jpeg"; quality?: number },
+  ): Promise<{ path: string; bytes: number }>;
+  visibility(tabId: string, selector: string): Promise<unknown>;
+  /** `viewId` omitted means the view currently on stage. */
+  setLayout(layoutId: string, viewId?: string): unknown;
+  pinTab(slotIndex: number, tabId: string | null, viewId?: string): unknown;
+  fillLogin(tabId: string): Promise<unknown>;
+  defaultTabId(requested?: string): string;
+  /** Id of the view on stage, so layout tools do not need one spelled out. */
+  defaultViewId(): string | undefined;
+  /** View a layout call should use; may group loose tabs into a new one. */
+  layoutTargetView(layoutId?: string): string | undefined;
+  /** Opens a saved view definition as a container on the built-in surface. */
+  openView(viewId: string): Promise<unknown>;
 }
 
 const string = (description: string) => ({ type: "string", description });
@@ -62,6 +114,10 @@ export function newMcpToken(): string {
 
 function clampPort(value: unknown): number {
   const port = typeof value === "number" ? Math.trunc(value) : Number.NaN;
+  // 0 means "let the OS pick a free port". It is not settable from the UI; the
+  // end-to-end tests use it so they cannot collide with a port some other process
+  // (or a previous run) already holds.
+  if (port === 0) return 0;
   if (!Number.isInteger(port) || port < 1024 || port > 65_535) {
     throw new Error("MCP 端口必须在 1024–65535 之间");
   }
@@ -81,9 +137,11 @@ export function loadMcpSettings(path: string): McpSettings {
     raw = {};
   }
   const defaults = defaultMcpSettings();
+  // 0 is honoured as "let the OS pick a port"; it is what tests write so they
+  // never fight over a fixed number.
   const port =
-    typeof raw.port === "number" && raw.port >= 1024 && raw.port <= 65_535
-      ? raw.port
+    raw.port === 0 || (typeof raw.port === "number" && raw.port >= 1024 && raw.port <= 65_535)
+      ? (raw.port as number)
       : defaults.port;
   const settings: McpSettings = {
     enabled: raw.enabled === true,
@@ -137,6 +195,8 @@ export class McpServer {
   private running = false;
   private lastError: string | undefined;
   private settings: McpSettings;
+  /** Port the current socket is on, kept after close so status() stays readable. */
+  private cachedPort = 0;
 
   constructor(
     private readonly options: {
@@ -144,6 +204,12 @@ export class McpServer {
       auditPath: string;
       service: WorkspaceService;
       appVersion: string;
+      /**
+       * The in-app browser surface. Optional so the server can be constructed in
+       * tests without an Electron window; when absent the browser tools report
+       * that the surface is unavailable instead of crashing.
+       */
+      embedded?: EmbeddedSurface;
       onChange?: () => void;
     },
   ) {
@@ -154,12 +220,26 @@ export class McpServer {
     return { ...this.settings };
   }
 
+  /**
+   * Port the socket is actually bound to.
+   *
+   * When the stored port is 0 the OS assigns one, and when a bind fails the
+   * stored port is a lie. Reporting the live address keeps `status()` honest —
+   * a client that trusted the configured number would post into the void.
+   */
+  private boundPort(): number | undefined {
+    const address = this.server?.address();
+    if (address && typeof address !== "string") return address.port;
+    return this.cachedPort > 0 ? this.cachedPort : undefined;
+  }
+
   status(): McpStatus {
+    const port = this.boundPort() ?? this.settings.port;
     return {
       enabled: this.settings.enabled,
       running: this.running,
-      port: this.settings.port,
-      url: `http://127.0.0.1:${this.settings.port}/mcp`,
+      port,
+      url: `http://127.0.0.1:${port}/mcp`,
       token: this.settings.token,
       allowWrite: this.settings.allowWrite,
       allowRun: this.settings.allowRun,
@@ -215,7 +295,10 @@ export class McpServer {
         server.removeListener("error", onError);
         this.server = server;
         this.running = true;
-        console.log(`[mcp] listening on http://127.0.0.1:${this.settings.port}/mcp`);
+        const address = server.address();
+        this.cachedPort =
+          address && typeof address !== "string" ? address.port : this.settings.port;
+        console.log(`[mcp] listening on http://127.0.0.1:${this.cachedPort}/mcp`);
         resolve();
       };
       server.once("error", onError);
@@ -245,7 +328,10 @@ export class McpServer {
   private allowedHost(request: IncomingMessage): boolean {
     const host = request.headers.host;
     if (!host) return false;
-    const allowed = [`127.0.0.1:${this.settings.port}`, `localhost:${this.settings.port}`];
+    // The Host header must name the port the socket is really on: with a stored
+    // port of 0 the configured value says nothing about where the server listens.
+    const port = this.boundPort() ?? this.cachedPort;
+    const allowed = [`127.0.0.1:${port}`, `localhost:${port}`];
     return allowed.includes(host.toLowerCase());
   }
 
@@ -390,6 +476,20 @@ export class McpServer {
             });
             return;
           }
+          const missing = this.missingArguments(tool, params.arguments ?? {});
+          if (missing.length > 0) {
+            // Validated here rather than inside each tool: a tool that silently
+            // ran with an empty selector would click whatever happened to be
+            // first on the page, which is worse than a protocol error.
+            const messageText = `缺少必填参数：${missing.join(", ")}`;
+            this.audit(tool.name, params.arguments, false, messageText);
+            send(200, {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: messageText },
+            });
+            return;
+          }
           try {
             const output = await tool.run(params.arguments ?? {});
             this.audit(tool.name, params.arguments, true);
@@ -425,6 +525,27 @@ export class McpServer {
         error: { code: -32603, message: (error as Error).message },
       });
     }
+  }
+
+  /**
+   * Names from the schema's `required` list that are absent or blank.
+   *
+   * Only presence is checked, not types: the schemas here are hand-written JSON
+   * Schema fragments and every tool coerces its own arguments. This is the last
+   * guard against a request that would otherwise act on an empty selector.
+   */
+  private missingArguments(tool: ToolDefinition, args: Record<string, unknown>): string[] {
+    const required = tool.inputSchema["required"];
+    if (!Array.isArray(required)) return [];
+    return required.filter((name: unknown) => {
+      if (typeof name !== "string") return false;
+      // `confirm` is checked by the tool itself, which explains what it is for;
+      // a generic "missing argument" message would be worse there.
+      if (name === "confirm") return false;
+      const value = args[name];
+      if (value === undefined || value === null) return true;
+      return typeof value === "string" && value.trim() === "";
+    });
   }
 
   private gate(tool: ToolDefinition): string | undefined {
@@ -475,26 +596,26 @@ export class McpServer {
   private tools(): ToolDefinition[] {
     const service = this.options.service;
 
-    const environmentSummary = (environment: Environment) => ({
-      id: environment.id,
-      name: environment.name,
-      baseUrl: environment.baseUrl,
-      loginPath: environment.loginPath,
-      ...(environment.authCheckPath ? { authCheckPath: environment.authCheckPath } : {}),
-      defaultEngineId: environment.defaultEngineId ?? null,
-      autoSubmit: environment.autoSubmit,
-      extraFields: environment.extraFields ?? [],
-      identityCount: service
-        .snapshot()
-        .identities.filter((identity) => identity.environmentId === environment.id).length,
-      sceneCount: service
-        .snapshot()
-        .scenes.filter((scene) => scene.environmentId === environment.id).length,
+    const siteSummary = (site: Site) => ({
+      id: site.id,
+      name: site.name,
+      baseUrl: site.baseUrl,
+      loginPath: site.loginPath,
+      ...(site.authCheckPath ? { authCheckPath: site.authCheckPath } : {}),
+      defaultEngineId: site.defaultEngineId ?? null,
+      autoSubmit: site.autoSubmit,
+      // The origin the password was last used with; a different current origin
+      // means filling will ask for confirmation first.
+      lastOrigin: site.lastOrigin ?? null,
+      extraFields: site.extraFields ?? [],
+      identityCount: service.snapshot().identities.filter((identity) => identity.siteId === site.id)
+        .length,
+      viewCount: service.snapshot().views.filter((view) => view.siteId === site.id).length,
     });
 
     const identitySummary = (identity: Identity) => ({
       id: identity.id,
-      environmentId: identity.environmentId,
+      siteId: identity.siteId,
       name: identity.name,
       username: identity.username,
       role: identity.role,
@@ -502,35 +623,36 @@ export class McpServer {
       engineId: identity.engineId ?? null,
       startPath: identity.startPath ?? null,
       passwordMode: identity.passwordMode,
+      credentialFrom: identity.credentialFrom ?? null,
       hasPassword: Boolean(service.snapshot().credentials.identity[identity.id]),
       extraFields: identity.extraFields ?? [],
       note: identity.note ?? null,
     });
 
-    const sceneSummary = (scene: Scene) => ({
-      id: scene.id,
-      environmentId: scene.environmentId,
-      name: scene.name,
-      identityIds: scene.identityIds,
-      layoutId: scene.layoutId,
-      slotAssignments: scene.slotAssignments,
-      paths: scene.paths,
+    const viewSummary = (view: View) => ({
+      id: view.id,
+      siteId: view.siteId,
+      name: view.name,
+      identityIds: view.identityIds,
+      layoutId: view.layoutId,
+      slotAssignments: view.slotAssignments,
+      paths: view.paths,
     });
 
-    const findEnvironment = (id: unknown): Environment => {
-      const environment = service.snapshot().environments.find((item) => item.id === id);
-      if (!environment) throw new Error(`环境不存在：${String(id)}`);
-      return environment;
+    const findSite = (id: unknown): Site => {
+      const site = service.snapshot().sites.find((item) => item.id === id);
+      if (!site) throw new Error(`站点不存在：${String(id)}`);
+      return site;
     };
     const findIdentity = (id: unknown): Identity => {
       const identity = service.snapshot().identities.find((item) => item.id === id);
       if (!identity) throw new Error(`身份不存在：${String(id)}`);
       return identity;
     };
-    const findScene = (id: unknown): Scene => {
-      const scene = service.snapshot().scenes.find((item) => item.id === id);
-      if (!scene) throw new Error(`场景不存在：${String(id)}`);
-      return scene;
+    const findView = (id: unknown): View => {
+      const view = service.snapshot().views.find((item) => item.id === id);
+      if (!view) throw new Error(`视图不存在：${String(id)}`);
+      return view;
     };
 
     const requireConfirm = (args: Record<string, unknown>, field = "confirm"): void => {
@@ -539,17 +661,21 @@ export class McpServer {
       }
     };
 
-    const identityDraftFrom = (
-      environmentId: string,
-      item: Record<string, unknown>,
-    ): IdentityDraft => {
+    const identityDraftFrom = (siteId: string, item: Record<string, unknown>): IdentityDraft => {
+      // An explicit credentialFrom wins over `password`: a reference reuses the
+      // source identity's credentials, so a password here would be contradictory.
+      const credentialFrom =
+        typeof item["credentialFrom"] === "string" && item["credentialFrom"]
+          ? item["credentialFrom"]
+          : undefined;
       const draft: IdentityDraft = {
-        environmentId,
+        siteId,
         name: String(item["name"] ?? ""),
         username: String(item["username"] ?? ""),
         role: typeof item["role"] === "string" ? item["role"] : "member",
         color: (item["color"] as IdentityDraft["color"]) ?? "slate",
-        passwordMode: item["password"] ? "custom" : "inherit",
+        passwordMode: credentialFrom ? "reference" : item["password"] ? "custom" : "inherit",
+        ...(credentialFrom ? { credentialFrom } : {}),
         startPath: typeof item["startPath"] === "string" ? item["startPath"] : "/",
         ...(typeof item["engineId"] === "string" ? { engineId: item["engineId"] } : {}),
         ...(Array.isArray(item["extraFields"])
@@ -563,21 +689,19 @@ export class McpServer {
     return [
       {
         name: "get_workspace_summary",
-        description: "查看当前 Ensemble 工作区概览：环境、身份、场景、运行中实例的数量与名称。",
+        description: "查看当前 Ensemble 工作区概览：站点、身份、视图、运行中实例的数量与名称。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
           return {
-            environments: snapshot.environments.map((environment) => ({
-              id: environment.id,
-              name: environment.name,
-              baseUrl: environment.baseUrl,
-              identityCount: snapshot.identities.filter(
-                (identity) => identity.environmentId === environment.id,
-              ).length,
-              sceneCount: snapshot.scenes.filter((scene) => scene.environmentId === environment.id)
+            sites: snapshot.sites.map((site) => ({
+              id: site.id,
+              name: site.name,
+              baseUrl: site.baseUrl,
+              identityCount: snapshot.identities.filter((identity) => identity.siteId === site.id)
                 .length,
+              viewCount: snapshot.views.filter((view) => view.siteId === site.id).length,
             })),
             running: snapshot.instances.map((instance) => ({
               id: instance.id,
@@ -593,38 +717,95 @@ export class McpServer {
         },
       },
       {
-        name: "list_environments",
-        description: "列出所有环境（被测目标作用域）。",
+        name: "list_sites",
+        description: "列出所有站点（被测目标作用域），含各自的标签。",
         kind: "read",
         inputSchema: object({}),
-        run: () => service.snapshot().environments.map(environmentSummary),
+        run: () => {
+          const snapshot = service.snapshot();
+          const tags = new Map(snapshot.siteTags.map((tag) => [tag.id, tag.name]));
+          return snapshot.sites.map((site) => ({
+            ...siteSummary(site),
+            tags: (site.tagIds ?? []).map((id) => tags.get(id) ?? id),
+          }));
+        },
+      },
+      {
+        name: "list_site_tags",
+        description: "列出站点标签。标签只用于归类展示，不影响任何业务规则。",
+        kind: "read",
+        inputSchema: object({}),
+        run: () => service.snapshot().siteTags,
+      },
+      {
+        name: "save_site_tag",
+        description:
+          "创建或重命名站点标签。标签只决定站点列表和切换器怎么分组；删除标签不会影响站点和账号。",
+        kind: "write",
+        inputSchema: object(
+          {
+            id: string("标签 id；省略表示新建"),
+            name: string("标签名称"),
+            color: {
+              type: "string",
+              enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
+              description: "标签颜色",
+            },
+          },
+          ["name", "color"],
+        ),
+        run: (args) => {
+          const draft = siteTagDraftSchema.parse({
+            ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
+            name: args["name"],
+            color: args["color"],
+          });
+          return service.saveSiteTag(draft);
+        },
+      },
+      {
+        name: "delete_site_tag",
+        description:
+          "删除站点标签，并从所有站点上解除关联。站点与账号不受影响。破坏性操作，必须传 confirm: true。",
+        kind: "danger",
+        inputSchema: object({ id: string("标签 id"), confirm: { type: "boolean" } }, [
+          "id",
+          "confirm",
+        ]),
+        run: (args) => {
+          requireConfirm(args);
+          const id = String(args["id"] ?? "");
+          if (!service.snapshot().siteTags.some((tag) => tag.id === id)) {
+            throw new Error(`标签不存在：${id}`);
+          }
+          service.deleteSiteTag(id);
+          return { deleted: id };
+        },
       },
       {
         name: "list_identities",
-        description: "列出身份。可按 environmentId 过滤。不会返回密码。",
+        description: "列出身份。可按 siteId 过滤。不会返回密码。",
         kind: "read",
-        inputSchema: object({ environmentId: string("只看该环境的身份") }),
+        inputSchema: object({ siteId: string("只看该站点的身份") }),
         run: (args) => {
-          const environmentId = args["environmentId"];
+          const siteId = args["siteId"];
           return service
             .snapshot()
-            .identities.filter(
-              (identity) => !environmentId || identity.environmentId === environmentId,
-            )
+            .identities.filter((identity) => !siteId || identity.siteId === siteId)
             .map(identitySummary);
         },
       },
       {
-        name: "list_scenes",
-        description: "列出场景。可按 environmentId 过滤。",
+        name: "list_views",
+        description: "列出视图。可按 siteId 过滤。",
         kind: "read",
-        inputSchema: object({ environmentId: string("只看该环境的场景") }),
+        inputSchema: object({ siteId: string("只看该站点的视图") }),
         run: (args) => {
-          const environmentId = args["environmentId"];
+          const siteId = args["siteId"];
           return service
             .snapshot()
-            .scenes.filter((scene) => !environmentId || scene.environmentId === environmentId)
-            .map(sceneSummary);
+            .views.filter((view) => !siteId || view.siteId === siteId)
+            .map(viewSummary);
         },
       },
       {
@@ -636,8 +817,7 @@ export class McpServer {
           const snapshot = service.snapshot();
           return {
             builtin: [
-              { id: "free", name: "Free / 无布局" },
-              { id: "1x1", name: "1 × 1" },
+              { id: "free", name: "Free / 无布局（等价于 1 × 1）" },
               { id: "2x1", name: "2 × 1" },
               { id: "1x2", name: "1 × 2" },
               { id: "2x2", name: "2 × 2" },
@@ -652,13 +832,13 @@ export class McpServer {
         },
       },
       {
-        name: "create_environment",
+        name: "create_site",
         description:
-          "创建被测环境。baseUrl 是容器或站点地址；loginPath 默认 /login。可在 extraFields 里声明租户名等额外登录字段。",
+          "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。可在 extraFields 里声明租户名等额外登录字段。",
         kind: "write",
         inputSchema: object(
           {
-            name: string("环境名称，例如 订单服务-测试环境"),
+            name: string("站点名称，例如 订单服务-测试站点"),
             baseUrl: string("站点地址，例如 http://localhost:3000"),
             loginPath: string("登录入口，默认 /login"),
             authCheckPath: string("登录态检测地址，可省略"),
@@ -672,11 +852,16 @@ export class McpServer {
                 "value",
               ]),
             },
+            tagIds: {
+              type: "array",
+              description: "站点标签 id 列表，只用于归类展示",
+              items: { type: "string" },
+            },
           },
           ["name", "baseUrl"],
         ),
         run: (args) => {
-          const draft = environmentDraftSchema.parse({
+          const draft = siteDraftSchema.parse({
             name: args["name"],
             baseUrl: args["baseUrl"],
             loginPath: args["loginPath"] ?? "/login",
@@ -684,18 +869,19 @@ export class McpServer {
             ...(args["authCheckPath"] ? { authCheckPath: args["authCheckPath"] } : {}),
             ...(args["defaultEngineId"] ? { defaultEngineId: args["defaultEngineId"] } : {}),
             ...(Array.isArray(args["extraFields"]) ? { extraFields: args["extraFields"] } : {}),
+            ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
           });
-          const environment = service.saveEnvironment(draft);
-          return environmentSummary(environment);
+          const site = service.saveSite(draft);
+          return siteSummary(site);
         },
       },
       {
-        name: "update_environment",
-        description: "修改环境。只传需要改的字段。",
+        name: "update_site",
+        description: "修改站点。只传需要改的字段。",
         kind: "write",
         inputSchema: object(
           {
-            id: string("环境 id"),
+            id: string("站点 id"),
             name: string("新名称"),
             baseUrl: string("新站点地址"),
             loginPath: string("新登录入口"),
@@ -706,8 +892,8 @@ export class McpServer {
           ["id"],
         ),
         run: (args) => {
-          const existing = findEnvironment(args["id"]);
-          const draft: EnvironmentDraft = {
+          const existing = findSite(args["id"]);
+          const draft: SiteDraft = {
             id: existing.id,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
             baseUrl: typeof args["baseUrl"] === "string" ? args["baseUrl"] : existing.baseUrl,
@@ -724,18 +910,19 @@ export class McpServer {
             autoSubmit:
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
             extraFields: existing.extraFields,
+            tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,
           };
-          return environmentSummary(service.saveEnvironment(environmentDraftSchema.parse(draft)));
+          return siteSummary(service.saveSite(siteDraftSchema.parse(draft)));
         },
       },
       {
         name: "create_identity",
         description:
-          "录入一个账号身份。password 只写入加密凭据库，不会回显；不传则继承环境默认密码。",
+          "录入一个账号身份。password 只写入加密凭据库，不会回显；不传则继承站点默认密码。",
         kind: "write",
         inputSchema: object(
           {
-            environmentId: string("所属环境 id"),
+            siteId: string("所属站点 id"),
             name: string("显示名称，例如 管理员 · 主账号"),
             username: string("账号"),
             password: string("密码，写入加密凭据库后不回显"),
@@ -745,9 +932,12 @@ export class McpServer {
               enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
               description: "身份色",
             },
-            engineId: string("覆盖环境默认引擎"),
+            engineId: string("覆盖站点默认引擎"),
             startPath: string("起始路径，默认 /"),
             note: string("备注"),
+            credentialFrom: string(
+              "引用另一个身份的凭据（跨站点复用账号）。传了就忽略 password，且被引用的身份不能再是引用。",
+            ),
             extraFields: {
               type: "array",
               description: "该身份专用的额外登录字段",
@@ -757,11 +947,11 @@ export class McpServer {
               ]),
             },
           },
-          ["environmentId", "name", "username"],
+          ["siteId", "name", "username"],
         ),
         run: (args) => {
-          const environment = findEnvironment(args["environmentId"]);
-          const draft = identityDraftFrom(environment.id, args);
+          const site = findSite(args["siteId"]);
+          const draft = identityDraftFrom(site.id, args);
           const password = typeof args["password"] === "string" ? args["password"] : undefined;
           const identity = service.saveIdentity(draft, password);
           return identitySummary(identity);
@@ -770,11 +960,11 @@ export class McpServer {
       {
         name: "create_identities",
         description:
-          "批量录入账号身份。每项字段与 create_identity 相同（不含 environmentId）。部分失败会在 failures 里返回，不影响已成功的条目。",
+          "批量录入账号身份。每项字段与 create_identity 相同（不含 siteId）。部分失败会在 failures 里返回，不影响已成功的条目。",
         kind: "write",
         inputSchema: object(
           {
-            environmentId: string("所属环境 id"),
+            siteId: string("所属站点 id"),
             identities: {
               type: "array",
               minItems: 1,
@@ -795,10 +985,10 @@ export class McpServer {
               ),
             },
           },
-          ["environmentId", "identities"],
+          ["siteId", "identities"],
         ),
         run: (args) => {
-          const environment = findEnvironment(args["environmentId"]);
+          const site = findSite(args["siteId"]);
           const items = Array.isArray(args["identities"]) ? args["identities"] : [];
           if (items.length === 0) throw new Error("identities 不能为空");
           const created: ReturnType<typeof identitySummary>[] = [];
@@ -806,7 +996,7 @@ export class McpServer {
           for (const [index, item] of items.entries()) {
             try {
               const record = item as Record<string, unknown>;
-              const draft = identityDraftFrom(environment.id, record);
+              const draft = identityDraftFrom(site.id, record);
               const password =
                 typeof record["password"] === "string" ? record["password"] : undefined;
               created.push(identitySummary(service.saveIdentity(draft, password)));
@@ -846,7 +1036,7 @@ export class McpServer {
           const existing = findIdentity(args["id"]);
           const draft: IdentityDraft = {
             id: existing.id,
-            environmentId: existing.environmentId,
+            siteId: existing.siteId,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
             username: typeof args["username"] === "string" ? args["username"] : existing.username,
             role: typeof args["role"] === "string" ? args["role"] : existing.role,
@@ -865,22 +1055,22 @@ export class McpServer {
       {
         name: "set_password",
         description:
-          "单独写入密码（只写不读）。ownerKind 为 environment 时写环境默认密码，为 identity 时写身份密码。",
+          "单独写入密码（只写不读）。ownerKind 为 site 时写站点默认密码，为 identity 时写身份密码。",
         kind: "write",
         inputSchema: object(
           {
             ownerKind: {
               type: "string",
-              enum: ["environment", "identity"],
+              enum: ["site", "identity"],
               description: "归属类型",
             },
-            ownerId: string("环境或身份 id"),
+            ownerId: string("站点或身份 id"),
             password: string("密码"),
           },
           ["ownerKind", "ownerId", "password"],
         ),
         run: (args) => {
-          const ownerKind = args["ownerKind"] === "environment" ? "environment" : "identity";
+          const ownerKind = args["ownerKind"] === "site" ? "site" : "identity";
           const ownerId = String(args["ownerId"] ?? "");
           const password = String(args["password"] ?? "");
           if (!ownerId || !password) throw new Error("ownerId 与 password 都不能为空");
@@ -889,14 +1079,14 @@ export class McpServer {
         },
       },
       {
-        name: "create_scene",
+        name: "create_view",
         description:
-          "创建场景。identityIds 按启动顺序排列；layoutId 默认 2x2，可选 free/1x1/2x1/1x2/2x2/3x1 或自定义预设 id。",
+          "创建视图。identityIds 按启动顺序排列；layoutId 默认 2x2，可选 free/1x1/2x1/1x2/2x2/3x1 或自定义预设 id。",
         kind: "write",
         inputSchema: object(
           {
-            environmentId: string("所属环境 id"),
-            name: string("场景名称"),
+            siteId: string("所属站点 id"),
+            name: string("视图名称"),
             identityIds: {
               type: "array",
               minItems: 1,
@@ -910,28 +1100,28 @@ export class McpServer {
               additionalProperties: { type: "integer" },
             },
           },
-          ["environmentId", "name", "identityIds"],
+          ["siteId", "name", "identityIds"],
         ),
         run: (args) => {
-          const environment = findEnvironment(args["environmentId"]);
-          const draft: SceneDraft = sceneDraftSchema.parse({
-            environmentId: environment.id,
+          const site = findSite(args["siteId"]);
+          const draft: ViewDraft = viewDraftSchema.parse({
+            siteId: site.id,
             name: args["name"],
             identityIds: args["identityIds"],
             layoutId: typeof args["layoutId"] === "string" ? args["layoutId"] : "2x2",
             slotAssignments: args["slotAssignments"] ?? {},
             paths: {},
           });
-          return sceneSummary(service.saveScene(draft));
+          return viewSummary(service.saveView(draft));
         },
       },
       {
-        name: "update_scene",
-        description: "修改场景名称、成员、布局或槽位分配。只传需要改的字段。",
+        name: "update_view",
+        description: "修改视图名称、成员、布局或槽位分配。只传需要改的字段。",
         kind: "write",
         inputSchema: object(
           {
-            id: string("场景 id"),
+            id: string("视图 id"),
             name: string("新名称"),
             identityIds: { type: "array", items: { type: "string" }, description: "新成员列表" },
             layoutId: string("新布局 id"),
@@ -944,10 +1134,10 @@ export class McpServer {
           ["id"],
         ),
         run: (args) => {
-          const existing = findScene(args["id"]);
-          const draft: SceneDraft = {
+          const existing = findView(args["id"]);
+          const draft: ViewDraft = {
             id: existing.id,
-            environmentId: existing.environmentId,
+            siteId: existing.siteId,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
             identityIds: Array.isArray(args["identityIds"])
               ? (args["identityIds"] as string[])
@@ -959,21 +1149,21 @@ export class McpServer {
                 : existing.slotAssignments,
             paths: existing.paths,
           };
-          return sceneSummary(service.saveScene(sceneDraftSchema.parse(draft)));
+          return viewSummary(service.saveView(viewDraftSchema.parse(draft)));
         },
       },
       {
-        name: "set_scene_layout",
-        description: "只切换场景的窗口布局，不改成员。",
+        name: "set_view_layout",
+        description: "只切换视图的窗口布局，不改成员。",
         kind: "write",
-        inputSchema: object({ sceneId: string("场景 id"), layoutId: string("布局 id") }, [
-          "sceneId",
+        inputSchema: object({ viewId: string("视图 id"), layoutId: string("布局 id") }, [
+          "viewId",
           "layoutId",
         ]),
         run: (args) => {
-          const scene = findScene(args["sceneId"]);
-          service.setSceneLayout(scene.id, String(args["layoutId"] ?? "2x2"));
-          return sceneSummary(findScene(scene.id));
+          const view = findView(args["viewId"]);
+          service.setViewLayout(view.id, String(args["layoutId"] ?? "2x2"));
+          return viewSummary(findView(view.id));
         },
       },
       {
@@ -1006,13 +1196,13 @@ export class McpServer {
           ),
       },
       {
-        name: "launch_scene",
-        description: "启动场景：按布局打开成员窗口并自动填充。",
+        name: "launch_view",
+        description: "启动视图：按布局打开成员窗口并自动填充。",
         kind: "run",
-        inputSchema: object({ sceneId: string("场景 id") }, ["sceneId"]),
+        inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: async (args) => {
-          const scene = findScene(args["sceneId"]);
-          const result = await service.launchScene(scene.id);
+          const view = findView(args["viewId"]);
+          const result = await service.launchView(view.id);
           return {
             instances: result.identities.map((identity) => ({
               identityId: identity.id,
@@ -1035,18 +1225,16 @@ export class McpServer {
       {
         name: "launch_clean_session",
         description:
-          "打开一个干净会话窗口：不登录、关闭即删除。传 environmentId 时打开该环境登录页；不传则打开不属于任何环境的空白页。",
+          "打开一个干净会话窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
         kind: "run",
         inputSchema: object({
-          environmentId: string("环境 id；省略则打开空白页"),
+          siteId: string("站点 id；省略则打开空白页"),
         }),
         run: async (args) => {
-          const environmentId =
-            typeof args["environmentId"] === "string" && args["environmentId"]
-              ? args["environmentId"]
-              : undefined;
-          const result = await service.launchCleanSession(environmentId);
-          return { instanceId: result.instance.id, environmentId: result.instance.environmentId };
+          const siteId =
+            typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
+          const result = await service.launchCleanSession(siteId);
+          return { instanceId: result.instance.id, siteId: result.instance.siteId };
         },
       },
       {
@@ -1077,6 +1265,35 @@ export class McpServer {
         run: async (args) => service.checkAuth(String(args["identityId"] ?? "")),
       },
       {
+        name: "detach_identity_reference",
+        description:
+          "把引用别的账号的身份断开成独立副本：当前解析出的密码会写成它自己的密码，此后两边各改各的。已经是独立身份时无变化。",
+        kind: "write",
+        inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
+        run: (args) => {
+          const id = String(args["identityId"] ?? "");
+          if (!service.snapshot().identities.some((item) => item.id === id)) {
+            throw new Error(`身份不存在：${id}`);
+          }
+          return identitySummary(service.detachReference(id));
+        },
+      },
+      {
+        name: "copy_view_to_site",
+        description:
+          "把一个视图复制到另一个站点。成员按用户名匹配：目标站点已有同名账号就直接使用，没有就新建一个引用该账号凭据的身份（登录态各自独立）。副本与原视图独立，不会实时同步。",
+        kind: "write",
+        inputSchema: object(
+          {
+            viewId: string("要复制的视图 id"),
+            targetSiteId: string("目标站点 id"),
+          },
+          ["viewId", "targetSiteId"],
+        ),
+        run: (args) =>
+          service.copyViewToSite(String(args["viewId"] ?? ""), String(args["targetSiteId"] ?? "")),
+      },
+      {
         name: "delete_identity",
         description: "删除身份及其凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
@@ -1092,34 +1309,276 @@ export class McpServer {
         },
       },
       {
-        name: "delete_scene",
-        description: "删除场景（不影响身份）。破坏性操作，必须传 confirm: true。",
+        name: "delete_view",
+        description: "删除视图（不影响身份）。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("场景 id"), confirm: { type: "boolean" } }, [
+        inputSchema: object({ id: string("视图 id"), confirm: { type: "boolean" } }, [
           "id",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const scene = findScene(args["id"]);
-          service.deleteScene(scene.id);
-          return { deleted: scene.id };
+          const view = findView(args["id"]);
+          service.deleteView(view.id);
+          return { deleted: view.id };
         },
       },
       {
-        name: "delete_environment",
-        description: "删除环境及其下全部身份、场景与凭据。破坏性操作，必须传 confirm: true。",
+        name: "delete_site",
+        description: "删除站点及其下全部身份、视图与凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("环境 id"), confirm: { type: "boolean" } }, [
+        inputSchema: object({ id: string("站点 id"), confirm: { type: "boolean" } }, [
           "id",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const environment = findEnvironment(args["id"]);
-          service.deleteEnvironment(environment.id);
-          return { deleted: environment.id };
+          const site = findSite(args["id"]);
+          service.deleteSite(site.id);
+          return { deleted: site.id };
         },
+      },
+      ...this.browserTools(),
+    ];
+  }
+
+  /**
+   * Tools that drive the in-app browser surface.
+   *
+   * These are what let an AI run a real flow without opening a system window:
+   * open a tab per identity, read what is actually rendered, click and type with
+   * real input events, and capture screenshots. Page-side reading and clicking are
+   * `run` (they change the page); listing is `read`. None of them can read a
+   * password — filling uses the stored credential inside the main process and
+   * returns only a summary.
+   */
+  private browserTools(): ToolDefinition[] {
+    const surface = () => {
+      const embedded = this.options.embedded;
+      if (!embedded) {
+        throw new Error("内置浏览器不可用：这个桌面端没有提供页面表面。");
+      }
+      return embedded;
+    };
+    const tabId = (args: Record<string, unknown>): string =>
+      surface().defaultTabId(
+        typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : undefined,
+      );
+
+    return [
+      {
+        name: "list_browser_tabs",
+        description:
+          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。",
+        kind: "read",
+        inputSchema: object({}),
+        run: () => surface().state(),
+      },
+      {
+        name: "open_browser_view",
+        description:
+          "把保存好的视图（一组身份 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。",
+        kind: "run",
+        inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
+        run: (args) => surface().openView(String(args["viewId"] ?? "")),
+      },
+      {
+        name: "open_browser_tab",
+        description:
+          "在内置浏览器里打开一个标签页。传 identityId 时使用该身份独立的会话分区（与其他身份隔离，登录态持久保存）；不传则用空白会话。返回 tabId，后续所有操作都用它。不会弹出任何系统窗口。",
+        kind: "run",
+        inputSchema: object({
+          url: string("要打开的地址；省略则打开空白页"),
+          identityId: string("身份 id；省略则使用不属于任何身份的空白会话"),
+          siteId: string("站点 id；仅用于界面分组显示"),
+          label: string("标签页显示名；通常用身份名"),
+        }),
+        run: async (args) => {
+          const rawUrl =
+            typeof args["url"] === "string" && args["url"] ? args["url"] : "about:blank";
+          const identityId =
+            typeof args["identityId"] === "string" && args["identityId"]
+              ? args["identityId"]
+              : undefined;
+          const identity = identityId
+            ? this.options.service.snapshot().identities.find((item) => item.id === identityId)
+            : undefined;
+          if (identityId && !identity) throw new Error(`身份不存在：${identityId}`);
+          const siteId = (typeof args["siteId"] === "string" && args["siteId"]) || identity?.siteId;
+          const label = typeof args["label"] === "string" ? args["label"] : identity?.name;
+          return surface().createTab({
+            url: rawUrl,
+            ...(identityId ? { identityId } : {}),
+            ...(siteId ? { siteId } : {}),
+            ...(label ? { label } : {}),
+            ...(identity?.color ? { color: identity.color } : {}),
+          });
+        },
+      },
+      {
+        name: "navigate_browser_tab",
+        description: "让内置浏览器的一个标签页跳到指定地址，并等待加载完成。",
+        kind: "run",
+        inputSchema: object(
+          { tabId: string("标签页 id；省略表示当前激活的标签页"), url: string("目标地址") },
+          ["url"],
+        ),
+        run: (args) => surface().navigate(tabId(args), String(args["url"] ?? "")),
+      },
+      {
+        name: "read_browser_page",
+        description:
+          "读取标签页当前渲染出来的内容：可见元素的角色、可访问名称、稳定选择器、位置，以及页面地址和标题。隐藏元素不会被包含，所以这就是「这个账号实际能看到什么」。用返回的 selector 配合 click/type 使用。",
+        kind: "read",
+        inputSchema: object({
+          tabId: string("标签页 id；省略表示当前激活的标签页"),
+          maxNodes: integer("最多返回多少个元素，默认 400"),
+        }),
+        run: (args) => {
+          const max = Number(args["maxNodes"]);
+          return surface().snapshotDom(tabId(args), {
+            ...(Number.isFinite(max) && max > 0 ? { maxNodes: Math.trunc(max) } : {}),
+          });
+        },
+      },
+      {
+        name: "check_element_visible",
+        description:
+          "检查某个选择器对应元素是否存在、是否可见。用于权限断言：同一个选择器在不同身份的标签页里应该有不同的可见性。",
+        kind: "read",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            selector: string("CSS 选择器"),
+          },
+          ["selector"],
+        ),
+        run: (args) => surface().visibility(tabId(args), String(args["selector"] ?? "")),
+      },
+      {
+        name: "click_browser_element",
+        description:
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            selector: string("CSS 选择器"),
+          },
+          ["selector"],
+        ),
+        run: (args) => surface().click(tabId(args), String(args["selector"] ?? "")),
+      },
+      {
+        name: "type_browser_text",
+        description:
+          "向标签页里的输入框输入文本。先聚焦目标元素，清空原内容（除非 clear: false），再逐字输入；submit: true 会在输入后按回车。密码不要走这里——用 fill_browser_login。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            selector: string("CSS 选择器"),
+            text: string("要输入的文本"),
+            submit: { type: "boolean", description: "输入后按回车" },
+            clear: { type: "boolean", description: "先清空原有内容，默认 true" },
+          },
+          ["selector", "text"],
+        ),
+        run: (args) =>
+          surface().type(tabId(args), String(args["selector"] ?? ""), String(args["text"] ?? ""), {
+            submit: args["submit"] === true,
+            clear: args["clear"] !== false,
+          }),
+      },
+      {
+        name: "fill_browser_login",
+        description:
+          "用该标签页所属身份保存的账号密码填充登录表单。密码始终留在主进程，不会出现在返回值里。跨域页面会被拒绝。",
+        kind: "run",
+        inputSchema: object({ tabId: string("标签页 id；省略表示当前激活的标签页") }),
+        run: (args) => surface().fillLogin(tabId(args)),
+      },
+      {
+        name: "screenshot_browser_tab",
+        description:
+          "给标签页截图，返回保存到磁盘的路径。窗口最小化时也能拿到画面；完全隐藏的窗口不行。",
+        kind: "run",
+        inputSchema: object({
+          tabId: string("标签页 id；省略表示当前激活的标签页"),
+          format: { type: "string", enum: ["png", "jpeg"], description: "默认 png" },
+        }),
+        run: (args) =>
+          surface().screenshot(tabId(args), {
+            format: args["format"] === "jpeg" ? "jpeg" : "png",
+          }),
+      },
+      {
+        name: "evaluate_browser_page",
+        description:
+          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            expression: string("要执行的表达式"),
+          },
+          ["expression"],
+        ),
+        run: (args) => surface().evaluate(tabId(args), String(args["expression"] ?? "")),
+      },
+      {
+        name: "set_browser_layout",
+        description:
+          "设置内置浏览器某个视图的分屏布局：free（单页，等价于 1x1）/ 2x1 / 1x2 / 2x2 / 3x1。省略 viewId 表示当前在台上的视图。",
+        kind: "run",
+        inputSchema: object(
+          {
+            layoutId: string("布局 id：free / 2x1 / 1x2 / 2x2 / 3x1"),
+            viewId: string("视图 id；省略表示当前在台上的视图"),
+          },
+          ["layoutId"],
+        ),
+        run: (args) => {
+          const layoutId = String(args["layoutId"] ?? "");
+          const viewId =
+            typeof args["viewId"] === "string" && args["viewId"]
+              ? args["viewId"]
+              : surface().layoutTargetView(layoutId);
+          if (!viewId) throw new Error("当前没有打开的标签页");
+          return surface().setLayout(layoutId, viewId);
+        },
+      },
+      {
+        name: "pin_browser_tab",
+        description:
+          "把某个标签页固定到视图的指定格位，或清空格位（tabId 传空）。省略 viewId 表示当前在台上的视图。",
+        kind: "run",
+        inputSchema: object(
+          {
+            slotIndex: integer("格位序号，从 0 开始"),
+            tabId: string("标签页 id；省略或空字符串表示清空该格位"),
+            viewId: string("视图 id；省略表示当前在台上的视图"),
+          },
+          ["slotIndex"],
+        ),
+        run: (args) => {
+          const index = Number(args["slotIndex"]);
+          if (!Number.isInteger(index) || index < 0) throw new Error("slotIndex 必须是非负整数");
+          const viewId =
+            typeof args["viewId"] === "string" && args["viewId"]
+              ? args["viewId"]
+              : surface().defaultViewId();
+          if (!viewId) throw new Error("当前没有打开的视图");
+          const id = typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : null;
+          return surface().pinTab(index, id, viewId);
+        },
+      },
+      {
+        name: "close_browser_tab",
+        description: "关闭内置浏览器的一个标签页。只关页面，不影响该身份的登录态。",
+        kind: "run",
+        inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
+        run: (args) => surface().closeTab(String(args["tabId"] ?? "")),
       },
     ];
   }

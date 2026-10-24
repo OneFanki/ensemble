@@ -10,7 +10,8 @@
 | [0004](./0004-ui-stack.md) | Reka UI + Lucide + CSS 变量，不用 Element Plus | 已采纳 |
 | [0005](./0005-no-bundled-browsers.md) | 不打包浏览器，启动时扫描系统引擎 | 已采纳 |
 | [0006](./0006-embedded-browser-first.md) | 内置浏览器为主、外部浏览器为保真校验 | 已采纳 |
-| [0007](./0007-site-and-view-model.md) | 站点与视图模型：环境改名站点、场景改名视图、站点标签 | 已采纳，待实施 |
+| [0007](./0007-site-and-view-model.md) | 站点与视图模型：环境改名站点、场景改名视图、站点标签 | 已采纳（部分被 0008 修订） |
+| [0008](./0008-sites-as-login-recipes.md) | 站点降级为登录配方、删全局当前站点、标签升为全局 | 已采纳 |
 
 新决策模板：
 

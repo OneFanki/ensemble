@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ensemble · 同台 — 多个身份，同一个舞台</title>
+    <title>Ensemble · 同台 — 一套系统里的多个账号，一屏同时在线</title>
     <meta
       name="description"
-      content="同台（Ensemble）— 本地多身份浏览器工作台：内置浏览器一块屏幕并排多个身份，外部真实浏览器边到边平铺；内置 MCP 端点，AI 可直接驱动页面，也能录入站点、身份与视图。"
+      content="同台（Ensemble）— 一套系统里的多个账号，一屏同时在线。测多角色权限，别再反复退出登录了：内置浏览器同屏并排多个身份，每个账号独立 Profile；内置 MCP 端点，AI 能直接操作页面。"
     />
-    <meta property="og:title" content="Ensemble · 同台" />
+    <meta property="og:title" content="Ensemble · 同台 — 一套系统里的多个账号，一屏同时在线" />
     <meta
       property="og:description"
-      content="本地多身份浏览器工作台：内置浏览器并排、视图编排、独立 Profile、内置 MCP 端点。"
+      content="本地多身份浏览器工作台：一套系统里的多个账号，一屏同时在线。内置浏览器并排、视图编排、独立 Profile、内置 MCP 端点（AI 可直接建号并驱动页面）。"
     />
     <meta property="og:type" content="website" />
     <link rel="icon" href="./assets/icon.png" />
@@ -316,6 +316,29 @@
         font-size: 16px;
         line-height: 1.75;
         color: var(--muted);
+      }
+
+      /*
+       * The pain sentence, set between the headline and the paragraph.
+       *
+       * It has to read as a statement rather than more description, so it is
+       * larger than the lede and rules off with a short accent bar.
+       */
+      .lede-strong {
+        margin: 18px 0 0;
+        padding-left: 13px;
+        border-left: 2px solid var(--accent);
+        max-width: 640px;
+        font-family: var(--font-display);
+        font-size: 17px;
+        font-weight: 500;
+        line-height: 1.5;
+        letter-spacing: -0.01em;
+        color: var(--text-secondary);
+      }
+
+      .lede-strong + .lede {
+        margin-top: 16px;
       }
 
       .hero-actions {
@@ -807,20 +830,21 @@
           </p>
 
           <h1>
-            <span data-zh>多个身份，<span class="accent">同一个舞台</span>。</span>
-            <span data-en>Multiple identities, <span class="accent">one stage</span>.</span>
+            <span data-zh>一套系统里的多个账号，<span class="accent">一屏同时在线</span>。</span>
+            <span data-en>Every account of one system, <span class="accent">signed in at once</span>.</span>
           </h1>
 
+          <p class="lede-strong" data-zh>测多角色权限，别再反复退出登录了。</p>
+          <p class="lede-strong" data-en>Stop logging out just to check what another role sees.</p>
+
           <p class="lede" data-zh>
-            同一套系统里，不同账号看到的东西本来就不一样：谁多一个删除按钮、租户之间的数据该不该互相
-            可见、灰度功能有没有按名单放开。Ensemble 把这些窗口变成一张可以编排的台面：每个账号一个
-            完全独立的浏览器 Profile，一键拉起一组，边到边平铺，关掉就回收。
+            同一个页面，管理员看得到删除按钮，成员看不到——你怎么确认？Ensemble 把多个账号放进同一块屏幕：
+            每个账号一个完全独立的浏览器 Profile，一键拉起一组，边到边平铺，关掉就回收。
           </p>
           <p class="lede" data-en>
-            The same system looks different depending on who is signed in: an extra delete button, data
-            that must stay inside a tenant, a feature flag that reaches only part of the accounts.
-            Ensemble turns those windows into one orchestrated stage: every account gets its own
-            isolated browser profile, launched as a group and tiled edge to edge.
+            On the same page, an admin sees a delete button and a member does not. How do you confirm
+            that? Ensemble puts the accounts on one screen — each in its own isolated browser profile,
+            launched as a group and tiled edge to edge.
           </p>
 
           <div class="hero-actions">
@@ -873,12 +897,12 @@
             <h2 data-zh>三层模型，一个作用域一条隔离线</h2>
             <h2 data-en>Three layers, one isolation boundary</h2>
             <p data-zh>
-              站点是被测目标，身份是账号，视图是一块共享屏幕。换站点不会串登录态，换身份不会带出别人的
-              Cookie。
+              站点是被测目标，身份是账号，视图是一块共享屏幕。每个身份一个独立 Profile，换身份不会带出
+              别人的 Cookie。
             </p>
             <p data-en>
-              A site is the target, an identity is an account, a view is one shared screen. Switching
-              sites never mixes sessions; switching identities never leaks someone else's cookies.
+              A site is the target, an identity is an account, a view is one shared screen. Every
+              identity has its own profile, so switching never leaks someone else's cookies.
             </p>
           </div>
 
@@ -887,14 +911,14 @@
               <span class="num">01</span>
               <h3 data-zh>站点</h3>
               <h3 data-en>Site</h3>
-              <p class="scope" data-zh>作用域 · 不隔离</p>
-              <p class="scope" data-en>Scope · not isolated</p>
+              <p class="scope" data-zh>登录配方 · 不隔离</p>
+              <p class="scope" data-en>Login recipe · not isolated</p>
               <p data-zh>
-                站点地址、登录入口、登录检测地址与默认凭据；可用标签归类。切换站点同时切换身份与视图。
+                站点地址、登录入口、登录检测地址与默认凭据；可用标签归类。它不限定你能看到哪些账号。
               </p>
               <p data-en>
                 Base URL, login path, session-check endpoint and default credentials, groupable with
-                tags. Switching it switches the identities and views you see.
+                tags. It no longer scopes which accounts you see.
               </p>
             </article>
 
@@ -1079,7 +1103,7 @@
               </p>
               <p data-en>
                 Credentials are typed in as the window opens. Tenant or company codes are matched by
-                label, set per environment and overridable per identity.
+                label, set per site and overridable per identity.
               </p>
             </article>
 
@@ -1227,7 +1251,7 @@
               </p>
               <p data-en>
                 A throwaway window that never logs in and is deleted on close — including a blank one
-                that belongs to no environment, for checking a single link.
+                that belongs to no site, for checking a single link.
               </p>
             </article>
 
@@ -1241,11 +1265,11 @@
               <h3 data-zh>AI 直接录入</h3>
               <h3 data-en>AI does the data entry</h3>
               <p data-zh>
-                内置 MCP 端点。账号在容器或数据库里建好后，AI 可以直接写入站点、身份与视图，也能直接驱动内置浏览器，不必手填。
+                内置 MCP 端点。给 AI 一个测试环境和超管账号，它能登录后台、把租户账号建出来，再存成身份摆上舞台。
               </p>
               <p data-en>
-                A built-in MCP endpoint. Once accounts exist in your container or database, an AI
-                client registers the environments, identities and scenes for you.
+                A built-in MCP endpoint. Give it a test environment and a super-admin login; it signs
+                in, creates the tenant accounts and puts them on stage as identities.
               </p>
             </article>
 
@@ -1276,10 +1300,10 @@
             <span class="kicker">Interface</span>
             <h2 data-zh>界面</h2>
             <h2 data-en>Interface</h2>
-            <p data-zh>左侧管浏览器 / 站点 / 身份 / 视图 / 设置，顶栏只做站点切换，运行中的页面与窗口在右侧一览。</p>
+            <p data-zh>左侧管浏览器 / 站点 / 身份 / 视图 / 设置，顶栏只剩品牌与启动目标，运行中的页面与窗口在右侧一览。</p>
             <p data-en>
-              The rail manages environments, identities, scenes and settings; the title bar only
-              switches environments, and running windows are listed on the right.
+              The rail manages the browser, sites, accounts, views and settings; the title bar
+              keeps only the brand and the launch target, and running windows are listed on the right.
             </p>
           </div>
 
@@ -1310,10 +1334,27 @@
                 data-zh-src="./screenshots/browser.png"
                 data-en-src="./screenshots/browser-en.png"
               />
-              <figcaption data-zh>浏览器页：四宫格视图、格位标题与右侧运行栏；点台下标签就换进聚焦格位。</figcaption>
+              <figcaption data-zh>浏览器页：四宫格视图、格位标题与右侧运行栏；点台下标签或把行拖进格位，就换到那一格。</figcaption>
               <figcaption data-en>
-                The browser page: a 2×2 view, slot headers and the running dock; clicking an off-stage
-                tab swaps it into the focused slot.
+                The browser page: a 2×2 view, slot headers and the running dock; click an off-stage
+                tab or drag a row onto a slot to swap it into that cell.
+              </figcaption>
+            </figure>
+            <figure>
+              <img
+                src="./screenshots/new-tab.png"
+                alt="空白页：搜索框与内置背景"
+                data-zh-src="./screenshots/new-tab.png"
+                data-en-src="./screenshots/new-tab.png"
+              />
+              <figcaption data-zh>
+                启动就是一个空白页，落地页本身是搜索框：输地址直接打开、输词语按所选引擎搜索；
+                底色是内置预设，右下角一键换。运行栏收起后仍留着每个实例一个站点图标，点一下就切过去。
+              </figcaption>
+              <figcaption data-en>
+                Startup lands on a blank page whose surface is the search field: addresses open
+                directly, words go to the selected engine, and the backdrop is a built-in preset.
+                Collapsed, the dock keeps one site icon per running instance.
               </figcaption>
             </figure>
             <figure>
@@ -1405,21 +1446,31 @@
         <div class="wrap">
           <div class="section-head">
             <span class="kicker">MCP</span>
-            <h2 data-zh>让 AI 建好账号，Ensemble 只负责录入</h2>
-            <h2 data-en>Let the AI create accounts; Ensemble records them</h2>
+            <h2 data-zh>把测试环境的账号建齐，交给 AI</h2>
+            <h2 data-en>Hand the whole account set-up to your AI</h2>
+            <p data-zh>
+              一个测试环境地址、超管的账号密码、一个租户名——剩下的 AI 来做：存站点、登录后台、
+              建出几个不同类别的租户，再把每个租户的管理员连同它自己的租户名存成身份。
+            </p>
+            <p data-en>
+              A test-environment URL, the super-admin login and a tenant name. The AI saves the site,
+              signs in, creates tenants in a few categories, then records each tenant admin as an
+              identity with its own tenant name.
+            </p>
           </div>
 
           <div class="ai">
             <div>
               <p data-zh>
-                在你本机的回环地址上开一个 MCP 端点，AI 客户端可以列出、创建和修改站点、身份、视图与布局，也能直接驱动内置浏览器，
-                也可以启动窗口、检测登录态。端点只绑 127.0.0.1，必须带 Bearer Token，并校验 Host 与 Origin。
+                在你本机的回环地址上开一个 MCP 端点：AI 客户端可以列出、创建和修改站点、身份、视图与布局，
+                也能直接驱动内置浏览器——读页面、点击、输入、截图、检测登录态。页面就在主窗口里，
+                你随时能看见、接手或打断。
               </p>
               <p data-en>
                 Ensemble serves an MCP endpoint on the loopback interface. An AI client can list,
-                create and edit environments, identities, scenes and layouts, and also launch windows
-                and check sessions. The endpoint binds 127.0.0.1 only, requires a bearer token, and
-                validates Host and Origin.
+                create and edit sites, identities, views and layouts, and drive the built-in browser
+                directly — read the page, click, type, screenshot, check sessions. The pages live in
+                the main window, so you can watch, take over or interrupt at any point.
               </p>
               <ul>
                 <li data-zh>四档权限：读 / 写 / 运行 / 删除，后三档由设置页开关控制。</li>
@@ -1428,23 +1479,48 @@
                 <li data-en>Delete tools require an explicit <code>confirm: true</code>.</li>
                 <li data-zh>没有读密码的工具：密码只进加密凭据库，永远不回显。</li>
                 <li data-en>No tool reads a password back; credentials only go into the encrypted vault.</li>
-                <li data-zh>每次调用写一行审计日志，密码、口令与 Token 递归脱敏。</li>
-                <li data-en>Every call appends an audit line, with passwords, passphrases and tokens redacted.</li>
+                <li data-zh>走通的操作可以存成<b>流程</b>：一串带参数的步骤，下次一句话重跑；左侧导航的「流程」页能查看、编辑、直接运行。</li>
+                <li data-en>Any operation that works can be saved as a <b>flow</b>: parameterised steps that rerun in one call, listed and editable on the Flows page in the rail.</li>
+                <li data-zh>连接方式：设置 → AI 接入 → 复制配置片段（HTTP + Bearer Token）。</li>
+                <li data-en>Connect from Settings → AI access → copy the config snippet (HTTP + bearer token).</li>
+                <li data-zh>每次调用写一行审计日志，密码、口令、Token 与往密码框输入的文本都脱敏。</li>
+                <li data-en>Every call appends an audit line; passwords, passphrases, tokens and text typed into a password field are redacted.</li>
               </ul>
             </div>
 
-            <pre class="code"><code><span class="com">// 设置 → AI 接入 → 复制配置片段</span>
-{
-  <span class="key">"mcpServers"</span>: {
-    <span class="key">"ensemble"</span>: {
-      <span class="key">"type"</span>: <span class="str">"http"</span>,
-      <span class="key">"url"</span>: <span class="str">"http://127.0.0.1:47821/mcp"</span>,
-      <span class="key">"headers"</span>: {
-        <span class="key">"Authorization"</span>: <span class="str">"Bearer &lt;你的 Token&gt;"</span>
-      }
-    }
-  }
-}</code></pre>
+            <pre class="code" data-zh><code><span class="com">// 你只需要说一次</span>
+在内置浏览器里帮我把 <span class="str">http://localhost:3000</span> 配好：
+超管 <span class="str">super@example.test</span> / <span class="str">super-secret</span>，租户名「默认租户」。
+登录后台，建三个租户：A（标准版）、B（专业版）、C（试用版），
+各配一个管理员，密码统一 <span class="str">Tenant-1234</span>。
+把这四个账号存成身份，最后拉一个 2×2 的视图一起打开。
+
+<span class="com">// AI 调用</span>
+create_site        <span class="com">→ 站点 + 租户名字段 + 默认密码</span>
+create_identity    <span class="com">→ 超管</span>
+open_browser_tab   <span class="com">→ 以超管身份打开，自动填充</span>
+read_browser_page  <span class="com">→ 读懂租户表单</span>
+type_browser_text  <span class="com">→ 填租户与初始密码</span>
+create_identities  <span class="com">→ 逐个存身份，各带自己的租户名</span>
+create_view        <span class="com">→ 2×2 编排</span>
+open_browser_view  <span class="com">→ 摆上舞台</span></code></pre>
+
+            <pre class="code" data-en><code><span class="com">// You only say this once</span>
+Set up <span class="str">http://localhost:3000</span> in the built-in browser for me.
+Super admin <span class="str">super@example.test</span> / <span class="str">super-secret</span>, tenant "Default tenant".
+Sign in and create three tenants: A (standard), B (pro), C (trial),
+each with one admin, password <span class="str">Tenant-1234</span>.
+Save all four accounts as identities, then open them in a 2×2 view.
+
+<span class="com">// What the AI calls</span>
+create_site        <span class="com">→ site + tenant field + default password</span>
+create_identity    <span class="com">→ the super admin</span>
+open_browser_tab   <span class="com">→ open as super admin, filled automatically</span>
+read_browser_page  <span class="com">→ read the tenant form</span>
+type_browser_text  <span class="com">→ tenant name and initial password</span>
+create_identities  <span class="com">→ save each identity with its own tenant</span>
+create_view        <span class="com">→ arrange as 2×2</span>
+open_browser_view  <span class="com">→ put them on stage</span></code></pre>
           </div>
         </div>
       </section>

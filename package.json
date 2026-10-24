@@ -2,7 +2,7 @@
   "name": "ensemble",
   "version": "0.4.0",
   "private": true,
-  "description": "Multiple identities, one stage. A local multi-account browser workbench for permission and collaboration testing.",
+  "description": "Every account of one system, signed in at once. A local multi-account browser workbench for permission and collaboration testing.",
   "license": "MIT",
   "author": {
     "name": "OneFanki",
@@ -46,7 +46,16 @@
     "e2e:tab-reorder": "node scripts/e2e-tab-reorder.mjs",
     "e2e:instances": "node scripts/e2e-instances.mjs",
     "e2e:empty-slot": "node scripts/e2e-empty-slot.mjs",
-    "e2e:overlay-freeze": "node scripts/e2e-overlay-freeze.mjs"
+    "e2e:overlay-freeze": "node scripts/e2e-overlay-freeze.mjs",
+    "e2e:placement": "node scripts/e2e-placement.mjs",
+    "e2e:login-capture": "node scripts/e2e-login-capture.mjs",
+    "e2e:mcp-tenant-setup": "node scripts/e2e-mcp-tenant-setup.mjs",
+    "e2e:autofill": "node scripts/e2e-autofill.mjs",
+    "e2e:ui-regressions": "node scripts/e2e-ui-regressions.mjs",
+    "e2e:zoom-devtools": "node scripts/e2e-zoom-devtools.mjs",
+    "e2e:dom-resolver": "node scripts/e2e-dom-resolver.mjs",
+    "e2e:flows": "node scripts/e2e-flows.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

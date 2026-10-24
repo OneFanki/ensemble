@@ -61,6 +61,12 @@ const DEMO = {
     site: "后台系统 · 本地",
     second: "后台系统 · 测试",
     tag: "后台系统",
+    // Extra tags give the tag page something to show: one unused tag is the
+    // case the page is meant to surface.
+    extraTags: [
+      ["生产环境", "amber"],
+      ["只读账号", "violet"],
+    ],
     people: [
       ["管理员 · 主账号", "admin@example.test", "管理员", "amber"],
       ["成员 · 子账号", "member@example.test", "成员", "teal"],
@@ -68,11 +74,33 @@ const DEMO = {
       ["审核员", "review@example.test", "审核", "rose"],
     ],
     view: "权限矩阵 · 主流程",
+    flow: {
+      name: "创建租户",
+      description: "打开租户管理，按参数建一个租户，备注里带上页面上的订单号",
+      params: [
+        { name: "tenant", label: "租户名", required: true },
+        { name: "kind", label: "套餐", default: "标准版" },
+      ],
+      steps: [
+        { action: "navigate", url: "/console" },
+        { action: "wait", condition: "visible", text: "创建租户", timeoutMs: 8000 },
+        { action: "read", text: "ORD-", as: "order" },
+        { action: "fill", label: "租户名称", value: "{{tenant}}" },
+        { action: "select", label: "套餐", option: "{{kind}}" },
+        { action: "fill", label: "备注", value: "订单 {{order}}" },
+        { action: "click", text: "创建租户" },
+        { action: "wait", condition: "text", expect: "{{tenant}}" },
+      ],
+    },
   },
   en: {
     site: "Back office — local",
     second: "Back office — staging",
     tag: "Back office",
+    extraTags: [
+      ["Production", "amber"],
+      ["Read-only", "violet"],
+    ],
     people: [
       ["Admin · primary", "admin@example.test", "Admin", "amber"],
       ["Member", "member@example.test", "Member", "teal"],
@@ -80,12 +108,40 @@ const DEMO = {
       ["Reviewer", "review@example.test", "Reviewer", "rose"],
     ],
     view: "Permission matrix · main flow",
+    flow: {
+      name: "Create tenant",
+      description: "Open tenant management, create one tenant from parameters, note the order number from the page",
+      params: [
+        { name: "tenant", label: "Tenant name", required: true },
+        { name: "kind", label: "Plan", default: "Standard" },
+      ],
+      steps: [
+        { action: "navigate", url: "/console" },
+        { action: "wait", condition: "visible", text: "Create tenant", timeoutMs: 8000 },
+        { action: "read", text: "ORD-", as: "order" },
+        { action: "fill", label: "Tenant name", value: "{{tenant}}" },
+        { action: "select", label: "Plan", option: "{{kind}}" },
+        { action: "fill", label: "Note", value: "Order {{order}}" },
+        { action: "click", text: "Create tenant" },
+        { action: "wait", condition: "text", expect: "{{tenant}}" },
+      ],
+    },
   },
 };
 
 const SHOTS = [
   { name: "browser", locale: "zh", view: "browser" },
   { name: "browser-en", locale: "en", view: "browser" },
+  { name: "slot-tabs", locale: "zh", view: "browser", popup: true },
+  { name: "new-tab", locale: "zh", view: "browser", blankTab: true },
+  {
+    // The collapsed dock keeps one icon per running instance; the shot proves
+    // the strip is still usable when the panel is out of the way.
+    name: "dock-collapsed",
+    locale: "zh",
+    view: "browser",
+    collapsedDock: true,
+  },
   { name: "sites", locale: "zh", view: "sites" },
   { name: "sites-en", locale: "en", view: "sites" },
   { name: "identities", locale: "zh", view: "identities" },
@@ -96,7 +152,7 @@ const SHOTS = [
   { name: "settings-en", locale: "en", view: "settings" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
-  { name: "env-menu", locale: "zh", view: "identities", clicks: [".env-switch"] },
+  { name: "env-menu", locale: "zh", view: "browser", clicks: [".split-more"] },
   {
     name: "site-dialog",
     locale: "zh",
@@ -115,6 +171,24 @@ const SHOTS = [
     view: "identities",
     clicks: [".id-card .card-actions .edit"],
     script: `(() => { const seg = [...document.querySelectorAll('.seg')].find((el) => el.textContent.includes('引用')); seg?.click(); return Boolean(seg); })()`,
+  },
+  {
+    // Tags are a page of their own in the rail now, not a Settings tab.
+    name: "tags",
+    locale: "zh",
+    view: "tags",
+  },
+  {
+    // Same reason as tags: flows are an asset people browse, not a setting.
+    name: "flows",
+    locale: "zh",
+    view: "flows",
+  },
+  {
+    name: "flows-edit",
+    locale: "zh",
+    view: "flows",
+    clicks: [".detail-actions .icon-btn"],
   },
   {
     name: "settings-data",
@@ -164,6 +238,9 @@ async function seed(userData, locale, theme = "dark") {
     passwordMode: "inherit",
     status: "unknown",
     startPath: "/",
+    // Spread the two extra tags across accounts so the filter strip and the tag
+    // page show real usage instead of a row of zeros.
+    tagIds: index === 1 ? [uuid(11)] : index === 2 ? [uuid(12)] : [],
     createdAt: now,
     updatedAt: now,
   }));
@@ -173,7 +250,14 @@ async function seed(userData, locale, theme = "dark") {
     JSON.stringify(
       {
         version: 2,
-        siteTags: [{ id: uuid(8), name: demo.tag, color: "blue" }],
+        tags: [
+          { id: uuid(8), name: demo.tag, color: "blue" },
+          ...demo.extraTags.map(([name, color], index) => ({
+            id: uuid(11 + index),
+            name,
+            color,
+          })),
+        ],
         sites: [
           {
             id: siteId,
@@ -225,6 +309,20 @@ async function seed(userData, locale, theme = "dark") {
             layoutId: "2x2",
             slotAssignments: {},
             paths: {},
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        // A saved flow so the rail's Flows page is not an empty state in the
+        // docs. Same shape `save_flow` writes.
+        flows: [
+          {
+            id: uuid(5),
+            siteId,
+            name: demo.flow.name,
+            description: demo.flow.description,
+            params: demo.flow.params,
+            steps: demo.flow.steps,
             createdAt: now,
             updatedAt: now,
           },
@@ -358,11 +456,71 @@ async function capture(shot) {
            const api = window.ensemble;
            const snap = await api.getWorkspace();
            const view = snap.views[0];
-           if (view) await api.openEmbeddedView(view.id);
+           // A new-tab shot is about the surface, not the grid; opening the view
+           // would add four dock rows behind a page nobody can see.
+           if (view && !${shot.blankTab ? "true" : "false"}) await api.openEmbeddedView(view.id);
            return true;
          })()`,
       );
       await wait(2500);
+      // A blank tab is what the new-tab surface lives on: it is drawn by the
+      // app, because the main process keeps a blank page's native view parked.
+      if (shot.blankTab) {
+        await client.evaluate(`(async () => {
+          const api = window.ensemble;
+          // Exactly one loose page: launch already opens one, and a second would
+          // be a duplicate "new tab" row in the dock for no reason.
+          for (const tab of (await api.getEmbeddedState()).tabs) {
+            if (!tab.viewId) await api.closeEmbeddedTab(tab.id);
+          }
+          // Loose tab, so it gets the whole stage instead of one cell of a view.
+          await api.openEmbeddedTab({ viewId: null });
+          await new Promise((r) => setTimeout(r, 900));
+          return true;
+        })()`);
+        await wait(1200);
+      }
+      // An instance can hold several pages without taking extra cells. Opening
+      // one from the page itself is the only way to produce that state here.
+      if (shot.popup) {
+        const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+        const pageTarget = list.find(
+          (item) => item.type === "page" && item.url.startsWith(`http://127.0.0.1:${PAGE_PORT}`),
+        );
+        if (pageTarget) {
+          const pageClient = await connect(pageTarget.webSocketDebuggerUrl);
+          await pageClient.evaluate(`(() => { window.open('/second', '_blank'); return true; })()`);
+          pageClient.close();
+          await wait(1800);
+        }
+      }
+      // Collapse before freezing: the frozen images are placed at the stage
+      // rectangle measured at capture time, so collapsing afterwards would
+      // leave them at their old width and show a dead band beside the strip.
+      if (shot.collapsedDock) {
+        await client.evaluate(`(() => {
+          document.querySelector('.dock-head .collapse-btn')?.click();
+          return true;
+        })()`);
+        await wait(700);
+      }
+      // Re-report the stage after any layout change above. The freeze uses the
+      // main process's last known stage rect, and a wide-to-strip transition
+      // reports asynchronously; capturing before it lands paints every cell at
+      // the old width and leaves a dead band on the right.
+      await client.evaluate(`(async () => {
+        const stage = document.querySelector('.stage');
+        if (!stage) return false;
+        const box = stage.getBoundingClientRect();
+        await window.ensemble.setEmbeddedStage({
+          x: Math.round(box.left),
+          y: Math.round(box.top),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        return true;
+      })()`);
       // Native views are not part of the window's own pixels, so a plain
       // screenshot leaves the stage black. Freeze each page and paint the images
       // into the DOM instead — the same mechanism the app uses for its overlays.

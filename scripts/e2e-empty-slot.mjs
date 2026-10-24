@@ -26,7 +26,7 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    siteTags: [],
+    tags: [],
     sites: [
       {
         id: siteId,
@@ -138,16 +138,22 @@ try {
       slots: state.views[0]?.slotTabs,
       bodies: document.querySelectorAll('.slot-empty').length,
       buttons: [...document.querySelectorAll('.slot-add')].map((el) => el.textContent.trim()),
-      headers: [...document.querySelectorAll('.slot-header.empty')].length,
+      indexes: [...document.querySelectorAll('.slot-empty-index')].map((el) => el.textContent.trim()),
+      emptyHeaders: document.querySelectorAll('.slot-header.empty').length,
     };
   })()`);
   check("view created with two empty slots", created?.slots?.length === 2, created);
   check("the stage draws one dashed cell per empty slot", created?.bodies === 2, created);
   check("each empty cell offers an add button", created?.buttons?.length === 2, created?.buttons);
-  check("empty slot headers use the dashed style", created?.headers === 2, created);
+  check(
+    "an empty cell has no header band; its number sits inside the cell",
+    created?.emptyHeaders === 0 && created?.indexes?.join(",") === "1,2",
+    created,
+  );
 
   // Click the second cell's button: the page must land in slot 2, not slot 1.
   const clicked = await client.evaluate(`(async () => {
+    const before = await window.ensemble.getEmbeddedState();
     const buttons = [...document.querySelectorAll('.slot-add')];
     buttons[1]?.click();
     await new Promise((r) => setTimeout(r, 1500));
@@ -157,7 +163,8 @@ try {
       slots: view?.slotTabs,
       focused: view?.focusedTabId,
       active: state.activeTabId,
-      tabs: state.tabs.length,
+      // Relative to the launch page that is still on the surface.
+      tabs: state.tabs.length - before.tabs.length,
       address: document.querySelector('.address input')?.value ?? null,
     };
   })()`);

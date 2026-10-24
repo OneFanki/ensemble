@@ -31,7 +31,7 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    siteTags: [],
+    tags: [],
     sites: [
       {
         id: siteId,
@@ -141,11 +141,30 @@ try {
   const opened = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const view = await api.createEmbeddedView({ layoutId: "2x1", name: "覆盖验证" });
-    await api.openEmbeddedTabInSlot(view.activeViewId, 0);
-    await new Promise((r) => setTimeout(r, 1800));
-    return { viewId: view.activeViewId };
+    const state = await api.openEmbeddedTabInSlot(view.activeViewId, 0);
+    const active = state.views.find((item) => item.id === view.activeViewId);
+    const tabId = active?.slotTabs?.[0];
+    // A blank page has no native pixels to freeze (the app draws its new-tab
+    // surface there), so this check needs a real page on stage. Poll the state
+    // instead of sleeping a fixed time: on a slow start the page is still blank
+    // when the dialog opens, freeze returns no images, and the assertion fails
+    // for a reason that has nothing to do with overlays.
+    if (tabId) await api.navigateEmbeddedTab(tabId, ${JSON.stringify(`http://127.0.0.1:${PAGE_PORT}/`)});
+    let url = "";
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const next = await api.getEmbeddedState();
+      url = next.tabs.find((tab) => tab.id === tabId)?.url ?? "";
+      if (url.startsWith("http://127.0.0.1:${PAGE_PORT}")) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await new Promise((r) => setTimeout(r, 600));
+    return { viewId: view.activeViewId, tabId, url };
   })()`);
-  check("a page is on stage", Boolean(opened?.viewId), opened);
+  check(
+    "a page is on stage",
+    Boolean(opened?.viewId) && String(opened?.url).startsWith(`http://127.0.0.1:${PAGE_PORT}`),
+    opened,
+  );
 
   // The view header's × asks for confirmation; that dialog must sit above the
   // page, which means the stage has to be frozen into images first.

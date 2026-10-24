@@ -28,6 +28,65 @@ function makeSite(name: string, baseUrl: string) {
   return service.saveSite({ name, baseUrl, loginPath: "/login", autoSubmit: false });
 }
 
+describe("saved-login detection", () => {
+  it("recognises a username whose password the vault stores", () => {
+    const site = makeSite("本地", "http://localhost:3000");
+    service.saveIdentity(
+      {
+        siteId: site.id,
+        name: "管理员",
+        username: "admin@example.test",
+        role: "管理员",
+        color: "amber",
+        passwordMode: "custom",
+      },
+      "secret",
+    );
+    expect(service.hasSavedLogin(site.id, "Admin@example.test")).toBe(true);
+    expect(service.hasSavedLogin(site.id, "other@example.test")).toBe(false);
+  });
+
+  it("does not treat an identity saved without a password as saved", () => {
+    const site = makeSite("本地", "http://localhost:3000");
+    service.saveIdentity({
+      siteId: site.id,
+      name: "待补密码",
+      username: "pending@example.test",
+      role: "成员",
+      color: "slate",
+      passwordMode: "custom",
+    });
+    // Capturing this login is exactly what the prompt is for.
+    expect(service.hasSavedLogin(site.id, "pending@example.test")).toBe(false);
+  });
+
+  it("follows a reference to the source password", () => {
+    const source = makeSite("本地", "http://localhost:3000");
+    const other = makeSite("测试", "http://test.example.com");
+    const identity = service.saveIdentity(
+      {
+        siteId: source.id,
+        name: "管理员",
+        username: "admin",
+        role: "管理员",
+        color: "amber",
+        passwordMode: "custom",
+      },
+      "secret",
+    );
+    const reference = service.saveIdentity({
+      siteId: other.id,
+      name: "ignored",
+      username: "ignored",
+      role: "ignored",
+      color: "slate",
+      passwordMode: "reference",
+      credentialFrom: identity.id,
+    });
+    expect(service.hasSavedLogin(other.id, reference.username)).toBe(true);
+  });
+});
+
 describe("credential references", () => {
   it("copies the source's display fields onto the reference", () => {
     const a = makeSite("本地", "http://localhost:3000");

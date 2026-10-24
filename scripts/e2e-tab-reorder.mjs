@@ -41,7 +41,7 @@ writeFileSync(
   JSON.stringify(
     {
       version: 2,
-      siteTags: [],
+      tags: [],
       sites: [
         {
           id: siteId,
@@ -211,6 +211,16 @@ try {
   const client = await connect(target.webSocketDebuggerUrl);
   await wait(3000);
 
+  // Launch leaves one blank page on the surface; the assertions below count rows
+  // of this suite's own tabs, so start from nothing.
+  await client.evaluate(`(async () => {
+    for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
+      await window.ensemble.closeEmbeddedTab(tab.id);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    return true;
+  })()`);
+
   // Loose tabs first: the view is not on stage, so only the flat strip renders.
   const loose = await client.evaluate(`(async () => {
     const api = window.ensemble;
@@ -261,6 +271,43 @@ try {
     afterReorder?.slots?.[0] === opened?.slots?.[2],
     { slots: afterReorder?.slots, before: opened?.slots },
   );
+
+  // Dragging a dock row straight onto a slot must replace that cell. This is the
+  // gesture users try first; the dock order must not matter.
+  const toSlot = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const state0 = await api.getEmbeddedState();
+    const view0 = state0.views.find((item) => item.viewDefinitionId === '33333333-3333-4333-8333-333333333333');
+    // The row whose page is in slot 3 is dragged onto slot 2's header.
+    const lastPageId = view0.slotTabs[2];
+    const rows = [...document.querySelectorAll('.dock .view-block .rows .tab-row')];
+    const source = rows[2];
+    const headers = [...document.querySelectorAll('.stage .slot-header')];
+    const target = headers[1];
+    if (!source || !target) return { error: 'missing', rows: rows.length, headers: headers.length };
+    const dt = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+    const rect = target.getBoundingClientRect();
+    const at = { clientX: rect.left + 10, clientY: rect.top + 8 };
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
+    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    await new Promise((r) => setTimeout(r, 800));
+    const state1 = await api.getEmbeddedState();
+    const view1 = state1.views.find((item) => item.id === view0.id);
+    return {
+      before: view0.slotTabs,
+      after: view1.slotTabs,
+      moved: lastPageId,
+      stageRestored: document.querySelectorAll('.stage .frozen').length === 0,
+    };
+  })()`);
+  check(
+    "dropping a dock row on a slot replaces that cell",
+    Array.isArray(toSlot?.after) && toSlot.after[1] === toSlot.moved,
+    toSlot,
+  );
+  check("the stage comes back to life after the drop", toSlot?.stageRestored === true, toSlot);
 
   // Drag every member out; the container must survive as an empty view.
   for (let index = 0; index < 3; index += 1) {

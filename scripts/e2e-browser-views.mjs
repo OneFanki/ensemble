@@ -147,7 +147,11 @@ try {
   const opened = await call("open_browser_view", { viewId: view.id });
   const container = (opened.views ?? []).find((item) => item.viewDefinitionId === view.id);
   check("view opens as one container", Boolean(container), opened.views);
-  check("one tab per member", (opened.tabs ?? []).length === 4, opened.tabs?.length);
+  // Counted by identity: launch leaves one blank page on the surface, so the
+  // total is not the member count and asserting it would test startup instead.
+  const memberIds = new Set(identities.map((item) => item.id));
+  const memberTabs = (opened.tabs ?? []).filter((tab) => memberIds.has(tab.identityId));
+  check("one tab per member", memberTabs.length === 4, memberTabs.length);
   check(
     "saved slot assignment is applied",
     container?.slotTabs?.[0] === opened.tabs.find((tab) => tab.identityId === identities[3].id)?.id,
@@ -155,19 +159,20 @@ try {
   );
   check(
     "every member tab belongs to the container",
-    (opened.tabs ?? []).every((tab) => tab.viewId === container.id),
+    memberTabs.every((tab) => tab.viewId === container.id),
+    memberTabs.map((tab) => tab.viewId),
   );
 
-  const firstIds = (opened.tabs ?? []).map((tab) => tab.id).sort();
+  const firstIds = memberTabs.map((tab) => tab.id).sort();
 
   // Reopening merges instead of duplicating: logins must survive.
   const reopened = await call("open_browser_view", { viewId: view.id });
+  const reopenedMembers = (reopened.tabs ?? []).filter((tab) => memberIds.has(tab.identityId));
   check(
     "reopening reuses the existing tabs",
-    (reopened.tabs ?? []).length === 4 &&
-      JSON.stringify((reopened.tabs ?? []).map((tab) => tab.id).sort()) ===
-        JSON.stringify(firstIds),
-    reopened.tabs?.length,
+    reopenedMembers.length === 4 &&
+      JSON.stringify(reopenedMembers.map((tab) => tab.id).sort()) === JSON.stringify(firstIds),
+    reopenedMembers.length,
   );
 
   // Layout change re-flows the same container.
@@ -195,9 +200,15 @@ try {
     { viewId: added.viewId, container: container.id },
   );
 
-  // Closing the view removes its tabs, leaving the surface empty.
+  // Closing the view removes its tabs, leaving the surface with what was there
+  // before the view existed — counted relative, since launch leaves a blank page.
+  const beforeClose = (await call("list_browser_tabs")).tabs.length;
   const closed = await call("close_browser_tab", { tabId: added.id });
-  check("closing a member leaves the rest", (closed.tabs ?? []).length === 4, closed.tabs?.length);
+  check(
+    "closing a member leaves the rest",
+    (closed.tabs ?? []).length === beforeClose - 1 && !closed.tabs.some((tab) => tab.id === added.id),
+    { before: beforeClose, after: closed.tabs?.length },
+  );
 
   const audit = readFileSync(join(userData, "mcp-audit.log"), "utf8");
   check("audit log records the view tool", audit.includes('"open_browser_view"'));

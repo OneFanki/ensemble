@@ -127,7 +127,15 @@ try {
   check("app started and MCP answered", ready, ready ? undefined : appLog.slice(-800));
   if (!ready) throw new Error("MCP never came up");
 
-  check("browser tools listed", (await call("list_browser_tabs")).tabs.length === 0);
+  // Startup opens one blank page, so the browser page is never an empty stage.
+  // What this protects is that a *fresh* workspace has nothing beyond it: a
+  // restored tab or a stray view would mean the starter logic leaked.
+  const starter = await call("list_browser_tabs");
+  check(
+    "only the starter tab exists",
+    starter.tabs.length === 1 && starter.tabs[0].url === "about:blank",
+    JSON.stringify(starter.tabs),
+  );
 
   const site = await call("create_site", {
     name: "本地开发站点",
@@ -265,10 +273,17 @@ try {
     layout.views,
   );
 
-  // Closing one tab leaves the other.
+  // Closing one tab leaves the other. Counted relative to what is open: the
+  // starter page from launch is still there, so an absolute number would be
+  // asserting startup behaviour, not the close.
+  const beforeClose = (await call("list_browser_tabs")).tabs.length;
   await call("close_browser_tab", { tabId: memberTab.id });
   const remaining = await call("list_browser_tabs");
-  check("closing one tab leaves the other", remaining.tabs.length === 1, remaining.tabs.length);
+  check(
+    "closing one tab leaves the other",
+    remaining.tabs.length === beforeClose - 1 && !remaining.tabs.some((tab) => tab.id === memberTab.id),
+    { before: beforeClose, after: remaining.tabs.length },
+  );
 
   // The audit log records the browser calls with arguments redacted.
   const audit = readFileSync(join(userData, "mcp-audit.log"), "utf8");

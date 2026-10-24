@@ -72,7 +72,7 @@ describe("workspace export", () => {
     expect(file.format).toBe(EXPORT_FORMAT);
     expect(secretsIncluded).toBe(false);
     expect(file.secrets).toBeUndefined();
-    expect(counts).toEqual({ sites: 1, identities: 1, views: 1, layoutPresets: 1 });
+    expect(counts).toEqual({ sites: 1, identities: 1, views: 1, flows: 0, layoutPresets: 1 });
     // Session state belongs to this machine and must not travel.
     expect(file.identities[0]?.status).toBe("unknown");
     expect(file.identities[0]?.id).toBe(identity.id);

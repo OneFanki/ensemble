@@ -111,6 +111,16 @@ try {
   check("app started and MCP answered", ready, ready ? undefined : appLog.slice(-800));
   if (!ready) throw new Error("MCP never came up");
 
+  // Launch leaves one blank page; this suite counts pages of its own tabs, so
+  // start from an empty surface. (The starter page is not the subject here.)
+  for (const tab of (await call("list_browser_tabs")).tabs ?? []) {
+    await call("close_browser_tab", { tabId: tab.id });
+  }
+  check(
+    "the surface starts empty for this check",
+    ((await call("list_browser_tabs")).tabs ?? []).length === 0,
+  );
+
   const first = await call("open_browser_tab", { url: PAGE_URL });
   check("first tab is its own instance", first.instanceId === first.id, first);
   check("a fresh instance has exactly one page", first.active === true, first);

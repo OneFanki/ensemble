@@ -14,6 +14,8 @@ function tab(id: string, viewId?: string): EmbeddedTab {
     origin: "manual",
     instanceId: id,
     active: true,
+    zoom: 100,
+    devtoolsOpen: false,
     ...(viewId ? { viewId } : {}),
   };
 }

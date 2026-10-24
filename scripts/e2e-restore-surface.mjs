@@ -165,7 +165,11 @@ try {
     layoutId: "2x1",
   });
   const opened = await call("open_browser_view", { viewId: view.id });
-  check("first run opened the view", (opened.tabs ?? []).length === 2);
+  // Counted by identity: launch leaves one blank page on the surface, and the
+  // restore check is about the two members, not the starter page.
+  const peopleIds = new Set(people.map((item) => item.id));
+  const openedMembers = (opened.tabs ?? []).filter((tab) => peopleIds.has(tab.identityId));
+  check("first run opened the view", openedMembers.length === 2, openedMembers.length);
   await stop();
 
   // ---- second run: the same container must come back ----------------------
@@ -178,13 +182,25 @@ try {
     if ((state.tabs ?? []).length >= 2) break;
     await wait(300);
   }
-  check("restore reopened one tab per member", (state.tabs ?? []).length === 2, state.tabs?.length);
+  check(
+    "restore reopened one tab per member",
+    (state.tabs ?? []).filter((tab) => peopleIds.has(tab.identityId)).length === 2,
+    state.tabs?.length,
+  );
+  // A restore is not an empty start: the starter page must not be added on top
+  // of the restored container.
+  check(
+    "restore did not add a starter page",
+    (state.tabs ?? []).every((tab) => tab.url !== "about:blank"),
+    (state.tabs ?? []).map((tab) => ({ url: tab.url, identityId: tab.identityId })),
+  );
   const container = (state.views ?? []).find((item) => item.viewDefinitionId === view.id);
   check("restore recreated the container", Boolean(container), state.views);
   check("restore kept the saved layout", container?.layoutId === "2x1", container?.layoutId);
   check(
     "restored tabs belong to the container",
     (state.tabs ?? []).every((tab) => tab.viewId === container?.id),
+    (state.tabs ?? []).map((tab) => tab.viewId),
   );
 
   const settings = JSON.parse(readFileSync(join(userData, "settings.json"), "utf8"));

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { EmbeddedDropTarget, EmbeddedTab, EmbeddedView } from "@shared/embedded";
 import { EMBEDDED_LAYOUTS } from "@shared/embedded";
-import type { LayoutId } from "@shared/types";
+import type { LayoutId, RoleColor } from "@shared/types";
 import {
   ChevronLeft,
   ChevronRight,
@@ -219,16 +219,34 @@ function isFocused(root: EmbeddedTab): boolean {
 }
 
 /**
- * Every running instance, in dock order, for the collapsed strip.
+ * Running instances grouped the way the expanded dock groups them.
  *
- * Built from the same sources the expanded tree uses — view instances first,
- * then loose ones — so collapsing the dock never changes the order of the icons
- * and expanding again lands on the row the user just clicked.
+ * The collapsed strip is 46px wide, so a view header cannot be printed. What it
+ * can do is keep the grouping visible: instances of one view stay together,
+ * groups are separated by a rule tinted with the view's own colour, and loose
+ * instances end the list. Without that, collapsing turns a 2×2 view and four
+ * unrelated pages into the same flat column of icons.
  */
-const miniInstances = computed<EmbeddedTab[]>(() => [
-  ...embedded.views.flatMap((view) => embedded.viewInstances(view.id)),
-  ...embedded.looseInstances,
-]);
+interface MiniGroup {
+  key: string;
+  /** View colour, so the group boundary also says which view it belongs to. */
+  color?: RoleColor;
+  instances: EmbeddedTab[];
+}
+
+const miniGroups = computed<MiniGroup[]>(() => {
+  const groups: MiniGroup[] = embedded.views.map((view) => ({
+    key: view.id,
+    ...(view.color ? { color: view.color } : {}),
+    instances: embedded.viewInstances(view.id),
+  }));
+  if (embedded.looseInstances.length) {
+    groups.push({ key: "loose", instances: [...embedded.looseInstances] });
+  }
+  // An empty container has nothing to show, and an empty group would render a
+  // rule around nothing.
+  return groups.filter((group) => group.instances.length > 0);
+});
 
 /** Icon of the page the instance is showing; the root is the fallback. */
 function faviconOf(root: EmbeddedTab): string | undefined {
@@ -239,6 +257,12 @@ function faviconOf(root: EmbeddedTab): string | undefined {
 function initialOf(root: EmbeddedTab): string {
   const source = accountOf(root) || titleOf(root);
   return source.trim().slice(0, 1).toUpperCase() || "·";
+}
+
+/** Group boundary tinted by the group it opens, so colour carries the grouping. */
+function groupRuleStyle(color: RoleColor | undefined): Record<string, string> {
+  if (!color) return {};
+  return { background: `color-mix(in srgb, var(--role-${color}) 45%, var(--line))` };
 }
 
 /**
@@ -359,38 +383,54 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
       @pointerdown="startResize"
     ></span>
 
+    <!--
+      The expand control sits where the collapse control sits in the expanded
+      panel — top right. A control that jumps from the bottom of the strip to the
+      top of the panel makes the same action feel like two different actions.
+    -->
     <div v-show="collapsed" class="mini">
-      <div class="mini-list">
-        <button
-          v-for="root in miniInstances"
-          :key="root.instanceId"
-          type="button"
-          class="mini-tab"
-          :class="{ current: miniActive(root), offstage: !miniOnStage(root) }"
-          :title="miniLabel(root)"
-          :aria-label="miniLabel(root)"
-          :aria-current="miniActive(root) ? 'true' : undefined"
-          @click="embedded.activate(activePageOf(root).id)"
-        >
-          <img v-if="faviconOf(root)" class="mini-fav" :src="faviconOf(root)" alt="" />
-          <span v-else class="mini-letter">{{ initialOf(root) }}</span>
-          <span
-            v-if="root.color"
-            class="mini-role"
-            :style="{ background: `var(--role-${root.color})` }"
-          ></span>
-        </button>
-      </div>
       <button
         type="button"
         class="expand"
         :title="t('app.browserExpandDock')"
         :aria-label="t('app.browserExpandDock')"
+        :aria-expanded="false"
         @click="toggleCollapsed"
       >
         <Layers :size="14" />
         <span class="badge mono">{{ totalRunning }}</span>
       </button>
+      <div class="mini-list">
+        <template v-for="(group, index) in miniGroups" :key="group.key">
+          <!-- Group boundary: structural, so it has no radius and no fill of its
+               own beyond the rule. Tinted by the view it opens. -->
+          <span
+            v-if="index > 0"
+            class="mini-rule"
+            :style="groupRuleStyle(group.color)"
+            aria-hidden="true"
+          ></span>
+          <button
+            v-for="root in group.instances"
+            :key="root.instanceId"
+            type="button"
+            class="mini-tab"
+            :class="{ current: miniActive(root), offstage: !miniOnStage(root) }"
+            :title="miniLabel(root)"
+            :aria-label="miniLabel(root)"
+            :aria-current="miniActive(root) ? 'true' : undefined"
+            @click="embedded.activate(activePageOf(root).id)"
+          >
+            <img v-if="faviconOf(root)" class="mini-fav" :src="faviconOf(root)" alt="" />
+            <span v-else class="mini-letter">{{ initialOf(root) }}</span>
+            <span
+              v-if="faviconOf(root) && root.color"
+              class="mini-role"
+              :style="{ background: `var(--role-${root.color})` }"
+            ></span>
+          </button>
+        </template>
+      </div>
     </div>
 
     <div class="dock-main" :class="{ hidden: collapsed }">
@@ -784,19 +824,22 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
 }
 
-/* Scrolls on its own so the expand button stays pinned while many instances
-   run: the way out of the strip must never scroll off. */
+/* Scrolls on its own so the expand control stays pinned at the top while many
+   instances run: the way out of the strip must never scroll off. */
 .mini-list {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  /* Tight inside a group; the rule below adds the breathing room between them.
+     Spacing alone is a weak signal, a rule alone is easy to miss at 1px — the
+     pair is what makes the grouping readable in a 46px column. */
+  gap: 3px;
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
@@ -808,6 +851,18 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   display: none;
 }
 
+/* Group boundary. A bare rule, square by construction: it is structure, not a
+   surface, so it carries no radius and no fill of its own. Spans most of the
+   strip so the break reads as a break — at 22px it looked like a smudge between
+   two icons rather than a boundary. Tint comes from the view it opens. */
+.mini-rule {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 1px;
+  margin: 8px 0 7px;
+  background: var(--line);
+}
+
 .mini-tab {
   position: relative;
   display: grid;
@@ -816,24 +871,41 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   height: 32px;
   flex: 0 0 auto;
   border-radius: var(--radius-sm);
-  color: var(--text-secondary);
+  /* Recessed tile, the same language the instance tab strip uses: without a
+     surface the fallback letter floats in the column and the strip reads as a
+     list of stray characters rather than as a column of icons.
+     Tinted from the text colour rather than from a surface step: `--surface-3`
+     is a visible step in light but only barely in dark, where the strip sits on
+     `--bg` and the two are within a few percent. Mixing toward `--text` moves
+     away from the background in both themes, which is the property that matters
+     here. */
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--text) 9%, var(--bg));
+  color: var(--muted);
 }
 
 .mini-tab:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--text-secondary);
 }
 
-/* Selection is a left inset bar, the same mark the slot headers use. */
+/* Current instance: the same tile tinted further with the accent, plus its
+   outline — exactly like the current page tab. Derived from `--accent` rather
+   than from a gray step, because a gray step means "raised" in one theme and
+   "recessed" in the other. The earlier version put a straight inset accent bar
+   on the rounded tile: a decorative line on a rounded surface, and two marks
+   for one fact. */
 .mini-tab.current {
-  background: var(--surface-3);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+  color: var(--text);
 }
 
-/* An off-stage instance still runs; the muted icon says it is not what the
+/* An off-stage instance still runs; the muted tile says it is not what the
    stage is showing right now. */
 .mini-tab.offstage .mini-fav,
 .mini-tab.offstage .mini-letter {
-  opacity: 0.62;
+  opacity: 0.55;
 }
 
 .mini-fav {
@@ -843,48 +915,47 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   object-fit: contain;
 }
 
-/* A site with no icon still needs something readable at 16px. A lettered tile
-   reads as a favicon at this size; a bare character at 10px did not. */
+/* Fallback for a site with no icon. It has to hold a CJK character, so it is
+   sized like a glyph rather than like a favicon: at 10px a two-stroke character
+   collapsed into a smudge. */
 .mini-letter {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  background: var(--surface-3);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0;
-  color: var(--muted);
+  line-height: 1;
+  color: inherit;
 }
 
-/* Identity colour in the corner: two accounts of one site share a favicon, and
-   this is what tells them apart. */
+/* Identity colour in the corner. Only drawn over an icon: the letter fallback
+   already carries the account, and two marks for one fact is what made the
+   earlier version look busy. */
 .mini-role {
   position: absolute;
-  right: 5px;
-  bottom: 5px;
+  right: 3px;
+  bottom: 3px;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--bg);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, var(--bg));
 }
 
+/* Same tile as an instance, pinned at the top of the strip: the position the
+   collapse control occupies when the panel is open, so expanding and collapsing
+   are one control in one place rather than two ends of the window. */
 .expand {
   position: relative;
   display: grid;
   place-items: center;
   width: 34px;
-  height: 34px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line-soft);
-  background: var(--surface);
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 9%, var(--bg));
   color: var(--muted);
   cursor: pointer;
 }
 
 .expand:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
   color: var(--text);
 }
 

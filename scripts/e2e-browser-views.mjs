@@ -51,7 +51,7 @@ const electron = join(
   process.platform === "win32" ? "electron.exe" : "electron",
 );
 const app = spawn(electron, [join(process.cwd(), "out", "main", "index.js")], {
-  env: { ...process.env, ENSEMBLE_USER_DATA: userData },
+  env: { ...process.env, ENSEMBLE_USER_DATA: userData, ENSEMBLE_HEADLESS: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let appLog = "";

@@ -82,6 +82,20 @@ import { McpServer } from "./mcp/server";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
 
+/**
+ * Runs the app without putting anything on screen.
+ *
+ * Automated checks (the e2e scripts and the screenshot pass) drive a real app,
+ * and a real app window steals focus from whoever is working at the machine —
+ * a suite spawns the app dozens of times, so the window kept surfacing in front
+ * of unrelated work. Everything the checks read (CDP, DOM, frozen captures,
+ * MCP) works on a window that was never shown, so the fix is to not show it.
+ *
+ * Deliberately an environment variable rather than a settings flag: this is a
+ * harness concern, not something a user would ever toggle.
+ */
+const headless = process.env["ENSEMBLE_HEADLESS"] === "1";
+
 // Lets an end-to-end check run against a throwaway workspace instead of the
 // user's real one. Must happen before app ready: Electron derives session and
 // partition storage from userData, so a late override would split the two.
@@ -239,6 +253,7 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
         mainWindow.webContents.send(IPC.embeddedPage);
       }
     },
+    ...(headless ? { headless: true } : {}),
     // Dragging a layout picker in the sidebar edits the open container only for
     // hand-made views; saved views persist the choice back to the definition.
     onViewLayoutChange: (viewDefinitionId, layoutId) => {
@@ -854,6 +869,9 @@ function hideOverlay(): void {
 
 /** Shows or hides the switcher to match settings and the number of instances. */
 function syncOverlay(snapshot?: WorkspaceSnapshot): void {
+  // The overlay is an always-on-top window over the user's desktop. A headless
+  // run must not put one there, whatever the workspace says.
+  if (headless) return;
   const current = snapshot ?? service?.snapshot();
   if (!current) return;
   const enabled = settingsCache?.overlayEnabled ?? true;
@@ -1020,6 +1038,7 @@ function hideFocusLabel(): void {
 
 /** Shows the label over one window; the payload is built from the identity. */
 function flashFocusLabel(instanceId: string, rect: ScreenRect | undefined): void {
+  if (headless) return;
   if (!(settingsCache?.focusLabelEnabled ?? true)) return;
   if (!service || !rect) return;
   const snapshot = service.snapshot();
@@ -1145,6 +1164,8 @@ function loadTrayImage(): Electron.NativeImage {
 }
 
 function showMainWindow(): void {
+  // A headless run has no window to show; raising one would defeat the point.
+  if (headless) return;
   if (!mainWindow || mainWindow.isDestroyed()) {
     void createWindow();
     return;
@@ -1152,6 +1173,28 @@ function showMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
+}
+
+/**
+ * Makes an automated run invisible without making the window unreal.
+ *
+ * A window created with `show: false` and never shown is not a faithful
+ * environment: Chromium stops producing compositor frames for it, so
+ * `Page.captureScreenshot` hangs rather than returning pixels (measured — the
+ * freeze pass and every screenshot went from ~100ms to never completing). The
+ * window therefore is shown, but parked outside every display, kept out of the
+ * taskbar, and never focused, so nothing appears where the machine's user is
+ * working while the compositor still behaves normally.
+ */
+function parkWindowOffscreen(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  // Far enough that no plausible display layout reaches it; the window keeps the
+  // size the checks expect because only the origin moves.
+  const bounds = win.getBounds();
+  win.setBounds({ ...bounds, x: -32_000, y: -32_000 });
+  win.setSkipTaskbar(true);
+  win.webContents.setBackgroundThrottling(false);
+  win.showInactive();
 }
 
 function createTray(): void {
@@ -1217,7 +1260,10 @@ async function createWindow(): Promise<void> {
     // Show immediately: a dark window frame appears in well under a second and the
     // first paint lands right after. Waiting for ready-to-show makes startup feel
     // several hundred milliseconds slower than it is.
-    show: true,
+    // A headless run still shows the window, but off every display (see below):
+    // a window that is never shown stops producing compositor frames, which
+    // makes `Page.captureScreenshot` hang instead of returning pixels.
+    show: !headless,
     backgroundColor: isDarkTheme(currentTheme) ? "#0b0d10" : "#f3efe6",
     title: "Ensemble",
     titleBarStyle: "hidden",
@@ -1274,6 +1320,8 @@ async function createWindow(): Promise<void> {
     await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
   }
 
+  if (headless) parkWindowOffscreen(mainWindow);
+
   // Pages survive in the manager while the window is closed to the tray; hand
   // them the new host so the next visit shows the same tabs.
   embedded?.attach(mainWindow);
@@ -1282,7 +1330,9 @@ async function createWindow(): Promise<void> {
   // default dark palette on some Windows builds; reapplying once the window exists
   // (and on every theme change) is what actually colors them.
   if (!isMac) mainWindow.setTitleBarOverlay(titleBarOverlay(currentTheme));
-  createTray();
+  // A headless run has nothing to click a tray icon on, and a tray icon is itself
+  // a visible artifact on the user's desktop.
+  if (!headless) createTray();
   startUpdateWatcher();
 }
 

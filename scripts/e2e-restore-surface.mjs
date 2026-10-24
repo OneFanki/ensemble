@@ -65,7 +65,7 @@ let log = "";
 function launch() {
   log = "";
   child = spawn(electron, [join(process.cwd(), "out", "main", "index.js")], {
-    env: { ...process.env, ENSEMBLE_USER_DATA: userData },
+    env: { ...process.env, ENSEMBLE_USER_DATA: userData, ENSEMBLE_HEADLESS: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => (log += chunk));
@@ -188,10 +188,13 @@ try {
     state.tabs?.length,
   );
   // A restore is not an empty start: the starter page must not be added on top
-  // of the restored container.
+  // of the restored container. The shape of a starter page is "blank and owned
+  // by no identity" — a restored member that simply has not finished loading yet
+  // is also blank, so testing `url !== "about:blank"` alone would fail on timing
+  // rather than on behaviour.
   check(
     "restore did not add a starter page",
-    (state.tabs ?? []).every((tab) => tab.url !== "about:blank"),
+    (state.tabs ?? []).every((tab) => Boolean(tab.identityId) || tab.url !== "about:blank"),
     (state.tabs ?? []).map((tab) => ({ url: tab.url, identityId: tab.identityId })),
   );
   const container = (state.views ?? []).find((item) => item.viewDefinitionId === view.id);

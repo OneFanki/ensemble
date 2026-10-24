@@ -144,7 +144,7 @@ const electronBinary =
 const app = spawn(
   electronBinary,
   [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
 app.stdout.on("data", (chunk) => (appLog += chunk));

@@ -35,7 +35,7 @@ writeFileSync(
 );
 
 const exe = resolve(process.env.ENSEMBLE_UNPACKED ?? "release/win-unpacked/Ensemble.exe");
-const app = spawn(exe, [`--user-data-dir=${userData}`], { stdio: ["ignore", "pipe", "pipe"] });
+const app = spawn(exe, [`--user-data-dir=${userData}`], { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 app.stdout.on("data", (chunk) => (log += chunk));
 app.stderr.on("data", (chunk) => (log += chunk));

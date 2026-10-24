@@ -134,6 +134,14 @@ export interface EmbeddedBrowserOptions {
   onStateChange?: (state: EmbeddedState) => void;
   /** Asks the renderer to switch to the browser page. */
   onShowPage?: () => void;
+  /**
+   * Never raise the host window.
+   *
+   * Set by automated runs, which drive a real app on a machine somebody is
+   * working on. Raising the window is a user-facing courtesy — "you asked for
+   * this page, here it is" — and a test asking for a page is not a user.
+   */
+  headless?: boolean;
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
@@ -338,6 +346,12 @@ export class EmbeddedBrowser {
   /** Raises the main window and asks its renderer to show the browser page. */
   focusPage(): void {
     const host = this.host;
+    // Still tell the renderer which page to show — the window just does not come
+    // forward, so an automated run leaves the desktop alone.
+    if (this.options.headless) {
+      this.options.onShowPage?.();
+      return;
+    }
     if (!host || host.isDestroyed()) return;
     if (host.isMinimized()) host.restore();
     host.show();
@@ -2375,6 +2389,9 @@ export class EmbeddedBrowser {
           width: 900,
           height: 620,
           title: `DevTools — ${tab.label}`,
+          // A detached DevTools window is still a window on the desktop; an
+          // automated run that detaches them must not paint one.
+          show: !this.options.headless,
           ...(this.options.appIcon ? { icon: this.options.appIcon } : {}),
         });
         win.on("resize", () => {
@@ -2408,7 +2425,7 @@ export class EmbeddedBrowser {
         width: Math.max(1, width ?? 900),
         height: Math.max(1, height ?? 620),
       });
-      win.show();
+      if (!this.options.headless) win.show();
       return;
     }
 

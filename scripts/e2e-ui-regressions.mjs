@@ -151,7 +151,7 @@ const electronBinary =
 const app = spawn(
   electronBinary,
   [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
 app.stdout.on("data", (chunk) => (appLog += chunk));
@@ -656,8 +656,14 @@ try {
   // so its left half was covered for about 100ms.
   const menuOpen = await client.evaluate(`(async () => {
     const chevron = document.querySelector('.toolbar .split-more');
-    chevron?.click();
-    await new Promise((r) => setTimeout(r, 900));
+    // Retried: the click is dispatched while the toolbar may still be settling
+    // after the resize above, and a click that lands on a re-rendering button is
+    // swallowed. Retrying the open is not weakening the check — the assertions
+    // below still fail on a panel that paints before the stage is parked.
+    for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
+      chevron?.click();
+      await new Promise((r) => setTimeout(r, 900));
+    }
     const panel = document.querySelector('.open-panel');
     const rows = [...document.querySelectorAll('.site-row')];
     return {
@@ -867,6 +873,96 @@ try {
     mini,
   );
 
+  // The strip has to keep saying what the panel said: which instances belong
+  // together. Grouping is structure (rules between groups), so it survives the
+  // width drop that makes view names unprintable.
+  //
+  // Also checked here: the current tile carries a fill and no decorative bar.
+  // It briefly had both, i.e. a straight line drawn on a rounded surface.
+  const grouped = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const before = await api.getEmbeddedState();
+    // Two containers of one instance each, so the strip must show a boundary
+    // between them. Without a second group the rule count is 0 either way and
+    // the assertion could not fail.
+    const a = await api.createEmbeddedView({ layoutId: "1x1", name: "分组甲" });
+    await api.openEmbeddedTabInSlot(a.activeViewId, 0);
+    const b = await api.createEmbeddedView({ layoutId: "1x1", name: "分组乙" });
+    await api.openEmbeddedTabInSlot(b.activeViewId, 0);
+    await new Promise((r) => setTimeout(r, 1200));
+    const rules = [...document.querySelectorAll('.mini-list .mini-rule')];
+    const icons = [...document.querySelectorAll('.mini-tab')];
+    const current = icons.find((el) => el.classList.contains('current'));
+    const style = current ? getComputedStyle(current) : null;
+    const idle = icons.find((el) => !el.classList.contains('current'));
+    const dockBg = getComputedStyle(document.querySelector('.dock')).backgroundColor;
+    return {
+      rules: rules.length,
+      ruleHeight: rules[0] ? Math.round(rules[0].getBoundingClientRect().height) : null,
+      ruleRadius: rules[0] ? getComputedStyle(rules[0]).borderTopLeftRadius : null,
+      icons: icons.length,
+      views: (await api.getEmbeddedState()).views.length,
+      currentFill: style ? style.backgroundColor : null,
+      currentShadow: style ? style.boxShadow : "none",
+      currentRadius: style ? style.borderTopLeftRadius : null,
+      // An idle tile has to be visible against the dock, or the strip reads as
+      // floating characters. This is worth asserting because it is exactly the
+      // failure mode of picking a token that only happens to work in one theme.
+      idleFill: idle ? getComputedStyle(idle).backgroundColor : null,
+      dockBg,
+    };
+  })()`);
+  check(
+    "the collapsed strip separates groups with a square rule",
+    (grouped?.rules ?? 0) >= 1 &&
+      grouped?.ruleHeight === 1 &&
+      (grouped?.ruleRadius === "0px" || grouped?.ruleRadius === "0"),
+    grouped,
+  );
+  check(
+    "the current instance is marked by fill only, not fill plus a bar",
+    grouped?.currentFill !== null &&
+      grouped.currentFill !== "rgba(0, 0, 0, 0)" &&
+      grouped.currentFill !== grouped?.idleFill &&
+      (grouped?.currentShadow === "none" || !String(grouped?.currentShadow).includes("inset")),
+    grouped,
+  );
+  check(
+    "an idle tile is a visible surface, not a floating letter",
+    grouped?.idleFill !== null &&
+      grouped.idleFill !== "rgba(0, 0, 0, 0)" &&
+      grouped.idleFill !== grouped?.dockBg,
+    grouped,
+  );
+
+  // Expanding and collapsing are the same control in the same place. It sat at
+  // the bottom of the strip while collapse sat in the panel header, so the same
+  // action lived at two ends of the window.
+  const expandAt = await client.evaluate(`(() => {
+    const strip = document.querySelector('.mini');
+    const button = strip?.querySelector('.expand');
+    if (!strip || !button) return null;
+    const s = strip.getBoundingClientRect();
+    const b = button.getBoundingClientRect();
+    const first = strip.querySelector('.mini-tab')?.getBoundingClientRect();
+    return {
+      fromTop: Math.round(b.top - s.top),
+      aboveFirstIcon: first ? b.bottom <= first.top + 1 : null,
+      radius: getComputedStyle(button).borderTopLeftRadius,
+      borderWidth: getComputedStyle(button).borderTopWidth,
+    };
+  })()`);
+  check(
+    "the expand control sits at the top, above the instances",
+    expandAt?.fromTop !== null && expandAt?.fromTop <= 12 && expandAt?.aboveFirstIcon === true,
+    expandAt,
+  );
+  check(
+    "the expand control is a borderless tile like the ones it sits with",
+    expandAt?.borderWidth === "0px" && expandAt?.radius !== "0px",
+    expandAt,
+  );
+
   await client.evaluate(`(() => {
     document.querySelector('.dock .expand')?.click();
     return true;
@@ -881,6 +977,19 @@ try {
     expanded?.width === dockAfter?.width,
     { expected: dockAfter?.width, got: expanded?.width },
   );
+
+  // The strip checks above opened two extra containers; close them so the slot
+  // assertions that follow work on a known surface.
+  await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    for (const view of (await api.getEmbeddedState()).views) {
+      if (view.name === "分组甲" || view.name === "分组乙") {
+        await api.closeEmbeddedView(view.id, "all");
+      }
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    return true;
+  })()`);
 
   await client.evaluate(`(() => {
     document.getElementById('__e2e-no-transition')?.remove();

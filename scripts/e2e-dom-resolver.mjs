@@ -77,7 +77,7 @@ const userData = mkdtempSync(join(tmpdir(), "ensemble-resolver-"));
 const electron = spawn(
   resolve("node_modules/electron/dist/electron.exe"),
   [hostDir, `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let hostLog = "";
 electron.stdout.on("data", (chunk) => (hostLog += chunk));

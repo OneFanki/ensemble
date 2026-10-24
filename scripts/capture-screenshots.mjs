@@ -419,7 +419,10 @@ async function capture(shot) {
   const child = spawn(
     electronBinary,
     [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`],
-    { stdio: "ignore" },
+    // Headless: the shot is taken over CDP, so the window never has to appear —
+    // and it must not, because capturing a whole screenshot pass would otherwise
+    // flash a window in front of whatever the machine's user is doing.
+    { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: "ignore" },
   );
 
   try {
@@ -498,6 +501,18 @@ async function capture(shot) {
       // rectangle measured at capture time, so collapsing afterwards would
       // leave them at their old width and show a dead band beside the strip.
       if (shot.collapsedDock) {
+        // One view is a single group, and a strip with one group cannot show
+        // its group boundaries. Open a second container and a loose page so the
+        // shot shows what the strip is actually for.
+        await client.evaluate(`(async () => {
+          const api = window.ensemble;
+          const created = await api.createEmbeddedView({ layoutId: "1x1", name: "第二组" });
+          await api.openEmbeddedTabInSlot(created.activeViewId, 0);
+          await new Promise((r) => setTimeout(r, 700));
+          await api.openEmbeddedTab({ viewId: null, url: "http://127.0.0.1:${PAGE_PORT}/docs" });
+          await new Promise((r) => setTimeout(r, 1200));
+          return true;
+        })()`);
         await client.evaluate(`(() => {
           document.querySelector('.dock-head .collapse-btn')?.click();
           return true;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Identity, RoleColor } from "@shared/types";
-import { Check, CheckSquare, Download, Globe, HeartPulse, Play, Plus, Search, Square } from "lucide-vue-next";
+import { Check, CheckSquare, Download, HeartPulse, Play, Plus, Search, Square } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -288,10 +288,6 @@ import AppButton from "./ui/AppButton.vue";
         </p>
       </div>
       <div class="head-actions">
-        <AppButton @click="store.launchScopedCleanSession()">
-          <Globe :size="13" />
-          {{ $t("app.cleanSession") }}
-        </AppButton>
         <AppButton variant="primary" data-tour="new-identity" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}

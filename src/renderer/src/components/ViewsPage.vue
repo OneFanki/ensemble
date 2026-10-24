@@ -3,7 +3,6 @@ import { isFreeLayout, resolveSlotAssignments } from "@shared/layouts";
 import type { Identity, LayoutPreset, View } from "@shared/types";
 import {
   Copy,
-  Globe,
   GripVertical,
   Layers,
   Pencil,
@@ -287,10 +286,6 @@ async function confirmCopy(): Promise<void> {
         <p class="head-note">{{ $t("app.viewsSubtitle") }}</p>
       </div>
       <div class="head-actions">
-        <AppButton @click="store.launchScopedCleanSession()">
-          <Globe :size="13" />
-          {{ $t("app.cleanSession") }}
-        </AppButton>
         <AppButton variant="primary" data-tour="new-view" @click="emit('newView')">
           <Plus :size="13" />
           {{ $t("app.newView") }}

@@ -52,6 +52,8 @@
     "e2e:mcp-tenant-setup": "node scripts/e2e-mcp-tenant-setup.mjs",
     "e2e:autofill": "node scripts/e2e-autofill.mjs",
     "e2e:ui-regressions": "node scripts/e2e-ui-regressions.mjs",
+    "e2e:bookmarks": "node scripts/e2e-bookmarks.mjs",
+    "e2e:ai-policy": "node scripts/e2e-ai-policy.mjs",
     "e2e:zoom-devtools": "node scripts/e2e-zoom-devtools.mjs",
     "e2e:dom-resolver": "node scripts/e2e-dom-resolver.mjs",
     "e2e:flows": "node scripts/e2e-flows.mjs",

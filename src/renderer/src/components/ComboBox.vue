@@ -219,7 +219,7 @@ function onKeydown(event: KeyboardEvent) {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-menu);
   padding: 4px;
 }
 

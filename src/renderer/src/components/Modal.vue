@@ -84,7 +84,7 @@ function onPointerDownOutside(event: CustomEvent<{ originalEvent: PointerEvent }
   border: 1px solid var(--line);
   border-radius: 11px;
   background: var(--surface);
-  box-shadow: 0 30px 80px rgb(0 0 0 / 55%);
+  box-shadow: var(--shadow-dialog);
   z-index: 71;
   overflow: hidden;
 }

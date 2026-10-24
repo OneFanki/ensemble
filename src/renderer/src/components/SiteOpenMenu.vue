@@ -7,9 +7,11 @@ import { useI18n } from "vue-i18n";
 /**
  * A bookmark-style "open from a site" menu.
  *
- * Sites are the bookmarks: open one clean, or open it as one of its accounts.
- * The account path is what makes this different from typing the URL — the page
- * lands in that identity's own session partition, so the login is already there.
+ * Sites are the bookmarks: open one in the daily profile, open it clean, or open
+ * it as one of its accounts. "Daily" is the default because that is what a
+ * bookmark does in an ordinary browser — the login is already there. "Clean" is
+ * the deliberate exception, and the account path lands in that identity's own
+ * session partition.
  *
  * Tags are deliberately not shown here: a lone tag name at the bottom of the
  * account column reads as an empty section, and tags are for finding things on
@@ -21,8 +23,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** Open the site's login page in a clean session. */
-  openSite: [siteId: string];
+  /** Open the site in the daily profile, reusing whatever login it has. */
+  openDaily: [siteId: string];
+  /** Open the site in a throwaway session. */
+  openClean: [siteId: string];
   /** Open the site as one identity (its own profile). */
   openIdentity: [identityId: string];
 }>();
@@ -50,8 +54,12 @@ const accounts = computed(() => {
   return props.identities.filter((identity) => identity.siteId === site.id);
 });
 
-function openSite(site: Site): void {
-  emit("openSite", site.id);
+function openDaily(site: Site): void {
+  emit("openDaily", site.id);
+}
+
+function openClean(site: Site): void {
+  emit("openClean", site.id);
 }
 
 function openIdentity(identity: Identity): void {
@@ -89,7 +97,14 @@ function openIdentity(identity: Identity): void {
       </div>
 
       <div v-if="activeSite" class="accounts">
-        <button type="button" class="account-row clean" @click="openSite(activeSite)">
+        <button type="button" class="account-row primary" @click="openDaily(activeSite)">
+          <Globe :size="11" />
+          <span class="acc-copy">
+            <span class="acc-name">{{ t("app.openSiteDaily") }}</span>
+            <span class="acc-note">{{ t("app.openSiteDailyHint") }}</span>
+          </span>
+        </button>
+        <button type="button" class="account-row clean" @click="openClean(activeSite)">
           <Plus :size="11" />
           <span class="acc-copy">
             <span class="acc-name">{{ t("app.openSiteClean") }}</span>
@@ -126,7 +141,7 @@ function openIdentity(identity: Identity): void {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 18px 40px rgb(0 0 0 / 48%);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
 }
 
@@ -264,8 +279,23 @@ function openIdentity(identity: Identity): void {
   color: var(--text-secondary);
 }
 
+/* Both open rows are actions rather than account picks, so they read as one
+   pair: solid for the ordinary daily open, dashed for the throwaway one. */
+.account-row.primary {
+  border: 1px solid var(--line);
+  margin-bottom: 2px;
+  color: var(--text-secondary);
+}
+
+.account-row.primary:hover,
+.account-row.clean:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 /* A clean open is a different kind of action from picking an account, so it is
-   drawn as one: dashed outline instead of a row in the same list. */
+   drawn as one: dashed outline instead of a row in the same list. The daily row
+   above it is the plain action and keeps the solid shape. */
 .account-row.clean {
   border: 1px dashed var(--line);
   margin-bottom: 2px;

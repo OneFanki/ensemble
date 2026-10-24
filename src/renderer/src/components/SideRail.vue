@@ -277,7 +277,7 @@ function toggleExpanded(): void {
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
-  box-shadow: 0 6px 18px rgb(0 0 0 / 40%);
+  box-shadow: var(--shadow-menu);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease, transform 0.12s ease;

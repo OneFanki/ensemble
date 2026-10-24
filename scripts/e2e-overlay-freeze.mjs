@@ -174,7 +174,9 @@ try {
     );
     close?.click();
     await new Promise((r) => setTimeout(r, 1500));
-    const modal = document.querySelector('[role="dialog"]');
+    // A confirmation is an AlertDialog (role "alertdialog"), not a form dialog:
+    // a destructive question must not be dismissable by clicking the backdrop.
+    const modal = document.querySelector('[role="alertdialog"], [role="dialog"]');
     const labels = [...document.querySelectorAll('.view-block .block-head button')].map((b) => b.getAttribute('aria-label') || b.className);
     const frozen = document.querySelectorAll('.frozen').length;
     const stage = document.querySelector('.stage');

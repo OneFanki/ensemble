@@ -20,9 +20,22 @@ const PAGE_PORT = 3987;
 const DEBUG_PORT = 9787;
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-ui-regression-"));
 
+// A real icon is served so the dock's favicon path is exercised, not just the
+// placeholder. A 1×1 PNG is enough: the fetch is what is being checked.
+const FAVICON_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 const page = createServer((req, res) => {
+  if (req.url === "/favicon.png") {
+    res.writeHead(200, { "content-type": "image/png" });
+    res.end(FAVICON_PNG);
+    return;
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>登录页</title></head>
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>登录页</title>
+<link rel="icon" type="image/png" href="/favicon.png" /></head>
 <body>
 <form id="f" action="/console" method="get">
   <label>账号 <input id="user" name="user" type="text" /></label>
@@ -854,7 +867,13 @@ try {
     return {
       icons: icons.length,
       instances: instanceCount,
-      hasFaviconSlot: icons.some((el) => el.querySelector('.mini-fav, .mini-letter')),
+      // Every tile carries a page icon slot, and it is never empty: a favicon
+      // when the page reported one, a placeholder globe otherwise. A bare letter
+      // was the old fallback and it read as a stray character in a 46px column.
+      iconSlots: icons.filter((el) => {
+        const slot = el.querySelector('.tab-icon');
+        return Boolean(slot && (slot.querySelector('img') || slot.querySelector('svg')));
+      }).length,
       stillCollapsed: document.querySelector('.dock')?.classList.contains('collapsed') ?? null,
       switched: Boolean(current && landed && landed.instanceId !== current.instanceId),
       sameInstance: Boolean(landed && current && landed.instanceId === current.instanceId),
@@ -864,7 +883,7 @@ try {
   })()`);
   check(
     "the collapsed dock shows one clickable icon per running instance",
-    mini?.icons === mini?.instances && mini?.icons >= 2 && mini?.hasFaviconSlot === true,
+    mini?.icons === mini?.instances && mini?.icons >= 2 && mini?.iconSlots === mini?.icons,
     mini,
   );
   check(
@@ -1607,6 +1626,123 @@ try {
     parkedViewport.length > 0 &&
       parkedViewport.every((size) => size && size.w > 0 && size.h > 0 && size.bodyW > 0),
     parkedViewport,
+  );
+
+  // --- Dock rows: a click brings the browser page forward -------------------
+  // The dock is on screen from every rail page, so clicking one of its rows has
+  // to show the page it selects. It used to switch the tab behind the accounts
+  // page and leave the user looking at account cards, which read as a dead click.
+  const dockSwitch = await client.evaluate(`(async () => {
+    const row = document.querySelector('.dock .tab-row[data-tab-id]');
+    const wanted = row?.getAttribute('data-tab-id') ?? null;
+    // Falsifiability: the assertion below is only meaningful from another page.
+    const elsewhereBefore = !document.querySelector('.stage') && Boolean(document.querySelector('.id-card'));
+    row?.click();
+    await new Promise((r) => setTimeout(r, 1000));
+    const after = await window.ensemble.getEmbeddedState();
+    return {
+      elsewhereBefore,
+      clicked: Boolean(row),
+      wanted,
+      onBrowserAfter: Boolean(document.querySelector('.stage')),
+      activeTab: after.activeTabId,
+    };
+  })()`);
+  check(
+    "clicking a dock row from another page switches to the browser page",
+    dockSwitch?.elsewhereBefore === true &&
+      dockSwitch?.clicked === true &&
+      dockSwitch?.onBrowserAfter === true &&
+      dockSwitch?.activeTab === dockSwitch?.wanted,
+    dockSwitch,
+  );
+
+  // Every page row carries the site's icon, with a placeholder when the page has
+  // not reported one. Checking a run means recognising pages by site, and the
+  // rows used to be bare titles.
+  const pageIcons = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const active = state.tabs.find((tab) => tab.id === state.activeTabId);
+    if (!active) return null;
+    // A second page is what makes the instance's own page list appear.
+    await window.ensemble.openEmbeddedTabInInstance(active.instanceId);
+    await new Promise((r) => setTimeout(r, 1200));
+    const rows = [...document.querySelectorAll('.dock .pages .page-row')];
+    const slots = rows.map((row) => {
+      const icon = row.querySelector('.tab-icon');
+      return Boolean(icon && (icon.querySelector('img') || icon.querySelector('svg')));
+    });
+    // Leave the surface as it was found.
+    for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
+      if (tab.instanceId === active.instanceId && tab.id !== active.id) {
+        await window.ensemble.closeEmbeddedTab(tab.id);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 700));
+    return { rows: rows.length, slots };
+  })()`);
+  check(
+    "each page row in the dock shows an icon or its placeholder",
+    (pageIcons?.rows ?? 0) >= 2 &&
+      pageIcons?.slots?.length === pageIcons?.rows &&
+      pageIcons.slots.every(Boolean),
+    pageIcons,
+  );
+
+  // The favicon path itself, not only the placeholder: the test page declares an
+  // icon, so at least one row must be showing a real image. Without this the
+  // check above would keep passing if the whole `src` wiring broke.
+  const realIcon = await client.evaluate(`(async () => {
+    const deadline = Date.now() + 5000;
+    let found = { rows: 0, images: 0, src: "" };
+    while (Date.now() < deadline) {
+      const rows = [...document.querySelectorAll('.dock .tab-row .tab-icon')];
+      const images = rows.filter((row) => row.querySelector('img'));
+      found = {
+        rows: rows.length,
+        images: images.length,
+        src: images[0]?.querySelector('img')?.getAttribute('src')?.slice(0, 20) ?? "",
+      };
+      if (images.length > 0) break;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return found;
+  })()`);
+  check(
+    "a dock row shows the site's real favicon, inlined as a data URL",
+    realIcon?.images >= 1 && String(realIcon?.src).startsWith("data:image/"),
+    realIcon,
+  );
+
+  // --- The flows empty state sits in the middle of the page ----------------
+  // The section did not fill the pane, so `margin: auto` had no free space to
+  // distribute and the block hugged the header instead of centring.
+  const flowsEmpty = await client.evaluate(`(async () => {
+    document.querySelector('[data-nav="flows"]')?.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const page = document.querySelector('.flows');
+    const empty = page?.querySelector('.empty');
+    if (!page || !empty) return { present: false };
+    const p = page.getBoundingClientRect();
+    const e = empty.getBoundingClientRect();
+    const head = page.querySelector('.head')?.getBoundingClientRect();
+    const padBottom = parseFloat(getComputedStyle(page).paddingBottom) || 0;
+    return {
+      present: true,
+      // Horizontally the block must sit on the page's own axis.
+      dx: Math.round(Math.abs(e.left + e.width / 2 - (p.left + p.width / 2))),
+      // Vertically the free space above and below must match: that is what an
+      // auto margin produces, and what a header-hugging block does not.
+      above: Math.round(e.top - (head?.bottom ?? p.top)),
+      below: Math.round(p.bottom - padBottom - e.bottom),
+    };
+  })()`);
+  check(
+    "the flows empty state is centred in the page",
+    flowsEmpty?.present === true &&
+      flowsEmpty?.dx <= 2 &&
+      Math.abs(flowsEmpty.above - flowsEmpty.below) <= 6,
+    flowsEmpty,
   );
 
   // --- AI entry in the status bar ------------------------------------------

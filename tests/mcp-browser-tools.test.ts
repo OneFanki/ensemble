@@ -20,8 +20,14 @@ let calls: Array<{ method: string; args: unknown[] }>;
  * in plain Node. It records calls and returns the shapes the real manager does.
  */
 function fakeSurface(): EmbeddedSurface {
-  let tabs: Array<{ id: string; label: string; url: string; title: string; identityId?: string }> =
-    [];
+  let tabs: Array<{
+    id: string;
+    label: string;
+    url: string;
+    title: string;
+    identityId?: string;
+    clean?: boolean;
+  }> = [];
   let active: string | undefined;
   const record =
     (method: string) =>
@@ -44,10 +50,34 @@ function fakeSurface(): EmbeddedSurface {
         url: input.url ?? "about:blank",
         title: "",
         ...(input.identityId ? { identityId: input.identityId } : {}),
+        // Mirrors the real bridge: an identity-less tab opened by the AI is a
+        // clean session, never a page in the user's daily profile.
+        ...(input.identityId ? {} : { clean: true }),
       };
       tabs = [...tabs, tab];
       active = tab.id;
       return tab;
+    },
+    /**
+     * The gate's view of a page, derived from the fake tab list including the
+     * `clean` marker, so these tests cover the same three cases the real surface
+     * reports.
+     */
+    aiPageContext: (tabId) => {
+      const tab = tabs.find((item) => item.id === tabId);
+      if (!tab) return { origin: "" };
+      let origin = "";
+      try {
+        const parsed = new URL(tab.url);
+        if (parsed.protocol === "http:" || parsed.protocol === "https:") origin = parsed.origin;
+      } catch {
+        origin = "";
+      }
+      return {
+        ...(tab.identityId ? { identityId: tab.identityId } : {}),
+        ...(tab.clean ? { clean: true } : {}),
+        origin,
+      };
     },
     navigate: async (tabId, url) => {
       calls.push({ method: "navigate", args: [tabId, url] });

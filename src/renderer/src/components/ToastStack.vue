@@ -47,7 +47,7 @@ const store = useWorkspaceStore();
   color: var(--text-secondary);
   font-size: 11.5px;
   line-height: 1.5;
-  box-shadow: 0 14px 40px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-menu);
   animation: toast-in 0.16s ease-out;
 }
 

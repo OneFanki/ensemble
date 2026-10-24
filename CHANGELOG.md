@@ -18,6 +18,72 @@
 2. **`#### 完整变更`**（可选）：详细的逐条变更，给 Release 页面和需要追溯的人看。
    更新弹窗会在这一行截断，永远不会显示它。
 
+## [未发布]
+
+### 中文
+
+- 新增日常档案：不带身份的标签（新标签页、书签、地址栏输入）登录一次长期有效，可以直接拿它当日常浏览器，也让 AI 在已登录的页面上帮忙做事
+- 新增书签：新标签页上一排图标，只有名字和地址，双击改名、右键删除、拖拽排序；地址栏的星标一键收藏当前页
+- 「从站点打开」多了「日常打开」，与「干净打开」并列；干净打开现在是真正的临时会话，退出即消失
+
+#### 完整变更
+
+**日常档案与书签**
+
+- 无身份页面从「所有标签共用一个叫 clean 的持久分区」改为落在一个明确的**日常档案**上。旧名沿用是为了接住升级前已有的登录，不会把人一次性登出。
+- **干净打开**改为每个实例一个内存级会话（不带 `persist:` 前缀）：退出即消失，两次干净打开之间也互相看不到。同一实例里页面打开的登录弹窗继承该会话，不会掉进日常档案。
+- **书签**成为独立对象：只有名字、地址、图标与顺序，没有凭据、登录路径或站点归属。点书签直接打开地址（用日常档案已有的登录），点站点/账号才是打开登录页并自动填充。
+- 新标签页的书签网格：图标 + 标题，双击或右键改名、右键删除、拖拽排序；没有图标时按域名生成稳定的颜色与首字母。设置里可以关掉网格。
+- 地址栏星标收藏/取消当前页，图标直接复用标签页已经抓到的那个，不额外发请求。
+- 书签随工作区导出导入；导入时重新编号并排在已有书签之后。MCP 新增 `list_bookmarks` / `save_bookmark` / `delete_bookmark`。
+- 运行栏里无身份标签的标注从「干净会话」改为「日常档案」，只有真正 clean 打开的才是「干净会话」。
+
+**界面与运行栏**
+
+- 在站点页、账号页等任何非浏览器页面，点击右侧运行栏的一行或某个子标签页，现在会切到浏览器页并显示那个页面；此前只切换了后台标签，看上去像点空了。
+- 运行栏折叠后的图标列改用网站自己的图标，取不到时显示统一的占位图标；「文字首字母」的旧回退去掉了。
+- 一个实例有多个页面时，折叠图标列显示当前选中页的图标；实例展开后每个子标签页行也带上了图标，跑测试时能直接按网站认页面。
+- 流程页在没有流程时，空状态居中显示。
+- 全局默认浏览器：站点不再各带一个默认引擎，统一跟随顶栏的浏览器选择；账号仍可单独指定，作为例外。
+- 账号导入导出的说明里去掉了「同事」这类限定场景的措辞；「批量启动」改名为「选择账号」，导出就在那里面。
+- 浅色主题下的浮层、菜单与确认弹窗改用暖色投影，不再是发灰的黑色光晕。
+
+**交互与措辞**
+
+- 关闭视图这类确认弹窗重做成独立的警示样式：图标 + 问题 + 两个按钮，不再是一个中间空着的表单框。
+- 干净会话的入口统一到顶栏的浏览器选择菜单里，跟随全局选择决定用内置还是外部浏览器；各页面里散落的「干净会话」按钮已移除。
+
+### English
+
+- New daily profile: tabs with no identity (new tabs, bookmarks, typed addresses) stay signed in across restarts, so the built-in browser works as an everyday browser and an AI can act on pages you are already signed in to
+- New bookmarks: a row of icons on the new tab — a name and an address, double-click to rename, right-click to remove, drag to reorder — plus a star in the address bar
+- "Open from site" gained "Open daily" next to "Open clean"; a clean open is now a real throwaway session that ends with the process
+
+#### Full changes
+
+- Identity-less pages moved from one shared persistent partition (misleadingly named "clean") to an explicit **daily profile**. The old partition string is reused on purpose so existing logins survive the upgrade.
+- A **clean open** is now one in-memory session per instance (no `persist:` prefix): gone when the process exits, invisible to other clean opens. A login popup opened by a page inherits that session and cannot leak into the daily profile.
+- **Bookmarks** are a first-class object: a name, an address, an icon and an order — no credentials, no login path, no site. Clicking a bookmark opens the address with the daily profile's login; clicking a site or account opens the login page and fills it.
+- Bookmark grid on the new tab: icon plus title, rename on double-click or from the context menu, remove from the context menu, drag to reorder; an iconless bookmark gets a stable colour and initial derived from its host. The grid can be turned off in Settings.
+- The address-bar star bookmarks and unbookmarks the current page, reusing the icon the tab already fetched.
+- Bookmarks travel with the workspace export; on import their order is reassigned and they append after the ones already present. New MCP tools: `list_bookmarks`, `save_bookmark`, `delete_bookmark`.
+- The dock now labels an identity-less tab "daily profile" instead of "clean session"; only an actual clean open says clean session.
+
+**Interface and dock**
+
+- Clicking a row or a page in the running dock from any other page now brings the browser page forward and shows that page; before, only the background tab changed and the click read as a no-op.
+- The collapsed dock's icon strip uses the site's own icon, falling back to one neutral placeholder; the old "first letter of the name" fallback is gone.
+- With several pages in one instance the collapsed strip shows the icon of the current page, and each page row under an instance carries its icon too, so a test run can be read by site.
+- The flows page centres its empty state instead of hugging the header.
+- One global default browser: sites no longer carry a default engine each and follow the title-bar choice; an account may still override it.
+- Account import/export wording no longer assumes a "colleague" scenario, and "批量启动" is now "选择账号" — where the export lives.
+- Floating surfaces, menus and confirmation dialogs use a warm shadow in the light theme instead of a grey halo.
+
+**Interaction and wording**
+
+- Confirmations such as closing a view are their own warning layout — a mark, the question, two buttons — instead of a form shell with an empty middle.
+- The clean-session entry moved into the title bar's browser menu and follows the global browser choice; the per-page clean-session buttons were removed.
+
 ## [0.4.0] - 2026-10-20
 
 ### 中文

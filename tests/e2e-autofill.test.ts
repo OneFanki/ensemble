@@ -102,12 +102,12 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     const reports: AutoFillReport[] = [];
     const { service: workspace, engine } = await makeService((report) => reports.push(report));
     service = workspace;
+    workspace.saveSettings({ defaultEngineId: engine.id });
 
     const site = workspace.saveSite({
       name: "e2e",
       baseUrl,
       loginPath: "/login",
-      defaultEngineId: engine.id,
       autoSubmit: true,
       extraFields: [{ label: "租户名", value: "acme" }],
     });
@@ -163,12 +163,12 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     const reports: AutoFillReport[] = [];
     const { service: workspace, engine } = await makeService((report) => reports.push(report));
     service = workspace;
+    workspace.saveSettings({ defaultEngineId: engine.id });
 
     const site = workspace.saveSite({
       name: "sso",
       baseUrl: entryUrl,
       loginPath: "/login",
-      defaultEngineId: engine.id,
       autoSubmit: false,
       extraFields: [],
     });

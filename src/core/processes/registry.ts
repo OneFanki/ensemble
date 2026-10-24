@@ -11,7 +11,16 @@ import {
   type WaitCondition,
 } from "@shared/flows";
 import { clampSlot } from "@shared/layouts";
-import type { Engine, Identity, LayoutPreset, Site, SlotRect, Tag, View } from "@shared/types";
+import type {
+  Bookmark,
+  Engine,
+  Identity,
+  LayoutPreset,
+  Site,
+  SlotRect,
+  Tag,
+  View,
+} from "@shared/types";
 
 export interface StoredInstance {
   id: string;
@@ -161,6 +170,8 @@ export interface WorkspaceData {
   instances: StoredInstance[];
   manualEngines: string[];
   layoutPresets: LayoutPreset[];
+  /** Plain bookmarks; see {@link Bookmark}. Absent in files from before 0.5. */
+  bookmarks: Bookmark[];
 }
 
 export interface EngineCache {
@@ -180,6 +191,7 @@ export function emptyWorkspace(): WorkspaceData {
     instances: [],
     manualEngines: [],
     layoutPresets: [],
+    bookmarks: [],
   };
 }
 
@@ -443,5 +455,52 @@ export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData 
     instances: Array.isArray(source.instances) ? source.instances : base.instances,
     manualEngines: Array.isArray(source.manualEngines) ? source.manualEngines : base.manualEngines,
     layoutPresets: sanitizeLayoutPresets(source.layoutPresets),
+    bookmarks: sanitizeBookmarks(source.bookmarks),
   };
+}
+
+/**
+ * Reads stored bookmarks, dropping anything that cannot be opened.
+ *
+ * A bookmark whose URL is not http(s) is not a bookmark the app can honour — the
+ * embedded surface refuses every other scheme, so keeping the record would only
+ * produce a row that fails when clicked. Unknown fields are ignored rather than
+ * rejected: a file written by a newer build must still open here.
+ */
+export function sanitizeBookmarks(input: unknown): Bookmark[] {
+  if (!Array.isArray(input)) return [];
+  const out: Bookmark[] = [];
+  const seen = new Set<string>();
+  for (const [index, item] of input.entries()) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const url = typeof raw["url"] === "string" ? raw["url"].trim() : "";
+    if (!/^https?:\/\//i.test(url)) continue;
+    const id = typeof raw["id"] === "string" && raw["id"] ? raw["id"] : `bookmark-${index}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof raw["name"] === "string" ? raw["name"].trim().slice(0, 120) : "";
+    const now = new Date().toISOString();
+    const favicon = typeof raw["favicon"] === "string" ? raw["favicon"] : "";
+    out.push({
+      id,
+      // An unnamed bookmark is still usable: the host is the only thing the user
+      // would have typed, so it is the honest fallback label.
+      name: name || hostOf(url) || url,
+      url,
+      ...(favicon.startsWith("data:image/") ? { favicon } : {}),
+      order: typeof raw["order"] === "number" && Number.isFinite(raw["order"]) ? raw["order"] : index,
+      createdAt: typeof raw["createdAt"] === "string" ? raw["createdAt"] : now,
+      updatedAt: typeof raw["updatedAt"] === "string" ? raw["updatedAt"] : now,
+    });
+  }
+  return out.sort((a, b) => a.order - b.order);
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
 }

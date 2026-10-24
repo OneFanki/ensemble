@@ -43,13 +43,6 @@ function viewCount(site: Site): number {
   return store.views.filter((view) => view.siteId === site.id).length;
 }
 
-function engineLabel(site: Site): string {
-  const engine =
-    store.engines.find((item) => item.id === site.defaultEngineId) ?? store.defaultEngine;
-  if (!engine) return t("app.noBrowserFound");
-  return `${engine.brand} ${engine.version ?? ""}`.trim();
-}
-
 function passwordSet(site: Site): boolean {
   return Boolean(store.credentials?.site[site.id]);
 }
@@ -78,10 +71,6 @@ import IconButton from "./ui/IconButton.vue";
         <p class="head-note">{{ $t("app.sitesSubtitle") }}</p>
       </div>
       <div class="head-actions">
-        <AppButton @click="store.launchCleanSession()">
-          <Globe :size="13" />
-          {{ $t("app.cleanSessionNoEnv") }}
-        </AppButton>
         <AppButton variant="primary" data-tour="new-site" @click="emit('newSite')">
           <Plus :size="13" />
           {{ $t("app.newSite") }}
@@ -140,10 +129,6 @@ import IconButton from "./ui/IconButton.vue";
               <div>
                 <dt>{{ $t("app.defaultPassword") }}</dt>
                 <dd>{{ passwordSet(site) ? $t("app.passwordSet") : $t("app.passwordNotSet") }}</dd>
-              </div>
-              <div class="wide">
-                <dt>{{ $t("app.defaultEngine") }}</dt>
-                <dd>{{ engineLabel(site) }}</dd>
               </div>
             </dl>
 
@@ -341,10 +326,6 @@ h1 {
 
 .env-meta div {
   min-width: 0;
-}
-
-.env-meta .wide {
-  grid-column: 1 / -1;
 }
 
 .env-meta dt {

@@ -1,6 +1,7 @@
 import type { EmbeddedState } from "@shared/embedded";
 import { type EnsembleApi, IPC } from "@shared/ipc";
 import type {
+  AiPageAction,
   AutoFillReport,
   FocusLabelPayload,
   LoginCaptureNotice,
@@ -42,6 +43,10 @@ const api: EnsembleApi = {
   saveFlow: (draft) => ipcRenderer.invoke(IPC.flowSave, draft),
   deleteFlow: (id) => ipcRenderer.invoke(IPC.flowDelete, id),
   runFlow: (input) => ipcRenderer.invoke(IPC.flowRun, input),
+  saveBookmark: (draft) => ipcRenderer.invoke(IPC.bookmarkSave, draft),
+  setBookmarkFavicon: (id, favicon) => ipcRenderer.invoke(IPC.bookmarkFavicon, id, favicon),
+  deleteBookmark: (id) => ipcRenderer.invoke(IPC.bookmarkDelete, id),
+  moveBookmark: (id, toIndex) => ipcRenderer.invoke(IPC.bookmarkMove, id, toIndex),
   acceptSiteOrigin: (siteId) => ipcRenderer.invoke(IPC.siteAcceptOrigin, siteId),
   takeOriginNotice: () => ipcRenderer.invoke(IPC.siteOriginNotice),
   saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
@@ -60,6 +65,11 @@ const api: EnsembleApi = {
     const handler = (_event: unknown, status: McpStatus) => listener(status);
     ipcRenderer.on(IPC.mcpChanged, handler);
     return () => ipcRenderer.removeListener(IPC.mcpChanged, handler);
+  },
+  onAiPageAction: (listener) => {
+    const handler = (_event: unknown, action: AiPageAction) => listener(action);
+    ipcRenderer.on(IPC.aiPageAction, handler);
+    return () => ipcRenderer.removeListener(IPC.aiPageAction, handler);
   },
 
   setPassword: (owner, password) => ipcRenderer.invoke(IPC.credentialsSet, owner, password),

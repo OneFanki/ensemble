@@ -36,6 +36,17 @@
   --radius-sm: 5px;
   --radius: 7px;
   --radius-lg: 9px;
+  /*
+   * Elevation is a theme token, not a literal in each component.
+   *
+   * A dark UI needs a deep black halo to lift a floating surface off the
+   * background. The same shadow over a warm light background reads as a dirty
+   * smudge — the new-tab search box was the clearest case. Each theme names its
+   * own elevation instead of every component guessing.
+   */
+  --shadow-float: 0 18px 40px rgb(0 0 0 / 45%);
+  --shadow-menu: 0 14px 30px rgb(0 0 0 / 45%);
+  --shadow-dialog: 0 30px 80px rgb(0 0 0 / 55%);
   --titlebar-height: 44px;
   --rail-width: 206px;
   --dock-width: 292px;
@@ -89,4 +100,13 @@
   --role-rose: #96394f;
   --role-blue: #335c8f;
   --role-slate: #6b6459;
+
+  /*
+   * Warm-tinted and much lighter than the dark theme's halo: black at 45% over
+   * cream looks like soot. Two layers (a tight contact shadow plus a wide soft
+   * one) keep the edge defined without a grey box around the element.
+   */
+  --shadow-float: 0 2px 6px rgb(74 58 33 / 10%), 0 12px 32px rgb(74 58 33 / 14%);
+  --shadow-menu: 0 2px 6px rgb(74 58 33 / 10%), 0 14px 30px rgb(74 58 33 / 16%);
+  --shadow-dialog: 0 4px 10px rgb(74 58 33 / 12%), 0 30px 70px rgb(74 58 33 / 22%);
 }

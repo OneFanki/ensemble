@@ -12,7 +12,7 @@ import SiteOpenMenu from "./SiteOpenMenu.vue";
  *
  * Browsers put bookmarks next to the address bar; here the bookmarks are sites.
  * The main button still does the obvious thing (a blank tab), and the chevron
- * opens a site — clean, or as one of its accounts.
+ * opens a site — daily, clean, or as one of its accounts.
  */
 const props = defineProps<{
   /** Compact variant for headers and empty slots. */
@@ -21,7 +21,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openBlank: [];
-  openSite: [siteId: string];
+  openDaily: [siteId: string];
+  openClean: [siteId: string];
   openIdentity: [identityId: string];
 }>();
 
@@ -95,9 +96,14 @@ async function toggle(): Promise<void> {
   });
 }
 
-function chooseSite(siteId: string): void {
+function chooseDaily(siteId: string): void {
   open.value = false;
-  emit("openSite", siteId);
+  emit("openDaily", siteId);
+}
+
+function chooseClean(siteId: string): void {
+  open.value = false;
+  emit("openClean", siteId);
 }
 
 function chooseIdentity(identityId: string): void {
@@ -139,7 +145,8 @@ function chooseIdentity(identityId: string): void {
       <SiteOpenMenu
         :sites="store.sites"
         :identities="store.identities"
-        @open-site="chooseSite"
+        @open-daily="chooseDaily"
+        @open-clean="chooseClean"
         @open-identity="chooseIdentity"
       />
     </div>

@@ -9,36 +9,31 @@ import {
   buildSelectExpression,
   buildVisibilityExpression,
   buildWaitExpression,
-  describeTarget,
   type DomSnapshot,
+  describeTarget,
   type TargetInput,
   type VisibilityProbe,
   type WaitCondition,
   type WaitResult,
 } from "@core/cdp/inspect";
 import { buildFillExpression } from "@core/cdp/login";
-import {
-  interpolateStep,
-  type FlowStep,
-  type FlowRunResult,
-  type FlowStepResult,
-} from "@shared/flows";
+import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
   desktopUserAgent,
-  EMBEDDED_CLEAN_PARTITION,
   EMBEDDED_SLOT_HEADER,
   type EmbeddedState,
   type EmbeddedTab,
   type EmbeddedView,
   embeddedPartition,
   embeddedSlotRects,
+  embeddedTabPartition,
   embeddedViewRect,
   type FrozenSlot,
-  insetSlotRects,
-  isEmbeddedLayout,
-  isBlankTab,
   inlineFavicon,
+  insetSlotRects,
+  isBlankTab,
+  isEmbeddedLayout,
   neighborZoomStep,
   normalizeEmbeddedUrl,
   parkedViewBounds,
@@ -47,6 +42,12 @@ import {
   type StageRect,
   ZOOM_STEPS,
 } from "@shared/embedded";
+import {
+  type FlowRunResult,
+  type FlowStep,
+  type FlowStepResult,
+  interpolateStep,
+} from "@shared/flows";
 import type { LayoutId, RoleColor, SlotRect } from "@shared/types";
 import { BrowserWindow, Menu, session, shell, WebContentsView } from "electron";
 import { EmbeddedCdp } from "./cdp";
@@ -189,6 +190,15 @@ export class EmbeddedBrowser {
   private views: ViewRecord[] = [];
   /** Active page per browser instance; the page a slot shows. */
   private instanceActive = new Map<string, string>();
+  /**
+   * Instances opened as a deliberate clean session.
+   *
+   * Kept out of `TabRecord` because it is a property of the instance (the shared
+   * session), not of a page: every page this instance opens has to stay in the
+   * same throwaway partition, or a popup mid-flow would silently switch to the
+   * daily profile.
+   */
+  private cleanInstances = new Set<string>();
   private activeTabId: string | undefined;
   private activeViewId: string | undefined;
   private stage: StageRect | null = null;
@@ -287,6 +297,7 @@ export class EmbeddedBrowser {
       origin: tab.origin,
       instanceId: tab.instanceId,
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
+      ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       zoom: tab.zoomOverride ?? this.defaultZoom,
       devtoolsOpen: this.devtoolsOpen(tab),
@@ -847,6 +858,14 @@ export class EmbeddedBrowser {
     color?: RoleColor;
     viewId?: string;
     origin?: "view" | "manual" | "ai";
+    /**
+     * Open with no shared state at all.
+     *
+     * Only an explicit "clean open" sets this. A page with no identity that
+     * omits it lands in the daily profile — that is what makes a bookmark and a
+     * typed address reuse the login the user already has.
+     */
+    clean?: boolean;
     /** Existing instance that should own this page; omitted creates a new one. */
     instanceId?: string;
     openerId?: string;
@@ -861,7 +880,17 @@ export class EmbeddedBrowser {
     // the same browser instance rather than a second window.
     const identityId = input.identityId ?? parent?.identityId;
     const siteId = input.siteId ?? parent?.siteId;
-    const partition = identityId ? embeddedPartition(identityId) : EMBEDDED_CLEAN_PARTITION;
+    // A popup inherits its opener's world, including a deliberate clean open: it
+    // must not jump into the daily profile halfway through a throwaway flow.
+    const clean = input.clean ?? (parent ? this.cleanInstances.has(parent.instanceId) : false);
+    const partition = embeddedTabPartition({
+      ...(identityId ? { identityId } : {}),
+      clean,
+      instanceId,
+    });
+    // Remembered per instance: `clean` is not part of the tab record, and the
+    // next page opened by this instance has to agree with it.
+    if (clean) this.cleanInstances.add(instanceId);
     const view = new WebContentsView({
       webPreferences: {
         partition,
@@ -989,6 +1018,22 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * The session a page lives in.
+   *
+   * Derived rather than stored: the identity and the instance already say it, and
+   * a copy on the tab record would be one more thing that can disagree. The icon
+   * fetch needs it because an icon request has to travel through the same session
+   * the page uses (cookies, region, referrer), not the app's default session.
+   */
+  private partitionOf(tab: TabRecord): string {
+    return embeddedTabPartition({
+      ...(tab.identityId ? { identityId: tab.identityId } : {}),
+      clean: this.cleanInstances.has(tab.instanceId),
+      instanceId: tab.instanceId,
+    });
+  }
+
+  /**
    * Downloads a site icon and inlines it.
    *
    * Electron reports icons through `page-favicon-updated`, but the renderer
@@ -1011,11 +1056,7 @@ export class EmbeddedBrowser {
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
     try {
-      const response = await session
-        .fromPartition(
-          tab.identityId ? embeddedPartition(tab.identityId) : EMBEDDED_CLEAN_PARTITION,
-        )
-        .fetch(url);
+      const response = await session.fromPartition(this.partitionOf(tab)).fetch(url);
       if (!response.ok) return;
       const bytes = new Uint8Array(await response.arrayBuffer());
       const data = inlineFavicon(response.headers.get("content-type"), bytes);
@@ -1396,6 +1437,12 @@ export class EmbeddedBrowser {
   private discardTab(tab: TabRecord): void {
     const index = this.tabs.indexOf(tab);
     if (index >= 0) this.tabs.splice(index, 1);
+    // The last page of an instance carries the instance with it; drop the
+    // clean-session marker with it so the set does not grow forever.
+    if (!this.tabs.some((item) => item.instanceId === tab.instanceId)) {
+      this.cleanInstances.delete(tab.instanceId);
+      this.instanceActive.delete(tab.instanceId);
+    }
     tab.cdp.detach();
     // The DevTools view outlives the page only until here: it is hosted by the
     // same window, so a closed page must take its panel with it.
@@ -1416,6 +1463,7 @@ export class EmbeddedBrowser {
     for (const tab of [...this.tabs]) this.discardTab(tab);
     this.tabs = [];
     this.views = [];
+    this.cleanInstances.clear();
     this.activeTabId = undefined;
     this.activeViewId = undefined;
   }
@@ -1709,6 +1757,22 @@ export class EmbeddedBrowser {
   }
 
   // ---------- AI-facing operations ----------
+
+  /**
+   * What an AI client needs to know before it may send input to a tab.
+   *
+   * The policy lives in `shared/ai-policy.ts`; this only reports facts about the
+   * page. `clean` is read from the instance marker because an identity-less tab
+   * is either daily or clean and the URL cannot tell them apart.
+   */
+  aiPageContext(tabId: string): AiPageContext {
+    const tab = this.requireTab(tabId);
+    return {
+      ...(tab.identityId ? { identityId: tab.identityId } : {}),
+      ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
+      origin: aiOriginOf(tab.url),
+    };
+  }
 
   async snapshotDom(tabId: string, options: { maxNodes?: number } = {}): Promise<DomSnapshot> {
     const tab = this.requireTab(tabId);

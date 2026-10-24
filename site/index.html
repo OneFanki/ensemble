@@ -1244,14 +1244,16 @@
                   <path d="M18 15.5 19 18l2.5 1-2.5 1-1 2.5-1-2.5L14.5 19l2.5-1 1-2.5Z" />
                 </svg>
               </span>
-              <h3 data-zh>干净会话</h3>
-              <h3 data-en>Clean sessions</h3>
+              <h3 data-zh>日常档案与书签</h3>
+              <h3 data-en>Daily profile and bookmarks</h3>
               <p data-zh>
-                不登录、关闭即自动删除的临时窗口；也能开一个不属于任何站点的空白会话，单独验证一条链接。
+                不带身份的页面落在一个持久的个人档案里，登录一次长期有效；书签只有名字和地址，
+                新标签页上一排图标，点开直接用已有的登录。干净打开才是另一次性的内存会话。
               </p>
               <p data-en>
-                A throwaway window that never logs in and is deleted on close — including a blank one
-                that belongs to no site, for checking a single link.
+                Identity-less pages share one persistent personal profile, so signing in once lasts.
+                A bookmark is just a name and an address, one click from the new tab and opened with
+                the login you already have. A clean open is the separate, in-memory throwaway.
               </p>
             </article>
 
@@ -1485,6 +1487,10 @@
                 <li data-en>Connect from Settings → AI access → copy the config snippet (HTTP + bearer token).</li>
                 <li data-zh>每次调用写一行审计日志，密码、口令、Token 与往密码框输入的文本都脱敏。</li>
                 <li data-en>Every call appends an audit line; passwords, passphrases, tokens and text typed into a password field are redacted.</li>
+                <li data-zh>日常档案里 AI <b>默认只读</b>：能读页面、截图，不能点击输入，除非你按来源授权。账号页与干净会话不限制。</li>
+                <li data-en>The daily profile is <b>read-only</b> for the AI: it can read and screenshot, but not click or type until you allow that origin. Identity pages and clean sessions are unrestricted.</li>
+                <li data-zh>导航目标只能来自你或工作区（站点、书签），页面里写的地址不算数——防提示注入。</li>
+                <li data-en>Navigation targets must come from you or the workspace — an address written in a page does not count. That is the prompt-injection defence.</li>
               </ul>
             </div>
 

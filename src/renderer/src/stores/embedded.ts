@@ -222,14 +222,29 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     await window.ensemble.openEmbeddedTab({ viewId: null });
   }
 
-  /** Opens a tab directly at `url`; the address bar's "no tab yet" path. */
-  async function openTabWith(url: string): Promise<void> {
-    await window.ensemble.openEmbeddedTab({ url });
+  /**
+   * Opens a tab directly at `url`; the address bar's "no tab yet" path.
+   *
+   * `clean` is the explicit throwaway session. Omitting it puts the page in the
+   * daily profile, which is what makes a bookmark open signed in.
+   */
+  async function openTabWith(url: string, options?: { clean?: boolean }): Promise<void> {
+    await window.ensemble.openEmbeddedTab({
+      url,
+      ...(options?.clean ? { clean: true } : {}),
+    });
   }
 
   /** Opens a site bookmark as a loose page, even when a view is on stage. */
-  async function openLooseTabWith(url: string): Promise<void> {
-    await window.ensemble.openEmbeddedTab({ url, viewId: null });
+  async function openLooseTabWith(
+    url: string,
+    options?: { clean?: boolean },
+  ): Promise<void> {
+    await window.ensemble.openEmbeddedTab({
+      url,
+      viewId: null,
+      ...(options?.clean ? { clean: true } : {}),
+    });
   }
 
   /** Opens a blank tab straight into a view, so it lands on stage. */

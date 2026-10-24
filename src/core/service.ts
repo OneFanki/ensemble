@@ -27,6 +27,8 @@ import type {
   AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
+  Bookmark,
+  BookmarkDraft,
   CredentialPresence,
   Engine,
   Identity,
@@ -101,7 +103,7 @@ import {
   type WorkspaceData,
 } from "./processes/registry";
 import { JsonStore } from "./storage/json-store";
-import { joinUrl, sameOrigin } from "./util/url";
+import { joinUrl, safeExternalUrl, sameOrigin } from "./util/url";
 
 export interface WorkspaceServiceOptions {
   userDataDir: string;
@@ -277,6 +279,7 @@ export class WorkspaceService {
     return {
       sites: this.data.sites,
       tags: this.data.tags,
+      bookmarks: [...this.data.bookmarks].sort((a, b) => a.order - b.order),
       identities: this.data.identities,
       views: this.data.views,
       flows: this.data.flows,
@@ -336,7 +339,6 @@ export class WorkspaceService {
         baseUrl: trimTrailingSlash(draft.baseUrl),
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
-        defaultEngineId: draft.defaultEngineId,
         autoSubmit: draft.autoSubmit,
         extraFields: sanitizeLoginFields(draft.extraFields),
         tagIds,
@@ -352,7 +354,6 @@ export class WorkspaceService {
       baseUrl: trimTrailingSlash(draft.baseUrl),
       loginPath: draft.loginPath,
       authCheckPath: draft.authCheckPath,
-      defaultEngineId: draft.defaultEngineId,
       autoSubmit: draft.autoSubmit,
       extraFields: sanitizeLoginFields(draft.extraFields),
       tagIds,
@@ -879,6 +880,86 @@ export class WorkspaceService {
     this.persist();
   }
 
+  // ---------- bookmarks ----------
+
+  /**
+   * Adds or renames a bookmark.
+   *
+   * The URL is validated here rather than when it is opened: a stored bookmark
+   * that the surface refuses is a row that fails on click, and by then the user
+   * has already forgotten what they were doing. Only http(s) survives, the same
+   * rule `normalizeEmbeddedUrl` applies to a typed address.
+   *
+   * A bare host is accepted (`example.com`) because that is what people paste;
+   * https is assumed, which matches what the address bar does with the same
+   * input. A scheme that is present but not http(s) is rejected, not rewritten:
+   * silently turning `javascript:…` into a "bookmark" is what this check exists
+   * to prevent.
+   */
+  saveBookmark(draft: BookmarkDraft): Bookmark {
+    const raw = draft.url.trim();
+    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw);
+    const normalized = safeExternalUrl(hasScheme ? raw : `https://${raw}`);
+    if (!normalized) throw new Error("书签地址必须是 http(s) 链接");
+    const name = draft.name.trim().slice(0, 120) || new URL(normalized).host;
+    const now = new Date().toISOString();
+
+    if (draft.id) {
+      const existing = this.data.bookmarks.find((item) => item.id === draft.id);
+      if (!existing) throw new Error("书签不存在");
+      existing.name = name;
+      existing.url = normalized;
+      existing.updatedAt = now;
+      this.persist();
+      return existing;
+    }
+    // Sorted after everything else, so the grid keeps the order bookmarks were
+    // added in rather than reshuffling when one is edited.
+    const order = this.data.bookmarks.reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    const bookmark: Bookmark = {
+      id: randomUUID(),
+      name,
+      url: normalized,
+      order,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.data.bookmarks.push(bookmark);
+    this.persist();
+    return bookmark;
+  }
+
+  /** Stores the icon a tab has, so the grid can draw it without a fetch. */
+  setBookmarkFavicon(id: string, favicon: string | undefined): Bookmark {
+    const bookmark = this.data.bookmarks.find((item) => item.id === id);
+    if (!bookmark) throw new Error("书签不存在");
+    if (favicon && favicon.startsWith("data:image/")) bookmark.favicon = favicon;
+    else delete bookmark.favicon;
+    this.persist();
+    return bookmark;
+  }
+
+  deleteBookmark(id: string): void {
+    const before = this.data.bookmarks.length;
+    this.data.bookmarks = this.data.bookmarks.filter((item) => item.id !== id);
+    if (this.data.bookmarks.length === before) throw new Error("书签不存在");
+    this.persist();
+  }
+
+  /** Moves a bookmark to an explicit position and renumbers the rest. */
+  moveBookmark(id: string, toIndex: number): void {
+    const from = this.data.bookmarks.findIndex((item) => item.id === id);
+    if (from < 0) throw new Error("书签不存在");
+    const [moved] = this.data.bookmarks.splice(from, 1);
+    if (!moved) return;
+    const target = Math.max(0, Math.min(this.data.bookmarks.length, Math.trunc(toIndex)));
+    this.data.bookmarks.splice(target, 0, moved);
+    this.data.bookmarks.forEach((item, index) => {
+      item.order = index;
+    });
+    this.persist();
+  }
+
   /** Switching the preset clears assignments that no longer point at a real slot. */
   setViewLayout(viewId: string, layoutId: LayoutId): void {
     const view = this.data.views.find((item) => item.id === viewId);
@@ -1025,6 +1106,7 @@ export class WorkspaceService {
         ...item,
         slots: item.slots.map((slot) => ({ ...slot })),
       })),
+      bookmarks: this.data.bookmarks.map((item) => ({ ...item })),
     };
 
     if (passphrase) {
@@ -1163,13 +1245,37 @@ export class WorkspaceService {
     }
 
     const builtinIds = new Set(["free", "1x1", "2x1", "1x2", "2x2", "3x1"]);
-    for (const preset of file.layoutPresets) {      if (builtinIds.has(preset.id)) continue;
+    for (const preset of file.layoutPresets) {
+      if (builtinIds.has(preset.id)) continue;
       const existing = this.data.layoutPresets.find((item) => item.id === preset.id);
       if (existing) {
         Object.assign(existing, preset, { builtin: false });
         updated += 1;
       } else {
         this.data.layoutPresets.push({ ...preset, builtin: false });
+        added += 1;
+      }
+    }
+
+    /*
+     * Bookmarks have no site to belong to, so nothing is skipped for them. Their
+     * `order` is reassigned from the end rather than trusted: the incoming file
+     * knows only its own ordering, and letting it write absolute keys would drop
+     * imported bookmarks in between the ones already here.
+     */
+    let nextOrder = this.data.bookmarks.reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    const importedBookmarks = [...(file.bookmarks ?? [])].sort((a, b) => a.order - b.order);
+    for (const bookmark of importedBookmarks) {
+      const existing = this.data.bookmarks.find((item) => item.id === bookmark.id);
+      if (existing) {
+        Object.assign(existing, bookmark, {
+          order: existing.order,
+          updatedAt: new Date().toISOString(),
+        });
+        updated += 1;
+      } else {
+        this.data.bookmarks.push({ ...bookmark, order: nextOrder });
+        nextOrder += 1;
         added += 1;
       }
     }
@@ -1487,14 +1593,28 @@ export class WorkspaceService {
 
   // ---------- launching ----------
 
-  private resolveEngine(identity: Identity, site: Site): Engine {
-    const engineId = identity.engineId ?? site.defaultEngineId;
+  private resolveEngine(identity: Identity): Engine {
+    // An identity can still name its own browser — that is the escape hatch for
+    // one account that genuinely needs a different version. Otherwise the single
+    // global default decides, which is what the title bar's switch promises.
+    const engineId = identity.engineId ?? this.settings.defaultEngineId;
     const engine =
-      this.engines.find((item) => item.id === engineId) ?? this.engines.find((item) => item.cdp);
+      this.engines.find((item) => item.id === engineId) ?? this.defaultEngine();
     if (!engine) throw new Error(t("error.noEngine"));
     if (engine.status === "blocked")
       throw new Error(engine.blockReason ?? t("error.engineBlocked"));
     return engine;
+  }
+
+  /**
+   * The browser an external launch uses when nothing more specific is asked for.
+   *
+   * Prefers an engine that speaks CDP: credential filling and session checks need
+   * it, so a browser that cannot do those would launch into a session this app
+   * cannot verify.
+   */
+  defaultEngine(): Engine | undefined {
+    return this.engines.find((item) => item.cdp) ?? this.engines[0];
   }
 
   /**
@@ -1649,7 +1769,7 @@ export class WorkspaceService {
     if (!identity) throw new Error(t("error.identityMissing"));
     const site = this.data.sites.find((item) => item.id === identity.siteId);
     if (!site) throw new Error(t("error.siteMissing"));
-    const engine = this.resolveEngine(identity, site);
+    const engine = this.resolveEngine(identity);
 
     const running = [...this.liveInstances.values()].find(
       (instance) => instance.identityId === identityId,
@@ -1812,7 +1932,7 @@ export class WorkspaceService {
         // Each member opens against its own site, so a cross-site view gets the
         // right engine, base URL and default password per window.
         const site = siteFor(identity);
-        const engine = this.resolveEngine(identity, site);
+        const engine = this.resolveEngine(identity);
         const startUrl = joinUrl(
           site.baseUrl,
           pathFor(identity) ?? identity.startPath ?? site.loginPath ?? "/",
@@ -1939,7 +2059,7 @@ export class WorkspaceService {
       fallback,
     );
 
-    const engine = this.resolveEngine(identity, site);
+    const engine = this.resolveEngine(identity);
     const startUrl = joinUrl(
       site.baseUrl,
       view.paths[identity.id] ?? identity.startPath ?? site.loginPath ?? "/",
@@ -1977,9 +2097,7 @@ export class WorkspaceService {
     await this.maintenanceDone;
     const site = siteId ? this.data.sites.find((item) => item.id === siteId) : undefined;
     if (siteId && !site) throw new Error(t("error.siteMissing"));
-    const engine =
-      this.engines.find((item) => item.id === site?.defaultEngineId) ??
-      this.engines.find((item) => item.cdp);
+    const engine = this.defaultEngine();
     if (!engine) throw new Error(t("error.noEngine"));
 
     const area = this.workArea();
@@ -2283,7 +2401,7 @@ export class WorkspaceService {
   ): Promise<{ result: AuthCheckResult; changed: boolean }> {
     let engine: Engine;
     try {
-      engine = this.resolveEngine(identity, site);
+      engine = this.resolveEngine(identity);
     } catch (error) {
       return unknown((error as Error).message);
     }

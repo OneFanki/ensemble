@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onClickOutside } from "@vueuse/core";
-import { AppWindow, Check, ChevronDown, Monitor } from "lucide-vue-next";
+import { AppWindow, Check, ChevronDown, Monitor, ShieldOff } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -59,6 +59,19 @@ function chooseLaunch(value: "embedded" | "external"): void {
   if (value === launchTarget.value) return;
   void store.saveSettings({ launchTarget: value });
 }
+
+/**
+ * Opens a throwaway session on the surface chosen above.
+ *
+ * It lives in this menu because it is the same decision: the switch says where
+ * launches go, and a clean session is a launch. Keeping it here also means there
+ * is exactly one place to look — it used to be a button on three different pages,
+ * each of which ignored the switch and opened the external browser.
+ */
+async function openClean(): Promise<void> {
+  launchOpen.value = false;
+  await store.openCleanSession();
+}
 </script>
 
 <template>
@@ -105,6 +118,21 @@ function chooseLaunch(value: "embedded" | "external"): void {
               <span class="menu-url">{{ option.hint }}</span>
             </span>
             <Check v-if="option.value === launchTarget" :size="12" class="check" />
+          </button>
+          <!-- A clean session is a launch, so it belongs in the launch menu. The
+               hint names the current surface so the outcome is predictable. -->
+          <button type="button" class="menu-item clean" @click="openClean">
+            <ShieldOff :size="13" class="launch-icon" />
+            <span class="menu-copy">
+              <span class="menu-name">{{ $t("app.cleanSession") }}</span>
+              <span class="menu-url">
+                {{
+                  launchTarget === "embedded"
+                    ? $t("app.cleanSessionInEmbedded")
+                    : $t("app.cleanSessionInExternal")
+                }}
+              </span>
+            </span>
           </button>
         </div>
       </div>
@@ -200,6 +228,15 @@ function chooseLaunch(value: "embedded" | "external"): void {
 .menu-item.active {
   background: var(--surface-3);
   color: var(--text);
+}
+
+/* Separated from the two surface choices: those pick a destination, this one
+   performs a launch there. A divider is the whole difference. */
+.menu-item.clean {
+  margin-top: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .menu-copy {
@@ -307,7 +344,7 @@ function chooseLaunch(value: "embedded" | "external"): void {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-menu);
   padding: 6px;
 }
 

@@ -34,12 +34,14 @@ async function makeService() {
   const engines = await service.scanAvailableEngines();
   const engine = engines.find((item) => item.family === "chromium" && item.cdp);
   if (!engine) throw new Error("需要至少一个可用的 Chromium 引擎");
+  // The browser is a global setting now; a test that needs a specific engine
+  // says so once instead of pinning it onto a site.
+  service.saveSettings({ defaultEngineId: engine.id });
 
   const site = service.saveSite({
     name: "exit",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/",
-    defaultEngineId: engine.id,
     autoSubmit: false,
   });
   const identity = service.saveIdentity({

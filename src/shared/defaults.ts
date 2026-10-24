@@ -30,6 +30,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchEngineId: DEFAULT_SEARCH_ENGINE_ID,
   customSearchEngines: [],
   newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
+  newTabBookmarks: true,
   closeToTray: true,
   onboardingVersion: 0,
   // A quiet background check keeps users on current builds without nagging:

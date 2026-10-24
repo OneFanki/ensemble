@@ -2,26 +2,32 @@
 import type { EmbeddedTab } from "@shared/embedded";
 import { NEW_TAB_BACKDROPS, newTabBackdrop } from "@shared/newtab";
 import { enginePreview, isValidEngineTemplate, resolveBrowserInput } from "@shared/search";
+import type { Bookmark } from "@shared/types";
 import { Check, ChevronDown, Palette, Plus, Search, X } from "lucide-vue-next";
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import BookmarkGrid from "./BookmarkGrid.vue";
 import AppButton from "./ui/AppButton.vue";
 
 /**
  * What a blank page shows instead of an empty white rectangle.
  *
- * One field, one engine picker. It resolves whatever is typed — a domain, an IP,
- * `localhost:3000` or a scheme navigates directly, everything else goes to the
- * selected engine — so it never needs a second input or a row of buttons
- * explaining the rule: the placeholder says both halves and the engine picker
- * sits where a browser puts it, at the left of the field.
+ * One field, one engine picker, and — when the user has any — a grid of plain
+ * bookmarks. It resolves whatever is typed — a domain, an IP, `localhost:3000`
+ * or a scheme navigates directly, everything else goes to the selected engine —
+ * so it never needs a second input or a row of buttons explaining the rule.
  *
  * The backdrop is a preset, not an image file: this surface has to paint before
  * any network call, and the choice is a settings string that survives export.
  */
 const props = defineProps<{ tab: EmbeddedTab }>();
+
+const emit = defineEmits<{
+  /** A bookmark was clicked; the browser page navigates this tab. */
+  openBookmark: [bookmark: Bookmark];
+}>();
 
 const store = useEmbeddedStore();
 const workspace = useWorkspaceStore();
@@ -41,6 +47,11 @@ const engine = computed(() => workspace.searchEngine);
 const input = computed(() => query.value.trim());
 const preview = computed(() => enginePreview(draftTemplate.value, "示例 query"));
 const backdrop = computed(() => newTabBackdrop(workspace.settings.newTabBackground));
+/**
+ * Bookmarks are shown only when both sides agree: the setting is on, and there
+ * is something to show. An empty grid would be a permanently empty box.
+ */
+const bookmarks = computed(() => (workspace.settings.newTabBookmarks ? workspace.bookmarks : []));
 
 async function submit(): Promise<void> {
   error.value = "";
@@ -88,6 +99,30 @@ async function saveEngine(): Promise<void> {
   await workspace.saveSettings({ customSearchEngines: next, searchEngineId: id });
   adding.value = false;
   error.value = "";
+}
+
+/**
+ * A bookmark tile opens in this tab.
+ *
+ * Navigating the existing page rather than opening a new one is what a new-tab
+ * page does in every browser: the blank tab is the destination, not a launcher.
+ */
+function openBookmark(bookmark: Bookmark): void {
+  query.value = "";
+  emit("openBookmark", bookmark);
+}
+
+async function renameBookmark(bookmark: Bookmark, name: string): Promise<void> {
+  await workspace.saveBookmark({ id: bookmark.id, name, url: bookmark.url });
+}
+
+async function removeBookmark(bookmark: Bookmark): Promise<void> {
+  await workspace.deleteBookmark(bookmark.id);
+  workspace.notify(t("app.bookmarkRemoved", { name: bookmark.name }), "success");
+}
+
+async function moveBookmark(bookmark: Bookmark, toIndex: number): Promise<void> {
+  await workspace.moveBookmark(bookmark.id, toIndex);
 }
 </script>
 
@@ -176,6 +211,15 @@ async function saveEngine(): Promise<void> {
         </AppButton>
       </form>
 
+      <BookmarkGrid
+        v-if="bookmarks.length"
+        :bookmarks="bookmarks"
+        @open="openBookmark"
+        @rename="renameBookmark"
+        @remove="removeBookmark"
+        @move="moveBookmark"
+      />
+
       <p v-if="error" class="nt-error">{{ error }}</p>
     </div>
 
@@ -252,7 +296,9 @@ async function saveEngine(): Promise<void> {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+  /* A theme token rather than a literal black halo: the dark value looks like
+     soot on the light backdrop, which is what made this box look dirty there. */
+  box-shadow: var(--shadow-float);
 }
 
 .nt-box:focus-within {
@@ -306,7 +352,7 @@ async function saveEngine(): Promise<void> {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 14px 32px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-menu);
 }
 
 .nt-engine-item {
@@ -477,7 +523,7 @@ async function saveEngine(): Promise<void> {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-menu);
 }
 
 .nt-swatch {

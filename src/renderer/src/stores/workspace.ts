@@ -12,6 +12,8 @@ import type {
   AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
+  Bookmark,
+  BookmarkDraft,
   Engine,
   Identity,
   IdentityDraft,
@@ -70,6 +72,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
    * changed the port or switched the endpoint off.
    */
   const mcp = ref<McpStatus | null>(null);
+  /** AI page actions this session, keyed by origin. */
+  const aiActions = ref<Record<string, number>>({});
+  /** Origin of the most recent AI action, so the dock can pulse the right row. */
+  const lastAiOrigin = ref<string | null>(null);
   let toastSeq = 0;
 
   const api = computed(() => window.ensemble);
@@ -93,6 +99,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       });
       window.ensemble.onMcpChanged((status) => {
         mcp.value = status;
+      });
+      window.ensemble.onAiPageAction((event) => {
+        // Per-origin totals for this session; the dock shows them beside the
+        // account, so "the AI is working in this site" is answerable at a glance
+        // instead of by reading the audit log.
+        aiActions.value = { ...aiActions.value, [event.origin]: event.count };
+        lastAiOrigin.value = event.origin;
       });
     } finally {
       loading.value = false;
@@ -203,6 +216,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
   const views = computed<View[]>(() => snapshot.value?.views ?? []);
   const flows = computed<Flow[]>(() => snapshot.value?.flows ?? []);
+  /** Plain bookmarks in stored order; the main process already sorted them. */
+  const bookmarks = computed<Bookmark[]>(() => snapshot.value?.bookmarks ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
   const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
   const settings = computed<AppSettings>(
@@ -223,6 +238,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         searchEngineId: DEFAULT_SEARCH_ENGINE_ID,
         customSearchEngines: [],
         newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
+        newTabBookmarks: true,
         closeToTray: true,
         onboardingVersion: 0,
         autoCheckUpdates: true,
@@ -275,12 +291,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     () => sites.value.find((site) => site.id === recentSiteId.value) ?? sites.value[0],
   );
 
+  /**
+   * The browser external launches use.
+   *
+   * One global setting, matching the title bar's single switch. It used to be
+   * derived from whichever site was used last, so the browser name shown in the
+   * switch changed when the user moved between sites — while accounts from
+   * different sites were meant to launch into the same surface.
+   */
   const defaultEngine = computed<Engine | undefined>(() => {
-    const preferredId = defaultSite.value?.defaultEngineId;
+    const preferredId = settings.value.defaultEngineId;
     return (
       engines.value.find((engine) => engine.id === preferredId) ??
       engines.value.find((engine) => engine.cdp && engine.status === "ready") ??
-      engines.value.find((engine) => engine.cdp)
+      engines.value.find((engine) => engine.cdp) ??
+      engines.value[0]
     );
   });
 
@@ -346,7 +371,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   function engineFor(identity: Identity): Engine | undefined {
-    const id = identity.engineId ?? defaultSite.value?.defaultEngineId;
+    // An identity may override the global browser; otherwise the global default
+    // decides, exactly like the main service does.
+    const id = identity.engineId ?? settings.value.defaultEngineId;
     return engines.value.find((engine) => engine.id === id) ?? defaultEngine.value;
   }
 
@@ -448,6 +475,37 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("flow", () => window.ensemble.deleteFlow(id));
   }
 
+  /*
+   * Bookmark mutations apply the returned snapshot instead of waiting for the
+   * broadcast: the star reads `bookmarks` right after adding, and an event that
+   * has not landed yet would make the follow-up icon write miss its target.
+   */
+  async function saveBookmark(draft: BookmarkDraft) {
+    return run("bookmark", async () => {
+      const next = await window.ensemble.saveBookmark(toPlain(draft));
+      apply(next);
+      return next;
+    });
+  }
+
+  async function setBookmarkFavicon(id: string, favicon?: string) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.setBookmarkFavicon(id, favicon));
+    });
+  }
+
+  async function deleteBookmark(id: string) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.deleteBookmark(id));
+    });
+  }
+
+  async function moveBookmark(id: string, toIndex: number) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.moveBookmark(id, toIndex));
+    });
+  }
+
   /**
    * Runs a flow and reports the outcome.
    *
@@ -544,6 +602,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   /**
    * Pass an site id for a clean window on that login page; omit it for a
    * blank tab that belongs to no site.
+   *
+   * Always the external surface: this is the service's throwaway browser window.
+   * Callers that should follow the title bar's launch target use
+   * `openCleanSession` instead.
    */
   async function launchCleanSession(siteId?: string) {
     return run("launch", async () => {
@@ -553,11 +615,27 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  /** Opens a clean window on the most recently used site's login page. */
-  async function launchScopedCleanSession() {
-    return launchCleanSession(defaultSite.value?.id);
+  /**
+   * Opens a clean session on whichever surface the title bar points at.
+   *
+   * A clean session is a session, not a window type: "throwaway, signed out"
+   * applies equally to a built-in page and to a separate browser window. Routing
+   * it through the global switch is the point — the old per-page buttons always
+   * launched the external browser, even with the switch set to the built-in
+   * surface, so clicking "blank clean session" opened Edge out of nowhere.
+   */
+  async function openCleanSession(): Promise<void> {
+    if (settings.value.launchTarget === "embedded") {
+      // A loose tab, so it does not silently join whatever view is on stage:
+      // a throwaway page is not part of the comparison being arranged there.
+      await window.ensemble.openEmbeddedTab({ viewId: null, clean: true });
+      notify(tr("app.toastCleanOpened"), "success");
+      return;
+    }
+    await launchCleanSession();
   }
 
+  /** Opens a clean session on the most recently used site's login page. */
   async function stopInstance(id: string) {
     return run("stop", () => window.ensemble.stopInstance(id));
   }
@@ -731,12 +809,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     dismissLoginCapture,
     clearLoginCapture,
     mcp,
+    aiActions,
+    lastAiOrigin,
     sites,
     identities,
     views,
     engines,
     enginesReady,
     settings,
+    bookmarks,
     instances,
     credentials,
     defaultSite,
@@ -777,6 +858,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     deleteView,
     saveFlow,
     deleteFlow,
+    saveBookmark,
+    setBookmarkFavicon,
+    deleteBookmark,
+    moveBookmark,
     runFlow,
     setViewLayout,
     setViewSlots,
@@ -790,7 +875,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     launchView,
     launchViewMember,
     launchCleanSession,
-    launchScopedCleanSession,
+    openCleanSession,
     stopInstance,
     stopAll,
     stopView,

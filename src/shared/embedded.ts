@@ -43,6 +43,14 @@ export interface EmbeddedTab {
   instanceId: string;
   /** Page that opened this one. */
   openerId?: string;
+  /**
+   * True when this instance lives in the throwaway partition.
+   *
+   * Surfaced so the chrome can say so: being signed out is expected in a clean
+   * session and surprising in the daily profile, and the partition is the one
+   * thing the URL cannot tell you.
+   */
+  clean?: boolean;
   /** True for the page currently shown by its instance. */
   active: boolean;
   /** Effective zoom in percent; `100` means the page renders at its natural size. */
@@ -454,8 +462,54 @@ export function embeddedPartition(key: string): string {
   return `persist:embedded-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 }
 
-/** Fixed partition for throwaway sessions that belong to no identity. */
-export const EMBEDDED_CLEAN_PARTITION = "persist:embedded-clean";
+/**
+ * Fixed partition for the user's everyday browsing.
+ *
+ * Pages with no identity land here: the new-tab surface, a bookmark, a URL typed
+ * into the address bar. It persists on purpose — logging in once has to keep
+ * working across restarts, which is the whole point of being able to use this as
+ * a normal browser and to let an assistant act on an already signed-in profile.
+ *
+ * The value still reads "clean" because that is the partition earlier versions
+ * gave every identity-less page. Keeping the exact string adopts whatever logins
+ * the user already has: an upgrade must not sign them out of everything. The
+ * throwaway session below is a new name, so nothing old has to be migrated there.
+ */
+export const EMBEDDED_DAILY_PARTITION = "persist:embedded-clean";
+
+/**
+ * Prefix for a throwaway session, one per browser instance.
+ *
+ * No `persist:` prefix on purpose: Electron keeps such a session in memory only,
+ * so its cookies die with the process. That is what "clean open" promises, and
+ * the old shared, persistent partition could not keep it — it survived quitting
+ * and was handed to the next clean tab as well.
+ *
+ * Keyed by instance so two clean instances never see each other's login either,
+ * while the pages and popups of one instance still share it (a login flow that
+ * opens a popup has to work).
+ */
+export const EMBEDDED_CLEAN_PREFIX = "embedded-clean-";
+
+export function embeddedCleanPartition(instanceId: string): string {
+  return `${EMBEDDED_CLEAN_PREFIX}${instanceId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+/**
+ * Which partition a page belongs to.
+ *
+ * An identity gets its own partition; an everyday page shares the daily profile;
+ * an explicit clean open gets a throwaway session of its own.
+ */
+export function embeddedTabPartition(input: {
+  identityId?: string;
+  clean?: boolean;
+  /** Instance the page belongs to; names the throwaway session. */
+  instanceId: string;
+}): string {
+  if (input.identityId) return embeddedPartition(input.identityId);
+  return input.clean ? embeddedCleanPartition(input.instanceId) : EMBEDDED_DAILY_PARTITION;
+}
 
 /**
  * Only http(s) and about:blank are navigable inside the embedded surface.

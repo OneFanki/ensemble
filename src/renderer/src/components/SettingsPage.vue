@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Upload,
+  X,
 } from "lucide-vue-next";
 import type { Component } from "vue";
 import { computed, onMounted, ref, watch } from "vue";
@@ -275,6 +276,29 @@ function statusLabel(status: string): string {
   return t("app.unverified");
 }
 
+/**
+ * Choices for the one browser external launches use.
+ *
+ * "Automatic" is first and is the default, so a fresh install launches without
+ * anyone opening this page. A blocked engine stays listed but disabled: hiding
+ * it would make a launch fail with "no browser" while the browser sits right
+ * there in the same list.
+ */
+const defaultBrowserOptions = computed(() => [
+  { value: "__auto__", label: t("app.autoPickEngine") },
+  ...engines.value.map((engine) => ({
+    value: engine.id,
+    label: `${engine.brand} ${engine.version ?? ""}`.trim(),
+    hint:
+      engine.status === "blocked"
+        ? t("app.engineBlockedSuffix").trim()
+        : !engine.cdp
+          ? t("app.engineExternalSuffix").trim()
+          : t("app.cdpMode"),
+    disabled: engine.status === "blocked",
+  })),
+]);
+
 async function submitUnlock() {
   const unlocked = await store.unlockVault(unlockPassword.value);
   if (unlocked) unlockPassword.value = "";
@@ -356,6 +380,25 @@ async function submitMaster() {
             </AppButton>
           </div>
         </div>
+
+        <!-- The one browser external launches use. It replaced a per-site field:
+             the title bar shows a single browser, so the setting behind it has
+             to be single too, or the same switch routes differently per account. -->
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.defaultBrowser") }}</span>
+          <div class="select-slot wide-select">
+            <SelectField
+              :model-value="store.settings.defaultEngineId ?? '__auto__'"
+              :options="defaultBrowserOptions"
+              @update:model-value="
+                store.saveSettings({
+                  defaultEngineId: $event === '__auto__' ? undefined : $event,
+                })
+              "
+            />
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.defaultBrowserNote") }}</p>
 
         <div class="engine-table">
           <div class="engine-head">
@@ -532,6 +575,28 @@ async function submitMaster() {
           </div>
         </div>
         <p class="fineprint">{{ $t("app.searchEngineNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.bookmarkShowTitle") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.newTabBookmarks }"
+              @click="store.saveSettings({ newTabBookmarks: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.newTabBookmarks }"
+              @click="store.saveSettings({ newTabBookmarks: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.bookmarkShowHint") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.launchInterval") }}</span>
           <div class="interval">
@@ -1005,6 +1070,33 @@ async function submitMaster() {
         </div>
         <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
 
+        <!--
+          Origins where the AI may act inside the daily profile. Listed here as
+          well as in the browser toolbar because this is where the user thinks
+          about what the AI is allowed to do; the toolbar entry exists because
+          that is where they notice it needs granting.
+        -->
+        <div v-if="mcp" class="origin-block">
+          <span class="origin-label">{{ $t("app.mcpAiOrigins") }}</span>
+          <div class="origin-list">
+            <span v-if="!mcp.aiOrigins.length" class="origin-empty">
+              {{ $t("app.mcpAiOriginsEmpty") }}
+            </span>
+            <span v-for="origin in mcp.aiOrigins" :key="origin" class="origin-chip mono">
+              {{ origin }}
+              <button
+                type="button"
+                class="origin-remove"
+                :aria-label="$t('app.mcpAiOriginRevoke')"
+                @click="refreshMcp({ aiOrigin: { origin, allowed: false } })"
+              >
+                <X :size="10" />
+              </button>
+            </span>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.mcpAiOriginsNote") }}</p>
+
         <div v-if="mcp" class="mcp-endpoint">
           <p class="fineprint">{{ $t("app.mcpEndpoint") }}</p>
           <div class="copy-row">
@@ -1356,6 +1448,12 @@ async function submitMaster() {
   width: 170px;
 }
 
+/* The engine list carries versions ("Microsoft Edge 155.0.4283.62"), which do
+   not fit 170px and would truncate the part that tells two installs apart. */
+.wide-select {
+  width: 280px;
+}
+
 .interval {
   display: inline-flex;
   align-items: center;
@@ -1634,6 +1732,64 @@ async function submitMaster() {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
+}
+
+/* One chip per authorized origin; the cross is the revoke, so the list itself
+   doubles as the place a mistake gets undone. The label sits above the chips
+   rather than beside them: it is a sentence, not a one-word field name, and
+   squeezing it into the 132px label column wrapped it into two lines. */
+.origin-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+/* Its own class rather than `.option-label`: that one carries a 132px
+   `flex-basis` that aligns a row's switch column, and inside this column it
+   would apply to the height, leaving a large empty band above the chips. */
+.origin-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.origin-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.origin-empty {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.origin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.origin-remove {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--faint);
+}
+
+.origin-remove:hover {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  color: var(--red);
 }
 
 .mcp-endpoint {

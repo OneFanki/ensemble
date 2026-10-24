@@ -577,6 +577,11 @@ async function saveDraft() {
 <style scoped>
 .flows {
   min-height: 0;
+  /* Fills the pane so the empty state has free space to sit in the middle of.
+     Without it the section is only as tall as its contents and `margin: auto`
+     on `.empty` has nothing to distribute — which is why the block hugged the
+     header. */
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   padding: 18px 20px 14px;
@@ -620,6 +625,15 @@ async function saveDraft() {
   gap: 10px;
   color: var(--faint);
   font-size: 12px;
+}
+
+/* The user agent's paragraph margins would double the flex gap above and below
+   the line, so the three parts of the block would not read as evenly spaced. */
+.empty p {
+  margin: 0;
+  max-width: 320px;
+  line-height: 1.6;
+  text-align: center;
 }
 
 .workspace {

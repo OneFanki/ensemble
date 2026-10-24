@@ -26,6 +26,7 @@ import {
   IPC,
 } from "@shared/ipc";
 import {
+  bookmarkDraftSchema,
   flowDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
@@ -38,6 +39,7 @@ import {
 import { parseExportFile } from "@shared/transfer";
 import type {
   AppSettings,
+  BookmarkDraft,
   FocusLabelPayload,
   IdentityDraft,
   LayoutId,
@@ -151,6 +153,14 @@ let quitting = false;
 let currentTheme: AppSettings["theme"] = "dark";
 let tray: Tray | null = null;
 let mcpServer: McpServer | null = null;
+/**
+ * AI page actions per origin, for the session.
+ *
+ * Reset when the app restarts rather than persisted: "how many operations the AI
+ * made on this site" is a session fact, and a number that kept growing across
+ * launches would stop meaning anything.
+ */
+const aiActions = new Map<string, number>();
 /** Kept in sync so the close handler does not need the service to be initialized. */
 let settingsCache: AppSettings | null = null;
 /** Logins seen in embedded pages, waiting for the user to accept or dismiss. */
@@ -1705,6 +1715,30 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.bookmarkSave, (draft: BookmarkDraft) => {
+    workspace.saveBookmark(bookmarkDraftSchema.parse(draft));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkFavicon, (id: string, favicon?: string) => {
+    workspace.setBookmarkFavicon(String(id), favicon ? String(favicon) : undefined);
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkDelete, (id: string) => {
+    workspace.deleteBookmark(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkMove, (id: string, toIndex: number) => {
+    workspace.moveBookmark(String(id), Number(toIndex));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
   handle(
     IPC.flowRun,
     async (input: {
@@ -1944,6 +1978,7 @@ function registerIpc(workspace: WorkspaceService): void {
         views: payload.views.length,
         flows: payload.flows?.length ?? 0,
         layoutPresets: payload.layoutPresets.length,
+        bookmarks: payload.bookmarks?.length ?? 0,
       },
     } satisfies ImportPickOutcome;
   });
@@ -2188,6 +2223,7 @@ function registerIpc(workspace: WorkspaceService): void {
       label?: string;
       color?: string;
       viewId?: string | null;
+      clean?: boolean;
     }) => {
       const browser = ensureEmbeddedBrowser();
       // "+" while a view is on stage adds to that view; a loose tab would vanish
@@ -2202,6 +2238,9 @@ function registerIpc(workspace: WorkspaceService): void {
         ...(input?.label ? { label: input.label } : {}),
         ...(input?.color ? { color: input.color as RoleColor } : {}),
         ...(viewId ? { viewId } : {}),
+        // An identity always owns its own partition; `clean` only decides for a
+        // page that has none, so the two never disagree.
+        ...(input?.clean ? { clean: true } : {}),
         origin: "manual",
       });
       // Opening a bookmark as one of its accounts is the same intent as
@@ -2324,7 +2363,20 @@ function registerIpc(workspace: WorkspaceService): void {
   });
 
   handle(IPC.embeddedClose, (tabId: string) => ensureEmbeddedBrowser().closeTab(String(tabId)));
-  handle(IPC.embeddedActivate, (tabId: string) => ensureEmbeddedBrowser().activate(String(tabId)));
+  /**
+   * Activating a page means "show me this page".
+   *
+   * The dock is reachable from every rail page, so a click on one of its rows has
+   * to bring the browser page forward as well as switch the tab. Only this channel
+   * does that: the AI surface calls `activate` directly, and a tool switching tabs
+   * must not pull the window in front of whatever the user is doing.
+   */
+  handle(IPC.embeddedActivate, (tabId: string) => {
+    const browser = ensureEmbeddedBrowser();
+    const state = browser.activate(String(tabId));
+    browser.focusPage();
+    return state;
+  });
   handle(IPC.embeddedNavigate, (tabId: string, url: string) =>
     ensureEmbeddedBrowser().navigate(String(tabId), String(url)),
   );
@@ -2337,9 +2389,13 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedReload, (tabId: string) => {
     ensureEmbeddedBrowser().reload(String(tabId));
   });
-  handle(IPC.embeddedViewActivate, (viewId: string | null) =>
-    ensureEmbeddedBrowser().activateView(viewId ? String(viewId) : null),
-  );
+  /** Same rule as a page click: picking a container shows it. */
+  handle(IPC.embeddedViewActivate, (viewId: string | null) => {
+    const browser = ensureEmbeddedBrowser();
+    const state = browser.activateView(viewId ? String(viewId) : null);
+    browser.focusPage();
+    return state;
+  });
   handle(IPC.embeddedViewCreate, (input?: { name?: string; layoutId?: LayoutId }) => {
     const browser = ensureEmbeddedBrowser();
     const state = browser.createView({
@@ -2494,6 +2550,21 @@ if (!gotLock) {
       auditPath: join(userDataDir(), "mcp-audit.log"),
       service,
       appVersion: app.getVersion(),
+      // The log is the record; this is the live signal the dock shows. Counted
+      // per origin so "the AI is working in that site right now" is visible
+      // while it happens, not only afterwards.
+      onPageAction: (event) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        aiActions.set(event.origin, (aiActions.get(event.origin) ?? 0) + 1);
+        mainWindow.webContents.send(IPC.aiPageAction, {
+          origin: event.origin,
+          tabId: event.tabId,
+          tool: event.tool,
+          ok: event.ok,
+          originAuthorized: event.originAuthorized,
+          count: aiActions.get(event.origin) ?? 0,
+        });
+      },
       embedded: {
         state: () => ensureEmbeddedBrowser().state(),
         createTab: async (input) => {
@@ -2505,6 +2576,17 @@ if (!gotLock) {
             ...(input.siteId ? { siteId: input.siteId } : {}),
             ...(input.label ? { label: input.label } : {}),
             ...(input.color ? { color: input.color as RoleColor } : {}),
+            // AI scratch work goes in a throwaway session, never the daily
+            // profile.
+            //
+            // An identity-less tab opened by a person is everyday browsing, but
+            // one opened by an AI client is a scratch surface — automating a
+            // page the user happens to be signed in to is exactly what the
+            // origin gate exists to prevent, and letting the AI create such a
+            // tab would sidestep it. A `clean` session is disposable by
+            // construction and has no user login to protect, so everything the
+            // AI does there is its own.
+            ...(input.identityId ? {} : { clean: true }),
             // An AI opening pages for comparison expects them on stage together,
             // so a new tab joins the view the user is looking at.
             ...(viewId ? { viewId } : {}),
@@ -2527,6 +2609,9 @@ if (!gotLock) {
           return created;
         },
         navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),
+        // Facts for the per-origin AI gate. Passed as a function so the MCP
+        // server never holds a tab reference of its own.
+        aiPageContext: (tabId) => ensureEmbeddedBrowser().aiPageContext(tabId),
         closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),

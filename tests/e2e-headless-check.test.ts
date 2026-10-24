@@ -102,13 +102,13 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const workspace = await makeService();
     service = workspace;
     const engine = await chromiumEngine(workspace);
+    workspace.saveSettings({ defaultEngineId: engine.id });
 
     const site = workspace.saveSite({
       name: "headless",
       baseUrl,
       loginPath: "/login",
       authCheckPath: "/api/session",
-      defaultEngineId: engine.id,
       autoSubmit: false,
       extraFields: [],
     });
@@ -153,13 +153,13 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const workspace = await makeService();
     service = workspace;
     const engine = await chromiumEngine(workspace);
+    workspace.saveSettings({ defaultEngineId: engine.id });
 
     const site = workspace.saveSite({
       name: "fresh",
       baseUrl,
       loginPath: "/login",
       authCheckPath: "/api/session",
-      defaultEngineId: engine.id,
       autoSubmit: false,
       extraFields: [],
     });
@@ -185,13 +185,13 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const workspace = await makeService();
     service = workspace;
     const engine = await chromiumEngine(workspace);
+    workspace.saveSettings({ defaultEngineId: engine.id });
 
     const site = workspace.saveSite({
       name: "batch",
       baseUrl,
       loginPath: "/login",
       authCheckPath: "/api/session",
-      defaultEngineId: engine.id,
       autoSubmit: false,
       extraFields: [],
     });

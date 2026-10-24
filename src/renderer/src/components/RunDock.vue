@@ -19,6 +19,7 @@ import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import OpenSiteButton from "./OpenSiteButton.vue";
 import SelectField from "./SelectField.vue";
+import TabIcon from "./TabIcon.vue";
 
 const workspace = useWorkspaceStore();
 const embedded = useEmbeddedStore();
@@ -114,15 +115,36 @@ function titleOf(root: EmbeddedTab): string {
 }
 
 /**
- * The account a row belongs to, shown next to the page title.
+ * Which world a row belongs to, shown next to the page title.
  *
  * Without it every row of the same app reads "数据集管理 · 数据集管理" and the
  * dock cannot answer the one question it exists for: which account is this?
- * A tab with no identity is a clean session and says so.
+ *
+ * "No identity" is not the same as "clean" any more: an identity-less page lands
+ * in the daily profile by default, and only an explicit clean open is a
+ * throwaway. Saying "clean" for every daily bookmark would be actively wrong.
  */
 function accountOf(root: EmbeddedTab): string {
   const identity = workspace.identities.find((item) => item.id === root.identityId);
-  return identity?.name ?? t("app.cleanSession");
+  if (identity) return identity.name;
+  return root.clean ? t("app.cleanSession") : t("app.dailyProfile");
+}
+
+/**
+ * AI operations this row's site has seen in this session, or 0.
+ *
+ * Keyed by origin, derived from the tab's current URL: a tab that navigated away
+ * from a site stops claiming that site's count, which is what a user reading the
+ * row would expect.
+ */
+function aiCountOf(root: EmbeddedTab): number {
+  const page = activePageOf(root);
+  try {
+    const origin = new URL(page.url).origin;
+    return workspace.aiActions[origin] ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 function onDragStart(root: EmbeddedTab, event: DragEvent): void {
@@ -253,11 +275,8 @@ function faviconOf(root: EmbeddedTab): string | undefined {
   return activePageOf(root).favicon ?? root.favicon;
 }
 
-/** One character that still identifies the instance when it has no icon. */
-function initialOf(root: EmbeddedTab): string {
-  const source = accountOf(root) || titleOf(root);
-  return source.trim().slice(0, 1).toUpperCase() || "·";
-}
+/** Tab icons are a pixel or two smaller than the collapsed tile's. */
+const PAGE_ICON_SIZE = 11;
 
 /** Group boundary tinted by the group it opens, so colour carries the grouping. */
 function groupRuleStyle(color: RoleColor | undefined): Record<string, string> {
@@ -286,15 +305,6 @@ function miniActive(root: EmbeddedTab): boolean {
 
 function miniOnStage(root: EmbeddedTab): boolean {
   return isOnStage(root);
-}
-
-
-function layoutLabel(view: EmbeddedView): string {
-  const id = view.layoutId === "1x1" ? "free" : view.layoutId;
-  const preset =
-    workspace.layoutPresets.find((item) => item.id === id) ??
-    workspace.layoutPresets.find((item) => item.id === "free");
-  return preset ? workspace.presetName(preset) : id;
 }
 
 async function changeLayout(view: EmbeddedView, value: string | undefined): Promise<void> {
@@ -338,7 +348,7 @@ async function newView(): Promise<void> {
 }
 
 /** Site bookmark: open its login page as a loose page, not as a view member. */
-async function openSiteBookmark(siteId: string): Promise<void> {
+async function openSiteBookmark(siteId: string, options?: { clean?: boolean }): Promise<void> {
   const site = workspace.sites.find((item) => item.id === siteId);
   if (!site) return;
   let url: string;
@@ -349,7 +359,7 @@ async function openSiteBookmark(siteId: string): Promise<void> {
     return;
   }
   workspace.markSiteUsed(site.id);
-  await embedded.openLooseTabWith(url);
+  await embedded.openLooseTabWith(url, options);
 }
 
 /** Site bookmark as one account: own profile, own login state. */
@@ -421,10 +431,9 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
             :aria-current="miniActive(root) ? 'true' : undefined"
             @click="embedded.activate(activePageOf(root).id)"
           >
-            <img v-if="faviconOf(root)" class="mini-fav" :src="faviconOf(root)" alt="" />
-            <span v-else class="mini-letter">{{ initialOf(root) }}</span>
+            <TabIcon :src="faviconOf(root)" :size="16" />
             <span
-              v-if="faviconOf(root) && root.color"
+              v-if="root.color"
               class="mini-role"
               :style="{ background: `var(--role-${root.color})` }"
             ></span>
@@ -557,6 +566,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 draggable="true"
                 role="button"
                 tabindex="0"
+                :data-tab-id="activePageOf(root).id"
                 :title="activePageOf(root).url"
                 @dragstart="onDragStart(root, $event)"
                 @dragend="onDragEnd"
@@ -570,8 +580,21 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                   class="tab-dot"
                   :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
                 ></span>
+                <!-- Same mark as the page tabs on the stage: a row is a tab,
+                     and a tab starts with its site's icon. -->
+                <TabIcon :src="faviconOf(root)" :size="12" />
                 <span class="tab-label">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
+                <!-- How many AI operations this site has seen in this session.
+                     A count per origin, not per page: the permission is granted
+                     per origin, so the origin is the honest unit. -->
+                <span
+                  v-if="aiCountOf(root)"
+                  class="ai-badge mono"
+                  :title="t('app.aiActionCount', { count: aiCountOf(root) })"
+                >
+                  {{ aiCountOf(root) }}
+                </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
                 </span>
@@ -593,9 +616,14 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                   type="button"
                   class="page-row"
                   :class="{ current: page.id === activePageOf(root).id }"
+                  :data-page-id="page.id"
                   :title="page.url"
                   @click="embedded.activate(page.id)"
                 >
+                  <!-- Same icon as the stage's own tab strip: the dock's page
+                       list is where a test run is checked, so a page must be
+                       identifiable by its site even before it reports a title. -->
+                  <TabIcon :src="page.favicon" :size="PAGE_ICON_SIZE" />
                   <span class="page-title">{{ embedded.titleOf(page) }}</span>
                 </button>
               </div>
@@ -623,7 +651,8 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
             <OpenSiteButton
               compact
               @open-blank="embedded.openLooseTab()"
-              @open-site="openSiteBookmark"
+              @open-daily="openSiteBookmark($event)"
+              @open-clean="openSiteBookmark($event, { clean: true })"
               @open-identity="openIdentityBookmark"
             />
             <span class="icon-spacer"></span>
@@ -640,6 +669,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 draggable="true"
                 role="button"
                 tabindex="0"
+                :data-tab-id="activePageOf(root).id"
                 :title="activePageOf(root).url"
                 @dragstart="onDragStart(root, $event)"
                 @dragend="onDragEnd"
@@ -653,8 +683,19 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                   class="tab-dot"
                   :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
                 ></span>
+                <TabIcon :src="faviconOf(root)" :size="12" />
                 <span class="tab-label">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
+                <!-- How many AI operations this site has seen in this session.
+                     A count per origin, not per page: the permission is granted
+                     per origin, so the origin is the honest unit. -->
+                <span
+                  v-if="aiCountOf(root)"
+                  class="ai-badge mono"
+                  :title="t('app.aiActionCount', { count: aiCountOf(root) })"
+                >
+                  {{ aiCountOf(root) }}
+                </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
                 </span>
@@ -675,9 +716,14 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                   type="button"
                   class="page-row"
                   :class="{ current: page.id === activePageOf(root).id }"
+                  :data-page-id="page.id"
                   :title="page.url"
                   @click="embedded.activate(page.id)"
                 >
+                  <!-- Same icon as the stage's own tab strip: the dock's page
+                       list is where a test run is checked, so a page must be
+                       identifiable by its site even before it reports a title. -->
+                  <TabIcon :src="page.favicon" :size="PAGE_ICON_SIZE" />
                   <span class="page-title">{{ embedded.titleOf(page) }}</span>
                 </button>
               </div>
@@ -901,33 +947,16 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   color: var(--text);
 }
 
-/* An off-stage instance still runs; the muted tile says it is not what the
-   stage is showing right now. */
-.mini-tab.offstage .mini-fav,
-.mini-tab.offstage .mini-letter {
+/* An off-stage instance still runs; the muted icon says it is not what the
+   stage is showing right now. The child component's root carries this scope
+   id, so the selector reaches it without `:deep`. */
+.mini-tab.offstage .tab-icon {
   opacity: 0.55;
 }
 
-.mini-fav {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  object-fit: contain;
-}
-
-/* Fallback for a site with no icon. It has to hold a CJK character, so it is
-   sized like a glyph rather than like a favicon: at 10px a two-stroke character
-   collapsed into a smudge. */
-.mini-letter {
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
-  color: inherit;
-}
-
-/* Identity colour in the corner. Only drawn over an icon: the letter fallback
-   already carries the account, and two marks for one fact is what made the
-   earlier version look busy. */
+/* Identity colour in the corner of the tile. Drawn whether or not the page has
+   a favicon: with the letter fallback gone the corner is the only thing left
+   saying which account the instance belongs to. */
 .mini-role {
   position: absolute;
   right: 3px;
@@ -1299,6 +1328,17 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   padding: 0 3px;
 }
 
+/* Distinct from the page count: this one is about the AI, and it is the only
+   place in the dock that reports what the AI did. */
+.ai-badge {
+  flex: none;
+  font-size: 8.5px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--line) 55%, var(--accent));
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
 .row-close {
   width: 17px;
   height: 17px;
@@ -1333,6 +1373,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
 .page-row {
   display: flex;
   align-items: center;
+  gap: 5px;
   min-width: 0;
   padding: 3px 8px;
   border: none;

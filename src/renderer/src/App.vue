@@ -109,9 +109,11 @@ onMounted(async () => {
       ? saved
       : "browser";
   // The main process asks for the browser page when a tool or a shortcut opens a
-  // page in it, so the result is never hidden behind a management page.
+  // page in it, so the result is never hidden behind a management page. Already
+  // being there is the common case (a tab click inside the browser page), and
+  // re-entering the view would persist the same setting on every click.
   window.ensemble.onEmbeddedPage(() => {
-    switchView("browser");
+    if (view.value !== "browser") switchView("browser");
   });
   if (shouldAutoStartTour(store.settings)) {
     tourOriginView.value = view.value;
@@ -212,7 +214,6 @@ function openNewSite(seed?: Partial<SiteDraft>) {
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     authCheckPath: "",
-    defaultEngineId: store.defaultEngine?.id,
     autoSubmit: false,
     extraFields: [],
     tagIds: [],
@@ -245,7 +246,6 @@ function openEditSite(siteId?: string) {
     baseUrl: env.baseUrl,
     loginPath: env.loginPath,
     authCheckPath: env.authCheckPath ?? "",
-    defaultEngineId: env.defaultEngineId,
     autoSubmit: env.autoSubmit,
     extraFields: env.extraFields ? env.extraFields.map((field) => ({ ...field })) : [],
     tagIds: env.tagIds ? [...env.tagIds] : [],
@@ -603,7 +603,6 @@ async function handleLocale(locale: "zh" | "en") {
     <SiteDialog
       v-if="siteDraft"
       :draft="siteDraft"
-      :engines="store.engines"
       :tags="store.snapshot?.tags ?? []"
       @close="siteDraft = null"
       @save="saveSite"

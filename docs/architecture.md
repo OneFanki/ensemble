@@ -101,9 +101,14 @@
   **与外部浏览器的 profile 目录分开**：两者由不同 Chromium 版本写，让 Electron 直接
   打开新版 Chrome 写过的 profile 会有降级迁移的风险，分开也避免内置侧污染正在用的
   外部登录态。
+- 没有身份的页面分两种世界（[ADR 0009](./architecture/adr/0009-daily-profile-and-bookmarks.md)）：
+  **日常档案**是一个固定的 `persist:` 分区，新标签页、书签与地址栏输入的地址都落在那里，
+  登录一次长期有效；**干净打开**是每个实例一个不带 `persist:` 前缀的内存会话
+  （`embeddedCleanPartition`），退出即消失。日常档案沿用旧字符串 `persist:embedded-clean`
+  是为了接住用户升级前已有的登录。
 - 页面自己开的弹窗（`setWindowOpenHandler`）继承所在实例的 `instanceId` 与分区，
   只改变该实例当前显示的页面，不会成为新的格位候选——这和外部模式里「一个窗口自带
-  标签页」是同一个语义。
+  标签页」是同一个语义。`clean` 也随实例继承：干净会话里打开的登录弹窗不会掉进日常档案。
 - `cdp.ts` 通过 `webContents.debugger` 说 CDP，**不开放任何调试端口**。调试端口无鉴权，
   本机任意进程都能驱动浏览器；进程内通道的唯一入口是已鉴权的 IPC 与 MCP。
 - 视图的 `setBounds` 坐标是窗口内容区 DIP，`shared/embedded.ts` 的网格计算直接复用
@@ -361,7 +366,7 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 
 | 文件 | 内容 | 位置 |
 | --- | --- | --- |
-| `workspace.json` | 站点、标签、身份、视图、布局预设、手动引擎路径 | Electron `userData` |
+| `workspace.json` | 站点、标签、身份、视图、布局预设、书签、手动引擎路径 | Electron `userData` |
 | `settings.json` | 主题、语言、布局、上次视图 | Electron `userData` |
 | `vault.json` | 加密后的凭据 | Electron `userData` |
 | `mcp.json` | AI 接入开关、端口、Token、权限开关 | Electron `userData` |
@@ -370,7 +375,8 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 | `screenshots/` | 内置浏览器与 AI 工具截的图 | Electron `userData` |
 
 内置表面的会话分区由 Chromium 自己管理，位置在 `userData/Partitions/`，
-与 `profiles/` 互不相干。
+与 `profiles/` 互不相干。其中**日常档案**是持久目录，**干净会话**（不带 `persist:` 前缀）
+只在内存里，不产生目录。
 
 所有写入使用「临时文件 + rename」保证原子性，`vault.json`、`mcp.json`、导出文件以 0600 权限写入。
 
@@ -416,10 +422,24 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   字段递归替换为 `[redacted]`。`type_browser_text` 的参数叫 `text`，名字上看不出秘密；
   它聚焦目标后会回读 `input[type=password]`，是密码框就在结果里置 `secret: true`，
   MCP 层据此把这条 `text` 也换成 `[redacted]`。不做这一步，AI 给新建租户设置初始密码时
-  明文就必然落进审计日志。
+  明文就必然落进审计日志。**碰到页面的调用还记一个 `origin` 字段**，回答「AI 在这个站点上
+  做了什么」不需要再按时间窗去 Join；同一事件也推给渲染层，运行栏在对应那一行显示本次会话
+  的操作次数。
 - 浏览器工具与账号工具同权：`run` 档同时覆盖「启动窗口」和「操作内置页面」，因为两者
   都是对现场的改动而不是对数据的改动。`open_browser_tab` 带 `identityId` 时与手动入口
   一样走 `scheduleEmbeddedFill`，AI 不必额外记得调 `fill_browser_login`。
+- **按来源只读**（`shared/ai-policy.ts`）：日常档案是真实登录态，所以 AI 在那里的页面默认
+  只读——读页面、截图、切标签、等待都放行，点击 / 输入 / 填表 / 填登录 / 执行表达式 / 跑流程
+  一律拦在 `tool.run` 之前。账号页与干净会话不受限制，那本来就是给 AI 驱动的。
+  授权按 **origin** 给（`mcp.json` 的 `aiOrigins`），默认空；工具栏的盾牌按钮与设置页都能
+  授予或撤销。实现上靠 `ToolDefinition.inputTarget` 声明「这个工具碰到哪一页」，闸门在
+  `tools/call` 里统一执行一次——新加一个输入类工具只要声明它，不会忘记过闸。
+  一个尚未授权的来源会被拒，但**读仍然可用**，这样 AI 至少能看清页面再向用户要授权。
+- **导航目标必须来自用户或工作区**：`navigate_browser_tab` 只允许空白页的首次导航、
+  同源链接、或工作区里已有的站点 / 书签地址。这条防的是提示注入——页面正文里的文字不能被
+  AI 当成下一步要去的地方。
+- **AI 自己开的无身份标签是干净会话**：`open_browser_tab` 不带 `identityId` 时显式传
+  `clean: true`。否则 AI 能自己造一个落在日常档案里的标签，等于绕过上面那道闸门。
 - 生命周期：与主进程同生共死。`stop()` 先 `closeAllConnections()` 再 `close()`，
   保证客户端保持长连接时也能立即释放端口。
 
@@ -437,8 +457,8 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 - 导入按 id 合并，缺失所属站点的条目跳过并计数；有加密段但口令错误时整体抛错，
   不写入任何数据。
 
-**账号包**（`shared/accounts-transfer.ts`，`format: "ensemble.accounts"`）是分享给同事：
-只挑几个站点、几个账号，不带走别人的视图与布局。
+**账号包**（`shared/accounts-transfer.ts`，`format: "ensemble.accounts"`）是把登录交给别处：
+只挑几个站点、几个账号，不带走你的视图与布局。
 
 - 匹配键里**没有 id**：站点按 `baseUrl`、账号按 `baseUrl` + 小写 username。接收方的
   workspace 有自己的 id，用发送方的 id 去合并只会覆盖无关账号或造出重复项。

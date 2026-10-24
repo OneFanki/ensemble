@@ -48,13 +48,44 @@ export interface Tag {
   createdAt: string;
 }
 
+/**
+ * A plain bookmark: a name and an address, nothing else.
+ *
+ * Deliberately not a {@link Site}. A site is a login recipe — it knows a login
+ * path, an auth check, default passwords and the accounts that belong to it, and
+ * opening one lands on the login form with a session of its own. A bookmark only
+ * says "this page, in the daily profile". Conflating the two was the reason the
+ * default surface had no way to keep a page without inventing an identity for
+ * it: opening a bookmark must reuse the login already in the daily profile, not
+ * start a fresh session and ask for a password.
+ *
+ * The difference the user sees is the outcome: a bookmark opens the address
+ * directly, a site opens its login page and fills it.
+ */
+export interface Bookmark {
+  id: string;
+  name: string;
+  url: string;
+  /** Site icon, inlined by the main process exactly like a tab's. */
+  favicon?: string;
+  /** Sort key; lower first. New bookmarks append. */
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookmarkDraft {
+  id?: string;
+  name: string;
+  url: string;
+}
+
 export interface Site {
   id: string;
   name: string;
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  defaultEngineId?: string;
   autoSubmit: boolean;
   /** Login fields shared by every identity in this site. */
   extraFields?: LoginField[];
@@ -313,6 +344,19 @@ export interface AppSettings {
    * is the fidelity check against the real browser.
    */
   launchTarget: "embedded" | "external";
+  /**
+   * Browser used for external launches, by engine id.
+   *
+   * Global on purpose. It used to live on each site, which meant the same
+   * "launch externally" action routed differently depending on which site the
+   * account belonged to — while the title bar showed one browser. A single
+   * setting matches what that switch claims to do; an identity can still
+   * override it when one account genuinely needs another browser.
+   *
+   * Unset means "pick one": the first engine that supports CDP, else the first
+   * engine found. That keeps a fresh install working with no configuration.
+   */
+  defaultEngineId?: string;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
   /**
@@ -344,6 +388,13 @@ export interface AppSettings {
    * own cleanup path. Presets are a closed set that can grow later.
    */
   newTabBackground: string;
+  /**
+   * Show the bookmark grid on the new-tab surface.
+   *
+   * On by default. A user who wants the search box alone can turn it off, and
+   * the page then looks exactly like a plain browser start page.
+   */
+  newTabBookmarks: boolean;
   /**
    * Keep running in the tray when the window is closed. On by default: the local
    * MCP endpoint dies with the process, so an accidental close would disconnect
@@ -384,6 +435,8 @@ export interface WorkspaceSnapshot {
   sites: Site[];
   /** User-created site tags; ordering here is the display order. */
   tags: Tag[];
+  /** Plain bookmarks on the new-tab surface; no credentials, no site. */
+  bookmarks: Bookmark[];
   identities: Identity[];
   views: View[];
   /** Reusable step sequences, one per repeatable job on a site. */
@@ -407,7 +460,6 @@ export interface SiteDraft {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  defaultEngineId?: string;
   autoSubmit: boolean;
   extraFields?: LoginField[];
   tagIds?: string[];
@@ -505,11 +557,13 @@ export type SettingsPatch = Partial<
     | "launchIntervalMs"
     | "layout"
     | "launchTarget"
+    | "defaultEngineId"
     | "autoFillOnLaunch"
     | "browserZoom"
     | "searchEngineId"
     | "customSearchEngines"
     | "newTabBackground"
+    | "newTabBookmarks"
     | "closeToTray"
     | "onboardingVersion"
     | "autoCheckUpdates"
@@ -532,6 +586,15 @@ export interface McpSettings {
   allowWrite: boolean;
   allowRun: boolean;
   allowDelete: boolean;
+  /**
+   * Origins where the AI may type and click inside the **daily profile**.
+   *
+   * Empty by default, and that default is the point: a page in the daily profile
+   * is the user's own signed-in browsing, so an AI gets read access there and
+   * nothing more until the user names the origin. Identity and clean-session
+   * pages are unaffected — those exist to be driven.
+   */
+  aiOrigins: string[];
 }
 
 export interface McpStatus {
@@ -544,9 +607,27 @@ export interface McpStatus {
   allowWrite: boolean;
   allowRun: boolean;
   allowDelete: boolean;
+  aiOrigins: string[];
   toolCount: number;
   /** Last bind error, if the port could not be used. */
   error?: string;
+}
+
+/**
+ * One AI action aimed at a page.
+ *
+ * Carries the origin because that is the unit the permission is granted in, and
+ * the count so the dock can show a running total per site for this session.
+ */
+export interface AiPageAction {
+  origin: string;
+  tabId: string;
+  tool: string;
+  ok: boolean;
+  /** False when the action was refused by the daily-profile gate. */
+  originAuthorized: boolean;
+  /** Actions on this origin since the app started. */
+  count: number;
 }
 
 export interface McpPatch {
@@ -555,6 +636,8 @@ export interface McpPatch {
   allowWrite?: boolean;
   allowRun?: boolean;
   allowDelete?: boolean;
+  /** Grants or revokes AI input permission for one origin in the daily profile. */
+  aiOrigin?: { origin: string; allowed: boolean };
   /** Replaces the bearer token; every client must update its config. */
   rotateToken?: boolean;
 }

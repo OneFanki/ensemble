@@ -1,5 +1,5 @@
 import type { Flow, FlowParam, FlowStep } from "./flows";
-import type { Site, Identity, LayoutPreset, View, SlotRect } from "./types";
+import type { Bookmark, Identity, LayoutPreset, Site, SlotRect, View } from "./types";
 
 /**
  * Portable workspace snapshot. IDs are preserved so re-importing an export on the
@@ -26,6 +26,11 @@ export interface WorkspaceExportFile {
   /** Saved step sequences; they belong to a site and travel with it. */
   flows?: Flow[];
   layoutPresets: LayoutPreset[];
+  /**
+   * Plain bookmarks. Independent of sites and identities — that is the point of
+   * the distinction — so they import even into a workspace with no sites at all.
+   */
+  bookmarks?: Bookmark[];
   secrets?: SealedSecrets;
 }
 
@@ -35,6 +40,7 @@ export interface ExportCounts {
   views: number;
   flows: number;
   layoutPresets: number;
+  bookmarks: number;
 }
 
 export interface ImportPreview extends ExportCounts {
@@ -81,9 +87,6 @@ function sanitizeSite(raw: unknown): Site {
     loginPath: text(raw["loginPath"], "登录入口", 300),
     ...(optionalText(raw["authCheckPath"], 300)
       ? { authCheckPath: optionalText(raw["authCheckPath"], 300) }
-      : {}),
-    ...(optionalText(raw["defaultEngineId"], 120)
-      ? { defaultEngineId: optionalText(raw["defaultEngineId"], 120) }
       : {}),
     autoSubmit: raw["autoSubmit"] === true,
     ...(Array.isArray(raw["extraFields"]) ? { extraFields: raw["extraFields"] as never } : {}),
@@ -224,7 +227,8 @@ function sanitizeFlow(raw: unknown): Flow | undefined {
   };
 }
 
-function sanitizePreset(raw: unknown): LayoutPreset | undefined {  if (!isRecord(raw)) return undefined;
+function sanitizePreset(raw: unknown): LayoutPreset | undefined {
+  if (!isRecord(raw)) return undefined;
   const name = optionalText(raw["name"], 60);
   const id = optionalText(raw["id"], 80);
   if (!name || !id || !Array.isArray(raw["slots"])) return undefined;
@@ -246,6 +250,30 @@ function sanitizePreset(raw: unknown): LayoutPreset | undefined {  if (!isRecord
 }
 
 /**
+ * Validates one imported bookmark.
+ *
+ * The rules match `sanitizeBookmarks` in the store — an export is a hand-editable
+ * file, so the same "no bookmark the app cannot open" rule has to hold here.
+ * Ordered after the import so appends land at the end of the grid in file order.
+ */
+function sanitizeBookmark(raw: unknown, index: number): Bookmark | undefined {
+  if (!isRecord(raw)) return undefined;
+  const url = optionalText(raw["url"], 2000);
+  if (!url || !/^https?:\/\//i.test(url)) return undefined;
+  const id = optionalText(raw["id"], 80) ?? `bookmark-import-${index}`;
+  const favicon = optionalText(raw["favicon"], 400_000);
+  return {
+    id,
+    name: optionalText(raw["name"], 120) ?? new URL(url).host,
+    url,
+    ...(favicon?.startsWith("data:image/") ? { favicon } : {}),
+    order: typeof raw["order"] === "number" && Number.isFinite(raw["order"]) ? raw["order"] : index,
+    createdAt: optionalText(raw["createdAt"]) ?? new Date().toISOString(),
+    updatedAt: optionalText(raw["updatedAt"]) ?? new Date().toISOString(),
+  };
+}
+
+/**
  * Validates a user-picked file. Anything malformed is rejected with a readable
  * message instead of partially importing a half-broken workspace.
  */
@@ -263,14 +291,17 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     : [];
   const views = Array.isArray(input["views"]) ? input["views"].map(sanitizeView) : [];
   const flows = Array.isArray(input["flows"])
-    ? input["flows"]
-        .map(sanitizeFlow)
-        .filter((flow): flow is Flow => Boolean(flow))
+    ? input["flows"].map(sanitizeFlow).filter((flow): flow is Flow => Boolean(flow))
     : [];
   const layoutPresets = Array.isArray(input["layoutPresets"])
     ? input["layoutPresets"]
         .map(sanitizePreset)
         .filter((preset): preset is LayoutPreset => Boolean(preset))
+    : [];
+  const bookmarks = Array.isArray(input["bookmarks"])
+    ? input["bookmarks"]
+        .map(sanitizeBookmark)
+        .filter((bookmark): bookmark is Bookmark => Boolean(bookmark))
     : [];
 
   const secrets = isRecord(input["secrets"])
@@ -285,6 +316,7 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     views,
     flows,
     layoutPresets,
+    bookmarks,
     ...(secrets && typeof secrets.payload === "string" ? { secrets } : {}),
   };
 }
@@ -296,5 +328,6 @@ export function exportCounts(file: WorkspaceExportFile): ExportCounts {
     views: file.views.length,
     flows: file.flows?.length ?? 0,
     layoutPresets: file.layoutPresets.length,
+    bookmarks: file.bookmarks?.length ?? 0,
   };
 }

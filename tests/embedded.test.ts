@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  EMBEDDED_DAILY_PARTITION,
   EMBEDDED_SLOT_HEADER,
   FAVICON_MAX_BYTES,
   ZOOM_STEPS,
   clampZoom,
   desktopUserAgent,
+  embeddedCleanPartition,
   embeddedPartition,
   embeddedSlotCount,
   embeddedSlotRects,
+  embeddedTabPartition,
   embeddedViewRect,
   inlineFavicon,
   neighborZoomStep,
@@ -85,6 +88,60 @@ describe("session partitioning", () => {
 
   it("gives different identities different partitions", () => {
     expect(embeddedPartition("one")).not.toBe(embeddedPartition("two"));
+  });
+
+  /*
+   * The two identity-less worlds used to be one shared, persistent partition:
+   * every throwaway tab got the same cookie jar and it survived quitting. The
+   * split is what makes a bookmark open signed in while "clean open" stays a
+   * throwaway; if these ever collapse into one value the distinction is gone.
+   */
+  it("separates the daily profile from the throwaway session", () => {
+    expect(embeddedTabPartition({ instanceId: "i1" })).toBe(EMBEDDED_DAILY_PARTITION);
+    const clean = embeddedTabPartition({ instanceId: "i1", clean: true });
+    expect(clean).toBe(embeddedCleanPartition("i1"));
+    expect(clean).not.toBe(EMBEDDED_DAILY_PARTITION);
+  });
+
+  it("keeps the throwaway session in memory, not on disk", () => {
+    // A `persist:` partition is written to the user's data directory and would be
+    // there for the next clean open, and the next launch, which is not "clean".
+    expect(embeddedCleanPartition("abc").startsWith("persist:")).toBe(false);
+    expect(EMBEDDED_DAILY_PARTITION.startsWith("persist:")).toBe(true);
+  });
+
+  it("gives each clean instance its own throwaway session", () => {
+    expect(embeddedCleanPartition("one")).not.toBe(embeddedCleanPartition("two"));
+    // ...so a login in one clean window cannot be seen by another.
+    expect(embeddedTabPartition({ instanceId: "a", clean: true })).not.toBe(
+      embeddedTabPartition({ instanceId: "b", clean: true }),
+    );
+  });
+
+  /*
+   * The daily profile keeps the string the old shared partition used, on purpose:
+   * that is where the user's existing logins live, and an upgrade must not sign
+   * them out of every site they had opened before the split.
+   */
+  it("adopts the old shared partition as the daily profile", () => {
+    expect(EMBEDDED_DAILY_PARTITION).toBe("persist:embedded-clean");
+  });
+
+  it("puts an identity's page in that identity's partition whatever clean says", () => {
+    expect(embeddedTabPartition({ identityId: "id-1", instanceId: "i1" })).toBe(
+      embeddedPartition("id-1"),
+    );
+    expect(embeddedTabPartition({ identityId: "id-1", instanceId: "i1", clean: true })).toBe(
+      embeddedPartition("id-1"),
+    );
+  });
+
+  it("never lets an identity land in a shared profile", () => {
+    for (const identityId of ["a", "b"]) {
+      const partition = embeddedTabPartition({ identityId, instanceId: "i1" });
+      expect(partition).not.toBe(EMBEDDED_DAILY_PARTITION);
+      expect(partition).not.toBe(embeddedCleanPartition("i1"));
+    }
   });
 });
 

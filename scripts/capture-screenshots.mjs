@@ -32,11 +32,26 @@ const electronBinary =
 /**
  * A local page for the built-in browser shots. It has to be a real server: the
  * whole point of the browser page is that native views paint over the stage.
+ *
+ * It also serves an icon: the dock's icon strip and the page rows read their
+ * favicon from here, and a screenshot full of placeholder globes would not show
+ * the thing those rows are for.
  */
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<rect width="32" height="32" rx="8" fill="#2f6fae"/>
+<path d="M9 22V10h4l3 7 3-7h4v12h-3v-8l-3 7h-1l-3-7v8z" fill="#fff"/>
+</svg>`;
+
 const demoPage = createServer((req, res) => {
+  if (req.url === "/favicon.svg") {
+    res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "max-age=300" });
+    res.end(FAVICON_SVG);
+    return;
+  }
   const who = decodeURIComponent((req.url ?? "/").split("/")[1] || "console");
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>${who} · 控制台</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
 body{font:13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:18px 22px;background:#0f1419;color:#dbe3ec}
 h1{font-size:16px;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid #26313d;font-weight:500}
@@ -330,6 +345,43 @@ async function seed(userData, locale, theme = "dark") {
         instances: [],
         manualEngines: [],
         layoutPresets: [],
+        // Bookmarks are what a new tab shows, so the shot needs real ones. Kept
+        // on the local demo server: a screenshot must not depend on the network,
+        // and their tiles fall back to the coloured initial on purpose.
+        bookmarks: [
+          {
+            id: uuid(20),
+            name: demo.site,
+            url: `http://127.0.0.1:${PAGE_PORT}/console`,
+            order: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: uuid(21),
+            name: locale === "zh" ? "接口文档" : "API docs",
+            url: `http://127.0.0.1:${PAGE_PORT}/docs`,
+            order: 1,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: uuid(22),
+            name: locale === "zh" ? "发布流水线" : "Release pipeline",
+            url: `http://127.0.0.1:${PAGE_PORT}/builds`,
+            order: 2,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: uuid(23),
+            name: locale === "zh" ? "监控面板" : "Dashboards",
+            url: `http://127.0.0.1:${PAGE_PORT}/metrics`,
+            order: 3,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
       },
       null,
       2,

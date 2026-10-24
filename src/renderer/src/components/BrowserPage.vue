@@ -8,8 +8,8 @@ import {
   tabDisplayTitle,
   viewSlotFractions,
 } from "@shared/embedded";
-import type { SlotRect } from "@shared/types";
 import { resolveBrowserInput } from "@shared/search";
+import type { Bookmark, SlotRect } from "@shared/types";
 import {
   ArrowLeft,
   ArrowRight,
@@ -22,6 +22,8 @@ import {
   Plus,
   RotateCw,
   Search,
+  ShieldCheck,
+  Star,
   X,
 } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -62,6 +64,116 @@ const stageOrigin = ref({ x: 0, y: 0 });
 
 const activeTab = computed(() => store.activeTab);
 const activeView = computed(() => store.activeView);
+
+/**
+ * Whether the active page is already a bookmark.
+ *
+ * Compared by URL, not by name: two bookmarks may share a title but never the
+ * address they open, and this drives a toggle — a star that is filled must mean
+ * "clicking it removes exactly this entry".
+ */
+const bookmarkedEntry = computed<Bookmark | undefined>(() => {
+  const tab = activeTab.value;
+  if (!tab || isBlankTab(tab)) return undefined;
+  return workspace.bookmarks.find((item) => samePage(item.url, tab.url));
+});
+
+/** URL equality that ignores the hash and a trailing slash on the path. */
+function samePage(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    const trim = (value: string) => value.replace(/\/+$/, "");
+    return (
+      left.origin === right.origin &&
+      trim(left.pathname) === trim(right.pathname) &&
+      left.search === right.search
+    );
+  } catch {
+    return a === b;
+  }
+}
+
+/**
+ * The origin of the active page, when it is one the AI gate actually covers.
+ *
+ * Undefined for an account page, a clean session, or a non-web page: in all
+ * three cases a permission switch here would be meaningless, and showing one
+ * would teach the user that the control is decorative.
+ */
+const aiGateOrigin = computed<string | undefined>(() => {
+  const tab = activeTab.value;
+  if (!tab || tab.identityId || tab.clean) return undefined;
+  try {
+    const parsed = new URL(tab.url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return parsed.origin;
+  } catch {
+    return undefined;
+  }
+});
+
+const aiGateVisible = computed(() => Boolean(aiGateOrigin.value));
+const aiOriginAuthorized = computed(() => {
+  const origin = aiGateOrigin.value;
+  return origin ? (workspace.mcp?.aiOrigins ?? []).includes(origin) : false;
+});
+
+/**
+ * Grants or revokes AI input for the page's origin.
+ *
+ * Per origin rather than per tab, and reversible in one click: the user's model
+ * is "this site may be operated", and a permission that takes a trip to Settings
+ * to undo would stay on long after they stopped needing it.
+ */
+async function toggleAiOrigin(): Promise<void> {
+  const origin = aiGateOrigin.value;
+  if (!origin) {
+    workspace.notify(t("app.aiOriginNoOrigin"), "error");
+    return;
+  }
+  const next = !aiOriginAuthorized.value;
+  const status = await workspace.updateMcp({ aiOrigin: { origin, allowed: next } });
+  if (!status) return;
+  workspace.notify(t(next ? "app.aiOriginGranted" : "app.aiOriginRevoked", { origin }), "success");
+}
+
+/**
+ * Star in the address bar: one click adds the current page, another removes it.
+ *
+ * The name offered is the page title, which is what the user recognises; the
+ * host is the fallback for a page that has not set one. Everything goes through
+ * the same `saveBookmark` call the grid's rename uses, so the URL rule is
+ * enforced in one place.
+ */
+async function toggleBookmark(): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab || isBlankTab(tab)) return;
+  const existing = bookmarkedEntry.value;
+  if (existing) {
+    await workspace.deleteBookmark(existing.id);
+    workspace.notify(t("app.bookmarkRemoved", { name: existing.name }), "success");
+    return;
+  }
+  // A crash page and a scheme the surface refuses both have a URL but no
+  // bookmark; the service would reject them, so say why before trying.
+  let host = "";
+  try {
+    const parsed = new URL(tab.url);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") host = parsed.host;
+  } catch {
+    host = "";
+  }
+  if (!host) return;
+  const name = (tab.title || "").trim() || host;
+  await workspace.saveBookmark({ name: name.slice(0, 120), url: tab.url });
+  // The icon is already in hand here: the tab fetched it through its own session,
+  // so the grid does not have to make a second request for the same bytes.
+  const saved = workspace.bookmarks.find((item) => samePage(item.url, tab.url));
+  if (saved && tab.favicon) await workspace.setBookmarkFavicon(saved.id, tab.favicon);
+  workspace.notify(t("app.bookmarkAdded", { name }), "success");
+}
 
 /**
  * Slots of the view on stage, in the same geometry the main process uses. The
@@ -804,6 +916,10 @@ async function addToSlot(slotIndex: number): Promise<void> {
  * These are sites, not history entries: "open this system" and "open it as this
  * account" are the two things this app exists for, and both are one click away
  * from the tab bar instead of a trip to the sites page.
+ *
+ * The plain open lands in the daily profile, so a site the user is signed in to
+ * just opens. "Clean" is the explicit exception and uses the throwaway
+ * partition, which is why it is its own row in the menu rather than a modifier.
  */
 function siteLoginUrl(siteId: string): string | undefined {
   const site = workspace.sites.find((item) => item.id === siteId);
@@ -820,6 +936,30 @@ async function openSiteBookmark(siteId: string): Promise<void> {
   if (!url) return;
   workspace.markSiteUsed(siteId);
   await store.openTabWith(url);
+}
+
+async function openSiteClean(siteId: string): Promise<void> {
+  const url = siteLoginUrl(siteId);
+  if (!url) return;
+  workspace.markSiteUsed(siteId);
+  await store.openTabWith(url, { clean: true });
+}
+
+/**
+ * A bookmark tile on the new-tab surface.
+ *
+ * The tile replaces the blank page the user is looking at, which is what the
+ * same click does in a browser. If the tab disappeared in the meantime (the
+ * state broadcast and a close can race), a new tab is the safe fallback rather
+ * than a navigation into a page that is gone.
+ */
+async function openBookmark(bookmark: Bookmark): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab) {
+    await store.openTabWith(bookmark.url);
+    return;
+  }
+  await window.ensemble.navigateEmbeddedTab(tab.id, bookmark.url);
 }
 
 async function openIdentityBookmark(identityId: string): Promise<void> {
@@ -910,6 +1050,18 @@ function fillMessage(reason?: string): string {
       </form>
 
       <button
+        v-if="activeTab && !isBlankTab(activeTab)"
+        type="button"
+        class="icon star"
+        :class="{ active: Boolean(bookmarkedEntry) }"
+        :title="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
+        :aria-label="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAdd')"
+        :aria-pressed="Boolean(bookmarkedEntry)"
+        @click="toggleBookmark"
+      >
+        <Star :size="15" :fill="bookmarkedEntry ? 'currentColor' : 'none'" />
+      </button>
+      <button
         v-if="activeTab?.identityId"
         type="button"
         class="icon"
@@ -918,6 +1070,25 @@ function fillMessage(reason?: string): string {
         @click="fillLogin(activeTab.id)"
       >
         <KeyRound :size="15" />
+      </button>
+      <!--
+        Shown only where the answer can differ: a daily-profile page. An account
+        page and a clean session are driveable already, so a control that is
+        always "on" there would just add noise — and imply the switch guards
+        something it does not.
+      -->
+      <button
+        v-if="aiGateVisible"
+        type="button"
+        class="icon"
+        data-ai-origin-switch
+        :class="{ active: aiOriginAuthorized }"
+        :title="aiOriginAuthorized ? t('app.aiOriginRevokeHint') : t('app.aiOriginGrantHint')"
+        :aria-label="t('app.aiOriginTitle')"
+        :aria-pressed="aiOriginAuthorized"
+        @click="toggleAiOrigin"
+      >
+        <ShieldCheck :size="15" />
       </button>
       <button
         type="button"
@@ -990,7 +1161,8 @@ function fillMessage(reason?: string): string {
       </button>
       <OpenSiteButton
         @open-blank="store.openTab()"
-        @open-site="openSiteBookmark"
+        @open-daily="openSiteBookmark"
+        @open-clean="openSiteClean"
         @open-identity="openIdentityBookmark"
       />
     </div>
@@ -1048,7 +1220,7 @@ function fillMessage(reason?: string): string {
             : { inset: '0' }
         "
       >
-        <NewTabPage :tab="surface.tab" />
+        <NewTabPage :tab="surface.tab" @open-bookmark="openBookmark" />
       </div>
 
       <!-- Native views paint over this area; only the slot headers stay visible. -->
@@ -1376,7 +1548,7 @@ function fillMessage(reason?: string): string {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 14px 32px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-menu);
   overflow: hidden;
 }
 
@@ -1856,7 +2028,7 @@ function fillMessage(reason?: string): string {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 55%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .tab-menu-item {

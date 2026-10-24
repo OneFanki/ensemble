@@ -132,6 +132,19 @@ export const flowDraftSchema = z.object({
   steps: z.array(flowStepSchema).min(1).max(100),
 });
 
+/**
+ * A bookmark is a name and an address.
+ *
+ * The address is left permissive here — a bare `example.com` is what people
+ * paste — and normalised in `saveBookmark`, which is also where the http(s)
+ * rule lives for every other caller.
+ */
+export const bookmarkDraftSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().trim().max(120),
+  url: z.string().trim().min(1).max(2000),
+});
+
 export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(["zh", "en"]).optional(),
@@ -145,6 +158,7 @@ export const settingsPatchSchema = z.object({
   launchIntervalMs: z.number().int().min(0).max(5000).optional(),
   layout: z.string().min(1).max(64).optional(),
   launchTarget: z.enum(["embedded", "external"]).optional(),
+  defaultEngineId: z.string().optional(),
   autoFillOnLaunch: z.boolean().optional(),
   browserZoom: z.number().int().min(50).max(200).optional(),
   /**
@@ -173,6 +187,7 @@ export const settingsPatchSchema = z.object({
    * default at render time rather than breaking the page.
    */
   newTabBackground: z.string().min(1).max(32).optional(),
+  newTabBookmarks: z.boolean().optional(),
   closeToTray: z.boolean().optional(),
   onboardingVersion: z.number().int().min(0).max(999).optional(),
   autoCheckUpdates: z.boolean().optional(),

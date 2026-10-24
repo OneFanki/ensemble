@@ -94,12 +94,13 @@ The identities page is where most of the day is spent: one card per identity wit
 - **A view is one shared screen region**: create one from the running dock, then drag tabs into it (the drop point decides side by side or stacked), switch layouts, drag the seams to re-proportion slots; only one view is on stage at a time and the rest keep running off screen
 - **One slot = one browser instance**: a page opened from a page (`target="_blank"`, an OAuth popup) stays inside the same instance and just becomes the page that slot shows — it never takes an extra slot. Switching those pages does not require the dock: the slot header carries a tab strip for the instance in that cell, and one click decides which of its pages the cell shows. The dock lists one row per instance, with that instance's other pages indented beneath it
 - **On stage / off stage / selected**: a view shows only as many instances as it has slots; one click on an off-stage instance swaps it into the selected slot, and clicking again swaps back. A dock row can also be dragged straight onto a slot to replace it. Slot numbers make “which pages are on screen right now” a readable fact; an empty slot is a dashed cell with an “add a page here” button that drops a fresh tab straight into that cell
-- **One switch for built-in vs external**: pick the launch target at the top right of the title bar once, and launching from the identities page, batch launch, re-login and the views page all follow it. The dock's “add tab” always opens a built-in tab; the overlay always lists external windows only
-- **Sites are bookmarks**: the split new-tab button next to the address bar, the dock's ＋ and typing a site name all open a site — clean, or as one of its accounts with that account's session already loaded
+- **One switch for built-in vs external**: pick the launch target at the top right of the title bar once, and launching from the identities page, batch launch, re-login and the views page all follow it. The same menu offers “open a clean session”, which opens in whichever surface that switch names. The dock's “add tab” always opens a built-in tab; the overlay always lists external windows only
+- **A site is a login recipe; a bookmark is an address**: the split new-tab button next to the address bar, the dock's ＋ and typing a site name all open a site — daily (reusing whatever login the daily profile already has), clean, or as one of its accounts with that account's session already loaded. An address that needs no login and no site is a bookmark
+- **Daily profile**: identity-less pages — new tabs, bookmarks, addresses typed into the bar — share one persistent personal profile, so signing in once keeps working across restarts. That is what lets an assistant act on a page you are already signed in to
 - **Save a hand-typed login**: sign in yourself in the built-in browser and the app offers to save it, like the browser's own password bubble; accepting opens the account form pre-filled, and the password only ever passes through the main process into the vault
 - **A site is just “where and how to log in”**: there is no global “current site”; accounts are grouped by site, a view may span sites, and one tag namespace is shared by sites, accounts and views. Tag management lives in Settings → Tags, where each tag shows how many sites, accounts and views use it; the tag filter strip is a single scrolling row, so a dozen tags never push the cards down.
 - **Running dock**: views, loose tabs and external instances in one place; views are blocks, instances are rows, collapsible as a whole; one click brings the page or window to the front. Collapsed, it keeps one site icon per running instance with the group boundaries still visible — click an icon to switch to it, so the width goes back to the page instead of hiding how many windows are running. Expanding and collapsing are the same control in the same place
-- **The blank page is the search box**: startup opens one blank page whose landing surface is a single field — an address opens directly, words go to the selected engine (Bing by default, custom engines accepted). The surface ships with built-in backdrops, switchable from the bottom-right corner and carried with the workspace on export
+- **The blank page is the search box**: startup opens one blank page whose landing surface is a single field — an address opens directly, words go to the selected engine (Bing by default, custom engines accepted) — with a row of bookmarks beneath it: double-click to rename, right-click to remove, drag to reorder, and a star in the address bar bookmarks the page you are on. The surface ships with built-in backdrops, switchable from the bottom-right corner and carried with the workspace on export
 - **Two browser surfaces**: the built-in one is the main surface, the external real browser is the fidelity check; both share the same accounts, credentials and layouts
 - **Identity references**: an identity can reference one on another site — username, password, display name and role stay in sync while sessions and profiles stay independent; detach when they need to differ
 - **Address-change detection**: a site remembers the address that last signed in successfully; if it changes, filling the password requires one explicit confirmation
@@ -113,15 +114,16 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Session health**: one screen shows who is signed in, who expired and who is unconfirmed across every account; check everyone with one click, or open the login page and fill credentials for every expired account. Accounts with no window open are checked in a hidden browser that reads their own profile and closes again
 - **Restore last view**: when enabled in Settings, a cold start reopens the last view in its saved layout inside the built-in browser
 - **Credential protection**: OS keychain encryption (DPAPI / Keychain / keyring), optionally hardened with an app master password
-- **Clean sessions**: in external mode, throwaway windows with their own profile directory, deleted on close; the sites page can also open a blank one that belongs to no site. In the built-in surface, pages with no identity share a temporary partition and never carry an account's login
+- **Clean sessions**: in external mode, throwaway windows with their own profile directory, deleted on close. In the built-in surface each clean open gets its own in-memory session — gone when the process exits, and two clean opens never see each other. The entry lives in the title bar's browser menu and follows that switch
+- **Daily profile**: in the built-in surface, identity-less pages share one persistent profile, so signing in once lasts. It is a separate world from a clean session, and a bookmark opens using the login it already holds
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
 - **One entry per job**: the rail navigates browser / sites / identities / views / tags / flows / settings; the title bar only switches sites
 - **Let an AI do the data entry**: a built-in MCP endpoint receives sites, identities and views from your AI client; it also drives the built-in browser, so given a test URL and a super-admin login it can create the tenant accounts, save them and put them on stage
 - **Flows are reusable assets**: an AI (or you) can save a page operation that worked as a flow — a list of parameterised steps that reruns in one call instead of being worked out again. A flow is steps, not a script, so it stays readable, editable and adjustable in the UI
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
 - **Share accounts**: select accounts on the identities page and export a bundle with just those
-  logins, so a colleague can import them and skip re-registering. Separate from the whole-workspace
-  migration export — your views and layouts stay local
+  logins, so they can be imported elsewhere and skip re-registering. Separate from the
+  whole-workspace migration export — your views and layouts stay local
 - **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
 - **Automatic updates**: the app checks for a new version in the background, shows a short summary when one exists, and downloads, verifies and installs it in one click — then restarts itself. No manual GitHub download, and no browser download warning to get past
 
@@ -287,7 +289,9 @@ Hard boundaries:
 
 - **Passwords are write-only.** No tool reads, copies or returns a password; once stored it is only decrypted inside the main process for filling.
 - Delete tools additionally require an explicit `confirm: true`. Launch tools are gated only by the Run permission: opening a window changes no data.
-- Every call appends one line to `mcp-audit.log`; passwords, passphrases and tokens are replaced with `[redacted]`. Text typed into a password field is masked too, even though the parameter is simply called `text`.
+- Every call appends one line to `mcp-audit.log`; passwords, passphrases and tokens are replaced with `[redacted]`. Text typed into a password field is masked too, even though the parameter is simply called `text`. A call that touches a page also records its **origin**, so "what did the AI do on this site" is answerable from the log alone.
+- **The daily profile is read-only for the AI by default.** It is the browser you are signed in to, so an AI may read pages, take screenshots and switch tabs, but clicking, typing, filling a form or running a flow requires you to allow that origin first — from the shield button in the browser toolbar or from Settings. Identity pages and clean sessions are never restricted; those exist to be driven. The dock shows how many AI actions each site has seen this session.
+- **Navigation targets must come from you or the workspace.** A blank tab's first navigation, same-site links, and addresses already saved as a site or a bookmark are allowed; an address written in a page's body is not. That is the defence against prompt injection — a tampered page cannot talk the AI into going somewhere else.
 - On quit the MCP server stops before browsers are reclaimed, so the port is released with the process.
 
 <p align="center">
@@ -308,10 +312,11 @@ tags, flows and layout presets. Browser profiles and sessions are never exported
   site is missing are skipped and counted.
 - Running instances and login status are never part of an export.
 
-**Account bundle** shares logins with a colleague: select a few accounts on the identities page
-(or a whole site) and export just those. The file is much smaller and contains no views or layouts.
+**Account bundle** hands logins to another machine or person: click “select accounts” on the
+identities page, tick a few (or a whole site) and export just those. The file is much smaller and
+contains no views or layouts.
 
-- Matching uses no ids: sites match by URL, accounts by username within the site. A colleague who
+- Matching uses no ids: sites match by URL, accounts by username within the site. A recipient who
   has never seen that site can still import it.
 - Passwords are sealed with a passphrase the same way, so copying the file alone does not reveal
   them; a wrong passphrase rejects the whole import.
@@ -398,6 +403,7 @@ The primary path talks to browsers over CDP directly rather than hosting human-d
 
 - No fingerprint spoofing, anti-detection or account farming
 - No bundled browser engine
+- No Chrome replacement: no extension store, no password manager, no sync — and bookmarks stay local (a name and an address, carried with the workspace export) rather than syncing across devices
 - No test-case management, reporting or CI platform
 - No multi-account Safari (it has no per-profile directory model)
 

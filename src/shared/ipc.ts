@@ -10,9 +10,11 @@ import type { FlowDraft, FlowRunResult } from "./flows";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
   AppSettings,
+  AiPageAction,
   AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
+  BookmarkDraft,
   Engine,
   FocusLabelPayload,
   IdentityDraft,
@@ -104,6 +106,13 @@ export const IPC = {
   flowDelete: "flow:delete",
   /** Runs a saved flow against a tab and reports every step's outcome. */
   flowRun: "flow:run",
+  /** Adds or renames a plain bookmark (a name and an address, no site). */
+  bookmarkSave: "bookmark:save",
+  /** Stores the icon a page already showed, so the grid needs no fetch. */
+  bookmarkFavicon: "bookmark:favicon",
+  bookmarkDelete: "bookmark:delete",
+  /** Moves one bookmark to an explicit index and renumbers the rest. */
+  bookmarkMove: "bookmark:move",
   /** Accepts a changed site address so credential filling may proceed again. */
   siteAcceptOrigin: "site:accept-origin",
   /** Reads the address-change notice left by the last blocked fill. */
@@ -119,6 +128,8 @@ export const IPC = {
   mcpInfo: "mcp:info",
   mcpUpdate: "mcp:update",
   mcpChanged: "mcp:changed",
+  /** Main → renderer: an AI client acted on a page, with its origin. */
+  aiPageAction: "ai:page-action",
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
@@ -253,6 +264,15 @@ export interface EnsembleApi {
   saveFlow(draft: FlowDraft): Promise<WorkspaceSnapshot>;
   deleteFlow(id: string): Promise<WorkspaceSnapshot>;
   /**
+   * Adds or renames a plain bookmark. Returns the snapshot rather than the
+   * record: the new-tab grid and any open bookmark panel both read from it.
+   */
+  saveBookmark(draft: BookmarkDraft): Promise<WorkspaceSnapshot>;
+  /** Attaches an already-inlined `data:image/*` icon, or clears it. */
+  setBookmarkFavicon(id: string, favicon?: string): Promise<WorkspaceSnapshot>;
+  deleteBookmark(id: string): Promise<WorkspaceSnapshot>;
+  moveBookmark(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
+  /**
    * Runs a flow. Omitting `identityId` opens a fresh tab as the site's first
    * usable account; the result names the tab so the caller can watch it.
    */
@@ -295,6 +315,13 @@ export interface EnsembleApi {
   updateMcp(patch: McpPatch): Promise<McpStatus>;
   /** Fires when the endpoint starts, stops, or moves to another port. */
   onMcpChanged(listener: (status: McpStatus) => void): () => void;
+  /**
+   * Fires whenever an AI client acts on a page, with the site it touched.
+   *
+   * The dock shows the count so "the AI is operating this site" is visible while
+   * it happens; the audit log is the durable record of the same events.
+   */
+  onAiPageAction(listener: (event: AiPageAction) => void): () => void;
 
   setPassword(owner: PasswordOwner, password: string): Promise<WorkspaceSnapshot>;
   clearPassword(owner: PasswordOwner): Promise<WorkspaceSnapshot>;
@@ -376,6 +403,12 @@ export interface EnsembleApi {
      * for a loose tab explicitly, which the dock's "Tabs" block needs.
      */
     viewId?: string | null;
+    /**
+     * Open in the throwaway session instead of the daily profile. Only the
+     * explicit "clean open" action sets this; a bookmark or a typed address
+     * omits it, so the login already in the daily profile is reused.
+     */
+    clean?: boolean;
   }): Promise<EmbeddedTab>;
   /** Opens a blank tab into a specific view and returns the new state. */
   openEmbeddedTabInView(viewId: string): Promise<EmbeddedState>;

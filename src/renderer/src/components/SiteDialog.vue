@@ -1,17 +1,15 @@
 <script setup lang="ts">
-import type { Engine, SiteDraft, Tag } from "@shared/types";
+import type { SiteDraft, Tag } from "@shared/types";
 import { Trash2 } from "lucide-vue-next";
 import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
 import Modal from "./Modal.vue";
-import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
 
 const props = defineProps<{
   draft: SiteDraft;
-  engines: Engine[];
   tags?: Tag[];
 }>();
 
@@ -59,23 +57,6 @@ function submit() {
 
 const namePlaceholder = computed(() => t("app.siteNameExample"));
 
-const engineOptions = computed(() => [
-  { value: "__auto__", label: t("app.autoPickEngine") },
-  ...props.engines.map((engine) => ({
-    value: engine.id,
-    label: `${engine.brand} ${engine.version ?? ""}`.trim(),
-    hint:
-      engine.status === "blocked"
-        ? t("app.engineBlockedSuffix").trim()
-        : !engine.cdp
-          ? t("app.engineExternalSuffix").trim()
-          : t("app.cdpMode"),
-    disabled: engine.status === "blocked",
-  })),
-]);
-
-const engineValue = computed(() => form.defaultEngineId ?? "__auto__");
-
 function normalizePath(event: Event) {
   const input = event.target as HTMLInputElement;
   const value = input.value.trim();
@@ -101,17 +82,6 @@ function normalizePath(event: Event) {
         <input v-model="form.name" class="input" :placeholder="namePlaceholder" />
         <span class="hint">{{ $t("app.siteNameHint") }}</span>
       </label>
-
-      <div class="field">
-        <span class="label">{{ $t("app.defaultEngine") }}</span>
-        <SelectField
-          :model-value="engineValue"
-          :options="engineOptions"
-          @update:model-value="
-            form.defaultEngineId = $event === '__auto__' ? undefined : $event
-          "
-        />
-      </div>
 
       <div class="field">
         <span class="label">{{ $t("app.tags") }}</span>

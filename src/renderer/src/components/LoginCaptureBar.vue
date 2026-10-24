@@ -52,7 +52,7 @@ import IconButton from "./ui/IconButton.vue";
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
-  box-shadow: 0 12px 28px rgb(0 0 0 / 34%);
+  box-shadow: var(--shadow-menu);
 }
 
 .icon {

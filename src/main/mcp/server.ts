@@ -2,13 +2,17 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
+import type { ElementTarget, WaitResult } from "@core/cdp/inspect";
 import type { WorkspaceService } from "@core/service";
 import { JsonStore } from "@core/storage/json-store";
+import type { Flow, FlowRunResult, FlowStep } from "@shared/flows";
+import { resolveParams } from "@shared/flows";
 import {
+  flowDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
   siteDraftSchema,
-  siteTagDraftSchema,
+  tagDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
 import type {
@@ -61,22 +65,56 @@ export interface EmbeddedSurface {
   closeTab(tabId: string): unknown;
   activate(tabId: string): unknown;
   snapshotDom(tabId: string, options?: { maxNodes?: number }): Promise<unknown>;
-  click(tabId: string, selector: string): Promise<unknown>;
+  click(tabId: string, target: ElementTarget | string): Promise<unknown>;
   type(
     tabId: string,
-    selector: string,
+    target: ElementTarget | string,
     text: string,
     options?: { submit?: boolean; clear?: boolean },
   ): Promise<unknown>;
+  /** Fills several fields in one call; each entry is a real input event. */
+  fillForm(
+    tabId: string,
+    fields: Array<{
+      target: ElementTarget | string;
+      value: string;
+      submit?: boolean;
+      clear?: boolean;
+    }>,
+  ): Promise<unknown>;
+  /** Runs a saved flow's steps against one tab, reporting every step. */
+  runFlow(
+    tabId: string,
+    steps: FlowStep[],
+    options: { baseUrl: string; vars: Record<string, string>; timeoutMs: number },
+  ): Promise<FlowRunResult>;
   evaluate(tabId: string, expression: string): Promise<unknown>;
   screenshot(
     tabId: string,
     options?: { format?: "png" | "jpeg"; quality?: number },
   ): Promise<{ path: string; bytes: number }>;
-  visibility(tabId: string, selector: string): Promise<unknown>;
+  visibility(tabId: string, target: ElementTarget | string): Promise<unknown>;
+  /** Polls a page condition; see `buildWaitExpression` for the conditions. */
+  wait(
+    tabId: string,
+    input: {
+      condition: "visible" | "hidden" | "text" | "url" | "value";
+      target?: ElementTarget | string;
+      text?: string;
+      timeoutMs: number;
+    },
+  ): Promise<WaitResult>;
   /** `viewId` omitted means the view currently on stage. */
   setLayout(layoutId: string, viewId?: string): unknown;
   pinTab(slotIndex: number, tabId: string | null, viewId?: string): unknown;
+  /** Reorders the dock, or moves a tab in/out of a view. */
+  moveTab(
+    tabId: string,
+    target:
+      | { kind: "tab"; tabId: string; edge: "before" | "after" | "middle" }
+      | { kind: "view"; viewId: string }
+      | { kind: "loose" },
+  ): unknown;
   fillLogin(tabId: string): Promise<unknown>;
   defaultTabId(requested?: string): string;
   /** Id of the view on stage, so layout tools do not need one spelled out. */
@@ -95,6 +133,45 @@ function object(
   required: string[] = [],
 ): Record<string, unknown> {
   return { type: "object", properties, required, additionalProperties: false };
+}
+
+/**
+ * How a tool names the element it acts on.
+ *
+ * `selector` is a CSS path and stays supported for callers that already have
+ * one, but it is the wrong default for pages built from component libraries: the
+ * snapshot can only express those as long `:nth-of-type` chains, and one extra
+ * conditional field breaks the chain. A person reads the label next to a field
+ * or the text on a button, so the tools accept the same thing.
+ */
+const targetProps = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  selector: string("CSS 选择器。页面结构一变就可能失效；能用 label 时优先用 label"),
+  label: string("表单字段旁的标签文字，例如「用户名」。按它找到对应的输入框"),
+  role: {
+    type: "string",
+    description: "ARIA role，例如 button / combobox / textbox，用于在同名元素中收窄",
+  },
+  exact: { type: "boolean", description: "要求文字完全相等，默认按前缀/包含匹配" },
+  ...extra,
+});
+
+/** Builds the element target from tool arguments, rejecting an empty one. */
+function targetFrom(args: Record<string, unknown>, options: { withText: boolean }): ElementTarget {
+  const text = options.withText ? args["text"] : args["elementText"];
+  const selector = typeof args["selector"] === "string" ? args["selector"].trim() : "";
+  const label = typeof args["label"] === "string" ? args["label"].trim() : "";
+  const buttonText = typeof text === "string" ? text.trim() : "";
+  const role = typeof args["role"] === "string" ? args["role"].trim() : "";
+  if (!selector && !label && !buttonText && !role) {
+    throw new Error("需要 selector、label、text 或 role 之一来定位元素");
+  }
+  return {
+    ...(selector ? { selector } : {}),
+    ...(label ? { label } : {}),
+    ...(buttonText ? { text: buttonText } : {}),
+    ...(role ? { role } : {}),
+    ...(args["exact"] === true ? { exact: true } : {}),
+  };
 }
 
 export function defaultMcpSettings(): McpSettings {
@@ -210,6 +287,27 @@ export class McpServer {
        * that the surface is unavailable instead of crashing.
        */
       embedded?: EmbeddedSurface;
+      /**
+       * Account bundles need file IO, which lives in the main process. Injected
+       * so the MCP server stays constructible in a plain Node test.
+       */
+      exportAccounts?: (input: {
+        siteIds: string[];
+        identityIds: string[];
+        passphrase?: string;
+        note?: string;
+      }) => { path: string; counts: { sites: number; accounts: number; withPasswords: number } };
+      previewAccounts?: (path: string) => unknown;
+      importAccounts?: (path: string, passphrase?: string) => unknown;
+      /**
+       * Opens a tab for a flow run. The MCP layer cannot create a page bound to
+       * an identity's partition by itself, so the main process does it — the
+       * same path the UI's run button takes.
+       */
+      createFlowTab?: (
+        flow: Flow,
+        identityId?: string,
+      ) => Promise<{ tabId: string; identityId?: string }>;
       onChange?: () => void;
     },
   ) {
@@ -492,7 +590,7 @@ export class McpServer {
           }
           try {
             const output = await tool.run(params.arguments ?? {});
-            this.audit(tool.name, params.arguments, true);
+            this.audit(tool.name, this.auditArgs(params.arguments, output), true);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -560,6 +658,39 @@ export class McpServer {
       return "删除权限已关闭，请在 Ensemble 设置的「AI 接入」里开启。";
     }
     return undefined;
+  }
+
+  /**
+   * The arguments as they may be written to the audit log.
+   *
+   * A tool reports `secret: true` when it typed into a password field: the
+   * parameter is called `text`, so name-based redaction cannot see it, and a
+   * brand-new credential (creating a tenant account) has no stored value that
+   * `fill_browser_login` could use instead.
+   */
+  private auditArgs(args: unknown, output: unknown): unknown {
+    if (typeof args !== "object" || args === null) return args;
+    const masked: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    const result = output as { secret?: unknown; filled?: Array<{ secret?: unknown }> } | null;
+    if (typeof result === "object" && result !== null && result.secret === true) {
+      if (typeof masked["text"] === "string") masked["text"] = "[redacted]";
+      return masked;
+    }
+    // A form fill reports one entry per field. Only the fields that turned out to
+    // be password inputs get masked; the rest of the form is ordinary text and
+    // stays readable in the log.
+    const secrets = new Set<number>();
+    if (typeof result === "object" && result !== null && Array.isArray(result.filled)) {
+      result.filled.forEach((item, index) => {
+        if (item?.secret === true) secrets.add(index);
+      });
+    }
+    if (secrets.size === 0 || !Array.isArray(masked["fields"])) return masked;
+    masked["fields"] = (masked["fields"] as unknown[]).map((field, index) => {
+      if (!secrets.has(index) || typeof field !== "object" || field === null) return field;
+      return { ...(field as Record<string, unknown>), value: "[redacted]" };
+    });
+    return masked;
   }
 
   private audit(tool: string, args: unknown, ok: boolean, error?: string): void {
@@ -723,7 +854,7 @@ export class McpServer {
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
-          const tags = new Map(snapshot.siteTags.map((tag) => [tag.id, tag.name]));
+          const tags = new Map(snapshot.tags.map((tag) => [tag.id, tag.name]));
           return snapshot.sites.map((site) => ({
             ...siteSummary(site),
             tags: (site.tagIds ?? []).map((id) => tags.get(id) ?? id),
@@ -735,12 +866,12 @@ export class McpServer {
         description: "列出站点标签。标签只用于归类展示，不影响任何业务规则。",
         kind: "read",
         inputSchema: object({}),
-        run: () => service.snapshot().siteTags,
+        run: () => service.snapshot().tags,
       },
       {
-        name: "save_site_tag",
+        name: "save_tag",
         description:
-          "创建或重命名站点标签。标签只决定站点列表和切换器怎么分组；删除标签不会影响站点和账号。",
+          "创建或重命名标签。标签是一套全局命名空间，站点、账号、视图都能挂；用户界面上它现在是左侧导航的一页。删除标签不会影响站点和账号。",
         kind: "write",
         inputSchema: object(
           {
@@ -755,18 +886,18 @@ export class McpServer {
           ["name", "color"],
         ),
         run: (args) => {
-          const draft = siteTagDraftSchema.parse({
+          const draft = tagDraftSchema.parse({
             ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
             name: args["name"],
             color: args["color"],
           });
-          return service.saveSiteTag(draft);
+          return service.saveTag(draft);
         },
       },
       {
-        name: "delete_site_tag",
+        name: "delete_tag",
         description:
-          "删除站点标签，并从所有站点上解除关联。站点与账号不受影响。破坏性操作，必须传 confirm: true。",
+          "删除标签，并从所有站点、账号、视图上解除关联。这些对象本身不受影响。破坏性操作，必须传 confirm: true。",
         kind: "danger",
         inputSchema: object({ id: string("标签 id"), confirm: { type: "boolean" } }, [
           "id",
@@ -775,11 +906,126 @@ export class McpServer {
         run: (args) => {
           requireConfirm(args);
           const id = String(args["id"] ?? "");
-          if (!service.snapshot().siteTags.some((tag) => tag.id === id)) {
+          if (!service.snapshot().tags.some((tag) => tag.id === id)) {
             throw new Error(`标签不存在：${id}`);
           }
-          service.deleteSiteTag(id);
+          service.deleteTag(id);
           return { deleted: id };
+        },
+      },
+      // Old names, kept as aliases: they were already released, and a client
+      // configured against them should keep working after the rename.
+      {
+        name: "save_site_tag",
+        description: "save_tag 的旧名称，行为相同。",
+        kind: "write",
+        inputSchema: object(
+          {
+            id: string("标签 id；省略表示新建"),
+            name: string("标签名称"),
+            color: {
+              type: "string",
+              enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
+              description: "标签颜色",
+            },
+          },
+          ["name", "color"],
+        ),
+        run: (args) =>
+          service.saveTag(
+            tagDraftSchema.parse({
+              ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
+              name: args["name"],
+              color: args["color"],
+            }),
+          ),
+      },
+      {
+        name: "delete_site_tag",
+        description: "delete_tag 的旧名称，行为相同。破坏性操作，必须传 confirm: true。",
+        kind: "danger",
+        inputSchema: object({ id: string("标签 id"), confirm: { type: "boolean" } }, [
+          "id",
+          "confirm",
+        ]),
+        run: (args) => {
+          requireConfirm(args);
+          const id = String(args["id"] ?? "");
+          if (!service.snapshot().tags.some((tag) => tag.id === id)) {
+            throw new Error(`标签不存在：${id}`);
+          }
+          service.deleteTag(id);
+          return { deleted: id };
+        },
+      },
+      {
+        name: "export_accounts",
+        description:
+          "把选定的站点和账号打包成一个账号文件，用来分享给同事（不是整机迁移用的配置导出）。按 username 在站点内匹配，导入方不需要有相同的 id。传 passphrase 才会带上密码；返回值里永远不含明文密码，只报告文件路径与数量。",
+        kind: "write",
+        inputSchema: object(
+          {
+            siteIds: {
+              type: "array",
+              description: "要导出的站点 id；选中账号所属的站点会自动带上",
+              items: { type: "string" },
+            },
+            identityIds: {
+              type: "array",
+              description: "要导出的账号 id；省略表示导出所选站点的全部账号",
+              items: { type: "string" },
+            },
+            passphrase: string("给密码加密用的口令；省略则只导出账号资料"),
+            note: string("写进文件里的备注，不会包含密码"),
+          },
+          [],
+        ),
+        run: (args) => {
+          const siteIds = Array.isArray(args["siteIds"]) ? (args["siteIds"] as string[]) : [];
+          const identityIds = Array.isArray(args["identityIds"])
+            ? (args["identityIds"] as string[])
+            : [];
+          const passphrase =
+            typeof args["passphrase"] === "string" ? args["passphrase"] : undefined;
+          const note = typeof args["note"] === "string" ? args["note"] : undefined;
+          if (!this.options.exportAccounts) throw new Error("导出账号不可用");
+          return this.options.exportAccounts({
+            siteIds,
+            identityIds,
+            ...(passphrase ? { passphrase } : {}),
+            ...(note ? { note } : {}),
+          });
+        },
+      },
+      {
+        name: "import_accounts",
+        description:
+          "读取一个账号文件并合并进当前工作区。站点按 baseUrl 匹配、账号按 username 匹配，所以可以接收别人从另一台机器导出的账号。有密码时需传当时的口令。",
+        kind: "write",
+        inputSchema: object(
+          {
+            path: string("账号文件路径"),
+            passphrase: string("导出时设置的密码口令"),
+          },
+          ["path"],
+        ),
+        run: (args) => {
+          const filePath = String(args["path"] ?? "");
+          const passphrase =
+            typeof args["passphrase"] === "string" ? args["passphrase"] : undefined;
+          if (!this.options.importAccounts) throw new Error("导入账号不可用");
+          return this.options.importAccounts(filePath, passphrase);
+        },
+      },
+      {
+        name: "preview_accounts",
+        description:
+          "预览一个账号文件会导入什么：站点数、账号数、是否带密码、哪些站点本地已有。不改动任何数据。",
+        kind: "read",
+        inputSchema: object({ path: string("账号文件路径") }, ["path"]),
+        run: (args) => {
+          if (!this.options.previewAccounts) throw new Error("预览账号文件不可用");
+          return this.options.previewAccounts(String(args["path"] ?? ""));
         },
       },
       {
@@ -809,6 +1055,153 @@ export class McpServer {
         },
       },
       {
+        name: "list_flows",
+        description:
+          "列出已保存的流程。可按 siteId 过滤。流程是一串可复用的操作步骤，属于某个站点；返回内容包含参数与步骤，便于判断能不能直接跑。",
+        kind: "read",
+        inputSchema: object({ siteId: string("只看该站点的流程") }),
+        run: (args) => {
+          const siteId = args["siteId"];
+          return service
+            .snapshot()
+            .flows.filter((flow) => !siteId || flow.siteId === siteId);
+        },
+      },
+      {
+        name: "save_flow",
+        description:
+          "保存一个流程：一串在某个站点里可重复执行的步骤。步骤是声明式的，不是任意脚本——动作只有 navigate / fill / click / select / press / login / wait / read。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
+        kind: "write",
+        inputSchema: object(
+          {
+            id: string("流程 id；省略表示新建，传已有 id 表示修改"),
+            siteId: string("流程所属站点 id"),
+            name: string("流程名称，例如「创建租户」"),
+            description: string("这个流程做什么、什么时候用"),
+            params: {
+              type: "array",
+              description: "运行时填写的参数",
+              items: object(
+                {
+                  name: string("变量名，步骤里用 {{这个}} 引用"),
+                  label: string("显示给人看的名字"),
+                  required: { type: "boolean", description: "运行时必须填" },
+                  secret: { type: "boolean", description: "密码类参数，审计日志会打码" },
+                  default: string("默认值"),
+                  description: string("参数说明"),
+                },
+                ["name", "label"],
+              ),
+            },
+            steps: {
+              type: "array",
+              description: "按顺序执行的步骤",
+              items: object({
+                action: {
+                  type: "string",
+                  enum: ["navigate", "fill", "click", "select", "press", "login", "wait", "read"],
+                },
+                label: string("字段旁的标签文字"),
+                text: string("按钮上的文字"),
+                selector: string("CSS 选择器（兜底）"),
+                role: string("ARIA role"),
+                exact: { type: "boolean", description: "文字必须完全相等" },
+                note: string("这一步在做什么，写给人看"),
+                value: string("要填入的值，可用 {{参数}}"),
+                url: string("navigate 的地址，可写相对站点根目录的路径"),
+                option: string("select 要选的选项文字"),
+                key: string("press 的按键：Enter / Escape / Tab / Backspace / Delete / ArrowUp / ArrowDown / ArrowLeft / ArrowRight / 空格"),
+                condition: {
+                  type: "string",
+                  enum: ["visible", "hidden", "text", "url", "value"],
+                  description: "wait 等什么",
+                },
+                expect: string("wait 要比对的文字（text / url / value）"),
+                timeoutMs: integer("wait 最多等多久，默认 5000"),
+                optional: { type: "boolean", description: "等待超时也继续" },
+                as: string("read 把结果存到的变量名"),
+              }),
+            },
+          },
+          ["siteId", "name", "steps"],
+        ),
+        run: (args) => service.saveFlow(flowDraftSchema.parse(args)),
+      },
+      {
+        name: "delete_flow",
+        description: "删除一个流程。只删步骤，不影响站点和账号。破坏性操作，必须传 confirm: true。",
+        kind: "danger",
+        inputSchema: object({ id: string("流程 id"), confirm: { type: "boolean" } }, [
+          "id",
+          "confirm",
+        ]),
+        run: (args) => {
+          requireConfirm(args);
+          const id = String(args["id"] ?? "");
+          service.deleteFlow(id);
+          return { deleted: id };
+        },
+      },
+      {
+        name: "run_flow",
+        description:
+          "运行一个已保存的流程。给了 tabId 就在那个页面里跑；否则新开一个标签页（默认用该站点第一个账号，登录表单会自动填充），返回这个标签页 id，让你能看到它在做什么。params 填流程声明的参数。某一步失败会停在那一步并说明原因，不会带着半填的表单继续。",
+        kind: "run",
+        inputSchema: object({
+          id: string("流程 id"),
+          tabId: string("在哪个标签页里跑；省略表示新开一个"),
+          identityId: string("新开标签页时用哪个账号；省略表示该站点第一个账号"),
+          params: {
+            type: "object",
+            description: "参数值，键是流程声明的参数名",
+            additionalProperties: { type: "string" },
+          },
+        }, ["id"]),
+        run: async (args) => {
+          const id = String(args["id"] ?? "");
+          const flow = service.snapshot().flows.find((item) => item.id === id);
+          if (!flow) throw new Error(`流程不存在：${id}`);
+          const site = service.findSite(flow.siteId);
+          if (!site) throw new Error("流程所属站点不存在");
+          const raw = args["params"];
+          const provided =
+            typeof raw === "object" && raw !== null
+              ? Object.fromEntries(
+                  Object.entries(raw as Record<string, unknown>).map(([key, value]) => [
+                    key,
+                    String(value ?? ""),
+                  ]),
+                )
+              : {};
+          const { values } = resolveParams(flow.params, provided);
+
+          let tabId = typeof args["tabId"] === "string" ? args["tabId"] : "";
+          let identityId = typeof args["identityId"] === "string" ? args["identityId"] : "";
+          if (!this.options.createFlowTab) throw new Error("流程运行不可用");
+          if (!tabId) {
+            const opened = await this.options.createFlowTab(flow, identityId);
+            tabId = opened.tabId;
+            identityId = opened.identityId ?? identityId;
+          }
+          // `surface()` is defined in the browser-tool block below; this tool sits
+          // with the workspace tools, so it reaches for the injected surface
+          // directly instead of relying on ordering.
+          const embeddedSurface = this.options.embedded;
+          if (!embeddedSurface) throw new Error("内置浏览器不可用，请先打开内置浏览器页面");
+          const run = await embeddedSurface.runFlow(tabId, flow.steps, {
+            baseUrl: site.baseUrl,
+            vars: values,
+            timeoutMs: 120_000,
+          });
+          return {
+            flowId: flow.id,
+            tabId,
+            ...(identityId ? { identityId } : {}),
+            run,
+          };
+        },
+      },
+      {
         name: "list_layouts",
         description: "列出可用窗口布局：内置预设与用户自定义预设。",
         kind: "read",
@@ -834,7 +1227,7 @@ export class McpServer {
       {
         name: "create_site",
         description:
-          "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。可在 extraFields 里声明租户名等额外登录字段。",
+          "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。可在 extraFields 里声明租户名等额外登录字段；带 password 时会同时写入站点默认密码，省掉一次 set_password。",
         kind: "write",
         inputSchema: object(
           {
@@ -843,6 +1236,7 @@ export class McpServer {
             loginPath: string("登录入口，默认 /login"),
             authCheckPath: string("登录态检测地址，可省略"),
             defaultEngineId: string("默认浏览器引擎 id，可省略"),
+            password: string("站点默认密码，写入加密凭据库后不回显"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
             extraFields: {
               type: "array",
@@ -872,6 +1266,8 @@ export class McpServer {
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
           });
           const site = service.saveSite(draft);
+          const password = typeof args["password"] === "string" ? args["password"] : "";
+          if (password) service.setPassword({ kind: "site", id: site.id }, password);
           return siteSummary(site);
         },
       },
@@ -978,8 +1374,18 @@ export class McpServer {
                     type: "string",
                     enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
                   },
+                  engineId: string("覆盖站点默认引擎"),
                   startPath: string("起始路径"),
                   note: string("备注"),
+                  credentialFrom: string("引用另一个身份的凭据，传给定时忽略 password"),
+                  extraFields: {
+                    type: "array",
+                    description: "该账号专用的额外登录字段，例如每个租户自己的租户名",
+                    items: object({ label: string("字段名"), value: string("字段值") }, [
+                      "label",
+                      "value",
+                    ]),
+                  },
                 },
                 ["name", "username"],
               ),
@@ -1377,7 +1783,7 @@ export class McpServer {
       {
         name: "open_browser_view",
         description:
-          "把保存好的视图（一组身份 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。",
+          "把保存好的视图（一组身份 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，用 launch_view，或让用户自己切过去。",
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: (args) => surface().openView(String(args["viewId"] ?? "")),
@@ -1385,7 +1791,7 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页。传 identityId 时使用该身份独立的会话分区（与其他身份隔离，登录态持久保存）；不传则用空白会话。返回 tabId，后续所有操作都用它。不会弹出任何系统窗口。",
+          "在内置浏览器里打开一个标签页。传 identityId 时使用该身份独立的会话分区（与其他身份隔离，登录态持久保存）；不传则用空白会话。返回 tabId，后续所有操作都用它。不会弹出系统窗口，也不会把应用窗口提到前台——页面在后台创建好，截图与 DOM 读取照常可用。",
         kind: "run",
         inputSchema: object({
           url: string("要打开的地址；省略则打开空白页"),
@@ -1428,7 +1834,7 @@ export class McpServer {
       {
         name: "read_browser_page",
         description:
-          "读取标签页当前渲染出来的内容：可见元素的角色、可访问名称、稳定选择器、位置，以及页面地址和标题。隐藏元素不会被包含，所以这就是「这个账号实际能看到什么」。用返回的 selector 配合 click/type 使用。",
+          "读取标签页当前渲染出来的内容：可见元素的角色、可访问名称、稳定选择器、位置，以及页面地址和标题。隐藏元素不会被包含，所以这就是「这个账号实际能看到什么」。表单控件的 field 是它旁边那行标签文字——组件库页面里它比 selector 可靠，直接把它当 type_browser_text / click_browser_element 的 label 用。",
         kind: "read",
         inputSchema: object({
           tabId: string("标签页 id；省略表示当前激活的标签页"),
@@ -1444,51 +1850,148 @@ export class McpServer {
       {
         name: "check_element_visible",
         description:
-          "检查某个选择器对应元素是否存在、是否可见。用于权限断言：同一个选择器在不同身份的标签页里应该有不同的可见性。",
+          "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同身份的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。",
         kind: "read",
-        inputSchema: object(
-          {
-            tabId: string("标签页 id；省略表示当前激活的标签页"),
-            selector: string("CSS 选择器"),
-          },
-          ["selector"],
-        ),
-        run: (args) => surface().visibility(tabId(args), String(args["selector"] ?? "")),
+        inputSchema: object({
+          tabId: string("标签页 id；省略表示当前激活的标签页"),
+          ...targetProps({ text: string("按钮或链接上的文字") }),
+        }),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          return surface().visibility(tabId(args), target);
+        },
       },
       {
         name: "click_browser_element",
         description:
-          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。",
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。",
         kind: "run",
-        inputSchema: object(
-          {
-            tabId: string("标签页 id；省略表示当前激活的标签页"),
-            selector: string("CSS 选择器"),
-          },
-          ["selector"],
-        ),
-        run: (args) => surface().click(tabId(args), String(args["selector"] ?? "")),
+        inputSchema: object({
+          tabId: string("标签页 id；省略表示当前激活的标签页"),
+          ...targetProps({ text: string("要点击的元素上的文字，例如「创建租户」") }),
+        }),
+        // Validate the target before resolving the tab: an empty call should say
+        // what is missing, not complain that no tab is open.
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          return surface().click(tabId(args), target);
+        },
       },
       {
         name: "type_browser_text",
         description:
-          "向标签页里的输入框输入文本。先聚焦目标元素，清空原内容（除非 clear: false），再逐字输入；submit: true 会在输入后按回车。密码不要走这里——用 fill_browser_login。",
+          "向一个输入框输入文本。用 label 指定字段（「用户名」「租户名称」），不必知道它的 CSS 选择器。先聚焦，清空原内容（除非 clear: false），再输入；submit: true 会在输入后按回车。已保存的账号密码用 fill_browser_login；新建账号设置新密码时可以直接输进 password 框，这类输入不会写进审计日志的明文。要一次填多个字段用 fill_browser_form。",
         kind: "run",
         inputSchema: object(
           {
             tabId: string("标签页 id；省略表示当前激活的标签页"),
-            selector: string("CSS 选择器"),
+            selector: string("CSS 选择器；能用 label 时优先用 label"),
+            label: string("字段旁的标签文字，例如「用户名」"),
+            role: { type: "string", description: "ARIA role，用于收窄候选元素" },
+            exact: { type: "boolean", description: "要求标签文字完全相等" },
             text: string("要输入的文本"),
             submit: { type: "boolean", description: "输入后按回车" },
             clear: { type: "boolean", description: "先清空原有内容，默认 true" },
           },
-          ["selector", "text"],
+          ["text"],
         ),
-        run: (args) =>
-          surface().type(tabId(args), String(args["selector"] ?? ""), String(args["text"] ?? ""), {
+        run: (args) => {
+          const target = targetFrom(args, { withText: false });
+          return surface().type(tabId(args), target, String(args["text"] ?? ""), {
             submit: args["submit"] === true,
             clear: args["clear"] !== false,
-          }),
+          });
+        },
+      },
+      {
+        name: "fill_browser_form",
+        description:
+          "一次填完一个表单：每个字段给 label（或 selector）和要输入的值。按顺序逐个填、每个都走真实输入事件，最后一个字段可以带 submit: true 提交。比逐个字段调 type_browser_text 少几十次往返，也不会因为中间某次调用超时让页面停在半填状态。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            fields: {
+              type: "array",
+              description: "要填的字段，按顺序执行",
+              items: object(
+                {
+                  selector: string("CSS 选择器；能用 label 时优先用 label"),
+                  label: string("字段旁的标签文字"),
+                  role: { type: "string", description: "ARIA role，用于收窄候选元素" },
+                  exact: { type: "boolean", description: "要求标签文字完全相等" },
+                  value: string("要填入的文本"),
+                  submit: { type: "boolean", description: "填完这个字段后按回车" },
+                  clear: { type: "boolean", description: "先清空，默认 true" },
+                },
+                ["value"],
+              ),
+            },
+          },
+          ["fields"],
+        ),
+        run: (args) => {
+          const raw = Array.isArray(args["fields"]) ? (args["fields"] as unknown[]) : [];
+          if (raw.length === 0) throw new Error("fields 不能为空");
+          const fields = raw.map((item, index) => {
+            if (typeof item !== "object" || item === null) {
+              throw new Error(`fields[${index}] 必须是对象`);
+            }
+            const record = item as Record<string, unknown>;
+            return {
+              target: targetFrom(record, { withText: false }),
+              value: String(record["value"] ?? ""),
+              submit: record["submit"] === true,
+              clear: record["clear"] !== false,
+            };
+          });
+          return surface().fillForm(tabId(args), fields);
+        },
+      },
+      {
+        name: "wait_browser",
+        description:
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。",
+        kind: "read",
+        inputSchema: object(
+          {
+            tabId: string("标签页 id；省略表示当前激活的标签页"),
+            condition: {
+              type: "string",
+              enum: ["visible", "hidden", "text", "url", "value"],
+              description: "要等的条件",
+            },
+            selector: string("CSS 选择器；可用 label / elementText / role 代替"),
+            label: string("元素旁的标签文字"),
+            elementText: string("元素上的文字，与 wait 的 text 区分开"),
+            role: { type: "string", description: "ARIA role，用于收窄候选元素" },
+            exact: { type: "boolean", description: "要求文字完全相等" },
+            expect: string("text / url / value 条件要比对的文字"),
+            timeoutMs: integer("最多等多久，默认 5000 毫秒"),
+          },
+          ["condition"],
+        ),
+        run: (args) => {
+          const condition = String(args["condition"] ?? "");
+          if (!["visible", "hidden", "text", "url", "value"].includes(condition)) {
+            throw new Error("condition 必须是 visible / hidden / text / url / value 之一");
+          }
+          const needsTarget =
+            condition === "visible" || condition === "hidden" || condition === "value";
+          const target = needsTarget ? targetFrom(args, { withText: false }) : undefined;
+          const expect = typeof args["expect"] === "string" ? args["expect"] : "";
+          if (!needsTarget && !expect) throw new Error(`${condition} 条件需要 expect`);
+          const timeout = Number(args["timeoutMs"]);
+          return surface().wait(tabId(args), {
+            condition: condition as "visible" | "hidden" | "text" | "url" | "value",
+            ...(target ? { target } : {}),
+            ...(expect ? { text: expect } : {}),
+            timeoutMs:
+              Number.isFinite(timeout) && timeout > 0
+                ? Math.min(Math.trunc(timeout), 60_000)
+                : 5_000,
+          });
+        },
       },
       {
         name: "fill_browser_login",
@@ -1579,6 +2082,50 @@ export class McpServer {
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
         run: (args) => surface().closeTab(String(args["tabId"] ?? "")),
+      },
+      {
+        name: "move_browser_tab",
+        description:
+          "改变标签页在运行栏里的顺序，或把它移进/移出视图。target 三选一：edge=before|after|middle（放到某个标签页前/后；middle 表示加入该标签页所在的视图）、viewId（加入该视图）、loose（移出视图变成游离标签页）。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: string("要移动的标签页 id"),
+            beforeOrAfter: string("相对哪个标签页移动：它的 id"),
+            edge: {
+              type: "string",
+              enum: ["before", "after", "middle"],
+              description: "放在目标前 / 后；middle 表示加入目标所在视图",
+            },
+            viewId: string("加入这个视图"),
+            loose: { type: "boolean", description: "传 true 表示移出视图" },
+          },
+          ["tabId"],
+        ),
+        run: (args) => {
+          const tabIdValue = String(args["tabId"] ?? "");
+          const anchor = typeof args["beforeOrAfter"] === "string" ? args["beforeOrAfter"] : "";
+          const edge = args["edge"];
+          const viewId = typeof args["viewId"] === "string" ? args["viewId"] : "";
+          if (anchor && (edge === "before" || edge === "after" || edge === "middle")) {
+            return surface().moveTab(tabIdValue, {
+              kind: "tab",
+              tabId: anchor,
+              edge: edge as "before" | "after" | "middle",
+            });
+          }
+          if (viewId) return surface().moveTab(tabIdValue, { kind: "view", viewId });
+          if (args["loose"] === true) return surface().moveTab(tabIdValue, { kind: "loose" });
+          throw new Error("需要提供 beforeOrAfter + edge、viewId，或 loose: true 之一");
+        },
+      },
+      {
+        name: "set_tab_page",
+        description:
+          "在一个实例里切换显示哪一页。一个格位放的是一个浏览器实例，实例可以有多个页面（页面里点开的链接）；这个工具决定该实例当前显示哪一页。",
+        kind: "run",
+        inputSchema: object({ pageId: string("要显示的那个页面 id") }, ["pageId"]),
+        run: (args) => surface().activate(String(args["pageId"] ?? "")),
       },
     ];
   }

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
@@ -14,15 +14,25 @@ import {
 import { WorkspaceService } from "@core/service";
 import { downloadUpdateAsset } from "@core/update/download";
 import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
+import { parseAccountBundle } from "@shared/accounts-transfer";
 import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
-import { type ExportOutcome, type ImportPickOutcome, IPC } from "@shared/ipc";
+import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
 import {
+  type AccountsExportOutcome,
+  type AccountsImportPickOutcome,
+  type ExportOutcome,
+  type FlowRunOutcome,
+  type ImportPickOutcome,
+  IPC,
+} from "@shared/ipc";
+import {
+  flowDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
   passwordOwnerSchema,
   settingsPatchSchema,
   siteDraftSchema,
-  siteTagDraftSchema,
+  tagDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
 import { parseExportFile } from "@shared/transfer";
@@ -38,8 +48,8 @@ import type {
   RoleColor,
   SettingsPatch,
   SiteDraft,
-  SiteTagDraft,
   SlotRect,
+  TagDraft,
   ViewDraft,
   WorkspaceSnapshot,
 } from "@shared/types";
@@ -59,12 +69,15 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  type OpenDialogOptions,
+  type SaveDialogOptions,
   safeStorage,
   screen,
   shell,
   Tray,
 } from "electron";
 import { EmbeddedBrowser } from "./embedded/browser";
+import { LoginCaptureStore } from "./embedded/login-capture";
 import { McpServer } from "./mcp/server";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
@@ -126,6 +139,8 @@ let tray: Tray | null = null;
 let mcpServer: McpServer | null = null;
 /** Kept in sync so the close handler does not need the service to be initialized. */
 let settingsCache: AppSettings | null = null;
+/** Logins seen in embedded pages, waiting for the user to accept or dismiss. */
+const loginCaptures = new LoginCaptureStore();
 
 /**
  * The in-app browser surface. Created on first use so a user who never opens it
@@ -135,6 +150,11 @@ let settingsCache: AppSettings | null = null;
 let embedded: EmbeddedBrowser | null = null;
 /** A parsed import file waiting for its confirmation, keyed by absolute path. */
 let pendingImport: { path: string; payload: ReturnType<typeof parseExportFile> } | null = null;
+/** An account bundle picked but not yet applied, same lifecycle as `pendingImport`. */
+let pendingAccountBundle: {
+  path: string;
+  payload: ReturnType<typeof parseAccountBundle>;
+} | null = null;
 
 // ---- update check / download / install ----
 
@@ -189,6 +209,9 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
   }
   embedded = new EmbeddedBrowser({
     shotDir: join(userDataDir(), "screenshots"),
+    // The detached DevTools window is created by the browser manager, so it
+    // needs the icon too rather than falling back to electron.exe's.
+    ...(appIconPath() ? { appIcon: appIconPath() } : {}),
     resolveLogin: async (identityId) => {
       if (!service) return undefined;
       const identity = service.findIdentity(identityId);
@@ -231,8 +254,30 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
         mainWindow.webContents.send(IPC.embeddedPage);
       }
     },
+    /*
+     * A login form was submitted inside a page. The secret stays here: the
+     * renderer receives a token and the username, and only picks a site/account
+     * name. Writing the vault happens in `IPC.loginCaptureSave` below.
+     */
+    onLoginCaptured: (capture) => {
+      if (!loginCaptures) return;
+      const site = service?.findSiteByOrigin(capture.origin);
+      // Signing in as an account the vault already stores (a saved identity, or
+      // a page an AI opened with `fill_browser_login`) must not offer to save a
+      // duplicate. Only a genuinely new credential is worth a prompt.
+      if (site && service?.hasSavedLogin(site.id, capture.username)) return;
+      const notice = loginCaptures.add(capture);
+      if (!notice) return;
+      const withSite = site ? loginCaptures.attachSite(notice.token, site.id) : notice;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.embeddedLoginCaptured, withSite);
+      }
+    },
   });
   if (mainWindow && !mainWindow.isDestroyed()) embedded.attach(mainWindow);
+  // Pages created later pick the default up in `createTab`; pages already open
+  // (after the window was recreated) need it applied now.
+  embedded.setDefaultZoom(settingsCache?.browserZoom ?? 100);
   return embedded;
 }
 
@@ -262,8 +307,17 @@ function embeddedStartUrl(identityId: string): string | undefined {
  * Existing tabs are left alone so logins survive a relaunch; only missing members
  * are created. The definition is single-site today, which keeps slot assignments
  * meaningful, while the container itself has no site of its own.
+ *
+ * `reveal` decides whether the call also raises the app window and switches it
+ * to the browser page. Every UI entry point wants that; an AI client does not —
+ * it opens pages to work on them, and stealing focus from whatever the user was
+ * doing is the difference between a background tool and an interruption.
  */
-async function openEmbeddedView(viewId: string): Promise<ReturnType<EmbeddedBrowser["state"]>> {
+async function openEmbeddedView(
+  viewId: string,
+  options: { reveal?: boolean } = {},
+): Promise<ReturnType<EmbeddedBrowser["state"]>> {
+  const reveal = options.reveal ?? true;
   if (!service) throw new Error("工作区尚未就绪");
   const view = service.findView(viewId);
   if (!view) throw new Error("视图不存在");
@@ -278,7 +332,7 @@ async function openEmbeddedView(viewId: string): Promise<ReturnType<EmbeddedBrow
     const url = embeddedStartUrl(identityId);
     if (!url) continue;
     const identity = service.findIdentity(identityId);
-    await browser.createTab({
+    const tab = await browser.createTab({
       url,
       identityId,
       siteId: identity?.siteId ?? view.siteId,
@@ -287,6 +341,11 @@ async function openEmbeddedView(viewId: string): Promise<ReturnType<EmbeddedBrow
       viewId: containerId,
       origin: "view",
     });
+    // A view launch fills credentials just like an external launch does.
+    // Without this, opening a saved view left every login form empty while the
+    // single-account path filled fine — the same action behaved differently
+    // depending on which entry point was used.
+    scheduleEmbeddedFill(tab.id, identityId);
   }
   // The saved slot assignments are identity ids; map them onto the tabs that
   // exist so a reopened view comes back in the same arrangement.
@@ -298,13 +357,114 @@ async function openEmbeddedView(viewId: string): Promise<ReturnType<EmbeddedBrow
   browser.applySlotAssignments(containerId, slots);
   const next = browser.activateView(containerId);
   service.rememberLaunchedView(view.id);
-  browser.focusPage();
+  if (reveal) browser.focusPage();
   return next;
 }
 
+/**
+ * Fills an identity's saved login into an embedded tab, once, in the background.
+ *
+ * The tab is created before its page has loaded, and a client-rendered login
+ * form can take several seconds to appear. Polling until the deadline mirrors
+ * the external path, which waits for the same reason: giving up on the first
+ * "no password field" reads as "autofill is broken".
+ *
+ * Deliberately not awaited: a four-member view must not hold the launch result
+ * for a minute while each page comes up.
+ */
+function scheduleEmbeddedFill(tabId: string, identityId: string): void {
+  if (!service?.settingsSnapshot().autoFillOnLaunch) return;
+  const identity = service.findIdentity(identityId);
+  if (!identity) return;
+  const browser = ensureEmbeddedBrowser();
+
+  void (async () => {
+    const deadline = Date.now() + 15_000;
+    let last: Awaited<ReturnType<typeof browser.fillLogin>> | undefined;
+    while (Date.now() < deadline) {
+      try {
+        last = await browser.fillLogin(tabId);
+      } catch {
+        // A navigation can destroy the page between two polls; keep trying.
+      }
+      if (last?.ok) break;
+      if (last && last.reason !== "password-field-not-found") break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const skipped = last?.ok
+      ? undefined
+      : last?.reason === "cross-origin"
+        ? ("cross-origin" as const)
+        : last?.reason === "no-password" || last?.reason === "no-identity"
+          ? ("no-password" as const)
+          : ("not-login-page" as const);
+    const report = {
+      identityId,
+      label: identity.name,
+      filled: last?.ok === true,
+      submitted: last?.submitted === true,
+      missingFields: last?.missingFields ?? [],
+      unmatchedFields: [],
+      ...(skipped ? { skipped } : {}),
+    };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.authAutoFilled, report);
+    }
+  })();
+}
+
+/**
+ * Gives a flow a page to drive.
+ *
+ * An explicit tab is used as-is: the AI's path, where it already has a
+ * signed-in page. Otherwise a tab opens as the given identity, or as the site's
+ * first account, and the automatic fill every other launch path uses runs here
+ * too — a flow's first step should not have to be "sign in" every time.
+ *
+ * Shared by the UI's run button and `run_flow` so the two cannot drift: one of
+ * them creating a tab differently is exactly the kind of difference that shows
+ * up as "works from the app but not from the AI".
+ */
+async function openFlowTab(
+  flow: Flow,
+  requestedIdentityId?: string,
+  existingTabId?: string,
+): Promise<{ tabId: string; identityId?: string }> {
+  if (existingTabId) {
+    return {
+      tabId: existingTabId,
+      ...(requestedIdentityId ? { identityId: requestedIdentityId } : {}),
+    };
+  }
+  if (!service) throw new Error("工作区未就绪");
+  const site = service.findSite(flow.siteId);
+  if (!site) throw new Error("流程所属站点不存在");
+  const identityId =
+    requestedIdentityId ||
+    (service
+      .snapshot()
+      .identities.filter((identity) => identity.siteId === site.id)
+      .map((identity) => identity.id)[0] ??
+      "");
+  if (!identityId) throw new Error("这个站点还没有账号，流程需要一个已登录的页面");
+
+  const browser = ensureEmbeddedBrowser();
+  const created = await browser.createTab({
+    url: embeddedStartUrl(identityId) ?? site.baseUrl,
+    identityId,
+    siteId: site.id,
+    label: flow.name,
+  });
+  browser.activate(created.id);
+  scheduleEmbeddedFill(created.id, identityId);
+  // The document is still loading; a step that runs immediately would look at
+  // about:blank and fail with "not-found" for a page that is a moment away.
+  await new Promise((done) => setTimeout(done, 800));
+  return { tabId: created.id, identityId };
+}
+
 /** Outcome the renderer shows after a cold start asked to reopen the last view. */
-interface RestoreOutcome {
-  restored: boolean;
+interface RestoreOutcome {  restored: boolean;
   viewId?: string;
   viewName?: string;
   reason?: string;
@@ -353,6 +513,20 @@ function broadcastWorkspace(): void {
   // to be rebuilt whenever that stops being true. Rebuilding on every broadcast
   // would churn a native menu for nothing.
   ensureTrayMenuMatches(snapshot.instances.length);
+}
+
+/**
+ * Pushes the endpoint state to the window.
+ *
+ * The status bar shows whether the endpoint is running and on which port on
+ * every screen, so a port change or a toggle has to reach it without the user
+ * opening settings and back.
+ */
+function broadcastMcp(): void {
+  if (!mcpServer) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC.mcpChanged, mcpServer.status());
+  }
 }
 
 /**
@@ -543,6 +717,7 @@ function ensureOverlay(): BrowserWindow {
     alwaysOnTop: true,
     skipTaskbar: true,
     title: "Ensemble",
+    ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       contextIsolation: true,
@@ -808,6 +983,7 @@ function ensureFocusLabel(): BrowserWindow {
     skipTaskbar: true,
     alwaysOnTop: true,
     title: "Ensemble",
+    ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       contextIsolation: true,
@@ -913,6 +1089,38 @@ function buildAssetPath(file: string): string {
     : join(__dirname, "../../build", file);
 }
 
+/**
+ * Icon the app presents to the OS.
+ *
+ * Windows takes it from the executable once packaged; in development the process
+ * is electron.exe, whose own icon is Electron's. Passing ours to every window and
+ * to native dialogs is what keeps a stray Electron logo out of the taskbar, the
+ * window frame and the file pickers.
+ */
+function appIconPath(): string | undefined {
+  const candidates = [join(__dirname, "../../build/icon.png"), buildAssetPath("icon.png")];
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+/**
+ * Native file pickers, parented to the main window.
+ *
+ * Without a parent the dialog is a standalone window that belongs to the process
+ * — on Windows that means it shows electron.exe's icon and can appear behind the
+ * app. A parent makes it modal to Ensemble and inherit Ensemble's icon.
+ */
+function showOpenDialog(options: OpenDialogOptions) {
+  return mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showOpenDialog(mainWindow, options)
+    : dialog.showOpenDialog(options);
+}
+
+function showSaveDialog(options: SaveDialogOptions) {
+  return mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showSaveDialog(mainWindow, options)
+    : dialog.showSaveDialog(options);
+}
+
 function loadTrayImage(): Electron.NativeImage {
   if (process.platform === "darwin") {
     // The menu bar only uses the alpha channel of a template image, so the
@@ -1015,7 +1223,7 @@ async function createWindow(): Promise<void> {
     titleBarStyle: "hidden",
     // Packaged builds take the executable icon (build/icon.ico); in development
     // the window and taskbar need it passed explicitly.
-    ...(app.isPackaged ? {} : { icon: join(__dirname, "../../build/icon.png") }),
+    ...(appIconPath() ? { icon: appIconPath() } : {}),
     ...(isMac
       ? { trafficLightPosition: { x: 14, y: 14 } }
       : {
@@ -1314,7 +1522,7 @@ function registerIpc(workspace: WorkspaceService): void {
   });
 
   handle(IPC.enginesAddManual, async () => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialog({
       title: "选择浏览器可执行文件",
       properties: ["openFile"],
       ...(process.platform === "win32"
@@ -1350,22 +1558,29 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.siteTagSave, (draft: SiteTagDraft) => {
-    workspace.saveSiteTag(siteTagDraftSchema.parse(draft));
+  handle(IPC.tagSave, (draft: TagDraft) => {
+    workspace.saveTag(tagDraftSchema.parse(draft));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.siteTagDelete, (id: string) => {
-    workspace.deleteSiteTag(String(id));
+  handle(IPC.tagDelete, (id: string) => {
+    workspace.deleteTag(String(id));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
   handle(IPC.identitySave, (draft: IdentityDraft) => {
     const parsed = identityDraftSchema.parse(draft);
-    const { password, ...rest } = parsed;
-    workspace.saveIdentity(rest, password);
+    const { password, captureToken, ...rest } = parsed;
+    // A saved login capture owns the secret; it is released exactly once, here.
+    // A second use must fail loudly instead of saving an account with no password.
+    let captured: ReturnType<typeof loginCaptures.take>;
+    if (captureToken) {
+      captured = loginCaptures.take(captureToken);
+      if (!captured) throw new Error("这次登录信息已保存过，请重新登录后再试");
+    }
+    workspace.saveIdentity(rest, password ?? captured?.password);
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -1427,6 +1642,45 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.viewRetile, async (viewId: string) => {
     await workspace.retileView(String(viewId));
   });
+
+  handle(IPC.flowSave, (draft: FlowDraft) => {
+    workspace.saveFlow(flowDraftSchema.parse(draft));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.flowDelete, (id: string) => {
+    workspace.deleteFlow(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(
+    IPC.flowRun,
+    async (input: {
+      flowId: string;
+      identityId?: string;
+      params?: Record<string, string>;
+      tabId?: string;
+    }): Promise<FlowRunOutcome> => {
+      const flow = workspace.snapshot().flows.find((item) => item.id === String(input?.flowId));
+      if (!flow) throw new Error("流程不存在");
+      const { values } = resolveParams(flow.params, input?.params ?? {});
+      const opened = await openFlowTab(flow, input?.identityId, input?.tabId);
+      const site = workspace.findSite(flow.siteId);
+      if (!site) throw new Error("流程所属站点不存在");
+      const run = await ensureEmbeddedBrowser().runFlow(opened.tabId, flow.steps, {
+        baseUrl: site.baseUrl,
+        vars: values,
+        timeoutMs: FLOW_TIMEOUT_MS,
+      });
+      return {
+        tabId: opened.tabId,
+        ...(opened.identityId ? { identityId: opened.identityId } : {}),
+        run,
+      };
+    },
+  );
 
   handle(IPC.layoutPresetSave, (draft: LayoutPresetDraft) => {
     const preset = workspace.saveLayoutPreset(layoutPresetDraftSchema.parse(draft));
@@ -1583,12 +1837,15 @@ function registerIpc(workspace: WorkspaceService): void {
     settingsCache = settings;
     if (parsed.theme) applyTheme(parsed.theme);
     if (parsed.locale) setCoreLocale(parsed.locale);
+    // The zoom setting reaches open pages only through this call: untouched
+    // pages follow it, pages the user zoomed by hand keep their factor.
+    if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
     broadcastWorkspace();
     return settings;
   });
 
   handle(IPC.dataExport, async (options: { includeSecrets: boolean; passphrase?: string }) => {
-    const { canceled, filePath } = await dialog.showSaveDialog({
+    const { canceled, filePath } = await showSaveDialog({
       title: "导出配置",
       defaultPath: join(app.getPath("documents"), `ensemble-${dateStamp()}.json`),
       filters: [{ name: "Ensemble 配置", extensions: ["json"] }],
@@ -1610,7 +1867,7 @@ function registerIpc(workspace: WorkspaceService): void {
   });
 
   handle(IPC.dataImportPick, async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
+    const { canceled, filePaths } = await showOpenDialog({
       title: "导入配置",
       properties: ["openFile"],
       filters: [{ name: "Ensemble 配置", extensions: ["json"] }],
@@ -1635,6 +1892,7 @@ function registerIpc(workspace: WorkspaceService): void {
         sites: payload.sites.length,
         identities: payload.identities.length,
         views: payload.views.length,
+        flows: payload.flows?.length ?? 0,
         layoutPresets: payload.layoutPresets.length,
       },
     } satisfies ImportPickOutcome;
@@ -1650,6 +1908,83 @@ function registerIpc(workspace: WorkspaceService): void {
     pendingImport = null;
     broadcastWorkspace();
     return result;
+  });
+
+  /*
+   * Account bundles: sharing a chosen subset of accounts with a colleague.
+   *
+   * Kept separate from `data:export` above, which is a whole-workspace
+   * migration file. A bundle is matched by site URL and username on the
+   * receiving side, so it lands correctly in someone else's workspace.
+   */
+  handle(
+    IPC.accountsExport,
+    async (options: {
+      siteIds: string[];
+      identityIds: string[];
+      passphrase?: string;
+      note?: string;
+    }) => {
+      const { canceled, filePath } = await showSaveDialog({
+        title: "导出账号",
+        defaultPath: join(app.getPath("documents"), `ensemble-accounts-${dateStamp()}.json`),
+        filters: [{ name: "Ensemble 账号包", extensions: ["json"] }],
+      });
+      const outcome: AccountsExportOutcome = { canceled: true };
+      if (canceled || !filePath) return outcome;
+      const passphrase = String(options?.passphrase ?? "");
+      const exported = workspace.exportAccounts({
+        siteIds: Array.isArray(options?.siteIds) ? options.siteIds.map(String) : [],
+        identityIds: Array.isArray(options?.identityIds) ? options.identityIds.map(String) : [],
+        ...(passphrase ? { passphrase } : {}),
+        ...(options?.note ? { note: String(options.note) } : {}),
+      });
+      writeFileSync(filePath, `${JSON.stringify(exported.file, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      return {
+        canceled: false,
+        path: filePath,
+        counts: exported.counts,
+        secretsIncluded: Boolean(exported.file.secrets),
+      } satisfies AccountsExportOutcome;
+    },
+  );
+
+  handle(IPC.accountsImportPick, async () => {
+    const { canceled, filePaths } = await showOpenDialog({
+      title: "导入账号",
+      properties: ["openFile"],
+      filters: [{ name: "Ensemble 账号包", extensions: ["json"] }],
+    });
+    const outcome: AccountsImportPickOutcome = { canceled: true };
+    const filePath = filePaths?.[0];
+    if (canceled || !filePath) return outcome;
+    let payload: ReturnType<typeof parseAccountBundle>;
+    try {
+      payload = parseAccountBundle(JSON.parse(readFileSync(filePath, "utf8")));
+    } catch (error) {
+      throw new Error(`无法读取该文件：${(error as Error).message}`);
+    }
+    pendingAccountBundle = { path: filePath, payload };
+    return {
+      canceled: false,
+      path: filePath,
+      preview: workspace.previewAccountBundle(payload),
+    } satisfies AccountsImportPickOutcome;
+  });
+
+  handle(IPC.accountsImportApply, (passphrase?: string) => {
+    if (!pendingAccountBundle) throw new Error("请先选择要导入的账号文件");
+    const { payload } = pendingAccountBundle;
+    const result = workspace.importAccountBundle(
+      payload,
+      passphrase ? String(passphrase) : undefined,
+    );
+    pendingAccountBundle = null;
+    broadcastWorkspace();
+    return { result, snapshot: workspace.snapshot() };
   });
 
   handle(IPC.mcpInfo, () => mcpServer?.status());
@@ -1796,7 +2131,7 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(
     IPC.embeddedOpen,
-    (input: {
+    async (input: {
       url?: string;
       identityId?: string;
       siteId?: string;
@@ -1810,7 +2145,7 @@ function registerIpc(workspace: WorkspaceService): void {
       // passes `viewId: null` because there the answer is the opposite.
       const explicit = input !== undefined && input !== null && "viewId" in input;
       const viewId = explicit ? (input?.viewId ?? undefined) : browser.defaultViewId();
-      return browser.createTab({
+      const tab = await browser.createTab({
         ...(input?.url ? { url: input.url } : {}),
         ...(input?.identityId ? { identityId: input.identityId } : {}),
         ...(input?.siteId ? { siteId: input.siteId } : {}),
@@ -1819,6 +2154,20 @@ function registerIpc(workspace: WorkspaceService): void {
         ...(viewId ? { viewId } : {}),
         origin: "manual",
       });
+      // Opening a bookmark as one of its accounts is the same intent as
+      // clicking that account's card, so it fills the same way. A blank tab or
+      // a clean session names no identity and is skipped inside the scheduler.
+      if (input?.identityId) scheduleEmbeddedFill(tab.id, input.identityId);
+      // A "+" that omits `viewId` means "add a page here and show it". When the
+      // grid is full, the new page has no free cell, so swap it into the
+      // selected one — otherwise the stage keeps showing the old page and the
+      // click looks like it did nothing. The displaced instance stays in the
+      // view off stage. An explicit `viewId` (batch launch) is left alone: there
+      // the caller is filling cells one by one, and a fifth member of a 2×2 must
+      // not evict one of the four.
+      if (!explicit && viewId) browser.activate(tab.id);
+      // The caller gets the tab itself; the stores need its id to pin it.
+      return tab;
     },
   );
 
@@ -1826,11 +2175,14 @@ function registerIpc(workspace: WorkspaceService): void {
    * Opens a blank tab into a specific view.
    *
    * The sidebar's "+" on a view header means "add a page here", not "add a page
-   * to whatever is on stage", so it names the view explicitly.
+   * to whatever is on stage", so it names the view explicitly. When every cell
+   * is taken the page would otherwise be created off stage and the header's "+"
+   * would look broken, so it swaps into the selected cell like the toolbar's "+".
    */
   handle(IPC.embeddedOpenInView, async (viewId: string) => {
     const browser = ensureEmbeddedBrowser();
-    await browser.createTab({ viewId: String(viewId), origin: "manual" });
+    const tab = await browser.createTab({ viewId: String(viewId), origin: "manual" });
+    browser.activate(tab.id);
     browser.focusPage();
     return browser.state();
   });
@@ -1851,23 +2203,52 @@ function registerIpc(workspace: WorkspaceService): void {
   });
 
   /**
-   * Opens an identity as a loose tab. Opening the same identity twice is a user
-   * choice, so the tab is created rather than merged — except when an identical
-   * loose tab is already on stage, which is almost always a double click.
+   * "+" in a slot's tab strip: one more page in the same instance.
+   *
+   * The strip shows the pages a single browser window has, so its "+" must not
+   * create a second window — that would double the session and split the cookies
+   * a login just produced.
+   */
+  handle(IPC.embeddedOpenInInstance, async (instanceId: string) => {
+    const browser = ensureEmbeddedBrowser();
+    const next = await browser.openInInstance(String(instanceId));
+    browser.focusPage();
+    return next;
+  });
+
+  handle(IPC.embeddedDuplicate, async (tabId: string) => {
+    const browser = ensureEmbeddedBrowser();
+    const next = await browser.duplicateTab(String(tabId));
+    browser.focusPage();
+    return next;
+  });
+
+  handle(IPC.embeddedCloseOthers, (tabId: string) =>
+    ensureEmbeddedBrowser().closeOtherTabs(String(tabId)),
+  );
+
+  /**
+   * Opens an account as a new page in the flat tab strip.
+   *
+   * This is the accounts page's meaning: "give me this account's page". It is
+   * deliberately not a placement rule any more. When a view is on stage, adding
+   * the page into a cell (or swapping it in) silently rearranges a screen the
+   * user did not point at. The stable behaviour is a new tab in the default
+   * group: the stage stays as it is, and moving the page into a view is the
+   * drag gesture or the view's own "add tab".
+   *
+   * It also always creates a page, even for an account that is already open:
+   * clicking launch is a request for a page, not for "bring me back to the last
+   * place this account appeared". Raising an external window is a different
+   * action and is handled by the caller.
    */
   handle(IPC.embeddedOpenIdentity, async (identityId: string) => {
     if (!service) throw new Error("工作区尚未就绪");
     const identity = service.findIdentity(String(identityId));
     if (!identity) throw new Error("账号不存在");
     const browser = ensureEmbeddedBrowser();
-    const existing = browser.findLooseIdentityTab(identity.id);
-    if (existing) {
-      browser.activate(existing.id);
-      browser.focusPage();
-      return browser.state();
-    }
     const url = embeddedStartUrl(identity.id);
-    await browser.createTab({
+    const tab = await browser.createTab({
       ...(url ? { url } : {}),
       identityId: identity.id,
       siteId: identity.siteId,
@@ -1876,10 +2257,21 @@ function registerIpc(workspace: WorkspaceService): void {
       origin: "manual",
     });
     browser.focusPage();
+    scheduleEmbeddedFill(tab.id, identity.id);
     return browser.state();
   });
 
   handle(IPC.embeddedOpenView, (viewId: string) => openEmbeddedView(String(viewId)));
+
+  /**
+   * Declining a capture drops the secret immediately.
+   *
+   * Nothing is written until the user says yes, so this is the whole cleanup:
+   * no password ever touched disk or the renderer.
+   */
+  handle(IPC.embeddedLoginDismiss, (token: string) => {
+    loginCaptures.discard(String(token));
+  });
 
   handle(IPC.embeddedClose, (tabId: string) => ensureEmbeddedBrowser().closeTab(String(tabId)));
   handle(IPC.embeddedActivate, (tabId: string) => ensureEmbeddedBrowser().activate(String(tabId)));
@@ -1937,9 +2329,24 @@ function registerIpc(workspace: WorkspaceService): void {
     ensureEmbeddedBrowser().dropTab(String(tabId), target),
   );
   handle(IPC.embeddedFill, (tabId: string) => ensureEmbeddedBrowser().fillLogin(String(tabId)));
-  handle(IPC.embeddedDevTools, (tabId: string) => {
-    ensureEmbeddedBrowser().openDevTools(String(tabId));
+  handle(IPC.embeddedDevTools, (tabId: string, mode?: "docked" | "window") => {
+    const browser = ensureEmbeddedBrowser();
+    const tab = browser.findTab(String(tabId));
+    const next = mode === "window" ? "window" : "docked";
+    // Reopening an already-open panel means "move it", not "open it twice": the
+    // toolbar calls this for both, and the only difference is the host.
+    if (tab?.devtools) browser.setDevToolsMode(String(tabId), next);
+    else browser.openDevTools(String(tabId), next);
   });
+  handle(IPC.embeddedDevToolsClose, (tabId: string) => {
+    ensureEmbeddedBrowser().closeDevTools(String(tabId));
+  });
+  handle(IPC.embeddedZoom, (tabId: string, direction: "in" | "out" | "reset") =>
+    ensureEmbeddedBrowser().zoomBy(
+      String(tabId),
+      direction === "out" ? "out" : direction === "reset" ? "reset" : "in",
+    ),
+  );
   handle(
     IPC.embeddedFind,
     (tabId: string, text: string, options?: { forward?: boolean; findNext?: boolean }) =>
@@ -1991,6 +2398,10 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     mkdirSync(profileRoot(), { recursive: true });
+    // Windows groups taskbar entries by AppUserModelID and takes the icon from
+    // the packaged executable. In development the process is electron.exe, so
+    // without this the taskbar shows Electron's logo for our window.
+    if (process.platform === "win32") app.setAppUserModelId("io.github.onefanki.ensemble");
 
     service = new WorkspaceService({
       userDataDir: userDataDir(),
@@ -2035,10 +2446,10 @@ if (!gotLock) {
       appVersion: app.getVersion(),
       embedded: {
         state: () => ensureEmbeddedBrowser().state(),
-        createTab: (input) => {
+        createTab: async (input) => {
           const browser = ensureEmbeddedBrowser();
           const viewId = browser.defaultViewId();
-          const created = browser.createTab({
+          const created = await browser.createTab({
             ...(input.url ? { url: input.url } : {}),
             ...(input.identityId ? { identityId: input.identityId } : {}),
             ...(input.siteId ? { siteId: input.siteId } : {}),
@@ -2049,22 +2460,36 @@ if (!gotLock) {
             ...(viewId ? { viewId } : {}),
             origin: "ai",
           });
-          // Without this the page would be created off screen and the user would
-          // never see what the AI is doing; it also mounts the stage so the view
-          // gets real bounds.
-          browser.focusPage();
+          // Deliberately no `focusPage()` here.
+          //
+          // Raising the window and switching it to the browser page is right for
+          // a click from the UI — the person just asked to see a page. An AI
+          // client is different: it opens pages to work on them, often while the
+          // user is reading or editing something else in the same app, and having
+          // the window jump to the front on every `open_browser_tab` makes the
+          // endpoint unusable. The page gets a real viewport either way:
+          // `createTab` lays it out inside the window before parking it, so
+          // screenshots and DOM queries work while it is off screen.
+          //
+          // The tab still lands on stage when the browser page happens to be
+          // visible, because the view on stage is what `viewId` names.
+          if (input.identityId) scheduleEmbeddedFill(created.id, input.identityId);
           return created;
         },
         navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),
         closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),
-        click: (tabId, selector) => ensureEmbeddedBrowser().click(tabId, selector),
-        type: (tabId, selector, text, options) =>
-          ensureEmbeddedBrowser().type(tabId, selector, text, options),
+        click: (tabId, target) => ensureEmbeddedBrowser().click(tabId, target),
+        type: (tabId, target, text, options) =>
+          ensureEmbeddedBrowser().type(tabId, target, text, options),
+        fillForm: (tabId, fields) => ensureEmbeddedBrowser().fillForm(tabId, fields),
+        runFlow: (tabId, steps, options) =>
+          ensureEmbeddedBrowser().runFlow(tabId, steps, options),
         evaluate: (tabId, expression) => ensureEmbeddedBrowser().evaluate(tabId, expression),
         screenshot: (tabId, options) => ensureEmbeddedBrowser().screenshot(tabId, options),
-        visibility: (tabId, selector) => ensureEmbeddedBrowser().visibility(tabId, selector),
+        visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
+        wait: (tabId, input) => ensureEmbeddedBrowser().wait(tabId, input),
         setLayout: (layoutId, viewId) =>
           ensureEmbeddedBrowser().setViewLayout(
             viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
@@ -2076,18 +2501,81 @@ if (!gotLock) {
             slotIndex,
             tabId,
           ),
+        moveTab: (tabId, target) => ensureEmbeddedBrowser().dropTab(tabId, target),
         fillLogin: (tabId) => ensureEmbeddedBrowser().fillLogin(tabId),
         defaultTabId: (requested) => ensureEmbeddedBrowser().defaultTabId(requested),
         defaultViewId: () => ensureEmbeddedBrowser().defaultViewId(),
         layoutTargetView: (layoutId) => ensureEmbeddedBrowser().layoutTargetView(layoutId),
-        openView: (viewId) => openEmbeddedView(viewId),
+        // Same reasoning as the AI `createTab` above: an AI opening a view must
+        // not take the window away from the user. Recording `lastViewId` still
+        // happens, so "restore last scene" sees what the AI worked on.
+        openView: (viewId) => openEmbeddedView(viewId, { reveal: false }),
       },
-      onChange: broadcastWorkspace,
+      /*
+       * Account bundles for AI clients. No save/open dialog: an AI has nobody to
+       * answer one, so bundles are read and written under a fixed directory and
+       * the path travels in the tool call.
+       */
+      exportAccounts: (input) => {
+        if (!service) throw new Error("工作区未就绪");
+        const exported = service.exportAccounts(input);
+        const dir = join(userDataDir(), "accounts-export");
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, `accounts-${dateStamp()}-${Date.now().toString(36)}.json`);
+        writeFileSync(file, `${JSON.stringify(exported.file, null, 2)}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+        return {
+          path: file,
+          counts: exported.counts,
+          withPasswords: exported.counts.withPasswords,
+        };
+      },
+      previewAccounts: (filePath) => {
+        if (!service) throw new Error("工作区未就绪");
+        const parsed = parseAccountBundle(JSON.parse(readFileSync(filePath, "utf8")));
+        return service.previewAccountBundle(parsed);
+      },
+      importAccounts: (filePath, passphrase) => {
+        if (!service) throw new Error("工作区未就绪");
+        const parsed = parseAccountBundle(JSON.parse(readFileSync(filePath, "utf8")));
+        const result = service.importAccountBundle(parsed, passphrase);
+        broadcastWorkspace();
+        return result;
+      },
+      createFlowTab: (flow, identityId) => openFlowTab(flow, identityId),
+      onChange: broadcastMcp,
     });
 
     registerIpc(service);
     await createWindow();
     await mcpServer.start();
+
+    /**
+     * A freshly started window opens with one blank page.
+     *
+     * An empty stage is a dead end: the toolbar is there but nothing it acts on
+     * exists yet, and the new-tab surface — search box, engine picker, backdrop —
+     * only appears once a page exists. Opening one is what makes the app usable
+     * the moment it starts, for the person typing an address and equally for an
+     * AI that later looks for a tab to drive.
+     *
+     * Runs after the restore attempt: a restored view already has pages, and
+     * adding a blank one on top would put an empty tab in front of real work.
+     */
+    const ensureStarterTab = async (): Promise<void> => {
+      try {
+        const browser = ensureEmbeddedBrowser();
+        if (browser.state().tabs.length > 0) return;
+        await browser.createTab({});
+        // No `focusPage()`: the window is already in front at startup, and the
+        // renderer mounts the browser page on its own.
+      } catch (error) {
+        // A blank starter page is a convenience; never let it abort startup.
+        console.error("[ensemble] could not open the starter tab", error);
+      }
+    };
 
     // Maintenance runs in the background, but restoring waits on it so a cold
     // start does not race the engine scan and fail with "no browser".
@@ -2096,12 +2584,13 @@ if (!gotLock) {
     // Internal "nothing to do" reasons never reach the UI; an actual launch
     // failure does, because the user asked for the restore to happen.
     const quietReasons = new Set(["disabled", "no-view", "already-attempted", "missing"]);
-    void restoreLastSurface().then((outcome) => {
+    void restoreLastSurface().then(async (outcome) => {
       if (outcome.restored || (outcome.reason && !quietReasons.has(outcome.reason))) {
         if (restoreTarget && !restoreTarget.isDestroyed()) {
           restoreTarget.webContents.send(IPC.viewRestored, outcome);
         }
       }
+      await ensureStarterTab();
       broadcastWorkspace();
     });
 

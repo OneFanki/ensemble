@@ -1,8 +1,15 @@
-import { contextBridge, ipcRenderer } from "electron";
-import { IPC, type EnsembleApi } from "@shared/ipc";
-import type { AutoFillReport, FocusLabelPayload, ViewRestoreOutcome, WorkspaceSnapshot } from "@shared/types";
-import type { UpdateCheckResult, UpdateProgress } from "@shared/update";
 import type { EmbeddedState } from "@shared/embedded";
+import { type EnsembleApi, IPC } from "@shared/ipc";
+import type {
+  AutoFillReport,
+  FocusLabelPayload,
+  LoginCaptureNotice,
+  McpStatus,
+  ViewRestoreOutcome,
+  WorkspaceSnapshot,
+} from "@shared/types";
+import type { UpdateCheckResult, UpdateProgress } from "@shared/update";
+import { contextBridge, ipcRenderer } from "electron";
 
 const api: EnsembleApi = {
   getWorkspace: () => ipcRenderer.invoke(IPC.workspaceGet),
@@ -18,8 +25,8 @@ const api: EnsembleApi = {
 
   saveSite: (draft) => ipcRenderer.invoke(IPC.siteSave, draft),
   deleteSite: (id) => ipcRenderer.invoke(IPC.siteDelete, id),
-  saveSiteTag: (draft) => ipcRenderer.invoke(IPC.siteTagSave, draft),
-  deleteSiteTag: (id) => ipcRenderer.invoke(IPC.siteTagDelete, id),
+  saveTag: (draft) => ipcRenderer.invoke(IPC.tagSave, draft),
+  deleteTag: (id) => ipcRenderer.invoke(IPC.tagDelete, id),
   saveIdentity: (draft) => ipcRenderer.invoke(IPC.identitySave, draft),
   deleteIdentity: (id) => ipcRenderer.invoke(IPC.identityDelete, id),
   rebuildIdentityProfile: (id) => ipcRenderer.invoke(IPC.identityRebuildProfile, id),
@@ -32,6 +39,9 @@ const api: EnsembleApi = {
   retileView: (viewId) => ipcRenderer.invoke(IPC.viewRetile, viewId),
   copyViewToSite: (viewId, targetSiteId) =>
     ipcRenderer.invoke(IPC.viewCopyToSite, viewId, targetSiteId),
+  saveFlow: (draft) => ipcRenderer.invoke(IPC.flowSave, draft),
+  deleteFlow: (id) => ipcRenderer.invoke(IPC.flowDelete, id),
+  runFlow: (input) => ipcRenderer.invoke(IPC.flowRun, input),
   acceptSiteOrigin: (siteId) => ipcRenderer.invoke(IPC.siteAcceptOrigin, siteId),
   takeOriginNotice: () => ipcRenderer.invoke(IPC.siteOriginNotice),
   saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
@@ -39,10 +49,18 @@ const api: EnsembleApi = {
   exportWorkspace: (options) => ipcRenderer.invoke(IPC.dataExport, options),
   pickImport: () => ipcRenderer.invoke(IPC.dataImportPick),
   applyImport: (passphrase) => ipcRenderer.invoke(IPC.dataImportApply, passphrase),
+  exportAccounts: (options) => ipcRenderer.invoke(IPC.accountsExport, options),
+  pickAccountsImport: () => ipcRenderer.invoke(IPC.accountsImportPick),
+  applyAccountsImport: (passphrase) => ipcRenderer.invoke(IPC.accountsImportApply, passphrase),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
 
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpInfo),
   updateMcp: (patch) => ipcRenderer.invoke(IPC.mcpUpdate, patch),
+  onMcpChanged: (listener) => {
+    const handler = (_event: unknown, status: McpStatus) => listener(status);
+    ipcRenderer.on(IPC.mcpChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.mcpChanged, handler);
+  },
 
   setPassword: (owner, password) => ipcRenderer.invoke(IPC.credentialsSet, owner, password),
   clearPassword: (owner) => ipcRenderer.invoke(IPC.credentialsClear, owner),
@@ -113,8 +131,18 @@ const api: EnsembleApi = {
   openEmbeddedTabInView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenInView, viewId),
   openEmbeddedTabInSlot: (viewId, slotIndex) =>
     ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex),
+  openEmbeddedTabInInstance: (instanceId) =>
+    ipcRenderer.invoke(IPC.embeddedOpenInInstance, instanceId),
+  duplicateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedDuplicate, tabId),
+  closeOtherEmbeddedTabs: (tabId) => ipcRenderer.invoke(IPC.embeddedCloseOthers, tabId),
   openEmbeddedIdentity: (identityId) => ipcRenderer.invoke(IPC.embeddedOpenIdentity, identityId),
   openEmbeddedView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenView, viewId),
+  onLoginCaptured: (listener: (notice: LoginCaptureNotice) => void) => {
+    const handler = (_event: unknown, notice: LoginCaptureNotice) => listener(notice);
+    ipcRenderer.on(IPC.embeddedLoginCaptured, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedLoginCaptured, handler);
+  },
+  dismissLoginCapture: (token) => ipcRenderer.invoke(IPC.embeddedLoginDismiss, token),
   closeEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedClose, tabId),
   activateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedActivate, tabId),
   navigateEmbeddedTab: (tabId, url) => ipcRenderer.invoke(IPC.embeddedNavigate, tabId, url),
@@ -125,8 +153,7 @@ const api: EnsembleApi = {
   createEmbeddedView: (input) => ipcRenderer.invoke(IPC.embeddedViewCreate, input),
   setEmbeddedViewLayout: (viewId, layoutId) =>
     ipcRenderer.invoke(IPC.embeddedViewLayout, viewId, layoutId),
-  setEmbeddedViewSlots: (viewId, rects) =>
-    ipcRenderer.invoke(IPC.embeddedViewSlots, viewId, rects),
+  setEmbeddedViewSlots: (viewId, rects) => ipcRenderer.invoke(IPC.embeddedViewSlots, viewId, rects),
   pinEmbeddedTab: (viewId, slotIndex, tabId) =>
     ipcRenderer.invoke(IPC.embeddedViewPin, viewId, slotIndex, tabId),
   renameEmbeddedView: (viewId, name) => ipcRenderer.invoke(IPC.embeddedViewRename, viewId, name),
@@ -136,7 +163,9 @@ const api: EnsembleApi = {
   closeEmbeddedView: (viewId, mode) => ipcRenderer.invoke(IPC.embeddedViewClose, viewId, mode),
   dropEmbeddedTab: (tabId, target) => ipcRenderer.invoke(IPC.embeddedDropTab, tabId, target),
   fillEmbeddedLogin: (tabId) => ipcRenderer.invoke(IPC.embeddedFill, tabId),
-  openEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId),
+  openEmbeddedDevTools: (tabId, mode) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId, mode),
+  closeEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevToolsClose, tabId),
+  zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
   findInEmbeddedTab: (tabId, text, options) =>
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
   stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),

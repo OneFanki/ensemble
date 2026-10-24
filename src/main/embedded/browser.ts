@@ -5,12 +5,26 @@ import {
   buildDomSnapshotExpression,
   buildElementPointExpression,
   buildFocusExpression,
+  buildReadExpression,
+  buildSelectExpression,
   buildVisibilityExpression,
+  buildWaitExpression,
+  describeTarget,
   type DomSnapshot,
+  type TargetInput,
   type VisibilityProbe,
+  type WaitCondition,
+  type WaitResult,
 } from "@core/cdp/inspect";
 import { buildFillExpression } from "@core/cdp/login";
 import {
+  interpolateStep,
+  type FlowStep,
+  type FlowRunResult,
+  type FlowStepResult,
+} from "@shared/flows";
+import {
+  clampZoom,
   desktopUserAgent,
   EMBEDDED_CLEAN_PARTITION,
   EMBEDDED_SLOT_HEADER,
@@ -23,15 +37,20 @@ import {
   type FrozenSlot,
   insetSlotRects,
   isEmbeddedLayout,
+  isBlankTab,
+  inlineFavicon,
+  neighborZoomStep,
   normalizeEmbeddedUrl,
+  parkedViewBounds,
   planTabClick,
   resolveSlotTabs,
   type StageRect,
+  ZOOM_STEPS,
 } from "@shared/embedded";
 import type { LayoutId, RoleColor, SlotRect } from "@shared/types";
-import type { BrowserWindow } from "electron";
-import { Menu, session, shell, WebContentsView } from "electron";
+import { BrowserWindow, Menu, session, shell, WebContentsView } from "electron";
 import { EmbeddedCdp } from "./cdp";
+import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -51,6 +70,16 @@ interface TabRecord {
   viewId?: string;
   origin: "view" | "manual" | "ai";
   /**
+   * Zoom this page was set to by hand, in percent.
+   *
+   * Absent means "follow the global default", which is what lets the setting
+   * apply to every page the user has not touched while leaving a deliberately
+   * zoomed page alone. It is in-memory on purpose: a tab does not survive a
+   * restart, and persisting per-page zoom would resurrect settings for pages
+   * that no longer exist.
+   */
+  zoomOverride?: number;
+  /**
    * The browser instance (window) this page belongs to.
    *
    * A view slot is one isolated browser instance, not one page: a page can open
@@ -65,8 +94,30 @@ interface TabRecord {
   cdp: EmbeddedCdp;
   url: string;
   title: string;
+  /** Inlined site icon; cleared when the page moves to another origin. */
+  favicon?: string;
   loading: boolean;
+  /** `Runtime.addBinding` only needs to run once per target, not per navigation. */
+  captureBinding?: boolean;
   crashed: boolean;
+  /**
+   * DevTools hosted by this app, rather than by Electron.
+   *
+   * `openDevTools({ mode: "right" })` cannot dock inside a `WebContentsView` —
+   * Electron opens its own window instead, which is exactly the behaviour that
+   * was not wanted. `setDevToolsWebContents` lets the tools render into a view
+   * we own, so they sit inside the page's cell; the same view is re-parented
+   * into a small window when the user asks to detach.
+   */
+  devtools?: {
+    view: WebContentsView;
+    /** Where the tools are shown right now. */
+    mode: "docked" | "window";
+    /** Set while they are shown in their own window. */
+    window?: BrowserWindow;
+    /** Fraction of the cell the docked panel takes. */
+    width: number;
+  };
 }
 
 interface ViewRecord extends EmbeddedView {
@@ -77,6 +128,8 @@ interface ViewRecord extends EmbeddedView {
 export interface EmbeddedBrowserOptions {
   /** Where screenshots are written; created on demand. */
   shotDir: string;
+  /** Icon for app-owned windows (the DevTools window), so none shows Electron's. */
+  appIcon?: string;
   resolveLogin?: (identityId: string) => Promise<EmbeddedLoginPayload | undefined>;
   onStateChange?: (state: EmbeddedState) => void;
   /** Asks the renderer to switch to the browser page. */
@@ -84,6 +137,28 @@ export interface EmbeddedBrowserOptions {
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
+  /**
+   * A login form was submitted inside an embedded page.
+   *
+   * The password travels from page to main through a CDP binding, never through
+   * the app's renderer; the callback is where it is turned into a vault entry.
+   */
+  onLoginCaptured?: (capture: {
+    tabId: string;
+    username: string;
+    password: string;
+    origin: string;
+    path: string;
+  }) => void;
+}
+
+/** Scheme + host of a URL, or "" for anything that does not parse. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -113,8 +188,36 @@ export class EmbeddedBrowser {
   private lastStage: StageRect | null = null;
   private pendingState = false;
   private viewSeq = 0;
+  /** Default zoom for pages that have not been adjusted by hand. */
+  private defaultZoom = 100;
+  /**
+   * Downloaded icons, keyed by source URL.
+   *
+   * Many pages of one site share an icon and a site re-reports it on every
+   * navigation, so fetching per event would hit the network far more than
+   * needed. Bounded because the entries hold base64 payloads.
+   */
+  private faviconCache = new Map<string, { data: string; fetched: number }>();
 
   constructor(private readonly options: EmbeddedBrowserOptions) {}
+
+  /**
+   * Applies the global zoom setting.
+   *
+   * Pages with no override follow it, so changing the setting is visible on
+   * every untouched page immediately. A page the user zoomed by hand keeps its
+   * factor: silently resetting it would undo exactly what the keystroke was for.
+   */
+  setDefaultZoom(percent: number): void {
+    const next = clampZoom(percent);
+    if (next === this.defaultZoom) return;
+    this.defaultZoom = next;
+    for (const tab of this.tabs) {
+      if (tab.zoomOverride !== undefined) continue;
+      this.applyZoom(tab, next);
+    }
+    this.emitState();
+  }
 
   /** Binds the surface to the main window; safe to call again on recreation. */
   attach(win: BrowserWindow): void {
@@ -130,6 +233,16 @@ export class EmbeddedBrowser {
       this.stage = null;
       this.closeAllTabs();
       this.emitState();
+    });
+    // Parked pages sit just past the content edge, so shrinking the window would
+    // pull them back inside and paint them over whatever page is showing. A full
+    // re-layout re-parks them and then puts the page on stage back with the last
+    // known stage rect; the renderer's resize observer corrects that rect a
+    // moment later. Doing only the parking would leave the stage blank during
+    // the drag.
+    win.on("resize", () => {
+      if (this.host !== win) return;
+      this.applyLayout();
     });
     this.parkAll();
     this.sendState();
@@ -149,6 +262,7 @@ export class EmbeddedBrowser {
   }
 
   private describe(tab: TabRecord): EmbeddedTab {
+    const contents = tab.view.webContents;
     return {
       id: tab.id,
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
@@ -157,6 +271,7 @@ export class EmbeddedBrowser {
       ...(tab.color ? { color: tab.color } : {}),
       url: tab.url,
       title: tab.title,
+      ...(tab.favicon ? { favicon: tab.favicon } : {}),
       loading: tab.loading,
       canGoBack: this.safeNav(tab, "canGoBack"),
       canGoForward: this.safeNav(tab, "canGoForward"),
@@ -165,7 +280,36 @@ export class EmbeddedBrowser {
       instanceId: tab.instanceId,
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
+      zoom: tab.zoomOverride ?? this.defaultZoom,
+      devtoolsOpen: this.devtoolsOpen(tab),
+      ...(contents.isDestroyed()
+        ? {}
+        : {
+            bounds: (() => {
+              const rect = tab.view.getBounds();
+              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+            })(),
+          }),
     };
+  }
+
+  /**
+   * Whether this page's DevTools are open.
+   *
+   * Our own record is authoritative: when the tools are hosted in a
+   * `WebContentsView` we created, Chromium's `isDevToolsOpened()` reports false
+   * even though they are live and painting. The native query is kept as a
+   * fallback for the moment before our view is registered.
+   */
+  private devtoolsOpen(tab: TabRecord): boolean {
+    if (tab.devtools) return true;
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return false;
+    try {
+      return contents.isDevToolsOpened();
+    } catch {
+      return false;
+    }
   }
 
   private describeView(view: ViewRecord): EmbeddedView {
@@ -268,6 +412,26 @@ export class EmbeddedBrowser {
    */
   private setActivePage(tab: TabRecord): void {
     this.instanceActive.set(tab.instanceId, tab.id);
+  }
+
+  /**
+   * Marks a visible page as the selected one, without changing the layout.
+   *
+   * Used when the click happened inside the native page itself: the slot is
+   * already correct, only the selection label and the typing target move.
+   */
+  private selectPage(tab: TabRecord): void {
+    this.setActivePage(tab);
+    this.activeTabId = tab.id;
+    const root = this.instanceRoot(tab.instanceId);
+    if (root?.viewId) {
+      const view = this.findView(root.viewId);
+      if (view) {
+        view.focusedTabId = root.id;
+        this.activeViewId = view.id;
+      }
+    }
+    this.emitState();
   }
 
   private requireTab(tabId: string): TabRecord {
@@ -388,6 +552,9 @@ export class EmbeddedBrowser {
     // Picking a preset discards a hand-dragged geometry; the preset is the new
     // intent, and keeping the old fractions would make the choice look ignored.
     delete view.slotRects;
+    // Normalized here as well as in `applyLayout`: this container may not be the
+    // one on stage, so the generic pass would not touch it.
+    this.normalizeSlots(view);
     this.applyLayout();
     if (view.viewDefinitionId) {
       this.options.onViewLayoutChange?.(view.viewDefinitionId, next);
@@ -473,6 +640,33 @@ export class EmbeddedBrowser {
   setViewCollapsed(viewId: string, collapsed: boolean): EmbeddedState {
     const view = this.requireView(viewId);
     view.collapsed = collapsed;
+    this.emitState();
+    return this.state();
+  }
+
+  /**
+   * Points the toolbar back at the page the view already shows.
+   *
+   * Joining a full grid leaves the new page off stage. Letting it become the
+   * active tab anyway would make the address bar describe a page nobody can see
+   * while the "selected" marker stays on another cell.
+   */
+  keepViewSelection(viewId: string, preferredTabId?: string): EmbeddedState {
+    const view = this.findView(viewId);
+    if (!view) return this.state();
+    const occupied = view.slotTabs.filter((id): id is string => Boolean(id));
+    const selected =
+      (preferredTabId && occupied.includes(preferredTabId) ? preferredTabId : undefined) ??
+      occupied[0];
+    const target = selected ? this.findTab(selected) : undefined;
+    const page = target ? this.activePageOf(target.instanceId) : undefined;
+    if (page && target) {
+      this.activeTabId = page.id;
+      this.setActivePage(page);
+      view.focusedTabId = target.id;
+    }
+    this.activeViewId = view.id;
+    this.applyLayout();
     this.emitState();
     return this.state();
   }
@@ -645,7 +839,10 @@ export class EmbeddedBrowser {
   }): Promise<EmbeddedTab> {
     const id = randomUUID();
     const parent = input.instanceId ? this.instanceRoot(input.instanceId) : undefined;
-    const instanceId = parent?.id ?? id;
+    // The group key, not the parent page's id: closing the page that used to be
+    // the root must not turn the surviving pages into a new instance, and a page
+    // opened into that instance still has to join them.
+    const instanceId = parent ? parent.instanceId : id;
     // A page opened by another page shares its session: that is what makes it
     // the same browser instance rather than a second window.
     const identityId = input.identityId ?? parent?.identityId;
@@ -682,6 +879,14 @@ export class EmbeddedBrowser {
     this.tabs.push(tab);
     this.wireTab(tab);
     this.attachView(tab);
+    // Lay the view out inside the window once before anything parks it. A view
+    // that has never had a real rect and gets its first bounds outside the
+    // window is given a 0×0 viewport and keeps it, which breaks every geometry
+    // based check on that page (see `parkAll`).
+    tab.view.setBounds({ x: 0, y: 0, ...this.hostContentSize() });
+    // A new page starts at the global default; only a deliberate keystroke
+    // creates an override, so the setting keeps applying to everything else.
+    this.applyZoom(tab, parent ? (parent.zoomOverride ?? this.defaultZoom) : this.defaultZoom);
     this.activeTabId = id;
     this.setActivePage(tab);
 
@@ -698,6 +903,12 @@ export class EmbeddedBrowser {
       // Opening a loose tab must actually show it, even when another view was on
       // stage; opening into a view brings that view forward instead.
       this.assignView(tab, input.viewId);
+      const owner = this.findView(input.viewId);
+      // Select the new page only when it really landed in a cell. An off-stage
+      // page that stole the marker would leave "selected" pointing at something
+      // invisible, and the next swap would target slot 1 instead of the cell the
+      // user is looking at.
+      if (owner && owner.slotTabs.includes(tab.id)) owner.focusedTabId = tab.id;
       this.activeViewId = input.viewId;
     } else {
       delete this.activeViewId;
@@ -739,6 +950,76 @@ export class EmbeddedBrowser {
     target.setPermissionCheckHandler(() => false);
   }
 
+  /**
+   * Installs the login-form listener in a freshly loaded document.
+   *
+   * `Runtime.addBinding` exposes one function to the page; the value it passes
+   * arrives here as a `bindingCalled` event, so the password is in main-process
+   * memory and never in the renderer that draws the app chrome.
+   */
+  private async installLoginCapture(tab: TabRecord): Promise<void> {
+    if (!this.options.onLoginCaptured) return;
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    try {
+      // The binding survives navigations within the same renderer; adding it
+      // twice throws, so it is remembered per tab.
+      if (!tab.captureBinding) {
+        await tab.cdp.send("Runtime.addBinding", { name: LOGIN_CAPTURE_BINDING });
+        tab.captureBinding = true;
+      }
+      await tab.cdp.evaluate(LOGIN_CAPTURE_SCRIPT);
+    } catch {
+      // A page that navigated away or a failed load has nothing to instrument.
+    }
+  }
+
+  /**
+   * Downloads a site icon and inlines it.
+   *
+   * Electron reports icons through `page-favicon-updated`, but the renderer
+   * cannot be handed a remote URL: its CSP only allows `data:` images, and a
+   * remote fetch from the app renderer would leak a request the page's own
+   * session already made. So the bytes are fetched with the tab's session and
+   * converted here; the type and size rules live in `inlineFavicon` so they can
+   * be tested without Electron.
+   *
+   * Failure is silent on purpose — an icon is decoration, and a site behind a
+   * login can answer 403 for a request the page itself would have made.
+   */
+  private async loadFavicon(tab: TabRecord, url: string): Promise<void> {
+    if (!/^https?:\/\//i.test(url)) return;
+    const hit = this.faviconCache.get(url);
+    if (hit) {
+      tab.favicon = hit.data;
+      return;
+    }
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    try {
+      const response = await session
+        .fromPartition(
+          tab.identityId ? embeddedPartition(tab.identityId) : EMBEDDED_CLEAN_PARTITION,
+        )
+        .fetch(url);
+      if (!response.ok) return;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const data = inlineFavicon(response.headers.get("content-type"), bytes);
+      if (!data) return;
+      this.faviconCache.set(url, { data, fetched: Date.now() });
+      if (this.faviconCache.size > 120) {
+        // Cheap eviction: drop the oldest quarter instead of tracking hits.
+        const oldest = [...this.faviconCache.entries()]
+          .sort((a, b) => a[1].fetched - b[1].fetched)
+          .slice(0, 30);
+        for (const [key] of oldest) this.faviconCache.delete(key);
+      }
+      tab.favicon = data;
+    } catch {
+      // Offline, blocked, or gone: keep whatever the tab showed before.
+    }
+  }
+
   private wireTab(tab: TabRecord): void {
     const contents = tab.view.webContents;
     const update = () => {
@@ -746,6 +1027,11 @@ export class EmbeddedBrowser {
       this.emitState();
     };
 
+    contents.on("page-favicon-updated", (_event, urls) => {
+      const first = urls[0];
+      if (!first) return;
+      void this.loadFavicon(tab, first).then(() => this.emitState());
+    });
     contents.on("page-title-updated", (_event, title) => {
       tab.title = title;
       update();
@@ -760,12 +1046,66 @@ export class EmbeddedBrowser {
       update();
     });
     contents.on("did-navigate", (_event, url) => {
+      // An icon belongs to an origin, not to a tab. Keeping the old one across a
+      // navigation would label the new site with the previous site's mark until
+      // the new icon arrives.
+      if (originOf(url) !== originOf(tab.url)) delete tab.favicon;
       tab.url = url;
       update();
     });
     contents.on("did-navigate-in-page", (_event, url) => {
       tab.url = url;
       update();
+    });
+    // DevTools can also be closed from their own header; the toolbar's toggle
+    // state has to follow that, or the button stays "on" after the panel is gone.
+    contents.on("devtools-opened", update);
+    contents.on("devtools-closed", update);
+    /*
+     * Login capture: the page hands the credentials to the main process through
+     * a CDP binding, so they never enter the app's renderer. The script is
+     * installed per document (a navigation replaces `window`).
+     */
+    contents.debugger.on("message", (_event, method, params) => {
+      if (method !== "Runtime.bindingCalled") return;
+      const payload = params as { name?: string; payload?: string } | undefined;
+      if (payload?.name !== LOGIN_CAPTURE_BINDING || typeof payload.payload !== "string") return;
+      let parsed: { username?: unknown; password?: unknown; origin?: unknown; path?: unknown };
+      try {
+        parsed = JSON.parse(payload.payload) as typeof parsed;
+      } catch {
+        return;
+      }
+      if (
+        typeof parsed.username !== "string" ||
+        typeof parsed.password !== "string" ||
+        typeof parsed.origin !== "string"
+      ) {
+        return;
+      }
+      if (!parsed.username.trim() || !parsed.password) return;
+      this.options.onLoginCaptured?.({
+        tabId: tab.id,
+        username: parsed.username.trim().slice(0, 200),
+        password: parsed.password.slice(0, 500),
+        origin: parsed.origin,
+        path: typeof parsed.path === "string" ? parsed.path : "/",
+      });
+    });
+    contents.on("did-finish-load", () => {
+      void this.installLoginCapture(tab);
+    });
+    /*
+     * Clicking anywhere inside a page selects that cell.
+     *
+     * Without this, the selection only moves when a dock row or a slot header is
+     * clicked, which reads as "the highlighted cell is the last one I clicked in
+     * the sidebar" instead of "the cell I am typing into". The native page owns
+     * the click, so its focus event is the only signal that reaches us.
+     */
+    contents.on("focus", () => {
+      if (this.activeTabId === tab.id) return;
+      this.selectPage(tab);
     });
     contents.on("render-process-gone", () => {
       tab.crashed = true;
@@ -845,6 +1185,20 @@ export class EmbeddedBrowser {
         event.preventDefault();
         this.closeTab(tab.id);
       }
+      // Zoom has to be intercepted here: a page can swallow Ctrl +/- itself
+      // (code editors do), and the gesture must still work on that page.
+      if (modifier && (key === "=" || key === "+")) {
+        event.preventDefault();
+        this.zoomBy(tab.id, "in");
+      }
+      if (modifier && (key === "-" || key === "_")) {
+        event.preventDefault();
+        this.zoomBy(tab.id, "out");
+      }
+      if (modifier && key === "0") {
+        event.preventDefault();
+        this.zoomBy(tab.id, "reset");
+      }
     });
   }
 
@@ -864,6 +1218,9 @@ export class EmbeddedBrowser {
       // The error page is the feedback; the tab stays alive.
     });
     this.syncTab(tab);
+    // The page is no longer blank, so it has to take over its cell: until now
+    // the renderer was drawing the new-tab surface there instead.
+    this.applyLayout();
     this.emitState();
     return this.describe(tab);
   }
@@ -944,6 +1301,22 @@ export class EmbeddedBrowser {
         delete view.focusedTabId;
       }
       // The container stays: it may be intentionally empty, waiting for a page.
+    } else if (view && siblings.length > 0) {
+      /**
+       * A slot names an instance by its root page's id. Closing that page left
+       * the slot pointing at a tab that no longer exists, so resolving the grid
+       * dropped the cell's contents — the surviving pages were still running,
+       * just unreachable from the stage. The oldest survivor takes the name.
+       */
+      const successor = siblings[0];
+      if (successor) {
+        view.slotTabs = view.slotTabs.map((id) =>
+          id === tabId || id === instanceId ? successor.id : id,
+        );
+        if (view.focusedTabId === tabId || view.focusedTabId === instanceId) {
+          view.focusedTabId = successor.id;
+        }
+      }
     }
     const survivor = siblings[siblings.length - 1];
     if (survivor) {
@@ -963,10 +1336,56 @@ export class EmbeddedBrowser {
     return this.state();
   }
 
+  /**
+   * Opens one more page inside an existing browser instance.
+   *
+   * This is the strip's "+". A new instance would be a second browser with a
+   * second session, which is the opposite of what a profile with a console open
+   * needs; the page has to join the same cookies, storage and window.
+   */
+  async openInInstance(instanceId: string): Promise<EmbeddedState> {
+    const root = this.instanceRoot(instanceId);
+    if (!root) throw new Error(`浏览器实例不存在：${instanceId}`);
+    const tab = await this.createTab({ instanceId: root.id });
+    this.activate(tab.id);
+    return this.state();
+  }
+
+  /**
+   * Duplicates a page in its own instance.
+   *
+   * Same session, same address, same cell — the copy only becomes a second page
+   * in the strip, which is what "duplicate this tab" means in a browser. A blank
+   * page has nothing to duplicate but the tab itself, so the copy is blank too.
+   */
+  async duplicateTab(tabId: string): Promise<EmbeddedState> {
+    const tab = this.requireTab(tabId);
+    const copy = await this.createTab({
+      instanceId: tab.instanceId,
+      openerId: tab.id,
+      label: tab.label,
+      ...(isBlankTab(tab) ? {} : { url: tab.url }),
+    });
+    this.activate(copy.id);
+    return this.state();
+  }
+
+  /** Closes every page of an instance except the one named. */
+  closeOtherTabs(tabId: string): EmbeddedState {
+    const tab = this.requireTab(tabId);
+    for (const sibling of this.instanceTabs(tab.instanceId)) {
+      if (sibling.id !== tab.id) this.closeTab(sibling.id);
+    }
+    return this.state();
+  }
+
   private discardTab(tab: TabRecord): void {
     const index = this.tabs.indexOf(tab);
     if (index >= 0) this.tabs.splice(index, 1);
     tab.cdp.detach();
+    // The DevTools view outlives the page only until here: it is hosted by the
+    // same window, so a closed page must take its panel with it.
+    this.dropDevTools(tab);
     try {
       this.host?.contentView.removeChildView(tab.view);
     } catch {
@@ -995,10 +1414,49 @@ export class EmbeddedBrowser {
     this.lastStage = null;
   }
 
+  /**
+   * Rebuilds a view's slot table from its layout.
+   *
+   * The slot count follows the layout, not the stage: it is decided by the preset
+   * or the hand-dragged fractions, so this must not depend on the browser page
+   * being mounted.
+   */
+  private normalizeSlots(view: ViewRecord): void {
+    const count = embeddedSlotRects(
+      view.layoutId,
+      { x: 0, y: 0, width: 1, height: 1 },
+      view.slotRects,
+    ).length;
+    view.slotTabs = resolveSlotTabs(
+      this.viewRoots(view.id).map((tab) => tab.id),
+      view.slotTabs,
+      count,
+    );
+    if (view.focusedTabId && !view.slotTabs.includes(view.focusedTabId)) {
+      // The focused page may sit in a trimmed slot; keep the marker honest
+      // instead of leaving it on a cell that no longer exists.
+      const first = view.slotTabs.find((id): id is string => Boolean(id));
+      if (first) view.focusedTabId = first;
+      else delete view.focusedTabId;
+    }
+  }
+
   private applyLayout(): void {
     const host = this.host;
     if (!host || host.isDestroyed()) return;
     this.parkAll();
+    /**
+     * Slot tables are layout *state*, not geometry, so they are normalized even
+     * when no stage has been reported.
+     *
+     * The browser page is not always mounted: the user may be on the accounts
+     * page, and an MCP call can arrive before the renderer has reported its
+     * stage. Skipping this left `slotTabs` at the old length, so switching 2×2 →
+     * 2×1 from `set_browser_layout` still listed four entries and a later launch
+     * reused a grid the user had already changed.
+     */
+    const current = this.activeView();
+    if (current) this.normalizeSlots(current);
     if (!this.stage) return;
 
     const view = this.activeView();
@@ -1008,9 +1466,14 @@ export class EmbeddedBrowser {
       // black strip above a page that already has its title in the toolbar.
       const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
       const page = tab ? this.activePageOf(tab.instanceId) : undefined;
-      if (page && !page.viewId && !page.view.webContents.isDestroyed()) {
+      // A page that has not navigated anywhere stays parked so the app's own
+      // new-tab surface (search box, engine picker) is what the user sees. The
+      // renderer draws it in the empty stage; it is plain HTML and needs no
+      // native view behind it.
+      if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
         page.view.setBounds(this.stage);
       }
+      if (tab?.devtools?.mode === "docked") this.placeDevTools(tab);
       return;
     }
 
@@ -1018,11 +1481,8 @@ export class EmbeddedBrowser {
       embeddedSlotRects(view.layoutId, this.stage, view.slotRects),
       this.stage,
     );
-    view.slotTabs = resolveSlotTabs(
-      this.viewRoots(view.id).map((tab) => tab.id),
-      view.slotTabs,
-      slots.length,
-    );
+    // `slotTabs` was already normalized above; the geometry is the only thing
+    // left to do here.
     slots.forEach((slot, index) => {
       const rootId = view.slotTabs[index];
       if (!rootId) return;
@@ -1030,8 +1490,15 @@ export class EmbeddedBrowser {
       // `instanceActive`, so popups reuse the slot instead of adding a cell.
       const page = this.activePageOf(rootId);
       if (!page || page.view.webContents.isDestroyed()) return;
+      // Same reason as the flat branch: a blank page keeps its cell for HTML.
+      if (isBlankTab(page)) return;
       page.view.setBounds(embeddedViewRect(slot));
     });
+    // Docked DevTools follow the cell they were opened in, so a layout change or
+    // a different page on screen keeps the panel beside the right page.
+    for (const tab of this.tabs) {
+      if (tab.devtools?.mode === "docked") this.placeDevTools(tab);
+    }
   }
 
   /**
@@ -1041,15 +1508,47 @@ export class EmbeddedBrowser {
    * scripts and `capturePage`, but CDP screenshots time out; bounds outside the
    * window keep everything working. AI calls therefore behave identically no
    * matter which app page the user is looking at.
+   *
+   * Two details decide the coordinates, both measured:
+   *
+   * 1. Park past the *window's* right edge, not past the stage's. The stage
+   *    starts to the right of the rail, so `x = stage.width` is still inside the
+   *    window — a parked page painted itself over the accounts page.
+   * 2. A view that is *created* outside the window gets a 0×0 viewport for good:
+   *    scripts run, but the document lays out at zero width, so "is this text
+   *    visible" and every element position are wrong. `createTab` therefore
+   *    gives a new view a real on-window rect before it is parked. A view that
+   *    was laid out once keeps its size when moved out, so this only has to
+   *    happen at creation.
    */
   private parkAll(): void {
-    const stage = this.stage ?? this.lastStage;
-    const width = Math.max(1, Math.round(stage?.width ?? 1280));
-    const height = Math.max(1, Math.round(stage?.height ?? 800));
+    const content = this.hostContentSize();
+    const parked = parkedViewBounds(content);
     for (const tab of this.tabs) {
       if (tab.view.webContents.isDestroyed()) continue;
-      tab.view.setBounds({ x: -100_000, y: -100_000, width, height });
+      tab.view.setBounds(parked);
+      // Docked DevTools are children of the same window: leaving them where they
+      // were would paint a panel over whichever page is now on stage.
+      if (tab.devtools?.mode === "docked" && !tab.devtools.view.webContents.isDestroyed()) {
+        tab.devtools.view.setBounds(parked);
+      }
     }
+  }
+
+  /** Size of the window content area, which is what child view bounds use. */
+  private hostContentSize(): { width: number; height: number } {
+    const host = this.host;
+    if (host && !host.isDestroyed()) {
+      const bounds = host.getContentBounds();
+      if (bounds.width > 0 && bounds.height > 0) {
+        return { width: bounds.width, height: bounds.height };
+      }
+    }
+    const stage = this.stage ?? this.lastStage;
+    return {
+      width: Math.max(1, Math.round(stage?.width ?? 1280)),
+      height: Math.max(1, Math.round(stage?.height ?? 800)),
+    };
   }
 
   private emitState(): void {
@@ -1135,6 +1634,38 @@ export class EmbeddedBrowser {
     return tab ? this.describe(tab) : undefined;
   }
 
+  /** The instance root page for an identity, wherever it lives. */
+  findIdentityRoot(identityId: string): EmbeddedTab | undefined {
+    const tab = this.tabs.find(
+      (item) => item.identityId === identityId && item.instanceId === item.id,
+    );
+    return tab ? this.describe(tab) : undefined;
+  }
+
+  /**
+   * First cell of a view that holds no instance.
+   *
+   * Opening an account has to distinguish "there is room, put it on stage" from
+   * "the grid is full, keep it off stage". Without that split, every open either
+   * replaces the selected cell or shoves the whole view aside.
+   */
+  firstEmptySlot(viewId: string): number | undefined {
+    const view = this.findView(viewId);
+    if (!view) return undefined;
+    const slotCount = embeddedSlotRects(
+      view.layoutId,
+      { x: 0, y: 0, width: 1, height: 1 },
+      view.slotRects,
+    ).length;
+    const slots = resolveSlotTabs(
+      this.viewRoots(view.id).map((item) => item.id),
+      view.slotTabs,
+      slotCount,
+    );
+    const index = slots.indexOf(null);
+    return index >= 0 ? index : undefined;
+  }
+
   /**
    * Re-applies a saved `slotAssignments` map after a container was (re)opened.
    *
@@ -1170,42 +1701,357 @@ export class EmbeddedBrowser {
     return tab.cdp.snapshotDom(buildDomSnapshotExpression(options));
   }
 
-  async visibility(tabId: string, selector: string): Promise<VisibilityProbe> {
+  async visibility(tabId: string, target: TargetInput): Promise<VisibilityProbe> {
     const tab = this.requireTab(tabId);
-    return tab.cdp.visibility(buildVisibilityExpression(selector));
+    return tab.cdp.visibility(buildVisibilityExpression(target));
   }
 
-  async click(tabId: string, selector: string): Promise<{ ok: true; tag?: string; text?: string }> {
+  async click(
+    tabId: string,
+    target: TargetInput,
+  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string }> {
     const tab = this.requireTab(tabId);
-    const point = await tab.cdp.elementPoint(buildElementPointExpression(selector));
+    const point = await tab.cdp.elementPoint(buildElementPointExpression(target));
     if (!point.ok || point.x === undefined || point.y === undefined) {
-      throw new Error(`无法点击 ${selector}：${point.reason ?? "unknown"}`);
+      throw new Error(`无法点击 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
     }
     await tab.cdp.clickAt(point.x, point.y);
     return {
       ok: true,
       ...(point.tag ? { tag: point.tag } : {}),
       ...(point.text ? { text: point.text } : {}),
+      ...(point.selector ? { selector: point.selector } : {}),
     };
   }
 
   async type(
     tabId: string,
-    selector: string,
+    target: TargetInput,
     text: string,
     options: { submit?: boolean; clear?: boolean } = {},
-  ): Promise<{ ok: true }> {
+  ): Promise<{ ok: true; secret?: true; selector?: string }> {
     const tab = this.requireTab(tabId);
-    const focus = await tab.cdp.evaluate<{ ok: boolean; reason?: string }>(
-      buildFocusExpression(selector),
-    );
-    if (!focus.ok) throw new Error(`无法输入到 ${selector}：${focus.reason ?? "unknown"}`);
+    const focus = await tab.cdp.evaluate<{
+      ok: boolean;
+      reason?: string;
+      inputType?: string;
+      selector?: string;
+    }>(buildFocusExpression(target));
+    if (!focus.ok)
+      throw new Error(`无法输入到 ${describeTarget(target)}：${focus.reason ?? "unknown"}`);
     if (options.clear !== false) {
       await tab.cdp.key("a", "KeyA", 65).catch(() => {});
     }
     await tab.cdp.insertText(text);
     if (options.submit) await tab.cdp.key("Enter", "Enter", 13);
-    return { ok: true };
+    // Reported so the MCP layer can keep the value out of its audit log; a
+    // password field can be a brand-new credential (creating a tenant), so it
+    // cannot always go through `fill_browser_login`.
+    return {
+      ok: true,
+      ...(focus.selector ? { selector: focus.selector } : {}),
+      ...(focus.inputType === "password" ? { secret: true as const } : {}),
+    };
+  }
+
+  /**
+   * Waits for a page condition, polling inside the tab.
+   *
+   * A navigation destroys the execution context the polling loop lives in, so a
+   * failure of that kind is retried with the time that is left: by then the new
+   * document may already satisfy the condition. Without the retry, "click 登录,
+   * then wait for the console" always reports a destroyed context instead of the
+   * page it was waiting for.
+   */
+  async wait(
+    tabId: string,
+    input: {
+      condition: WaitCondition;
+      target?: TargetInput;
+      text?: string;
+      timeoutMs: number;
+    },
+  ): Promise<WaitResult> {
+    const tab = this.requireTab(tabId);
+    const started = Date.now();
+    const deadline = started + input.timeoutMs;
+    let last: WaitResult | undefined;
+    while (Date.now() < deadline) {
+      const remaining = Math.max(200, deadline - Date.now());
+      const expression = buildWaitExpression({ ...input, timeoutMs: remaining });
+      try {
+        const result = await Promise.race([
+          tab.cdp.evaluate<WaitResult>(expression, { awaitPromise: true }),
+          new Promise<WaitResult>((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  ok: false,
+                  waitedMs: remaining,
+                  timedOut: true,
+                  reason: "evaluate-timeout",
+                }),
+              remaining + 400,
+            ),
+          ),
+        ]);
+        if (result.ok || !result.timedOut || result.reason !== "evaluate-timeout") return result;
+        last = result;
+      } catch (error) {
+        // Context destroyed by a navigation, or the tab went away mid-poll.
+        last = {
+          ok: false,
+          waitedMs: Date.now() - started,
+          timedOut: true,
+          reason: String((error as Error)?.message ?? error).slice(0, 200),
+        };
+      }
+    }
+    return (
+      last ?? {
+        ok: false,
+        waitedMs: Date.now() - started,
+        timedOut: true,
+        reason: "timeout",
+      }
+    );
+  }
+
+  /**
+   * Fills several fields in one call.
+   *
+   * The point is not saving keystrokes but round trips: each field used to be
+   * its own MCP request, and a slow backend meant the caller had to poll between
+   * them anyway. One call also keeps the page from being left half-filled when a
+   * single request times out.
+   */
+  async fillForm(
+    tabId: string,
+    fields: Array<{
+      target: TargetInput;
+      value: string;
+      submit?: boolean;
+      clear?: boolean;
+    }>,
+  ): Promise<{
+    ok: true;
+    filled: Array<{ field: string; selector?: string; secret?: true }>;
+  }> {
+    const tab = this.requireTab(tabId);
+    const filled: Array<{ field: string; selector?: string; secret?: true }> = [];
+    for (const field of fields) {
+      const name = describeTarget(field.target);
+      const focus = await tab.cdp.evaluate<{
+        ok: boolean;
+        reason?: string;
+        inputType?: string;
+        selector?: string;
+      }>(buildFocusExpression(field.target));
+      if (!focus.ok) {
+        throw new Error(
+          `第 ${filled.length + 1} 个字段（${name}）无法输入：${focus.reason ?? "unknown"}`,
+        );
+      }
+      if (field.clear !== false) await tab.cdp.key("a", "KeyA", 65).catch(() => {});
+      await tab.cdp.insertText(field.value);
+      if (field.submit) await tab.cdp.key("Enter", "Enter", 13);
+      filled.push({
+        field: name,
+        ...(focus.selector ? { selector: focus.selector } : {}),
+        // The MCP layer masks every value whose field reported `secret`, so one
+        // password in the middle of a form must not leak the rest of the call.
+        ...(focus.inputType === "password" ? { secret: true as const } : {}),
+      });
+    }
+    return { ok: true, filled };
+  }
+
+  /**
+   * Runs a saved flow's steps against one tab.
+   *
+   * Every step goes through the same primitives the individual tools use, so a
+   * flow clicks and types exactly like a person driving the app would. That is
+   * the whole reason flows are step lists instead of page scripts.
+   *
+   * A failed step stops the run and reports where. Continuing would be worse:
+   * the remaining steps assume the page reached the state this one was meant to
+   * produce, and carrying on from a half-finished form creates real data on the
+   * tested system. Steps marked `optional` (a wait that may time out) are the
+   * one exception.
+   */
+  async runFlow(
+    tabId: string,
+    steps: FlowStep[],
+    options: { baseUrl: string; vars: Record<string, string>; timeoutMs: number },
+  ): Promise<FlowRunResult> {
+    const tab = this.requireTab(tabId);
+    const started = Date.now();
+    const results: FlowStepResult[] = [];
+    const vars = { ...options.vars };
+
+    for (let index = 0; index < steps.length; index += 1) {
+      if (Date.now() - started > options.timeoutMs) {
+        return {
+          ok: false,
+          failedAt: index,
+          reason: `流程超过 ${Math.round(options.timeoutMs / 1000)} 秒仍未跑完`,
+          steps: results,
+        };
+      }
+      const raw = steps[index] as FlowStep;
+      const label = `第 ${index + 1} 步（${raw.action}）`;
+      let step: FlowStep;
+      try {
+        step = interpolateStep(raw, vars);
+      } catch (error) {
+        return {
+          ok: false,
+          failedAt: index,
+          reason: `${label}：${(error as Error).message}`,
+          steps: results,
+        };
+      }
+
+      const target = this.targetOf(step);
+      try {
+        let detail: string | undefined;
+        switch (step.action) {
+          case "navigate": {
+            const url = this.resolveFlowUrl(step.url ?? "", options.baseUrl);
+            await tab.view.webContents.loadURL(url).catch(() => {
+              // An error page is the feedback; the navigation itself did happen.
+            });
+            this.syncTab(tab);
+            detail = url;
+            break;
+          }
+          case "fill": {
+            const focus = await tab.cdp.evaluate<{
+              ok: boolean;
+              reason?: string;
+              inputType?: string;
+            }>(buildFocusExpression(target));
+            if (!focus.ok) throw new Error(`无法输入：${focus.reason ?? "unknown"}`);
+            // Some frameworks clear on focus; select-then-insert replaces the
+            // old value without leaving a trailing fragment behind.
+            await tab.cdp.key("a", "KeyA", 65).catch(() => {});
+            await tab.cdp.insertText(step.value ?? "");
+            detail = focus.inputType === "password" ? "[redacted]" : step.value;
+            break;
+          }
+          case "click": {
+            const point = await tab.cdp.elementPoint(buildElementPointExpression(target));
+            if (!point.ok || point.x === undefined || point.y === undefined) {
+              throw new Error(`无法点击：${point.reason ?? "unknown"}`);
+            }
+            await tab.cdp.clickAt(point.x, point.y);
+            detail = point.text;
+            break;
+          }
+          case "select": {
+            const selected = await tab.cdp.evaluate<{
+              ok: boolean;
+              reason?: string;
+              available?: string[];
+              text?: string;
+            }>(buildSelectExpression(target, step.option ?? ""));
+            if (!selected.ok) {
+              const hint = selected.available?.length
+                ? `（可选：${selected.available.join(" / ")}）`
+                : "";
+              throw new Error(`无法选择「${step.option}」：${selected.reason ?? "unknown"}${hint}`);
+            }
+            detail = selected.text;
+            break;
+          }
+          case "press": {
+            await tab.cdp.pressNamedKey(step.key ?? "");
+            detail = step.key;
+            break;
+          }
+          case "login": {
+            const filled = await this.fillLogin(tabId);
+            if (!filled.ok) throw new Error(`无法填充登录：${filled.reason ?? "unknown"}`);
+            detail = filled.missingFields?.length
+              ? `已填入账号密码，缺少字段：${filled.missingFields.join("、")}`
+              : "已填入账号密码";
+            break;
+          }
+          case "wait": {
+            const outcome = await this.wait(tabId, {
+              condition: step.condition ?? "visible",
+              ...(step.condition === "text" || step.condition === "url" ? {} : { target }),
+              ...(step.expect ? { text: step.expect } : {}),
+              timeoutMs: step.timeoutMs ?? 5000,
+            });
+            if (!outcome.ok && !step.optional) {
+              throw new Error(`等待超时：${outcome.reason ?? "unknown"}`);
+            }
+            detail = outcome.ok ? `等了 ${outcome.waitedMs}ms` : "超时，按可选项继续";
+            break;
+          }
+          case "read": {
+            const read = await tab.cdp.evaluate<{
+              ok: boolean;
+              reason?: string;
+              value?: string;
+            }>(buildReadExpression(target));
+            if (!read.ok) throw new Error(`无法读取：${read.reason ?? "unknown"}`);
+            if (step.as) vars[step.as] = read.value ?? "";
+            detail = step.as ? `${step.as} = ${read.value}` : read.value;
+            break;
+          }
+          default:
+            throw new Error(`不认识的动作 ${String(step.action)}`);
+        }
+        this.syncTab(tab);
+        results.push({ index, action: step.action, ok: true, ...(detail ? { detail } : {}) });
+      } catch (error) {
+        if (step.optional) {
+          results.push({
+            index,
+            action: step.action,
+            ok: false,
+            optional: true,
+            detail: (error as Error).message,
+          });
+          continue;
+        }
+        return {
+          ok: false,
+          failedAt: index,
+          reason: `${label}失败：${(error as Error).message}`,
+          steps: [
+            ...results,
+            { index, action: step.action, ok: false, detail: (error as Error).message },
+          ],
+          vars,
+        };
+      }
+    }
+    this.emitState();
+    return { ok: true, steps: results, vars };
+  }
+
+  /** The element target of a step, or undefined for steps that act on the page. */
+  private targetOf(step: FlowStep): TargetInput {
+    if (step.selector) return { selector: step.selector };
+    return {
+      ...(step.label ? { label: step.label } : {}),
+      ...(step.text ? { text: step.text } : {}),
+      ...(step.role ? { role: step.role } : {}),
+      ...(step.exact ? { exact: true } : {}),
+    };
+  }
+
+  /** A step's url may be absolute or a path relative to the flow's site. */
+  private resolveFlowUrl(url: string, baseUrl: string): string {
+    if (/^https?:\/\//i.test(url)) return url;
+    try {
+      return new URL(url, baseUrl).toString();
+    } catch {
+      throw new Error(`无法解析地址：${url}`);
+    }
   }
 
   async evaluate<T>(tabId: string, expression: string): Promise<T> {
@@ -1239,6 +2085,11 @@ export class EmbeddedBrowser {
     const payload = await this.options.resolveLogin?.(tab.identityId);
     if (!payload) return { ok: false, reason: "no-password" };
     const origin = await tab.cdp.evaluate<string>("location.origin");
+    // A tab created with a URL is still on about:blank for a moment, where
+    // `location.origin` is the string "null". That is "not there yet", not a
+    // cross-origin page: reporting it as cross-origin made the fill scheduler
+    // give up on its first attempt and never type anything.
+    if (!origin || origin === "null") return { ok: false, reason: "password-field-not-found" };
     let expected = "";
     try {
       expected = new URL(payload.baseUrl).origin;
@@ -1350,13 +2201,22 @@ export class EmbeddedBrowser {
     const stage = this.stage;
     const view = this.activeView();
     const shots: FrozenSlot[] = [];
+    /**
+     * Captures one page and reports the rect its pixels actually fill.
+     *
+     * Docked DevTools shrink the page inside the same view, so the screenshot is
+     * narrower than the slot. Scaling it to the full slot would stretch the page;
+     * reporting the real page box leaves the tools area unpainted instead.
+     */
     const capture = async (tab: TabRecord, rect: StageRect) => {
-      if (tab.view.webContents.isDestroyed()) return;
+      const contents = tab.view.webContents;
+      if (contents.isDestroyed()) return;
       try {
         const png = await tab.cdp.screenshot();
+        const page = await this.pageBoxDip(tab, rect);
         shots.push({
           tabId: tab.id,
-          rect,
+          rect: page,
           dataUrl: `data:image/png;base64,${png.toString("base64")}`,
         });
       } catch {
@@ -1373,6 +2233,10 @@ export class EmbeddedBrowser {
         // Capture the page the slot is actually showing, which may be a popup.
         const page = this.activePageOf(rootId);
         if (!page || !slot) continue;
+        // A blank page has no native pixels — the renderer draws the new-tab
+        // surface in that cell. Capturing it would return an empty image and
+        // paint over the search box the user is typing into.
+        if (isBlankTab(page)) continue;
         await capture(page, embeddedViewRect(slot));
       }
       return shots;
@@ -1381,13 +2245,218 @@ export class EmbeddedBrowser {
     const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
     const page = tab ? this.activePageOf(tab.instanceId) : undefined;
     // Flat mode paints the page at the stage origin: there is no header band.
-    if (page && stage) await capture(page, stage);
+    if (page && stage && !isBlankTab(page)) await capture(page, stage);
     return shots;
   }
 
-  openDevTools(tabId: string): void {
+  /**
+   * Where a page's pixels land inside its slot, in window DIP.
+   *
+   * `window.innerWidth` is in CSS pixels, so multiplying by the zoom factor gives
+   * the DIP width the page occupies. Without DevTools this equals the slot; with
+   * them docked it is the shrunken page area.
+   */
+  private async pageBoxDip(tab: TabRecord, slot: StageRect): Promise<StageRect> {
+    try {
+      const size = await tab.cdp.evaluate<{ width: number; height: number }>(
+        "({ width: window.innerWidth, height: window.innerHeight })",
+      );
+      const zoom = tab.view.webContents.getZoomFactor() || 1;
+      const width = Math.min(slot.width, Math.max(1, Math.round(size.width * zoom)));
+      const height = Math.min(slot.height, Math.max(1, Math.round(size.height * zoom)));
+      return { x: slot.x, y: slot.y, width, height };
+    } catch {
+      return slot;
+    }
+  }
+
+  /**
+   * Zooms one page, the Ctrl +/- gesture.
+   *
+   * The step list mirrors Chrome's: 50/67/75/80/90/100/110/125/150/175/200.
+   * Snapping to it means the same two keystrokes land on the same factor as a
+   * real browser, instead of drifting through arbitrary percentages.
+   */
+  zoomBy(tabId: string, direction: "in" | "out" | "reset"): number {
     const tab = this.requireTab(tabId);
-    tab.view.webContents.openDevTools({ mode: "detach" });
+    const current = tab.zoomOverride ?? this.defaultZoom;
+    const next =
+      direction === "reset"
+        ? this.defaultZoom
+        : clampZoom(ZOOM_STEPS[neighborZoomStep(current, direction)] ?? current);
+    this.applyZoom(tab, next);
+    // Reset means "back to the default", which is not an override.
+    if (direction === "reset" || next === this.defaultZoom) delete tab.zoomOverride;
+    else tab.zoomOverride = next;
+    this.emitState();
+    return next;
+  }
+
+  private applyZoom(tab: TabRecord, percent: number): void {
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    // `setZoomFactor` is per webContents and survives navigations within the
+    // page, which is what a browser tab does. It does not leak to other pages:
+    // each page is its own WebContentsView.
+    contents.setZoomFactor(Math.min(2, Math.max(0.5, percent / 100)));
+  }
+
+  /**
+   * Opens DevTools for one page, docked inside its cell.
+   *
+   * Electron cannot dock DevTools into a `WebContentsView` (`mode: "right"` opens
+   * a separate window), so the tools render into a view this manager owns and
+   * are laid out beside the page. `mode: "window"` re-parents that same view
+   * into a small window instead — one DevTools session either way, so its
+   * console history survives the switch.
+   */
+  openDevTools(tabId: string, mode: "docked" | "window"): void {
+    const tab = this.requireTab(tabId);
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    if (!tab.devtools) {
+      // DevTools needs the devtools:// scheme and their own preload; the page's
+      // identity partition would block both, so this view gets its own default
+      // session and no preload of ours.
+      const view = new WebContentsView({
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      view.setBackgroundColor("#101317");
+      contents.setDevToolsWebContents(view.webContents);
+      tab.devtools = { view, mode, width: 0.42 };
+    }
+    tab.devtools.mode = mode;
+    this.placeDevTools(tab);
+    contents.openDevTools({ mode: "detach" });
+    this.applyLayout();
+    this.emitState();
+  }
+
+  /** Moves an open panel between its cell and its own window. */
+  setDevToolsMode(tabId: string, mode: "docked" | "window"): void {
+    const tab = this.requireTab(tabId);
+    if (!tab.devtools) {
+      this.openDevTools(tabId, mode);
+      return;
+    }
+    if (tab.devtools.mode === mode) return;
+    tab.devtools.mode = mode;
+    this.placeDevTools(tab);
+    this.applyLayout();
+    this.emitState();
+  }
+
+  closeDevTools(tabId: string): void {
+    const tab = this.requireTab(tabId);
+    tab.view.webContents.closeDevTools();
+    this.dropDevTools(tab);
+    this.applyLayout();
+    this.emitState();
+  }
+
+  private dropDevTools(tab: TabRecord): void {
+    if (!tab.devtools) return;
+    const { view, window: win } = tab.devtools;
+    if (win && !win.isDestroyed()) {
+      win.contentView.removeChildView(view);
+      win.destroy();
+    }
+    this.host?.contentView.removeChildView(view);
+    delete tab.devtools;
+  }
+
+  /** Hosts the DevTools view in its window, or in the main window beside the page. */
+  private placeDevTools(tab: TabRecord): void {
+    const devtools = tab.devtools;
+    if (!devtools) return;
+    if (devtools.mode === "window") {
+      if (!devtools.window || devtools.window.isDestroyed()) {
+        const win = new BrowserWindow({
+          width: 900,
+          height: 620,
+          title: `DevTools — ${tab.label}`,
+          ...(this.options.appIcon ? { icon: this.options.appIcon } : {}),
+        });
+        win.on("resize", () => {
+          const [width, height] = win.getContentSize();
+          devtools.view.setBounds({
+            x: 0,
+            y: 0,
+            width: Math.max(1, width ?? 900),
+            height: Math.max(1, height ?? 620),
+          });
+        });
+        win.on("closed", () => {
+          // Closing the window closes the tools, not just their host: leaving
+          // them "open" with nowhere to draw makes the toolbar toggle lie.
+          if (tab.devtools?.window === win) {
+            tab.view.webContents.closeDevTools();
+            this.dropDevTools(tab);
+            this.applyLayout();
+            this.emitState();
+          }
+        });
+        devtools.window = win;
+      }
+      this.host?.contentView.removeChildView(devtools.view);
+      const win = devtools.window;
+      win.contentView.addChildView(devtools.view);
+      const [width, height] = win.getContentSize();
+      devtools.view.setBounds({
+        x: 0,
+        y: 0,
+        width: Math.max(1, width ?? 900),
+        height: Math.max(1, height ?? 620),
+      });
+      win.show();
+      return;
+    }
+
+    // Docked: the page keeps the left part of its cell, the tools take the rest.
+    if (devtools.window && !devtools.window.isDestroyed()) {
+      devtools.window.contentView.removeChildView(devtools.view);
+      devtools.window.destroy();
+      delete devtools.window;
+    }
+    if (!this.host || this.host.isDestroyed()) return;
+    this.host.contentView.addChildView(devtools.view);
+    const rect = this.pageRect(tab);
+    if (!rect) {
+      // Off stage: keep the tools alive but out of sight, like any other page.
+      const content = this.hostContentSize();
+      devtools.view.setBounds({ ...parkedViewBounds(content), width: 800, height: 600 });
+      return;
+    }
+    const split = Math.round(rect.width * (1 - devtools.width));
+    // The page gives up the right-hand part of its cell; the tools take it.
+    // `applyLayout` resets the page to the full cell first, and this runs right
+    // after it, so the two agree on the same rect.
+    tab.view.setBounds({ ...rect, width: Math.max(1, split) });
+    devtools.view.setBounds({
+      x: rect.x + split,
+      y: rect.y,
+      width: Math.max(1, rect.width - split),
+      height: rect.height,
+    });
+  }
+
+  /** Cell a page occupies right now, in window DIP; undefined when off stage. */
+  private pageRect(tab: TabRecord): StageRect | undefined {
+    const stage = this.stage;
+    if (!stage) return undefined;
+    // A blank page draws nothing on screen — the renderer owns that cell — so
+    // docked tools must not split a rectangle the page does not occupy.
+    if (isBlankTab(tab)) return undefined;
+    const view = this.activeView();
+    if (view) {
+      const slots = insetSlotRects(embeddedSlotRects(view.layoutId, stage, view.slotRects), stage);
+      const index = view.slotTabs.findIndex((id) => id === tab.instanceId || id === tab.id);
+      const slot = index >= 0 ? slots[index] : undefined;
+      return slot ? embeddedViewRect(slot) : undefined;
+    }
+    const active = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
+    if (!active || active.instanceId !== tab.instanceId) return undefined;
+    return stage;
   }
 
   /** Per-slot label height, exported so the chrome and the manager agree. */

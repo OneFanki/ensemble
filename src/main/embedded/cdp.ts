@@ -178,4 +178,55 @@ export class EmbeddedCdp {
       nativeVirtualKeyCode: keyCode,
     });
   }
+
+  /**
+   * Presses a key by its human name (Enter, Escape, Tab, …).
+   *
+   * `Input.dispatchKeyEvent` needs four fields that have to agree with each
+   * other — key, code, virtual key code, and a text payload for keys that
+   * produce one. Sending Enter without `text` leaves inputs that listen for the
+   * character (search boxes, chat composers) unfired, which reads as "the key did
+   * nothing". This table is the single place that mapping lives.
+   */
+  async pressNamedKey(name: string): Promise<void> {
+    const key = KEY_TABLE[name];
+    if (!key) throw new Error(`不支持的按键：${name}`);
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: key.key,
+      code: key.code,
+      windowsVirtualKeyCode: key.keyCode,
+      nativeVirtualKeyCode: key.keyCode,
+      ...(key.text ? { text: key.text, unmodifiedText: key.text } : {}),
+    });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: key.key,
+      code: key.code,
+      windowsVirtualKeyCode: key.keyCode,
+      nativeVirtualKeyCode: key.keyCode,
+    });
+  }
 }
+
+/**
+ * Key names a flow may press.
+ *
+ * Kept next to the dispatcher rather than in `shared/` because the codes are
+ * Chromium's, not the product's: a second copy elsewhere would drift.
+ */
+export const KEY_TABLE: Record<
+  string,
+  { key: string; code: string; keyCode: number; text?: string }
+> = {
+  Enter: { key: "Enter", code: "Enter", keyCode: 13, text: "\r" },
+  Escape: { key: "Escape", code: "Escape", keyCode: 27 },
+  Tab: { key: "Tab", code: "Tab", keyCode: 9 },
+  Backspace: { key: "Backspace", code: "Backspace", keyCode: 8 },
+  Delete: { key: "Delete", code: "Delete", keyCode: 46 },
+  ArrowUp: { key: "ArrowUp", code: "ArrowUp", keyCode: 38 },
+  ArrowDown: { key: "ArrowDown", code: "ArrowDown", keyCode: 40 },
+  ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", keyCode: 37 },
+  ArrowRight: { key: "ArrowRight", code: "ArrowRight", keyCode: 39 },
+  " ": { key: " ", code: "Space", keyCode: 32, text: " " },
+};

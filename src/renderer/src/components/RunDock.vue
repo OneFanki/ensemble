@@ -7,7 +7,7 @@ import {
   ChevronRight,
   ExternalLink,
   Layers,
-  PanelLeftClose,
+  PanelRightClose,
   Plus,
   Power,
   X,
@@ -17,6 +17,7 @@ import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import OpenSiteButton from "./OpenSiteButton.vue";
 import SelectField from "./SelectField.vue";
 
 const workspace = useWorkspaceStore();
@@ -48,6 +49,8 @@ const dropHint = shallowRef<DropHint | null>(null);
 const renamingViewId = ref<string | null>(null);
 const renameText = ref("");
 const renameInput = ref<HTMLInputElement | null>(null);
+/** True while the left edge is being dragged, so the width transition stays off. */
+const resizing = ref(false);
 
 const collapsed = computed(() => embedded.sidebarCollapsed);
 
@@ -71,6 +74,32 @@ function toggleCollapsed(): void {
   embedded.setSidebarCollapsed(!collapsed.value);
 }
 
+/**
+ * Drags the left edge to resize the dock.
+ *
+ * Width is written to the store on every move so the stage re-lays out live,
+ * but persistence waits for pointerup: writing localStorage 60 times a second
+ * during a drag is what makes sidebars feel sticky.
+ */
+function startResize(event: PointerEvent): void {
+  if (collapsed.value) return;
+  event.preventDefault();
+  const startX = event.clientX;
+  const startWidth = embedded.dockWidth;
+  resizing.value = true;
+  const move = (next: PointerEvent) => {
+    embedded.setDockWidth(startWidth - (next.clientX - startX), false);
+  };
+  const up = () => {
+    resizing.value = false;
+    embedded.setDockWidth(embedded.dockWidth);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
 /** Pages of an instance; more than one means it behaves like a tabbed window. */
 function pagesOf(root: EmbeddedTab): EmbeddedTab[] {
   return embedded.instancePages(root.instanceId);
@@ -84,8 +113,23 @@ function titleOf(root: EmbeddedTab): string {
   return embedded.titleOf(activePageOf(root));
 }
 
+/**
+ * The account a row belongs to, shown next to the page title.
+ *
+ * Without it every row of the same app reads "数据集管理 · 数据集管理" and the
+ * dock cannot answer the one question it exists for: which account is this?
+ * A tab with no identity is a clean session and says so.
+ */
+function accountOf(root: EmbeddedTab): string {
+  const identity = workspace.identities.find((item) => item.id === root.identityId);
+  return identity?.name ?? t("app.cleanSession");
+}
+
 function onDragStart(root: EmbeddedTab, event: DragEvent): void {
   draggedTabId.value = root.id;
+  // Tells the browser page a drag is in flight, so it can park its native pages
+  // and let the whole stage accept a drop.
+  embedded.dragTab(root.id);
   event.dataTransfer?.setData("text/plain", root.id);
   if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
 }
@@ -93,6 +137,7 @@ function onDragStart(root: EmbeddedTab, event: DragEvent): void {
 function onDragEnd(): void {
   draggedTabId.value = null;
   dropHint.value = null;
+  embedded.dragTab(null);
 }
 
 function edgeOf(event: DragEvent, element: HTMLElement): "before" | "after" | "middle" {
@@ -134,6 +179,7 @@ async function onDrop(event: DragEvent): Promise<void> {
   const hint = dropHint.value;
   draggedTabId.value = null;
   dropHint.value = null;
+  embedded.dragTab(null);
   if (!tabId || !hint) return;
   // Copied into a fresh literal for the same reason `dropHint` is shallow: keep
   // the IPC argument a plain object whatever the ref ends up holding.
@@ -171,6 +217,53 @@ function isFocused(root: EmbeddedTab): boolean {
   const page = activePageOf(root);
   return page.id === embedded.state.activeTabId;
 }
+
+/**
+ * Every running instance, in dock order, for the collapsed strip.
+ *
+ * Built from the same sources the expanded tree uses — view instances first,
+ * then loose ones — so collapsing the dock never changes the order of the icons
+ * and expanding again lands on the row the user just clicked.
+ */
+const miniInstances = computed<EmbeddedTab[]>(() => [
+  ...embedded.views.flatMap((view) => embedded.viewInstances(view.id)),
+  ...embedded.looseInstances,
+]);
+
+/** Icon of the page the instance is showing; the root is the fallback. */
+function faviconOf(root: EmbeddedTab): string | undefined {
+  return activePageOf(root).favicon ?? root.favicon;
+}
+
+/** One character that still identifies the instance when it has no icon. */
+function initialOf(root: EmbeddedTab): string {
+  const source = accountOf(root) || titleOf(root);
+  return source.trim().slice(0, 1).toUpperCase() || "·";
+}
+
+/**
+ * Hover label for an icon-only strip.
+ *
+ * This is the one place a native `title` is used on purpose: the strip is 46px
+ * wide inside the dock, and any HTML flyout would extend over the stage, where
+ * the native pages paint above the app's own renderer. A tooltip drawn in our
+ * layer would be invisible exactly where it needs to be. The instance tab strip
+ * can use its own tooltip because it sits inside the stage's HTML band.
+ */
+function miniLabel(root: EmbeddedTab): string {
+  const pages = pagesOf(root).length;
+  const suffix = pages > 1 ? ` · ${pages}` : "";
+  return `${accountOf(root)} · ${titleOf(root)}${suffix}`;
+}
+
+function miniActive(root: EmbeddedTab): boolean {
+  return pagesOf(root).some((page) => page.id === embedded.state.activeTabId);
+}
+
+function miniOnStage(root: EmbeddedTab): boolean {
+  return isOnStage(root);
+}
+
 
 function layoutLabel(view: EmbeddedView): string {
   const id = view.layoutId === "1x1" ? "free" : view.layoutId;
@@ -219,26 +312,88 @@ async function closeView(view: EmbeddedView): Promise<void> {
 async function newView(): Promise<void> {
   await embedded.createView({ layoutId: "2x1" });
 }
+
+/** Site bookmark: open its login page as a loose page, not as a view member. */
+async function openSiteBookmark(siteId: string): Promise<void> {
+  const site = workspace.sites.find((item) => item.id === siteId);
+  if (!site) return;
+  let url: string;
+  try {
+    url = new URL(site.loginPath || "/", site.baseUrl).toString();
+  } catch {
+    workspace.notify(t("app.errSiteUrl"), "error");
+    return;
+  }
+  workspace.markSiteUsed(site.id);
+  await embedded.openLooseTabWith(url);
+}
+
+/** Site bookmark as one account: own profile, own login state. */
+async function openIdentityBookmark(identityId: string): Promise<void> {
+  await embedded.openIdentity(identityId);
+}
 </script>
 
 <template>
   <!--
-    Collapsed, the dock is a narrow strip with a count badge: the browser page
-    needs the width, and the count is the one fact worth keeping visible.
+    Collapsed, the dock keeps a column of site icons — one per running instance,
+    the way a vertical tab strip does. Collapsing should reclaim width, not hide
+    the fact that several pages are running: clicking an icon switches to that
+    instance, and the last button reopens the panel.
   -->
-  <aside class="dock" :class="{ collapsed }" data-tour="run-dock">
-    <button
-      v-if="collapsed"
-      type="button"
-      class="expand"
-      :title="t('app.browserExpandDock')"
-      @click="toggleCollapsed"
-    >
-      <Layers :size="14" />
-      <span class="badge mono">{{ totalRunning }}</span>
-    </button>
+  <aside
+    class="dock"
+    :class="{ collapsed, resizing }"
+    :style="{ '--dock-width': `${embedded.dockWidth}px` }"
+    data-tour="run-dock"
+  >
+    <!-- Sits on the border so the pointer turns into a resize cursor before the
+         dock itself is reached; a 1px target would be unusable. -->
+    <span
+      v-if="!collapsed"
+      class="dock-resize"
+      role="separator"
+      aria-orientation="vertical"
+      :aria-label="t('app.browserResizeDock')"
+      :title="t('app.browserResizeDock')"
+      @pointerdown="startResize"
+    ></span>
 
-    <template v-else>
+    <div v-show="collapsed" class="mini">
+      <div class="mini-list">
+        <button
+          v-for="root in miniInstances"
+          :key="root.instanceId"
+          type="button"
+          class="mini-tab"
+          :class="{ current: miniActive(root), offstage: !miniOnStage(root) }"
+          :title="miniLabel(root)"
+          :aria-label="miniLabel(root)"
+          :aria-current="miniActive(root) ? 'true' : undefined"
+          @click="embedded.activate(activePageOf(root).id)"
+        >
+          <img v-if="faviconOf(root)" class="mini-fav" :src="faviconOf(root)" alt="" />
+          <span v-else class="mini-letter">{{ initialOf(root) }}</span>
+          <span
+            v-if="root.color"
+            class="mini-role"
+            :style="{ background: `var(--role-${root.color})` }"
+          ></span>
+        </button>
+      </div>
+      <button
+        type="button"
+        class="expand"
+        :title="t('app.browserExpandDock')"
+        :aria-label="t('app.browserExpandDock')"
+        @click="toggleCollapsed"
+      >
+        <Layers :size="14" />
+        <span class="badge mono">{{ totalRunning }}</span>
+      </button>
+    </div>
+
+    <div class="dock-main" :class="{ hidden: collapsed }">
       <header class="dock-head">
         <span class="dock-title">{{ t("app.browserExpandedDock") }}</span>
         <span class="count mono">{{ totalRunning }}</span>
@@ -257,7 +412,7 @@ async function newView(): Promise<void> {
           :title="t('app.browserCollapseDock')"
           @click="toggleCollapsed"
         >
-          <PanelLeftClose :size="13" />
+          <PanelRightClose :size="13" />
         </button>
       </header>
 
@@ -376,6 +531,7 @@ async function newView(): Promise<void> {
                   :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
                 ></span>
                 <span class="tab-label">{{ titleOf(root) }}</span>
+                <span class="tab-account">{{ accountOf(root) }}</span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
                 </span>
@@ -424,15 +580,12 @@ async function newView(): Promise<void> {
             <span class="view-count mono">{{ embedded.looseInstances.length }}</span>
             <span class="grow"></span>
             <span class="layout-spacer"></span>
-            <button
-              type="button"
-              class="icon-btn"
-              :title="t('app.browserNewTab')"
-              :aria-label="t('app.browserNewTab')"
-              @click.stop="embedded.openLooseTab()"
-            >
-              <Plus :size="12" />
-            </button>
+            <OpenSiteButton
+              compact
+              @open-blank="embedded.openLooseTab()"
+              @open-site="openSiteBookmark"
+              @open-identity="openIdentityBookmark"
+            />
             <span class="icon-spacer"></span>
           </header>
           <div v-if="embedded.looseInstances.length" class="rows">
@@ -461,6 +614,7 @@ async function newView(): Promise<void> {
                   :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
                 ></span>
                 <span class="tab-label">{{ titleOf(root) }}</span>
+                <span class="tab-account">{{ accountOf(root) }}</span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
                 </span>
@@ -537,12 +691,13 @@ async function newView(): Promise<void> {
           {{ t("app.closeAll") }}
         </button>
       </footer>
-    </template>
+    </div>
   </aside>
 </template>
 
 <style scoped>
 .dock {
+  position: relative;
   border-left: 1px solid var(--line-soft);
   background: var(--bg);
   display: flex;
@@ -555,10 +710,164 @@ async function newView(): Promise<void> {
   flex: 0 0 auto;
 }
 
+/* Animating width is fine here: the dock has no native child, only text rows. */
+.dock:not(.resizing) {
+  transition: width 0.18s ease;
+}
+
+.dock.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.dock-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1 1 auto;
+  opacity: 1;
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s;
+}
+
+/* The contents stay mounted and fade out while the width collapses, so the
+   animation reads as one motion instead of the panel emptying first. Taken out
+   of flow once hidden: the icon strip needs the full height, and the panel is
+   invisible anyway. */
+.dock-main.hidden {
+  position: absolute;
+  inset: 10px 4px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Straddles the border from the inside: the dock clips its own overflow, so a
+   handle hanging outside the panel would never be hit. */
+.dock-resize {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.dock-resize::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.dock-resize:hover::after,
+.dock.resizing .dock-resize::after {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* The collapsed strip still animates, so expanding and collapsing read as one
+   motion instead of the panel popping in. */
 .dock.collapsed {
   width: 46px;
   padding: 10px 4px;
   align-items: center;
+}
+
+.mini {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Scrolls on its own so the expand button stays pinned while many instances
+   run: the way out of the strip must never scroll off. */
+.mini-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.mini-list::-webkit-scrollbar {
+  display: none;
+}
+
+.mini-tab {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.mini-tab:hover {
+  background: var(--surface-2);
+}
+
+/* Selection is a left inset bar, the same mark the slot headers use. */
+.mini-tab.current {
+  background: var(--surface-3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* An off-stage instance still runs; the muted icon says it is not what the
+   stage is showing right now. */
+.mini-tab.offstage .mini-fav,
+.mini-tab.offstage .mini-letter {
+  opacity: 0.62;
+}
+
+.mini-fav {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+/* A site with no icon still needs something readable at 16px. A lettered tile
+   reads as a favicon at this size; a bare character at 10px did not. */
+.mini-letter {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+/* Identity colour in the corner: two accounts of one site share a favicon, and
+   this is what tells them apart. */
+.mini-role {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--bg);
 }
 
 .expand {
@@ -787,13 +1096,16 @@ async function newView(): Promise<void> {
   min-width: 4px;
 }
 
+/* Layout names are short and fixed-width (2 × 2), so the trigger hugs them. */
 .layout-field {
-  width: 78px;
+  width: auto;
+  min-width: 52px;
+  max-width: 76px;
   flex: none;
 }
 
 .layout-spacer {
-  width: 78px;
+  width: 52px;
   flex: none;
 }
 
@@ -891,6 +1203,20 @@ async function newView(): Promise<void> {
   white-space: nowrap;
   font-size: 11.5px;
   color: var(--text-secondary);
+}
+
+/* Second line's worth of information in one row: the page title leads, the
+   account follows in a quieter tone. The page title is what changes, the
+   account is what identifies the row, so the title keeps the flexible width. */
+.tab-account {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 .pages-badge {

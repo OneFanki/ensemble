@@ -1,17 +1,20 @@
 <script setup lang="ts">
+import type { Identity, LayoutPreset, Site, Tag, ViewDraft } from "@shared/types";
+import { GripVertical, Trash2 } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { GripVertical, Trash2 } from "lucide-vue-next";
-import Modal from "./Modal.vue";
-import LayoutPreview from "./LayoutPreview.vue";
 import { useWorkspaceStore } from "../stores/workspace";
-import type { Identity, LayoutPreset, Site, ViewDraft } from "@shared/types";
+import LayoutPreview from "./LayoutPreview.vue";
+import Modal from "./Modal.vue";
+import TagPicker from "./TagPicker.vue";
+import AppButton from "./ui/AppButton.vue";
 
 const props = defineProps<{
   draft: ViewDraft;
   identities: Identity[];
   sites: Site[];
   presets: LayoutPreset[];
+  tags?: Tag[];
 }>();
 
 const emit = defineEmits<{
@@ -68,8 +71,10 @@ const groupedIdentities = computed(() => {
 });
 
 /**
- * A cross-site view only works on the built-in surface: external windows are
- * launched one site at a time. Saying so before saving beats a failure at launch.
+ * A cross-site view is fully supported now: the built-in surface holds every
+ * site's tabs, and the external launcher opens each member against its own site
+ * into the shared slot layout. The note stays because the two surfaces visibly
+ * differ, not because anything is unsupported.
  */
 const crossSite = computed(() => {
   const sites = new Set(
@@ -239,6 +244,12 @@ function submit() {
       </div>
 
       <div class="field">
+        <span class="label">{{ $t("app.tags") }}</span>
+        <TagPicker v-model="form.tagIds" :tags="tags ?? []" />
+        <p class="hint">{{ $t("app.viewTagHint") }}</p>
+      </div>
+
+      <div class="field">
         <span class="label">{{ $t("app.windowLayout") }}</span>
         <div class="layouts">
           <button
@@ -282,13 +293,13 @@ function submit() {
     </div>
 
     <template #footer>
-      <button v-if="form.id" type="button" class="btn danger" @click="emit('delete')">
+      <AppButton variant="danger" v-if="form.id" @click="emit('delete')">
         <Trash2 :size="12" />
         {{ $t("app.delete") }}
-      </button>
+      </AppButton>
       <span class="spacer"></span>
-      <button type="button" class="btn" @click="emit('close')">{{ $t("app.cancel") }}</button>
-      <button type="button" class="btn primary" @click="submit">{{ $t("app.save") }}</button>
+      <AppButton @click="emit('close')">{{ $t("app.cancel") }}</AppButton>
+      <AppButton variant="primary" @click="submit">{{ $t("app.save") }}</AppButton>
     </template>
   </Modal>
 </template>
@@ -524,42 +535,6 @@ function submit() {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 12px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-}
-
-.btn.primary {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
-.btn.primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  filter: brightness(1.07);
-}
-
-.btn.danger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
 }
 
 .spacer {

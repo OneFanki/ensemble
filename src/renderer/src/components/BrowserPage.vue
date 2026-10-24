@@ -1,28 +1,35 @@
 <script setup lang="ts">
-import type { EmbeddedTab, FrozenSlot } from "@shared/embedded";
+import type { EmbeddedTab, FrozenSlot, StageRect } from "@shared/embedded";
 import {
   EMBEDDED_DIVIDER,
   EMBEDDED_SLOT_HEADER,
   embeddedSlotRects,
+  isBlankTab,
   tabDisplayTitle,
   viewSlotFractions,
 } from "@shared/embedded";
 import type { SlotRect } from "@shared/types";
+import { resolveBrowserInput } from "@shared/search";
 import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  Copy,
   CornerDownLeft,
+  ExternalLink,
+  KeyRound,
+  Minus,
   Plus,
   RotateCw,
   Search,
-  SquarePlus,
   X,
 } from "lucide-vue-next";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import NewTabPage from "./NewTabPage.vue";
+import OpenSiteButton from "./OpenSiteButton.vue";
 
 const store = useEmbeddedStore();
 const workspace = useWorkspaceStore();
@@ -34,6 +41,16 @@ const props = defineProps<{
 }>();
 
 const stage = ref<HTMLElement | null>(null);
+/**
+ * The stage box in CSS pixels, kept reactive.
+ *
+ * `slotChrome` used to read `stage.clientWidth` directly, which is not a
+ * reactive source: the header bands only recomputed when the tab list changed.
+ * Collapsing the dock or resizing the window then left the HTML bands at the old
+ * width while the native pages had already moved to the new one, which reads as
+ * a dead band beside the last cell.
+ */
+const stageBox = ref({ width: 0, height: 0 });
 const address = ref("");
 const findText = ref("");
 const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
@@ -52,12 +69,10 @@ const activeView = computed(() => store.activeView);
  * visible: the native page paints over the rest.
  */
 const slotChrome = computed(() => {
-  const element = stage.value;
   const view = activeView.value;
-  if (!element || !view) return [];
-  const width = element.clientWidth;
-  const height = element.clientHeight;
-  if (width <= 0 || height <= 0) return [];
+  const width = stageBox.value.width;
+  const height = stageBox.value.height;
+  if (!view || width <= 0 || height <= 0) return [];
   return embeddedSlotRects(view.layoutId, { x: 0, y: 0, width, height }, view.slotRects).map(
     (slot, index) => ({
       ...slot,
@@ -85,10 +100,193 @@ function slotPage(rootId: string | null): EmbeddedTab | undefined {
   return pages.find((page) => page.active) ?? root;
 }
 
-function slotLabel(rootId: string | null): string {
-  const page = slotPage(rootId);
-  if (!page) return t("app.browserEmptySlot");
-  return tabDisplayTitle(page);
+/** Every page of the instance in a slot, oldest first; a slot shows one. */
+function slotPages(rootId: string | null): EmbeddedTab[] {
+  const root = tabById(rootId);
+  if (!root) return [];
+  return store.instancePages(root.instanceId);
+}
+
+/** Name of the account the slot's instance belongs to, when it has one. */
+function slotAccount(rootId: string | null): string {
+  const root = tabById(rootId);
+  if (!root?.identityId) return "";
+  return workspace.identities.find((item) => item.id === root.identityId)?.name ?? "";
+}
+
+/**
+ * Switching pages inside a slot.
+ *
+ * The instance stays in the same cell — only which of its pages is on screen
+ * changes — so this must not bubble up to the header's "select this slot".
+ */
+function selectPage(pageId: string): void {
+  void store.activate(pageId);
+}
+
+/** "+" in a slot's strip: one more page in the same instance. */
+function openPageInInstance(rootId: string | null): void {
+  const instanceId = tabById(rootId)?.instanceId;
+  if (instanceId) void store.openTabInInstance(instanceId);
+}
+
+/**
+ * Hover hint for a page tab.
+ *
+ * Measured against the header band, not the tab, because the hint has to be
+ * drawn inside the band: everything below a slot is painted by the native page.
+ * It shows the full title *and the host* — a tab only ever shows a title, so a
+ * card carrying an address cannot be mistaken for another tab. Placed beside the
+ * tab (flipped left when the band runs out) rather than over it: covering the
+ * truncated title with the full one looks like nothing happened.
+ *
+ * The tip carries the slot it belongs to. Without that, every cell's header
+ * rendered the same shared tip and hovering one page showed the card over all of
+ * them at once.
+ */
+const hoverTip = ref<{ slot: number; text: string; host: string; left: number } | null>(null);
+const hoverTipMax = ref(0);
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+async function showTip(page: EmbeddedTab, slotIndex: number, event: MouseEvent): Promise<void> {
+  const element = event.currentTarget as HTMLElement;
+  const header = element.closest(".slot-header");
+  if (!(header instanceof HTMLElement)) return;
+  const headerRect = header.getBoundingClientRect();
+  const tabRect = element.getBoundingClientRect();
+  const margin = 5;
+  hoverTipMax.value = Math.max(80, headerRect.width - margin * 2);
+  hoverTip.value = {
+    slot: slotIndex,
+    text: store.titleOf(page),
+    host: hostOf(page.url),
+    left: Math.max(margin, tabRect.right - headerRect.left + 4),
+  };
+  await nextTick();
+  // Queried from the header rather than kept as a template ref: a string ref
+  // inside `v-for` is collected into an array, and the flip needs one element.
+  const tip = header.querySelector<HTMLElement>(".slot-tip");
+  if (!tip) return;
+  const width = tip.offsetWidth;
+  if (hoverTip.value.left + width > headerRect.width - margin) {
+    // Flip to the other side of the tab; still clamped so a narrow cell keeps
+    // the card inside its own band rather than spilling past it.
+    hoverTip.value.left = Math.max(margin, tabRect.left - headerRect.left - width - 4);
+  }
+}
+
+const hoverTipStyle = computed(() => ({
+  left: `${hoverTip.value?.left ?? 0}px`,
+  maxWidth: `${hoverTipMax.value}px`,
+}));
+
+/**
+ * Right-click menu for a page tab.
+ *
+ * This is the one popup that cannot live in the header band, so it asks the
+ * store to freeze the stage first — the native pages are parked, a snapshot
+ * stands in for them, and the menu is plain HTML on top. Closes on the next
+ * click anywhere.
+ */
+const tabMenu = ref<{ page: EmbeddedTab; x: number; y: number } | null>(null);
+
+async function openTabMenu(page: EmbeddedTab, event: MouseEvent): Promise<void> {
+  const x = Math.min(event.clientX, window.innerWidth - 208);
+  const y = Math.min(event.clientY, window.innerHeight - 160);
+  await store.coverStage();
+  tabMenu.value = { page, x, y };
+  window.addEventListener("pointerdown", onMenuPointerDown, true);
+  window.addEventListener("keydown", onMenuKeydown, true);
+}
+
+function closeTabMenu(): void {
+  window.removeEventListener("pointerdown", onMenuPointerDown, true);
+  window.removeEventListener("keydown", onMenuKeydown, true);
+  tabMenu.value = null;
+  store.setStageMenu(false);
+}
+
+function onMenuPointerDown(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.closest(".tab-menu")) return;
+  closeTabMenu();
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") closeTabMenu();
+}
+
+async function duplicateTab(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.duplicateTab(page.id);
+}
+
+async function closeTab(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.closeTab(page.id);
+}
+
+async function closeOtherTabs(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.closeOtherTabs(page.id);
+}
+
+async function copyTabUrl(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (!page || isBlankTab(page)) return;
+  await navigator.clipboard.writeText(page.url);
+}
+
+const menuPageCount = computed(() => {
+  const page = tabMenu.value?.page;
+  return page ? store.instancePages(page.instanceId).length : 0;
+});
+
+/**
+ * Blank pages the stage has to draw itself.
+ *
+ * The main process keeps a blank page's native view parked, so the app's own
+ * new-tab surface is what the user sees: search box, engine list, and a clear
+ * answer for what Enter will do. This is what makes "+" land somewhere instead
+ * of on an empty white rectangle.
+ */
+const blankSurfaces = computed(() => {
+  const view = activeView.value;
+  if (!view) {
+    const tab = activeTab.value;
+    return tab && !tab.viewId && isBlankTab(tab) ? [{ tab, slot: null }] : [];
+  }
+  return slotChrome.value
+    .map((slot, index) => ({ slot, index }))
+    .flatMap(({ slot, index }) => {
+      const page = slotPage(slot.tabId);
+      if (!page || !isBlankTab(page)) return [];
+      const rect = embeddedSlotRectsForSlot(index);
+      return rect ? [{ tab: page, slot: rect }] : [];
+    });
+});
+
+/** Slot rect with the header band removed: the surface lives below the chrome. */
+function embeddedSlotRectsForSlot(index: number): StageRect | null {
+  const slot = slotChrome.value.find((item) => item.index === index);
+  if (!slot) return null;
+  return {
+    x: slot.x,
+    y: slot.y + EMBEDDED_SLOT_HEADER,
+    width: slot.width,
+    height: Math.max(1, slot.height - EMBEDDED_SLOT_HEADER),
+  };
 }
 
 function activateSlot(rootId: string | null): void {
@@ -96,13 +294,53 @@ function activateSlot(rootId: string | null): void {
   if (page) void store.activate(page.id);
 }
 
-/** Room for the empty-slot button: the header band alone is too short. */
-const slotBody = computed(() =>
-  slotChrome.value.map((slot) => ({
-    ...slot,
-    top: slot.y + EMBEDDED_SLOT_HEADER,
-    height: Math.max(0, slot.height - EMBEDDED_SLOT_HEADER),
-  })),
+/**
+ * A dock row can be dropped straight onto a slot.
+ *
+ * Picking a slot first and then clicking a tab is the documented path, but almost
+ * nobody discovers it: dragging the page onto the cell is what people try first.
+ * The header band is the only HTML above a live page, so that is the drop target.
+ */
+const dropSlot = ref<number | null>(null);
+
+function onSlotDragOver(slotIndex: number, event: DragEvent): void {
+  if (!event.dataTransfer?.types.includes("text/plain")) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  dropSlot.value = slotIndex;
+}
+
+async function onSlotDrop(slotIndex: number, event: DragEvent): Promise<void> {
+  event.preventDefault();
+  const tabId = event.dataTransfer?.getData("text/plain");
+  dropSlot.value = null;
+  // Clearing the drag signal restores the live pages; do it before the IPC so the
+  // re-layout lands on a stage that is already visible again.
+  store.dragTab(null);
+  const view = activeView.value;
+  if (!tabId || !view) return;
+  // pinTab joins the view when needed and focuses the page it pinned.
+  await store.pin(view.id, slotIndex, tabId);
+}
+
+/**
+ * An empty slot is drawn as one dashed cell covering the whole rectangle.
+ *
+ * It has no header band — there is no page title to put in one, and a 26px strip
+ * with only a slot number looked like a label stuck to the top edge. The number
+ * moves into the cell, next to the action, so the whole area reads as "a place a
+ * page belongs".
+ */
+const emptySlots = computed(() =>
+  slotChrome.value
+    .filter((slot) => !slot.tabId)
+    .map((slot) => ({
+      index: slot.index,
+      left: slot.x,
+      top: slot.y,
+      width: slot.width,
+      height: slot.height,
+    })),
 );
 
 /**
@@ -275,6 +513,13 @@ function reportStage(): void {
     return;
   }
   stageOrigin.value = { x: Math.round(box.left), y: Math.round(box.top) };
+  // Fed into `slotChrome` as well: the header bands are laid out from this box,
+  // so they have to follow every resize the native pages follow.
+  const width = element.clientWidth;
+  const height = element.clientHeight;
+  if (width !== stageBox.value.width || height !== stageBox.value.height) {
+    stageBox.value = { width, height };
+  }
   store.setStage({
     x: Math.round(box.left),
     y: Math.round(box.top),
@@ -286,6 +531,7 @@ function reportStage(): void {
 let resizeObserver: ResizeObserver | null = null;
 
 onMounted(async () => {
+  store.setStageMounted(true);
   await store.init();
   if (stage.value) {
     resizeObserver = new ResizeObserver(() => reportStage());
@@ -297,6 +543,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  store.setStageMounted(false);
   resizeObserver?.disconnect();
   window.removeEventListener("resize", reportStage);
   window.removeEventListener("keydown", onKeydown);
@@ -332,24 +579,100 @@ watch(
 );
 
 /**
+ * Site suggestions in the address bar.
+ *
+ * Typing "后台" is how people look for a system they use daily; the embedded
+ * browser can reach it by address, but only this app knows which address and
+ * which login path. Matching is on the name and the host, and the suggestion
+ * resolves to the full login URL.
+ */
+const siteSuggestions = computed(() => {
+  const term = address.value.trim().toLowerCase();
+  if (!term || /^https?:\/\//i.test(term)) return [];
+  return workspace.sites
+    .map((site) => {
+      const host = (() => {
+        try {
+          return new URL(site.baseUrl).host.toLowerCase();
+        } catch {
+          return "";
+        }
+      })();
+      const nameHit = site.name.toLowerCase().includes(term);
+      const hostHit = host.includes(term);
+      if (!nameHit && !hostHit) return undefined;
+      let url: string | undefined;
+      try {
+        url = new URL(site.loginPath || "/", site.baseUrl).toString();
+      } catch {
+        url = undefined;
+      }
+      return url ? { site, url, nameHit } : undefined;
+    })
+    .filter(
+      (item): item is { site: (typeof workspace.sites)[number]; url: string; nameHit: boolean } =>
+        Boolean(item),
+    )
+    .sort((left, right) => Number(right.nameHit) - Number(left.nameHit))
+    .slice(0, 6);
+});
+
+const suggestionsOpen = ref(false);
+
+function pickSuggestion(url: string): void {
+  address.value = url;
+  suggestionsOpen.value = false;
+  void navigate();
+}
+
+/**
  * Overlays float above the stage by freezing it.
  *
  * `WebContentsView` paints above all HTML regardless of z-index, so an app menu
  * that reaches into the stage would be covered by the page. Capturing the stage
  * first and parking the views keeps the menu readable and the page running.
+ *
+ * A drag from the running dock counts as an overlay too: while pages occupy the
+ * stage, their own native views swallow every drag event, so the only way to make
+ * a whole cell a drop target is to park them for the duration of the drag. The
+ * frozen picture is pixel-identical to the live page, so nothing visibly changes.
  */
-watch(
-  () => props.obscured,
-  async (obscured, wasObscured) => {
-    if (obscured) {
-      frozenSlots.value = await window.ensemble.freezeEmbedded();
-      store.setStage(null);
-      return;
-    }
-    if (!wasObscured) return;
+let freezeSeq = 0;
+
+async function syncStageCover(): Promise<void> {
+  const covered =
+    props.obscured ||
+    Boolean(store.draggingTabId) ||
+    store.stageMenuOpen ||
+    // Address-bar suggestions hang below the toolbar, over the stage; native
+    // pages would paint on top of them otherwise.
+    (suggestionsOpen.value && siteSuggestions.value.length > 0);
+  const seq = ++freezeSeq;
+  if (!covered) {
     frozenSlots.value = [];
     reportStage();
-  },
+    return;
+  }
+  const slots = await window.ensemble.freezeEmbedded();
+  // A later call (drop, overlay closed) already restored the stage; applying this
+  // stale snapshot would park the views again with nothing to put back.
+  if (seq !== freezeSeq) return;
+  frozenSlots.value = slots;
+  store.setStage(null);
+  // Only now is the stage actually free of native views, which is what a menu
+  // opening over it has to wait for.
+  store.finishCover();
+}
+
+watch(
+  () =>
+    [
+      props.obscured,
+      store.draggingTabId,
+      store.stageMenuOpen,
+      suggestionsOpen.value && siteSuggestions.value.length > 0,
+    ] as const,
+  syncStageCover,
 );
 
 watch(
@@ -366,6 +689,20 @@ function onKeydown(event: KeyboardEvent): void {
     event.preventDefault();
     findOpen.value = true;
   }
+  // The page handles its own Ctrl +/- through `before-input-event`; this branch
+  // covers the case where focus is in the app chrome (address bar, toolbar).
+  if (modifier && !event.altKey) {
+    if (event.key === "=" || event.key === "+") {
+      event.preventDefault();
+      void zoom("in");
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      void zoom("out");
+    } else if (event.key === "0") {
+      event.preventDefault();
+      void zoom("reset");
+    }
+  }
   if (event.key === "Escape" && findOpen.value) {
     findOpen.value = false;
     closeFind();
@@ -377,15 +714,24 @@ function onKeydown(event: KeyboardEvent): void {
  *
  * Typing an address with nothing open is a complete instruction: it says "show
  * me this page". Requiring a separate "+" first would just be an extra click.
+ *
+ * The same field also takes words: anything that is not an address goes to the
+ * selected search engine. Two inputs that look identical must not disagree
+ * about what Enter does, so this shares `resolveBrowserInput` with the new-tab
+ * surface.
  */
 async function navigate(): Promise<void> {
-  const target = address.value.trim();
-  if (!target) return;
+  const target = resolveBrowserInput(address.value, workspace.searchEngine);
+  if (!target) {
+    if (address.value.trim()) workspace.notify(t("app.newTabBadInput"), "error");
+    return;
+  }
   const tab = activeTab.value;
   if (!tab) {
     await store.openTabWith(target);
     return;
   }
+  address.value = target;
   await window.ensemble.navigateEmbeddedTab(tab.id, target);
 }
 
@@ -405,7 +751,23 @@ function reload(): void {
 }
 
 function openDevTools(tabId: string): void {
-  void window.ensemble.openEmbeddedDevTools(tabId);
+  void window.ensemble.openEmbeddedDevTools(tabId, "docked");
+}
+
+/** Opens the same tools in their own window, for a screen too small to split. */
+function detachDevTools(tabId: string): void {
+  void window.ensemble.openEmbeddedDevTools(tabId, "window");
+}
+
+function closeDevTools(tabId: string): void {
+  void window.ensemble.closeEmbeddedDevTools(tabId);
+}
+
+/** Ctrl +/-/0 from the app chrome; the page itself handles its own keystrokes. */
+async function zoom(direction: "in" | "out" | "reset"): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab) return;
+  await window.ensemble.zoomEmbeddedTab(tab.id, direction);
 }
 
 async function runFind(direction: "next" | "prev" | "reset"): Promise<void> {
@@ -436,6 +798,34 @@ async function addToSlot(slotIndex: number): Promise<void> {
   await store.openTabInSlot(view.id, slotIndex);
 }
 
+/**
+ * Site bookmarks next to the address bar.
+ *
+ * These are sites, not history entries: "open this system" and "open it as this
+ * account" are the two things this app exists for, and both are one click away
+ * from the tab bar instead of a trip to the sites page.
+ */
+function siteLoginUrl(siteId: string): string | undefined {
+  const site = workspace.sites.find((item) => item.id === siteId);
+  if (!site) return undefined;
+  try {
+    return new URL(site.loginPath || "/", site.baseUrl).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function openSiteBookmark(siteId: string): Promise<void> {
+  const url = siteLoginUrl(siteId);
+  if (!url) return;
+  workspace.markSiteUsed(siteId);
+  await store.openTabWith(url);
+}
+
+async function openIdentityBookmark(identityId: string): Promise<void> {
+  await store.openIdentity(identityId);
+}
+
 function fillMessage(reason?: string): string {
   switch (reason) {
     case "no-identity":
@@ -460,7 +850,7 @@ function fillMessage(reason?: string): string {
         :title="t('app.browserBack')"
         @click="goBack"
       >
-        <ArrowLeft :size="14" />
+        <ArrowLeft :size="15" />
       </button>
       <button
         type="button"
@@ -469,7 +859,7 @@ function fillMessage(reason?: string): string {
         :title="t('app.browserForward')"
         @click="goForward"
       >
-        <ArrowRight :size="14" />
+        <ArrowRight :size="15" />
       </button>
       <button
         type="button"
@@ -477,7 +867,7 @@ function fillMessage(reason?: string): string {
         :title="t('app.browserReload')"
         @click="reload"
       >
-        <RotateCw :size="14" :class="{ spin: activeTab?.loading }" />
+        <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
       </button>
 
       <form class="address" @submit.prevent="navigate">
@@ -487,6 +877,10 @@ function fillMessage(reason?: string): string {
           spellcheck="false"
           :placeholder="t('app.browserAddress')"
           data-tour="browser-address"
+          @focus="suggestionsOpen = true"
+          @input="suggestionsOpen = true"
+          @blur="suggestionsOpen = false"
+          @keydown.esc="suggestionsOpen = false"
         />
         <!-- An explicit go button: Enter is invisible to a mouse user, and the
              adjacent search icon is easy to mistake for "run this address". -->
@@ -499,45 +893,106 @@ function fillMessage(reason?: string): string {
         >
           <CornerDownLeft :size="13" />
         </button>
-      </form>
 
-      <span v-if="activeTab" class="page-title" :title="activeTab.url">
-        {{ tabDisplayTitle(activeTab) }}
-      </span>
+        <!-- Sites are the bookmarks: typing a name resolves to its login URL. -->
+        <div v-if="suggestionsOpen && siteSuggestions.length" class="site-suggestions">
+          <button
+            v-for="item in siteSuggestions"
+            :key="item.site.id"
+            type="button"
+            class="suggestion"
+            @mousedown.prevent="pickSuggestion(item.url)"
+          >
+            <span class="sugg-name">{{ item.site.name }}</span>
+            <span class="sugg-url mono">{{ item.url }}</span>
+          </button>
+        </div>
+      </form>
 
       <button
         v-if="activeTab?.identityId"
         type="button"
-        class="text-btn"
+        class="icon"
         :title="t('app.browserFillHint')"
+        :aria-label="t('app.browserFill')"
         @click="fillLogin(activeTab.id)"
       >
-        {{ t("app.browserFill") }}
+        <KeyRound :size="15" />
       </button>
       <button
         type="button"
         class="icon"
+        :class="{ active: findOpen }"
         :title="t('app.browserFind')"
         @click="findOpen = !findOpen"
       >
-        <Search :size="14" />
+        <Search :size="15" />
       </button>
+      <!--
+        Zoom lives in the toolbar so it can be found without knowing the
+        shortcut. It stays visible (a hidden control is a control nobody
+        discovers) but is drawn quietly at the global default and takes the
+        accent colour once this page differs. The number is the reset.
+      -->
+      <div
+        v-if="activeTab"
+        class="zoom-stepper"
+        :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
+      >
+        <button
+          type="button"
+          class="zoom-step"
+          :aria-label="t('app.browserZoomOut')"
+          :title="t('app.browserZoomOut')"
+          @click="zoom('out')"
+        >
+          <Minus :size="12" />
+        </button>
+        <button
+          type="button"
+          class="zoom-value mono"
+          :title="t('app.browserZoomReset')"
+          @click="zoom('reset')"
+        >
+          {{ activeTab.zoom }}%
+        </button>
+        <button
+          type="button"
+          class="zoom-step"
+          :aria-label="t('app.browserZoomIn')"
+          :title="t('app.browserZoomIn')"
+          @click="zoom('in')"
+        >
+          <Plus :size="12" />
+        </button>
+      </div>
       <button
         type="button"
         class="icon"
-        :title="t('app.browserDevTools')"
-        @click="activeTab && openDevTools(activeTab.id)"
+        :class="{ active: activeTab?.devtoolsOpen }"
+        :title="
+          activeTab?.devtoolsOpen ? t('app.browserDevToolsClose') : t('app.browserDevTools')
+        "
+        @click="activeTab && (activeTab.devtoolsOpen ? closeDevTools(activeTab.id) : openDevTools(activeTab.id))"
       >
-        <Bug :size="14" />
+        <Bug :size="15" />
       </button>
+      <!-- Only relevant once the tools are docked: a small screen may want them
+           in their own window instead of splitting the cell. -->
       <button
+        v-if="activeTab?.devtoolsOpen"
         type="button"
         class="icon"
-        :title="t('app.browserNewTab')"
-        @click="store.openTab()"
+        :title="t('app.browserDevToolsDetach')"
+        @click="activeTab && detachDevTools(activeTab.id)"
       >
-        <SquarePlus :size="14" />
+        <ExternalLink :size="15" />
       </button>
+      <OpenSiteButton
+        @open-blank="store.openTab()"
+        @open-site="openSiteBookmark"
+        @open-identity="openIdentityBookmark"
+      />
     </div>
 
     <div v-if="findOpen" class="findbar">
@@ -577,14 +1032,33 @@ function fillMessage(reason?: string): string {
         alt=""
         aria-hidden="true"
       />
+      <!-- A blank page has no native view on screen; the app draws it. -->
+      <div
+        v-for="surface in blankSurfaces"
+        :key="`blank-${surface.tab.id}`"
+        class="blank-slot"
+        :style="
+          surface.slot
+            ? {
+                left: `${surface.slot.x}px`,
+                top: `${surface.slot.y}px`,
+                width: `${surface.slot.width}px`,
+                height: `${surface.slot.height}px`,
+              }
+            : { inset: '0' }
+        "
+      >
+        <NewTabPage :tab="surface.tab" />
+      </div>
+
       <!-- Native views paint over this area; only the slot headers stay visible. -->
       <div
-        v-for="slot in slotChrome"
+        v-for="slot in slotChrome.filter((item) => item.tabId)"
         :key="slot.index"
         class="slot-header"
         :class="{
-          empty: !slot.tabId,
-          focused: slot.tabId && slot.tabId === activeView?.focusedTabId,
+          selected: slot.tabId === activeView?.focusedTabId,
+          'drop-target': dropSlot === slot.index,
         }"
         :style="{
           left: `${slot.x}px`,
@@ -593,6 +1067,9 @@ function fillMessage(reason?: string): string {
           height: `${EMBEDDED_SLOT_HEADER}px`,
         }"
         @click="activateSlot(slot.tabId)"
+        @dragover="onSlotDragOver(slot.index, $event)"
+        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
+        @drop="onSlotDrop(slot.index, $event)"
       >
         <span class="slot-index mono">{{ slot.index + 1 }}</span>
         <span
@@ -600,36 +1077,104 @@ function fillMessage(reason?: string): string {
           class="dot"
           :style="{ background: `var(--role-${slotPage(slot.tabId)?.color})` }"
         ></span>
-        <span class="slot-title">
-          {{ slotLabel(slot.tabId) }}
-        </span>
+        <!-- Which account this cell belongs to. Every cell of the same app shows
+             the same page title, so without the account name the band cannot
+             answer "who am I looking at" — which is the point of the grid. -->
+        <span v-if="slotAccount(slot.tabId)" class="slot-account">{{ slotAccount(slot.tabId) }}</span>
         <span v-if="slotPage(slot.tabId)?.loading" class="spinner"></span>
-        <span
-          v-if="slot.tabId && slot.tabId === activeView?.focusedTabId"
-          class="slot-focus mono"
-          :title="t('app.browserFocusHint')"
+        <!--
+          Pages of this instance. A slot holds an instance, so a popup it opened
+          has no cell of its own; without a strip here the only way to switch
+          back was the dock. The strip is drawn even for a single page: it is
+          what says "this cell is a browser with tabs" and the only place the
+          "+" for a second page can live.
+        -->
+        <div
+          class="slot-tabs"
+          role="tablist"
+          :aria-label="t('app.browserInstancePages')"
+          @mouseleave="hoverTip = null"
         >
-          {{ t("app.browserFocus") }}
+          <div
+            v-for="page in slotPages(slot.tabId)"
+            :key="page.id"
+            class="slot-tab"
+            :class="{ current: page.id === slotPage(slot.tabId)?.id }"
+            role="tab"
+            :aria-selected="page.id === slotPage(slot.tabId)?.id"
+            :data-tab-id="page.id"
+            @click.stop="selectPage(page.id)"
+            @mousedown.stop
+            @mouseenter="showTip(page, slot.index, $event)"
+            @contextmenu.prevent.stop="openTabMenu(page, $event)"
+          >
+            <img
+              v-if="page.favicon"
+              class="slot-tab-fav"
+              :src="page.favicon"
+              alt=""
+              draggable="false"
+            />
+            <span class="slot-tab-label">{{ store.titleOf(page) }}</span>
+            <button
+              type="button"
+              class="slot-tab-close"
+              :aria-label="t('app.browserCloseTab')"
+              :data-close-tab="page.id"
+              @click.stop="store.closeTab(page.id)"
+              @mousedown.stop
+            >
+              <X :size="9" />
+            </button>
+          </div>
+          <button
+            type="button"
+            class="slot-tab-add"
+            :aria-label="t('app.browserNewTabHere')"
+            @click.stop="openPageInInstance(slot.tabId)"
+            @mousedown.stop
+            @mouseenter="hoverTip = null"
+          >
+            <Plus :size="11" />
+          </button>
+        </div>
+        <!--
+          Self-drawn hint for a page tab: the native `title` tooltip is slow,
+          unthemed, and on some platforms pops up outside the window. It has to
+          live inside the header band, because the area below is painted by the
+          native page and would cover it. Only the hovered cell renders one.
+        -->
+        <span
+          v-if="hoverTip?.slot === slot.index"
+          class="slot-tip"
+          :style="hoverTipStyle"
+        >
+          <span class="slot-tip-title">{{ hoverTip.text }}</span>
+          <span v-if="hoverTip.host" class="slot-tip-host mono">{{ hoverTip.host }}</span>
         </span>
       </div>
 
       <!--
-        An empty slot has to invite the next action, so the dashed frame fills
-        the whole cell and carries an "add a page" button: the new tab lands in
-        this slot and takes focus, which leaves the address bar ready to type.
+        An empty slot invites the next action: the dashed frame covers the whole
+        cell, the slot number sits inside it, and the button drops a focused tab
+        straight into this cell — so the address bar is ready to type.
       -->
       <div
-        v-for="slot in slotBody"
-        v-show="!slot.tabId"
-        :key="`body-${slot.index}`"
+        v-for="slot in emptySlots"
+        :key="`empty-${slot.index}`"
         class="slot-empty"
+        :class="{ 'drop-target': dropSlot === slot.index }"
         :style="{
-          left: `${slot.x}px`,
+          left: `${slot.left}px`,
           top: `${slot.top}px`,
           width: `${slot.width}px`,
           height: `${slot.height}px`,
         }"
+        @dragover="onSlotDragOver(slot.index, $event)"
+        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
+        @drop="onSlotDrop(slot.index, $event)"
       >
+        <span class="slot-empty-index mono">{{ slot.index + 1 }}</span>
         <button
           type="button"
           class="slot-add"
@@ -659,11 +1204,58 @@ function fillMessage(reason?: string): string {
       <div v-if="!store.tabs.length" class="empty">
         <p>{{ t("app.browserEmptyTitle") }}</p>
         <p class="sub">{{ t("app.browserEmptyHint") }}</p>
+        <!-- One button, not a wall of site chips: the address bar is right above
+             and the split new-tab button already lists every site as a bookmark,
+             so repeating them here made the empty state look like a menu. -->
         <button type="button" class="empty-action" @click="store.openTab()">
           {{ t("app.browserNewTab") }}
         </button>
       </div>
     </div>
+
+    <!--
+      Page actions. Positioned at the click point in viewport coordinates; the
+      stage was frozen before this appeared (see `openTabMenu`), so it is not
+      covered by the native page under the cursor.
+    -->
+    <Teleport to="body">
+      <div
+        v-if="tabMenu"
+        class="tab-menu"
+        role="menu"
+        :style="{ left: `${tabMenu.x}px`, top: `${tabMenu.y}px` }"
+      >
+        <button type="button" role="menuitem" class="tab-menu-item" @click="duplicateTab">
+          <Copy :size="12" />
+          {{ t("app.browserDuplicateTab") }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :disabled="isBlankTab(tabMenu.page)"
+          @click="copyTabUrl"
+        >
+          <CornerDownLeft :size="12" />
+          {{ t("app.browserCopyUrl") }}
+        </button>
+        <div class="tab-menu-sep"></div>
+        <button type="button" role="menuitem" class="tab-menu-item" @click="closeTab">
+          <X :size="12" />
+          {{ t("app.browserCloseTab") }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :disabled="menuPageCount < 2"
+          @click="closeOtherTabs"
+        >
+          <X :size="12" />
+          {{ t("app.browserCloseOtherTabs") }}
+        </button>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -685,11 +1277,13 @@ function fillMessage(reason?: string): string {
   flex: 0 0 auto;
 }
 
+/* Sits level with the address field, both 30px tall: a control that is shorter
+   than the input beside it reads as secondary, and "+" is the primary action. */
 .icon {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -708,16 +1302,119 @@ function fillMessage(reason?: string): string {
   background: transparent;
 }
 
+/* On state for a toggle (DevTools open): the control is clearly "on", not just
+   hovered. */
+.icon.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.zoom-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 30px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+/* Quiet at the default; the accent only appears when this page is actually
+   zoomed, so the toolbar does not shout "110%" at every normal page. */
+.zoom-stepper.changed {
+  border-color: color-mix(in srgb, var(--line) 40%, var(--accent));
+}
+
+.zoom-stepper.changed .zoom-value {
+  color: var(--accent);
+}
+
+.zoom-step {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  color: var(--faint);
+}
+
+.zoom-step:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* The number is the reset: the only reason to click a zoom value is to undo it. */
+.zoom-value {
+  min-width: 44px;
+  padding: 0 6px;
+  border-right: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.zoom-value:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 .address {
   position: relative;
   flex: 1;
   min-width: 0;
 }
 
+/* Site suggestions hang under the field. They are plain HTML, so they paint
+   above the native page only while the page is parked for an overlay. */
+.site-suggestions {
+  position: absolute;
+  z-index: 71;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 45%);
+  overflow: hidden;
+}
+
+.suggestion {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--muted);
+}
+
+.suggestion:hover,
+.suggestion:focus-visible {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.sugg-name {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.sugg-url {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .address input,
 .findbar input {
   width: 100%;
-  padding: 5px 9px;
+  height: 30px;
+  padding: 0 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--surface);
@@ -762,30 +1459,6 @@ function fillMessage(reason?: string): string {
   cursor: default;
 }
 
-.page-title {
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--faint);
-}
-
-.text-btn {
-  padding: 4px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.text-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
 .findbar {
   display: flex;
   align-items: center;
@@ -821,49 +1494,78 @@ function fillMessage(reason?: string): string {
   pointer-events: none;
 }
 
+/* A blank page's HTML surface: it fills the cell below the header band. */
+.blank-slot {
+  position: absolute;
+  z-index: 0;
+  overflow: hidden;
+}
+
 .slot-header {
   position: absolute;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 8px;
+  padding: 0 6px 0 8px;
   background: var(--surface);
   border-bottom: 1px solid var(--line-soft);
   box-sizing: border-box;
   cursor: pointer;
   z-index: 1;
+  overflow: hidden;
 }
 
 .slot-header:hover {
   background: var(--surface-2);
 }
 
-.slot-header.focused {
-  border-left: 2px solid var(--accent);
-  padding-left: 6px;
-  background: var(--surface-2);
+/* The selected cell is the keyboard target and the one a new page replaces, so
+   it is marked structurally — an accent rail plus a lifted background — instead
+   of spending band width on the word "selected". Tinted with the page colour
+   rather than the accent: mixing 8% amber into every selected band made it look
+   like a warning state. */
+.slot-header.selected {
+  background: var(--surface-3);
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset 0 1px 0 color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
-.slot-header.empty {
-  cursor: default;
-  border: 1px dashed var(--line);
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  background: transparent;
-  color: var(--faint);
+.slot-header.drop-target {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
-
-/* Whole-cell dashed frame with a centred action; the header band alone is too
-   small to look like a place a page can be added. */
 .slot-empty {
   position: absolute;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   border: 1px dashed var(--line);
-  border-top: none;
-  border-radius: 0 0 4px 4px;
+  border-radius: 4px;
   background: var(--bg);
   z-index: 0;
+}
+
+.slot-empty.drop-target {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+/* The number belongs inside the empty cell: a separate 26px header with only a
+   digit in it looked like a label pressed against the top edge. */
+.slot-empty-index {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--faint);
+  font-size: 9.5px;
 }
 
 .slot-add {
@@ -916,19 +1618,171 @@ function fillMessage(reason?: string): string {
   padding: 0 3px;
 }
 
-.slot-title {
-  flex: 1;
+/* The middle of the header band, between the slot number and the strip.
+   Shrinks before the strip does, so page titles keep their room. */
+.slot-account {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 110px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-secondary);
 }
 
-.slot-focus {
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
+.slot-tabs {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.slot-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * A page tab. Unselected tabs used to be transparent text on the header's own
+ * background, which made the strip indistinguishable from the slot label. They
+ * now sit in their own recessed pill, the current one is raised and lit, so the
+ * band reads as "window title, then tabs" at a glance.
+ */
+.slot-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 54px;
+  max-width: 170px;
+  height: 20px;
+  padding: 0 4px 0 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--faint);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Site mark, the way every browser tab strip carries one: it survives a
+   truncated title and tells two pages of the same site apart from two sites. */
+.slot-tab-fav {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.slot-tab:hover {
+  background: var(--surface-3);
+  color: var(--text-secondary);
+}
+
+.slot-tab.current {
+  background: var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--line) 80%, var(--accent));
+  color: var(--text);
+}
+
+.slot-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The close affordance appears on hover and on the current tab: always-on
+   crosses in a 20px pill would eat the title. */
+.slot-tab-close {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  color: var(--faint);
+  opacity: 0;
+  flex: 0 0 14px;
+}
+
+.slot-tab:hover .slot-tab-close,
+.slot-tab.current .slot-tab-close {
+  opacity: 1;
+}
+
+.slot-tab-close:hover {
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+  color: var(--red);
+}
+
+.slot-tab-add {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--faint);
+  flex: 0 0 18px;
+}
+
+.slot-tab-add:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Drawn inside the header band: the space below a slot belongs to the native page. */
+.slot-tip {
+  position: absolute;
+  top: 3px;
+  z-index: 4;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  height: 20px;
+  padding: 0 8px 0 9px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--line) 40%, var(--accent));
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    0 6px 16px rgb(0 0 0 / 55%);
+  color: var(--text);
+  font-size: 10px;
+  line-height: 18px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: slot-tip-in 90ms ease-out;
+}
+
+.slot-tip-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+/* The address is what makes this read as a hint: a tab never shows one. */
+.slot-tip-host {
   color: var(--accent);
+  font-size: 9.5px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes slot-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
 }
 
 .dot {
@@ -990,5 +1844,45 @@ function fillMessage(reason?: string): string {
 .empty-action:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+/* Page context menu ------------------------------------------------------- */
+
+.tab-menu {
+  position: fixed;
+  z-index: 95;
+  min-width: 196px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 55%);
+}
+
+.tab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.tab-menu-item:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.tab-menu-item:disabled {
+  opacity: 0.4;
+}
+
+.tab-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--line-soft);
 }
 </style>

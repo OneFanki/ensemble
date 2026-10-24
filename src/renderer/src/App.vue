@@ -1,12 +1,22 @@
 <script setup lang="ts">
-import type { IdentityDraft, LayoutPreset, SiteDraft, SlotRect, ViewDraft } from "@shared/types";
+import type {
+  IdentityDraft,
+  LayoutPreset,
+  LoginCaptureNotice,
+  SiteDraft,
+  SlotRect,
+  ViewDraft,
+} from "@shared/types";
 import type { UpdateCheckResult } from "@shared/update";
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import FlowsPage from "./components/FlowsPage.vue";
 import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import LayoutEditor from "./components/LayoutEditor.vue";
+import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
 import RunDock from "./components/RunDock.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
@@ -15,6 +25,7 @@ import SideRail from "./components/SideRail.vue";
 import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import SpotlightTour from "./components/SpotlightTour.vue";
+import TagsPage from "./components/TagsPage.vue";
 import TitleBar from "./components/TitleBar.vue";
 import ToastStack from "./components/ToastStack.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
@@ -31,7 +42,7 @@ import { useConfirmStore } from "./stores/confirm";
 import { useEmbeddedStore } from "./stores/embedded";
 import { useWorkspaceStore } from "./stores/workspace";
 
-type View = "browser" | "sites" | "identities" | "views" | "settings";
+type View = "browser" | "sites" | "identities" | "views" | "flows" | "tags" | "settings";
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
@@ -50,6 +61,8 @@ const tourSession = ref(0);
 const healthOpen = ref(false);
 /** True while an HTML overlay covers the browser stage. */
 const stageObscured = ref(false);
+/** Seed for the account form's inline site creator, from a captured login. */
+const identitySiteSeed = ref<{ origin: string; path: string } | null>(null);
 /** Set by a background check, or by the manual check in Settings. */
 const updatePrompt = ref<UpdateCheckResult | null>(null);
 
@@ -78,13 +91,21 @@ const overlayOpen = computed(
 onMounted(async () => {
   await store.init();
   await embedded.init();
+  // The status bar shows the endpoint on every screen, so it has to be known
+  // before the first settings visit.
+  void store.mcpStatus();
   applyTheme(store.settings.theme);
   setLocale(store.settings.locale as Locale);
   const saved = store.settings.lastView;
   // The browser is the default page; returning to where the user left off beats
   // resetting them to a management page they only visited once.
   view.value =
-    saved === "sites" || saved === "identities" || saved === "views" || saved === "browser"
+    saved === "sites" ||
+    saved === "identities" ||
+    saved === "views" ||
+    saved === "flows" ||
+    saved === "tags" ||
+    saved === "browser"
       ? saved
       : "browser";
   // The main process asks for the browser page when a tool or a shortcut opens a
@@ -143,6 +164,30 @@ function switchView(next: View) {
     void store.saveSettings({ lastView: next });
   }
 }
+
+/** Which settings tab a status-bar entry point should land on. */
+const settingsTab = ref<"general" | "engines" | "vault" | "data" | "mcp" | "about">("general");
+/**
+ * Bumped on every navigation request.
+ *
+ * The settings page is not remounted between visits, so the tab alone is not
+ * enough: clicking the entry twice, with a manual tab change in between, would
+ * leave the prop unchanged and the page would stay where the user put it.
+ */
+const settingsTabSeq = ref(0);
+
+/**
+ * Status-bar shortcut into Settings → AI access.
+ *
+ * Retargets the tab every time: the settings page keeps its own active tab
+ * across visits, so a plain `view = "settings"` would land on whatever was open
+ * last and leave the user hunting for the endpoint address.
+ */
+function openMcpSettings() {
+  settingsTab.value = "mcp";
+  settingsTabSeq.value += 1;
+  view.value = "settings";
+}
 function startTour() {
   tourOriginView.value = view.value;
   tourSession.value += 1;
@@ -161,7 +206,7 @@ function handleTourNavigate(next: TourView) {
   view.value = next;
 }
 
-function openNewSite() {
+function openNewSite(seed?: Partial<SiteDraft>) {
   siteDraft.value = {
     name: "",
     baseUrl: "http://localhost:3000",
@@ -170,12 +215,29 @@ function openNewSite() {
     defaultEngineId: store.defaultEngine?.id,
     autoSubmit: false,
     extraFields: [],
-    tagIds: store.activeSite?.tagIds ?? [],
+    tagIds: [],
+    ...seed,
   };
 }
 
+/** Opens a site's login page in the built-in browser as a fresh page. */
+async function openSite(siteId: string) {
+  const site = store.sites.find((item) => item.id === siteId);
+  if (!site) return;
+  let url: string;
+  try {
+    url = new URL(site.loginPath || "/", site.baseUrl).toString();
+  } catch {
+    store.notify(tr("app.errSiteUrl"), "error");
+    return;
+  }
+  store.markSiteUsed(site.id);
+  await embedded.openTabWith(url);
+  view.value = "browser";
+}
+
 function openEditSite(siteId?: string) {
-  const env = siteId ? store.sites.find((item) => item.id === siteId) : store.activeSite;
+  const env = siteId ? store.sites.find((item) => item.id === siteId) : store.defaultSite;
   if (!env) return;
   siteDraft.value = {
     id: env.id,
@@ -190,15 +252,16 @@ function openEditSite(siteId?: string) {
   };
 }
 
-function openNewIdentity() {
-  const env = store.activeSite;
-  if (!env) {
-    store.notify(tr("app.toastNeedSite"), "error");
-    view.value = "sites";
-    return;
-  }
+/**
+ * New identity starts on the most recently used site.
+ *
+ * The form can create a site inline, so having no sites is no longer a dead end
+ * that sends the user to another page first.
+ */
+function openNewIdentity(siteId?: string) {
+  const site = siteId ? store.sites.find((item) => item.id === siteId) : store.defaultSite;
   identityDraft.value = {
-    siteId: env.id,
+    siteId: site?.id ?? "",
     name: "",
     username: "",
     role: "admin",
@@ -206,6 +269,7 @@ function openNewIdentity() {
     passwordMode: "inherit",
     startPath: "/",
     extraFields: [],
+    tagIds: [],
   };
 }
 
@@ -224,24 +288,30 @@ function openEditIdentity(identityId: string) {
     passwordMode: identity.passwordMode,
     ...(identity.credentialFrom ? { credentialFrom: identity.credentialFrom } : {}),
     extraFields: identity.extraFields ? identity.extraFields.map((field) => ({ ...field })) : [],
+    tagIds: identity.tagIds ? [...identity.tagIds] : [],
     note: identity.note,
   };
 }
 
+/**
+ * A new view starts with members from the most recently used site, but the
+ * dialog lists every identity — a view is one screen, not one deployment.
+ */
 function openNewView() {
-  const env = store.activeSite;
-  if (!env) {
-    store.notify(tr("app.toastNeedSite"), "error");
-    view.value = "sites";
-    return;
-  }
+  const site = store.defaultSite;
   viewDraft.value = {
-    siteId: env.id,
+    siteId: site?.id ?? store.sites[0]?.id ?? "",
     name: "",
-    identityIds: store.siteIdentities.slice(0, 3).map((identity) => identity.id),
+    identityIds: site
+      ? store
+          .identitiesOf(site.id)
+          .slice(0, 3)
+          .map((item) => item.id)
+      : [],
     layoutId: store.settings.layout,
     slotAssignments: {},
     paths: {},
+    tagIds: [],
   };
 }
 function openEditView(viewId: string) {
@@ -255,6 +325,7 @@ function openEditView(viewId: string) {
     layoutId: view.layoutId,
     slotAssignments: { ...view.slotAssignments },
     paths: { ...view.paths },
+    tagIds: view.tagIds ? [...view.tagIds] : [],
   };
 }
 
@@ -263,15 +334,95 @@ async function saveSite(draft: SiteDraft) {
   if (result) {
     siteDraft.value = null;
     const saved = draft.id
-      ? result.sites.find((env) => env.id === draft.id)
-      : result.sites.find((env) => env.name === draft.name);
-    if (saved) store.setActiveSite(saved.id);
+      ? result.sites.find((item) => item.id === draft.id)
+      : result.sites.find((item) => item.name === draft.name);
+    if (saved) store.markSiteUsed(saved.id);
   }
 }
 
 async function saveIdentity(draft: IdentityDraft) {
   const result = await store.saveIdentity(draft);
-  if (result) identityDraft.value = null;
+  if (result) {
+    identityDraft.value = null;
+    // The captured password is consumed on save; the prompt must not linger.
+    if (draft.captureToken) store.clearLoginCapture();
+  }
+}
+
+/**
+ * Opens the account form pre-filled from a captured login.
+ *
+ * The site is matched by origin when one exists; otherwise the form opens with
+ * an inline "create this site" suggestion already filled, so the user does not
+ * have to leave and come back.
+ */
+function saveCapturedLogin(notice: LoginCaptureNotice): void {
+  const site = notice.siteId ? store.sites.find((item) => item.id === notice.siteId) : undefined;
+  const existing = store.identities.find(
+    (identity) =>
+      identity.username.toLowerCase() === notice.username.toLowerCase() &&
+      (!site || identity.siteId === site.id),
+  );
+  if (existing) {
+    // Same account seen again: updating the password is the only sensible action;
+    // a second identity for one login would split its session in two.
+    identityDraft.value = {
+      id: existing.id,
+      siteId: existing.siteId,
+      name: existing.name,
+      username: existing.username,
+      role: existing.role,
+      color: existing.color,
+      engineId: existing.engineId,
+      startPath: existing.startPath,
+      passwordMode: "custom",
+      extraFields: existing.extraFields ? existing.extraFields.map((field) => ({ ...field })) : [],
+      tagIds: existing.tagIds ? [...existing.tagIds] : [],
+      note: existing.note,
+      captureToken: notice.token,
+    };
+    return;
+  }
+  identityDraft.value = {
+    siteId: site?.id ?? "",
+    name: notice.username,
+    username: notice.username,
+    role: "member",
+    color: "teal",
+    passwordMode: "custom",
+    startPath: notice.path || "/",
+    extraFields: [],
+    tagIds: [],
+    captureToken: notice.token,
+  };
+  // No matching site: the form opens on its inline site creator, prefilled with
+  // the origin, so the password is not dropped just because the site is new.
+  if (!site) {
+    identitySiteSeed.value = { origin: notice.origin, path: notice.path };
+  }
+}
+
+/**
+ * Creates a site from inside the identity form and keeps the draft.
+ *
+ * The dialog asks the shell because saving a site is a workspace action; the
+ * account form should not submit a half-filled site on its own. Everything the
+ * user already typed stays, only the site id changes.
+ */
+async function createSiteFromIdentity(input: { name: string; baseUrl: string }) {
+  const draft = identityDraft.value;
+  if (!draft) return;
+  const result = await store.saveSite({
+    name: input.name,
+    baseUrl: input.baseUrl,
+    loginPath: "/login",
+    autoSubmit: false,
+  });
+  if (!result) return;
+  const saved = result.sites.find((item) => item.name === input.name);
+  if (!saved) return;
+  store.markSiteUsed(saved.id);
+  identityDraft.value = { ...draft, siteId: saved.id };
 }
 
 async function saveView(draft: ViewDraft) {
@@ -349,9 +500,7 @@ async function handleLocale(locale: "zh" | "en") {
 <template>
   <div class="app-shell" :data-platform="platform">
     <TitleBar
-      :view="view"
       @manage-sites="switchView('sites')"
-      @open-browser="switchView('browser')"
       @menu-open="(open) => (stageObscured = open)"
     />
 
@@ -372,6 +521,7 @@ async function handleLocale(locale: "zh" | "en") {
           v-else-if="view === 'sites'"
           @new-site="openNewSite"
           @edit-site="openEditSite"
+          @open-site="openSite"
         />
         <IdentitiesPage
           v-else-if="view === 'identities'"
@@ -386,8 +536,12 @@ async function handleLocale(locale: "zh" | "en") {
           @delete-view="deleteView"
           @edit-layout="openLayoutEditor"
         />
+        <FlowsPage v-else-if="view === 'flows'" />
+        <TagsPage v-else-if="view === 'tags'" />
         <SettingsPage
           v-else
+          :tab="settingsTab"
+          :tab-seq="settingsTabSeq"
           @theme="handleTheme"
           @locale="handleLocale"
           @start-tour="startTour"
@@ -408,18 +562,40 @@ async function handleLocale(locale: "zh" | "en") {
         }}
       </span>
       <span>{{ $t("app.instancesCount", { count: store.instances.length + embedded.tabs.length }) }}</span>
-      <span class="status-engines">
-        <template v-for="(engine, index) in store.engines.slice(0, 4)" :key="engine.id">
-          <span v-if="index > 0" class="sep">·</span>
-          {{ engine.brand }} {{ engine.version ?? "" }}
-        </template>
-        <span v-if="!store.engines.length">{{ $t("app.noBrowserFound") }}</span>
-      </span>
       <span class="status-right">
-        <span>{{ $t("app.singleUser") }}</span>
+        <!-- Every screen needs the endpoint address, and copying it should not
+             mean hunting through settings. The dot carries the on/off state on
+             its own when the endpoint is off, so the label and port only appear
+             while it is actually serving. -->
+        <button
+          type="button"
+          class="status-mcp"
+          :class="{ on: store.mcp?.running }"
+          :title="$t('app.statusMcpHint')"
+          @click="openMcpSettings"
+        >
+          <Bot :size="12" />
+          <span class="mcp-led" :class="{ on: store.mcp?.running }"></span>
+          <template v-if="store.mcp?.running">
+            <span class="mcp-label">AI</span>
+            <span class="mcp-port">:{{ store.mcp.port }}</span>
+          </template>
+        </button>
         <span>v{{ store.snapshot?.appVersion ?? "0.1.0" }}</span>
       </span>
     </footer>
+
+    <!-- A login seen in an embedded page. Floating above the dock so it never
+         covers the page the user is still working in, and never takes a row in
+         the app grid — it is a prompt, not part of the layout. -->
+    <div v-if="store.loginCapture" class="capture-wrap">
+      <LoginCaptureBar
+        :notice="store.loginCapture"
+        :site-name="store.sites.find((s) => s.id === store.loginCapture?.siteId)?.name"
+        @save="saveCapturedLogin"
+        @dismiss="store.dismissLoginCapture"
+      />
+    </div>
 
     <ToastStack />
     <ConfirmDialog />
@@ -428,7 +604,7 @@ async function handleLocale(locale: "zh" | "en") {
       v-if="siteDraft"
       :draft="siteDraft"
       :engines="store.engines"
-      :tags="store.snapshot?.siteTags ?? []"
+      :tags="store.snapshot?.tags ?? []"
       @close="siteDraft = null"
       @save="saveSite"
       @delete="deleteSite(siteDraft!.id!)"
@@ -438,9 +614,11 @@ async function handleLocale(locale: "zh" | "en") {
       v-if="identityDraft"
       :draft="identityDraft"
       :engines="store.engines"
+      :site-seed="identitySiteSeed"
       :password-set="identityDraft.id ? store.identityPasswordSet(store.identities.find(i => i.id === identityDraft!.id)!) : false"
-      @close="identityDraft = null"
+      @close="identityDraft = null; identitySiteSeed = null"
       @save="saveIdentity"
+      @create-site="createSiteFromIdentity"
       @delete="store.deleteIdentity(identityDraft!.id!); identityDraft = null"
     />
 
@@ -450,6 +628,7 @@ async function handleLocale(locale: "zh" | "en") {
       :identities="store.identities"
       :sites="store.sites"
       :presets="store.viewLayoutPresets"
+      :tags="store.snapshot?.tags ?? []"
       @close="viewDraft = null"
       @save="saveView"
       @delete="store.deleteView(viewDraft!.id!); viewDraft = null"
@@ -545,13 +724,28 @@ async function handleLocale(locale: "zh" | "en") {
   align-items: center;
   gap: 14px;
   padding: 0 13px;
-  border-top: 1px solid var(--line-soft);
-  background: color-mix(in srgb, var(--bg) 88%, black);
+  border-top: 1px solid var(--line-soft);  background: color-mix(in srgb, var(--bg) 88%, black);
   color: var(--faint);
   font-size: 10.5px;
   letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
+}
+
+/*
+ * The capture prompt floats over the app, dock included.
+ *
+ * It used to be a plain child of the shell grid, which added an implicit fourth
+ * row and shifted the whole layout every time a login was submitted. Fixed
+ * positioning keeps it a prompt: no reflow, no reserved space.
+ */
+.capture-wrap {
+  position: fixed;
+  z-index: 100;
+  left: 50%;
+  bottom: 46px;
+  transform: translateX(-50%);
+  width: min(520px, calc(100vw - 48px));
 }
 
 .status-group {
@@ -573,20 +767,59 @@ async function handleLocale(locale: "zh" | "en") {
   box-shadow: none;
 }
 
-.status-engines {
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* AI access entry: one click to the endpoint address, the dot is live state. */
+.status-mcp {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+  cursor: pointer;
 }
 
-.sep {
-  margin: 0 5px;
-  color: var(--line);
+.status-mcp:hover {
+  background: var(--surface-2);
+  border-color: var(--line-soft);
+  color: var(--text-secondary);
+}
+
+.status-mcp:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.status-mcp.on {
+  color: var(--text-secondary);
+}
+
+.mcp-led {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.mcp-led.on {
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 70%, transparent);
+}
+
+.mcp-port {
+  color: var(--faint);
 }
 
 .status-right {
   margin-left: auto;
   display: flex;
-  gap: 14px;
+  align-items: center;
+  gap: 12px;
   overflow: hidden;
 }
 

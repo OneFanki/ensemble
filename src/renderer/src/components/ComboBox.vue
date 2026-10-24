@@ -26,11 +26,11 @@ const panel = ref<HTMLElement | null>(null);
 const panelStyle = ref<Record<string, string>>({});
 const input = ref<HTMLInputElement | null>(null);
 
-// The panel is teleported out of the input, so it needs its own listener.
-onClickOutside(root, () => {
-  open.value = false;
-});
-onClickOutside(panel, () => {
+// One handler for both parts; two would cancel each other out (see SelectField).
+// The panel marks itself so a dialog does not read the press as "outside".
+onClickOutside(root, (event) => {
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-floating-panel]")) return;
   open.value = false;
 });
 
@@ -141,7 +141,7 @@ function onKeydown(event: KeyboardEvent) {
     </div>
 
     <Teleport to="body">
-      <div v-if="open && filtered.length" ref="panel" class="combo-panel" :style="panelStyle" role="listbox">
+      <div v-if="open && filtered.length" ref="panel" class="combo-panel" :style="panelStyle" role="listbox" data-floating-panel>
         <button
           v-for="item in filtered"
           :key="item"
@@ -209,6 +209,10 @@ function onKeydown(event: KeyboardEvent) {
 
 .combo-panel {
   position: fixed;
+  /* Reka UI locks the page with pointer-events: none while a dialog is open.
+     A teleported panel inherits that, which makes it both un-hoverable and
+     click-through onto the dialog fields underneath. */
+  pointer-events: auto;
   z-index: 90;
   max-height: 180px;
   overflow-y: auto;

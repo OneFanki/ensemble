@@ -102,6 +102,174 @@ a {
   border: 0;
 }
 
+/*
+ * The button and field vocabulary, in one place.
+ *
+ * Every component used to declare its own `.btn` inside a `scoped` block, so a
+ * new page that used `class="btn primary"` without copying the styles got bare
+ * text where a button should be — which is exactly how the flows page and its
+ * dialog shipped. Shared controls belong to the shared sheet.
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
+  color: var(--text);
+}
+
+.btn.primary {
+  background: linear-gradient(
+    180deg,
+    var(--accent-strong),
+    color-mix(in srgb, var(--accent) 88%, black)
+  );
+  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  color: var(--accent-foreground);
+  font-weight: 500;
+}
+
+/* `.btn:hover` also matches a primary button; restate the gradient so it does
+   not turn gray under the cursor. */
+.btn.primary:hover:not(:disabled) {
+  background: linear-gradient(
+    180deg,
+    var(--accent-strong),
+    color-mix(in srgb, var(--accent) 88%, black)
+  );
+  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  color: var(--accent-foreground);
+  filter: brightness(1.06);
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+}
+
+.btn.small {
+  padding: 5px 9px;
+  font-size: 11.5px;
+}
+
+/* Inline action that reads as a link (add a row, open a detail). */
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
+.link-btn:hover:not(:disabled) {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  flex: 0 0 24px;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text-secondary);
+}
+
+.icon-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+}
+
+/* One labelled form control: caption above, input below. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field > .field-label {
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+}
+
+.field input,
+.field select,
+.field textarea {
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.field textarea {
+  height: auto;
+  padding: 7px 9px;
+  resize: vertical;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: color-mix(in srgb, var(--line) 50%, var(--accent));
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--faint);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

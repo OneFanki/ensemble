@@ -10,17 +10,23 @@ import ComboBox from "./ComboBox.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
+import TagPicker from "./TagPicker.vue";
+import AppButton from "./ui/AppButton.vue";
 
 const props = defineProps<{
   draft: IdentityDraft;
   engines: Engine[];
   passwordSet: boolean;
+  /** Origin/path of a captured login, offered as a prefilled new site. */
+  siteSeed?: { origin: string; path: string } | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
   save: [draft: IdentityDraft];
   delete: [];
+  /** Asks the app shell to create a site first, then reopen this draft on it. */
+  createSite: [draft: { name: string; baseUrl: string }];
 }>();
 
 const store = useWorkspaceStore();
@@ -32,6 +38,32 @@ const reveal = ref(false);
 const error = ref<string | null>(null);
 /** In inherit mode the password input stays hidden until the user asks to edit. */
 const editingSitePassword = ref(false);
+/** Inline "create a site from the address you are on" fields. */
+const newSiteName = ref("");
+const newSiteUrl = ref("");
+const creatingSite = ref(false);
+
+/**
+ * A captured login on an unknown site opens this form with the creator already
+ * showing and the origin filled in — the alternative is losing the password
+ * because the site does not exist yet.
+ */
+watch(
+  () => props.siteSeed,
+  (seed) => {
+    if (!seed) return;
+    creatingSite.value = true;
+    newSiteUrl.value = seed.origin;
+    if (!newSiteName.value) {
+      try {
+        newSiteName.value = new URL(seed.origin).hostname;
+      } catch {
+        newSiteName.value = seed.origin;
+      }
+    }
+  },
+  { immediate: true },
+);
 
 watch(
   () => props.draft,
@@ -39,8 +71,34 @@ watch(
     Object.assign(form, next);
     password.value = "";
     editingSitePassword.value = false;
+    creatingSite.value = false;
   },
 );
+
+const siteOptions = computed(() =>
+  store.sites.map((site) => ({
+    value: site.id,
+    label: site.name,
+    hint: site.baseUrl,
+  })),
+);
+
+/**
+ * Creating a site from inside the dialog.
+ *
+ * "Which site does this account belong to" should not require leaving the form
+ * and losing what was typed. The dialog emits the draft; the shell saves the
+ * site and reopens this form with the new id selected.
+ */
+async function createSiteNow(): Promise<void> {
+  const name = newSiteName.value.trim();
+  const baseUrl = newSiteUrl.value.trim();
+  if (!name || !baseUrl) {
+    error.value = t("app.errSiteInline");
+    return;
+  }
+  emit("createSite", { name, baseUrl });
+}
 
 /** Role is a displayed label, so the suggestions are localized words, not keys. */
 const roleSuggestions = computed<string[]>(() => [
@@ -172,6 +230,10 @@ const colorLabels = computed<Record<RoleColor, string>>(() => ({
 
 function submit() {
   error.value = null;
+  if (!form.siteId) {
+    error.value = t("app.errIdentitySite");
+    return;
+  }
   if (form.passwordMode === "reference") {
     if (!form.credentialFrom) {
       error.value = t("app.errReferenceSource");
@@ -268,6 +330,40 @@ async function rebuildProfile() {
       </div>
 
       <label class="field">
+        <span class="label">{{ $t("app.identitySite") }}</span>
+        <SelectField
+          :model-value="form.siteId || undefined"
+          :options="siteOptions"
+          :placeholder="$t('app.identitySitePick')"
+          :aria-label="$t('app.identitySite')"
+          @update:model-value="form.siteId = $event ?? ''"
+        />
+        <button
+          type="button"
+          class="link-btn"
+          @click="creatingSite = !creatingSite"
+        >
+          {{ creatingSite ? $t("app.cancel") : $t("app.identitySiteNew") }}
+        </button>
+      </label>
+
+      <div v-if="creatingSite" class="new-site">
+        <div class="row">
+          <label class="field grow">
+            <span class="label">{{ $t("app.envNameLabel") }}</span>
+            <input v-model="newSiteName" class="input" :placeholder="$t('app.siteNameExample')" />
+          </label>
+          <label class="field grow">
+            <span class="label">{{ $t("app.envUrlLabel") }}</span>
+            <input v-model="newSiteUrl" class="input mono" placeholder="http://localhost:5173" />
+          </label>
+        </div>
+        <AppButton @click="createSiteNow">
+          {{ $t("app.identitySiteCreate") }}
+        </AppButton>
+      </div>
+
+      <label class="field">
         <span class="label">{{ $t("app.username") }}</span>
         <input
           v-model="form.username"
@@ -293,6 +389,12 @@ async function rebuildProfile() {
             @click="form.color = color"
           ></button>
         </div>
+      </div>
+
+      <div class="field">
+        <span class="label">{{ $t("app.tags") }}</span>
+        <TagPicker v-model="form.tagIds" :tags="store.snapshot?.tags ?? []" />
+        <span class="hint">{{ $t("app.identityTagHint") }}</span>
       </div>
 
       <section class="group">
@@ -361,16 +463,12 @@ async function rebuildProfile() {
                 : $t("app.referencePickHint")
             }}
           </p>
-          <button
-            v-if="isSavedReference"
-            type="button"
-            class="btn"
+          <AppButton v-if="isSavedReference"
             :disabled="store.busy === 'identity'"
-            @click="detach"
-          >
+            @click="detach">
             <Unlink :size="12" />
             {{ $t("app.detachReference") }}
-          </button>
+          </AppButton>
         </div>
 
         <p v-if="referencingDependents.length && !referencing" class="note warn">
@@ -386,17 +484,13 @@ async function rebuildProfile() {
               {{ envPasswordSet ? $t("app.passwordSet") : $t("app.passwordNotSet") }}
             </span>
           </span>
-          <button
-            type="button"
-            class="btn ghost"
-            :disabled="!envPasswordSet"
-            @click="copyDefaultPassword"
-          >
+          <AppButton variant="ghost" :disabled="!envPasswordSet"
+            @click="copyDefaultPassword">
             {{ $t("app.copy") }}
-          </button>
-          <button type="button" class="btn" @click="editingSitePassword = !editingSitePassword">
+          </AppButton>
+          <AppButton @click="editingSitePassword = !editingSitePassword">
             {{ editingSitePassword ? $t("app.cancel") : $t("app.editSitePassword") }}
-          </button>
+          </AppButton>
         </div>
 
         <div v-if="form.passwordMode === 'custom' || editingSitePassword" class="password-row">
@@ -422,24 +516,16 @@ async function rebuildProfile() {
               <Eye v-else :size="13" />
             </button>
           </div>
-          <button
-            v-if="editingSitePassword"
-            type="button"
-            class="btn"
+          <AppButton v-if="editingSitePassword"
             :disabled="!password"
-            @click="saveSitePassword"
-          >
+            @click="saveSitePassword">
             {{ $t("app.saveAsSiteDefault") }}
-          </button>
-          <button
-            v-else-if="form.id"
-            type="button"
-            class="btn"
+          </AppButton>
+          <AppButton v-else-if="form.id"
             :disabled="!password"
-            @click="saveIdentityPassword"
-          >
+            @click="saveIdentityPassword">
             {{ $t("app.saveToIdentity") }}
-          </button>
+          </AppButton>
         </div>
 
         <p class="note">
@@ -488,23 +574,19 @@ async function rebuildProfile() {
     </div>
 
     <template #footer>
-      <button v-if="form.id" type="button" class="btn danger" @click="emit('delete')">
+      <AppButton variant="danger" v-if="form.id" @click="emit('delete')">
         <Trash2 :size="12" />
         {{ $t("app.delete") }}
-      </button>
-      <button
-        v-if="form.id"
-        type="button"
-        class="btn"
+      </AppButton>
+      <AppButton v-if="form.id"
         :disabled="store.busy === 'identity'"
-        @click="rebuildProfile"
-      >
+        @click="rebuildProfile">
         <RotateCcw :size="12" />
         {{ $t("app.rebuildProfile") }}
-      </button>
+      </AppButton>
       <span class="spacer"></span>
-      <button type="button" class="btn" @click="emit('close')">{{ $t("app.cancel") }}</button>
-      <button type="button" class="btn primary" @click="submit">{{ $t("app.save") }}</button>
+      <AppButton @click="emit('close')">{{ $t("app.cancel") }}</AppButton>
+      <AppButton variant="primary" @click="submit">{{ $t("app.save") }}</AppButton>
     </template>
   </Modal>
 </template>
@@ -536,6 +618,35 @@ async function rebuildProfile() {
   font-size: 10.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Inline "create a site" affordance: a text link inside the site field, so the
+   form does not need a whole extra section for a rare action. */
+.link-btn {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: underline;
+  padding: 0;
+}
+
+.new-site {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 10px;
+  background: var(--bg-elevated);
+}
+
+.new-site .btn {
+  align-self: flex-start;
+}
+
+.hint {
+  font-size: 10.5px;
   color: var(--faint);
 }
 
@@ -743,34 +854,6 @@ async function rebuildProfile() {
   color: var(--red);
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-}
-
-.btn.ghost {
-  background: transparent;
-}
-
-.btn.primary {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
 /* `.btn:hover` matches primary buttons too; restate the gradient so the button
    does not turn gray while the cursor is over it. */
 .btn.primary:hover:not(:disabled) {
@@ -778,11 +861,6 @@ async function rebuildProfile() {
   border-color: color-mix(in srgb, var(--accent) 80%, black);
   color: var(--accent-foreground);
   filter: brightness(1.07);
-}
-
-.btn.danger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
 }
 
 .spacer {

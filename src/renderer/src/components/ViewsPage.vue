@@ -19,6 +19,8 @@ import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
+import AppButton from "./ui/AppButton.vue";
+import IconButton from "./ui/IconButton.vue";
 
 const emit = defineEmits<{
   newView: [];
@@ -37,9 +39,43 @@ const draggedId = ref<string | null>(null);
 const dropTarget = ref<number | null>(null);
 /** Target site of the "copy to another site" dialog. */
 const copyTargetId = ref<string | null>(null);
+/** Filters: a view matches if any member (or the view) belongs to this site/tag. */
+const siteFilter = ref<string | null>(null);
+const tagFilter = ref<string | null>(null);
+
+function siteIdsOf(view: View): string[] {
+  const ids = new Set<string>();
+  for (const identityId of view.identityIds) {
+    const identity = store.identities.find((item) => item.id === identityId);
+    if (identity) ids.add(identity.siteId);
+  }
+  return [...ids];
+}
+
+const visibleViews = computed(() =>
+  store.views.filter((view) => {
+    if (siteFilter.value && !siteIdsOf(view).includes(siteFilter.value)) return false;
+    if (tagFilter.value && !store.tagsForView(view).includes(tagFilter.value)) return false;
+    return true;
+  }),
+);
+
+/** Only sites and tags that some view actually uses; a dead filter is noise. */
+const filterSites = computed(() => {
+  const used = new Set<string>();
+  for (const view of store.views) for (const id of siteIdsOf(view)) used.add(id);
+  return store.sites.filter((site) => used.has(site.id));
+});
+
+const filterTags = computed(() => {
+  const used = new Set<string>();
+  for (const view of store.views) for (const id of store.tagsForView(view)) used.add(id);
+  return (store.snapshot?.tags ?? []).filter((tag) => used.has(tag.id));
+});
 
 const selectedView = computed<View | undefined>(
-  () => store.siteViews.find((view) => view.id === selectedViewId.value) ?? store.siteViews[0],
+  () =>
+    visibleViews.value.find((view) => view.id === selectedViewId.value) ?? visibleViews.value[0],
 );
 
 // Keep the selection valid when views are added, renamed or deleted.
@@ -169,33 +205,46 @@ function openContainer(view: View) {
   return embedded.views.find((item) => item.viewDefinitionId === view.id);
 }
 
-/** True when this view has pages anywhere: built-in container or external windows. */
-function viewRunning(view: View): boolean {
-  return Boolean(openContainer(view)) || view.identityIds.some((id) => store.instanceFor(id));
-}
+/** The title bar's launch target decides which surface this button acts on. */
+const launchTarget = computed(() => store.settings.launchTarget ?? "embedded");
+
+/** Whether this view is running on the surface the launch switch points at. */
+const runningHere = computed(() => {
+  const view = selectedView.value;
+  if (!view) return false;
+  return launchTarget.value === "embedded"
+    ? Boolean(openContainer(view))
+    : view.identityIds.some((id) => store.instanceFor(id));
+});
+
+const launchLabel = computed(() => {
+  if (launchTarget.value === "embedded") {
+    return runningHere.value ? t("app.browserStopView") : t("app.runView");
+  }
+  return runningHere.value ? t("app.closeViewWindows") : t("app.runExternal");
+});
 
 /**
- * The primary action opens the built-in surface: it is the main surface, the one
- * that keeps every account on one screen. External windows stay available as the
- * fidelity check through the separate action beside it.
+ * One action, routed by the title bar.
+ *
+ * Two buttons side by side ("run" and "run external") made the same decision
+ * twice and forced every user to re-answer it per view. The switch in the title
+ * bar is the single place that decides.
  */
-async function launchSelected() {
+async function launchHere() {
   const view = selectedView.value;
   if (!view) return;
-  const container = openContainer(view);
-  if (container) {
-    await embedded.closeView(container.id, "opened");
+  if (launchTarget.value === "embedded") {
+    const container = openContainer(view);
+    if (container) {
+      await embedded.closeView(container.id, "opened");
+      return;
+    }
+    await embedded.openView(view.id);
     return;
   }
-  await embedded.openView(view.id);
-}
-
-/** Opens the same view as real browser windows, for checking native behaviour. */
-function launchExternal() {
-  const view = selectedView.value;
-  if (!view) return;
-  if (isRunning.value) void store.stopView(view.id);
-  else void store.launchView(view.id);
+  if (view.identityIds.some((id) => store.instanceFor(id))) await store.stopView(view.id);
+  else await store.launchView(view.id);
 }
 
 /** Other sites this view can be copied to; the source site is excluded. */
@@ -238,30 +287,56 @@ async function confirmCopy(): Promise<void> {
         <p class="head-note">{{ $t("app.viewsSubtitle") }}</p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="store.launchScopedCleanSession()">
+        <AppButton @click="store.launchScopedCleanSession()">
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
-        </button>
-        <button class="btn primary" type="button" data-tour="new-view" @click="emit('newView')">
+        </AppButton>
+        <AppButton variant="primary" data-tour="new-view" @click="emit('newView')">
           <Plus :size="13" />
           {{ $t("app.newView") }}
-        </button>
+        </AppButton>
       </div>
     </header>
 
-    <div v-if="!store.siteViews.length" class="empty">
+    <div v-if="!store.views.length" class="empty">
       <Layers :size="22" />
       <p>{{ $t("app.emptyViews") }}</p>
-      <button class="btn primary" type="button" @click="emit('newView')">
+      <AppButton variant="primary" @click="emit('newView')">
         <Plus :size="13" />
         {{ $t("app.newView") }}
-      </button>
+      </AppButton>
     </div>
 
     <div v-else class="workspace">
       <div class="view-list" role="listbox" :aria-label="$t('app.viewColumnName')">
+        <!-- Filters match members, not just the view's own tags: "show me the
+             views that touch 生产" should not require tagging each view twice. -->
+        <div v-if="filterSites.length || filterTags.length" class="filters">
+          <button
+            v-for="site in filterSites"
+            :key="site.id"
+            type="button"
+            class="filter-chip"
+            :class="{ on: siteFilter === site.id }"
+            @click="siteFilter = siteFilter === site.id ? null : site.id"
+          >
+            {{ site.name }}
+          </button>
+          <button
+            v-for="tag in filterTags"
+            :key="tag.id"
+            type="button"
+            class="filter-chip"
+            :class="{ on: tagFilter === tag.id }"
+            :style="{ '--tag': `var(--role-${tag.color})` }"
+            @click="tagFilter = tagFilter === tag.id ? null : tag.id"
+          >
+            <span class="chip-dot"></span>
+            {{ tag.name }}
+          </button>
+        </div>
         <button
-          v-for="(view, index) in store.siteViews"
+          v-for="(view, index) in visibleViews"
           :key="view.id"
           type="button"
           role="option"
@@ -278,6 +353,7 @@ async function confirmCopy(): Promise<void> {
           <span class="layout mono">{{ store.presetName(store.presetById(view.layoutId)) }}</span>
           <span class="state mono">{{ viewStatus(view) }}</span>
         </button>
+        <p v-if="!visibleViews.length" class="no-match">{{ $t("app.noMatchingViews") }}</p>
       </div>
 
       <div v-if="selectedView" class="detail">
@@ -290,56 +366,27 @@ async function confirmCopy(): Promise<void> {
             </p>
           </div>
           <div class="detail-actions">
-            <button
-              class="btn small"
-              type="button"
-              :class="{ running: Boolean(openContainer(selectedView)) }"
-              @click="launchSelected"
-            >
-              <Square v-if="openContainer(selectedView)" :size="11" />
-              <Play v-else :size="11" />
-              {{
-                openContainer(selectedView)
-                  ? $t("app.browserStopView")
-                  : $t("app.runView")
-              }}
-            </button>
-            <button
-              class="btn small ghost"
-              type="button"
-              :class="{ running: isRunning }"
+            <AppButton size="sm" :class="{ running: runningHere }"
               :disabled="store.busy === 'launch'"
-              :title="$t('app.runInExternal')"
-              @click="launchExternal"
-            >
-              {{ isRunning ? $t("app.closeViewWindows") : $t("app.runExternal") }}
-            </button>
-            <button
-              class="icon-btn"
-              type="button"
-              :aria-label="$t('app.copyViewToSite')"
+              @click="launchHere">
+              <Square v-if="runningHere" :size="11" />
+              <Play v-else :size="11" />
+              {{ launchLabel }}
+            </AppButton>
+            <IconButton :ariaLabel="$t('app.copyViewToSite')"
               :title="$t('app.copyViewToSiteHint')"
               :disabled="!copyTargets.length"
-              @click="copyTargetId = copyTargets[0]?.id ?? null"
-            >
+              @click="copyTargetId = copyTargets[0]?.id ?? null">
               <Copy :size="12" />
-            </button>
-            <button
-              class="icon-btn"
-              type="button"
-              :aria-label="$t('app.edit')"
-              @click="emit('editView', selectedView.id)"
-            >
+            </IconButton>
+            <IconButton :ariaLabel="$t('app.edit')"
+              @click="emit('editView', selectedView.id)">
               <Pencil :size="12" />
-            </button>
-            <button
-              class="icon-btn danger"
-              type="button"
-              :aria-label="$t('app.delete')"
-              @click="emit('deleteView', selectedView.id)"
-            >
+            </IconButton>
+            <IconButton variant="danger" :ariaLabel="$t('app.delete')"
+              @click="emit('deleteView', selectedView.id)">
               <Trash2 :size="12" />
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -468,17 +515,13 @@ async function confirmCopy(): Promise<void> {
       </div>
       <template #footer>
         <span class="spacer"></span>
-        <button type="button" class="btn" @click="copyTargetId = null">
+        <AppButton @click="copyTargetId = null">
           {{ $t("app.cancel") }}
-        </button>
-        <button
-          type="button"
-          class="btn primary"
-          :disabled="store.busy === 'view'"
-          @click="confirmCopy"
-        >
+        </AppButton>
+        <AppButton variant="primary" :disabled="store.busy === 'view'"
+          @click="confirmCopy">
           {{ $t("app.copy") }}
-        </button>
+        </AppButton>
       </template>
     </Modal>
   </section>
@@ -544,6 +587,55 @@ h1 {
   overflow-y: auto;
   min-height: 0;
   padding-right: 2px;
+}
+
+/* Same rule as the account page: a single scrolling line, because a workspace
+   with many tags would otherwise fill the whole left column with chips. */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.filter-chip {
+  background: transparent;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.filter-chip.on {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text-secondary);
+}
+
+.filter-chip .chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tag, var(--accent));
+  opacity: 0.8;
+}
+
+.no-match {
+  margin: 12px 4px;
+  font-size: 11.5px;
+  color: var(--faint);
 }
 
 .view-row {
@@ -653,26 +745,6 @@ h1 {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.icon-btn {
-  width: 28px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--faint);
-  border: 1px solid var(--line-soft);
-}
-
-.icon-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-secondary);
-}
-
-.icon-btn.danger:hover {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 40%, var(--line));
 }
 
 .member-pool {
@@ -933,64 +1005,13 @@ h1 {
   margin: 0;
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-}
-
 .btn.small {
   padding: 6px 10px;
-}
-
-.btn.ghost {
-  background: transparent;
-  color: var(--faint);
-  font-size: 10.5px;
-  padding: 6px 8px;
-}
-
-.btn.ghost:hover:not(:disabled) {
-  color: var(--text-secondary);
 }
 
 .btn.running {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 35%, var(--line));
-}
-
-.btn.primary {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
-.btn.primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  filter: brightness(1.07);
 }
 
 @media (max-width: 1080px) {

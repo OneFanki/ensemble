@@ -1,22 +1,13 @@
 <script setup lang="ts">
+import type { Identity, RoleColor } from "@shared/types";
+import { Check, CheckSquare, Download, Globe, HeartPulse, Play, Plus, Search, Square } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import {
-  Check,
-  CheckSquare,
-  Globe,
-  HeartPulse,
-  Play,
-  Plus,
-  Search,
-  Square,
-} from "lucide-vue-next";
-import { useWorkspaceStore } from "../stores/workspace";
 import { useEmbeddedStore } from "../stores/embedded";
-import type { Identity, RoleColor } from "@shared/types";
+import { useWorkspaceStore } from "../stores/workspace";
 
 const emit = defineEmits<{
-  newIdentity: [];
+  newIdentity: [siteId?: string];
   editIdentity: [id: string];
   sessionHealth: [];
 }>();
@@ -73,18 +64,81 @@ function endSelecting() {
 async function launchSelected() {
   const ids = notRunningSelected.value.map((identity) => identity.id);
   if (ids.length === 0) return;
-  await store.launchIdentities(ids);
+  if (store.settings.launchTarget === "embedded") {
+    // A batch is the one launch that is about a layout, so it gets its own
+    // container instead of scattering pages into the tab strip.
+    await embedded.openIdentitiesInNewView(ids);
+  } else {
+    await store.launchIdentities(ids);
+  }
   endSelecting();
 }
 
 const roleVar = (color: RoleColor) => `var(--role-${color})`;
 
+/*
+ * Sharing the selected accounts with a colleague.
+ *
+ * This is not the settings → Data export: that one migrates the whole workspace
+ * (sites, views, layouts, ids). Here the point is "these three tenant logins",
+ * so the selection is the payload and the receiver matches them by URL and
+ * username in their own workspace.
+ */
+const exportOpen = ref(false);
+const exportPassphrase = ref("");
+const exportError = ref("");
+const exporting = ref(false);
+
+function openExport(): void {
+  exportError.value = "";
+  exportOpen.value = true;
+}
+
+async function doExport(): Promise<void> {
+  exportError.value = "";
+  const passphrase = exportPassphrase.value;
+  if (passphrase && passphrase.length < 8) {
+    exportError.value = t("app.accountsExportPassTooShort");
+    return;
+  }
+  exporting.value = true;
+  try {
+    const ids = [...selected.value];
+    // Sites are derived from the accounts, so the receiver gets somewhere to
+    // attach them without the sender having to pick sites separately.
+    const result = await window.ensemble.exportAccounts({
+      siteIds: [],
+      identityIds: ids,
+      ...(passphrase ? { passphrase } : {}),
+    });
+    if (result.canceled) return;
+    store.notify(
+      t("app.accountsExportDone", {
+        accounts: result.counts?.accounts ?? ids.length,
+        sites: result.counts?.sites ?? 0,
+      }),
+      "success",
+    );
+    exportOpen.value = false;
+    exportPassphrase.value = "";
+    endSelecting();
+  } catch (error) {
+    exportError.value = (error as Error).message;
+  } finally {
+    exporting.value = false;
+  }
+}
+
+/** Tag filter; `null` means every account. */
+const tagFilter = ref<string | null>(null);
+
 const visibleIdentities = computed(() => {
   const term = query.value.trim().toLowerCase();
-  return store.siteIdentities.filter((identity) => {
+  return store.identities.filter((identity) => {
     const running = Boolean(store.instanceFor(identity.id));
     if (filter.value === "running" && !running) return false;
     if (filter.value === "expired" && identity.status !== "expired") return false;
+    if (tagFilter.value && !store.tagsForIdentity(identity).includes(tagFilter.value)) return false;
     if (!term) return true;
     return (
       identity.name.toLowerCase().includes(term) ||
@@ -94,11 +148,48 @@ const visibleIdentities = computed(() => {
   });
 });
 
+/**
+ * Accounts grouped by site.
+ *
+ * This replaced a title-bar site switcher: one global "current site" scoped
+ * every page at once, which the embedded browser never honoured. Grouping keeps
+ * the same information visible without hiding anything.
+ */
+const groups = computed(() => {
+  const result: Array<{ siteId: string; name: string; url: string; people: Identity[] }> = [];
+  for (const site of store.sites) {
+    const people = visibleIdentities.value.filter((identity) => identity.siteId === site.id);
+    if (people.length === 0) continue;
+    result.push({ siteId: site.id, name: site.name, url: site.baseUrl, people });
+  }
+  const orphans = visibleIdentities.value.filter(
+    (identity) => !store.sites.some((site) => site.id === identity.siteId),
+  );
+  if (orphans.length > 0) {
+    result.push({
+      siteId: "__orphan__",
+      name: t("app.identityOrphanSite"),
+      url: "",
+      people: orphans,
+    });
+  }
+  return result;
+});
+
+/** Tags that actually appear on some account, so the filter never lists dead ends. */
+const filterTags = computed(() => {
+  const used = new Set<string>();
+  for (const identity of store.identities) {
+    for (const tagId of store.tagsForIdentity(identity)) used.add(tagId);
+  }
+  return (store.snapshot?.tags ?? []).filter((tag) => used.has(tag.id));
+});
+
 const runningCount = computed(
-  () => store.siteIdentities.filter((i) => store.instanceFor(i.id)).length,
+  () => store.identities.filter((identity) => store.instanceFor(identity.id)).length,
 );
 const expiredCount = computed(
-  () => store.siteIdentities.filter((i) => i.status === "expired").length,
+  () => store.identities.filter((identity) => identity.status === "expired").length,
 );
 
 const statusLabel = (identity: Identity): string => {
@@ -124,13 +215,34 @@ async function launch(identity: Identity) {
     toggleSelected(identity.id);
     return;
   }
-  const instance = store.instanceFor(identity.id);
-  if (instance) {
-    // Clicking a running identity raises its window; stopping is its own button.
-    await store.focusInstance(instance.id);
+  await launchHere(identity);
+}
+
+/**
+ * Launch through whichever surface the title bar selected.
+ *
+ * The page must not offer a second "built-in browser" action beside launch: that
+ * made one decision look like two unrelated features, and the choice belongs in
+ * one place for every page.
+ *
+ * Built-in means "a new tab in the default tab strip", always — even when a view
+ * is on stage or the account is already running somewhere. Clicking a card is a
+ * request for that page, not an instruction to rearrange the stage; moving into
+ * a view is the drag gesture or the view's own "add tab".
+ */
+async function launchHere(identity: Identity): Promise<void> {
+  if (store.settings.launchTarget === "external") {
+    // External windows exist once per identity, so re-launching means raising
+    // the running one; there is no tab strip to add a second page to.
+    const instance = store.instanceFor(identity.id);
+    if (instance) {
+      await store.focusInstance(instance.id);
+      return;
+    }
+    await store.launchIdentity(identity.id);
     return;
   }
-  await store.launchIdentity(identity.id);
+  await embedded.openIdentity(identity.id);
 }
 
 async function relogin(identity: Identity) {
@@ -139,19 +251,17 @@ async function relogin(identity: Identity) {
     await store.fillLogin(identity.id);
     return;
   }
-  const launched = await store.launchIdentity(identity.id, store.activeSite?.loginPath);
+  if (store.settings.launchTarget === "embedded") {
+    // The embedded surface has no login page to submit; opening the identity's
+    // start page and filling it is the equivalent action.
+    await embedded.openIdentity(identity.id);
+    return;
+  }
+  const site = store.sites.find((item) => item.id === identity.siteId);
+  const launched = await store.launchIdentity(identity.id, site?.loginPath);
   // A launch already fills on its own when the setting is on; filling again here
   // would type the same credentials twice and submit the form twice.
   if (launched && !store.settings.autoFillOnLaunch) await store.fillLogin(identity.id);
-}
-
-/**
- * Opens this identity's page in the built-in browser, which gets its own
- * persistent session partition. Opening the same identity again switches to the
- * tab that is already there instead of stacking identical pages.
- */
-async function openEmbedded(identity: Identity) {
-  await embedded.openIdentity(identity.id);
 }
 
 async function checkAuth(identity: Identity) {
@@ -163,6 +273,8 @@ function passwordLabel(identity: Identity): string {
   if (!store.identityPasswordSet(identity)) return t("app.passwordNotSet");
   return identity.passwordMode === "custom" ? t("app.passwordCustom") : t("app.passwordInherit");
 }
+
+import AppButton from "./ui/AppButton.vue";
 </script>
 
 <template>
@@ -171,20 +283,19 @@ function passwordLabel(identity: Identity): string {
       <div class="head-copy">
         <h1>{{ $t("app.identities") }}</h1>
         <p class="mono">
-          {{ store.activeSite?.baseUrl ?? "—" }} ·
-          {{ $t("app.identityCount", { count: store.siteIdentities.length }) }}
+          {{ $t("app.identityCount", { count: store.identities.length }) }}
           <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
         </p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="store.launchScopedCleanSession()">
+        <AppButton @click="store.launchScopedCleanSession()">
           <Globe :size="13" />
           {{ $t("app.cleanSession") }}
-        </button>
-        <button class="btn primary" type="button" data-tour="new-identity" @click="emit('newIdentity')">
+        </AppButton>
+        <AppButton variant="primary" data-tour="new-identity" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
-        </button>
+        </AppButton>
       </div>
     </header>
 
@@ -202,7 +313,7 @@ function passwordLabel(identity: Identity): string {
           :aria-selected="filter === 'all'"
           @click="filter = 'all'"
         >
-          {{ $t("app.filterAll") }} <span class="num mono">{{ store.siteIdentities.length }}</span>
+          {{ $t("app.filterAll") }} <span class="num mono">{{ store.identities.length }}</span>
         </button>
         <button
           type="button"
@@ -229,20 +340,49 @@ function passwordLabel(identity: Identity): string {
         <Search :size="12" />
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
-      <button
-        v-if="!selecting"
-        class="btn"
-        type="button"
+      <AppButton v-if="!selecting"
         :title="$t('app.batchSelectHint')"
-        @click="startSelecting"
-      >
+        @click="startSelecting">
         <CheckSquare :size="12" />
         {{ $t("app.batchSelect") }}
-      </button>
-      <button class="btn health" type="button" @click="emit('sessionHealth')">
+      </AppButton>
+      <AppButton class="health" @click="emit('sessionHealth')">
         <HeartPulse :size="13" />
         {{ $t("app.sessionHealth") }}
-      </button>
+      </AppButton>
+    </div>
+
+    <!--
+      Tag filters get their own strip, one line high, scrolled sideways.
+      A wrapping list was fine with three tags and pushed the cards off screen
+      with fifteen; a fixed-height strip keeps the page layout stable no matter
+      how many tags exist.
+    -->
+    <div v-if="filterTags.length" class="tag-filters">
+      <span class="filters-label">{{ $t("app.tags") }}</span>
+      <div class="chip-scroll">
+        <button
+          type="button"
+          class="tag-chip"
+          :class="{ on: tagFilter === null }"
+          @click="tagFilter = null"
+        >
+          {{ $t("app.filterAll") }}
+        </button>
+        <button
+          v-for="tag in filterTags"
+          :key="tag.id"
+          type="button"
+          class="tag-chip"
+          :class="{ on: tagFilter === tag.id }"
+          :style="{ '--tag': `var(--role-${tag.color})` }"
+          :aria-pressed="tagFilter === tag.id"
+          @click="tagFilter = tagFilter === tag.id ? null : tag.id"
+        >
+          <span class="chip-dot"></span>
+          {{ tag.name }}
+        </button>
+      </div>
     </div>
 
     <!--
@@ -258,104 +398,149 @@ function passwordLabel(identity: Identity): string {
         {{ $t("app.batchSelected", { count: selected.size }) }}
       </span>
       <span class="sel-note">{{ $t("app.batchLaunchNote") }}</span>
-      <button type="button" class="btn" @click="endSelecting">{{ $t("app.cancel") }}</button>
-      <button
-        type="button"
-        class="btn primary"
-        :disabled="!notRunningSelected.length || store.busy === 'launch'"
-        @click="launchSelected"
-      >
+      <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
+      <!-- Sharing accounts is a selection action too: pick the ones a colleague
+           needs, not the whole workspace. -->
+      <AppButton :disabled="selected.size === 0"
+        @click="openExport">
+        <Download :size="12" />
+        {{ $t("app.accountsExport") }}
+      </AppButton>
+      <AppButton variant="primary" :disabled="!notRunningSelected.length || store.busy === 'launch'"
+        @click="launchSelected">
         <Play :size="12" />
         {{ $t("app.batchLaunch", { count: notRunningSelected.length }) }}
-      </button>
+      </AppButton>
+    </div>
+
+    <div v-if="exportOpen" class="export-bar">
+      <div class="export-copy">
+        <p class="export-title">{{ $t("app.accountsExportTitle") }}</p>
+        <p class="export-note">{{ $t("app.accountsExportNote", { count: selected.size }) }}</p>
+      </div>
+      <label class="export-pass">
+        <span>{{ $t("app.accountsExportPassphrase") }}</span>
+        <input
+          v-model="exportPassphrase"
+          type="password"
+          autocomplete="new-password"
+          :placeholder="$t('app.accountsExportPassphraseHint')"
+        />
+      </label>
+      <p v-if="exportError" class="error">{{ exportError }}</p>
+      <div class="export-actions">
+        <AppButton @click="exportOpen = false">
+          {{ $t("app.cancel") }}
+        </AppButton>
+        <AppButton variant="primary" :disabled="exporting" @click="doExport">
+          {{ exportPassphrase ? $t("app.accountsExportWithPassword") : $t("app.accountsExportPlain") }}
+        </AppButton>
+      </div>
     </div>
 
     <div class="cards">
-      <button
-        v-for="identity in visibleIdentities"
-        :key="identity.id"
-        type="button"
-        class="id-card"
-        :class="{
-          running: Boolean(store.instanceFor(identity.id)),
-          picking: selecting,
-          picked: selected.has(identity.id),
-        }"
-        :style="{ '--role': roleVar(identity.color) }"
-        :aria-pressed="selecting ? selected.has(identity.id) : undefined"
-        @click="
-          selecting
-            ? toggleSelected(identity.id)
-            : store.instanceFor(identity.id)
-              ? launch(identity)
-              : emit('editIdentity', identity.id)
-        "
-      >
-        <!-- Selection mode hides the per-card actions: in that mode the card is a
-             checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
-        <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
-          <Check v-if="selected.has(identity.id)" :size="11" />
-        </span>
-        <div class="card-top">
-          <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
-          <span class="who">
-            <span class="name">{{ identity.name }}</span>
-            <span class="acct mono">{{ identity.username }}</span>
-          </span>
-          <span
-            class="state mono"
-            :class="{
-              live: Boolean(store.instanceFor(identity.id)),
-              warn: identity.status === 'expired',
-            }"
+      <!-- Grouped by site; a view may span sites, so the account page no longer
+           hides everything outside one global "current site". -->
+      <template v-for="group in groups" :key="group.siteId">
+        <div class="group-head">
+          <span class="group-name">{{ group.name }}</span>
+          <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
+          <span class="group-count mono">{{ group.people.length }}</span>
+          <button
+            v-if="group.siteId !== '__orphan__'"
+            type="button"
+            class="group-add"
+            :title="$t('app.newIdentityHere')"
+            @click="emit('newIdentity', group.siteId)"
           >
-            <span class="dot"></span>{{ statusLabel(identity) }}
+            <Plus :size="11" />
+          </button>
+        </div>
+        <button
+          v-for="identity in group.people"
+          :key="identity.id"
+          type="button"
+          class="id-card"
+          :class="{
+            running: Boolean(store.instanceFor(identity.id)),
+            picking: selecting,
+            picked: selected.has(identity.id),
+          }"
+          :style="{ '--role': roleVar(identity.color) }"
+          :aria-pressed="selecting ? selected.has(identity.id) : undefined"
+          @click="
+            selecting
+              ? toggleSelected(identity.id)
+              : store.instanceFor(identity.id)
+                ? launch(identity)
+                : emit('editIdentity', identity.id)
+          "
+        >
+          <!-- Selection mode hides the per-card actions: in that mode the card is a
+               checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
+          <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
+            <Check v-if="selected.has(identity.id)" :size="11" />
           </span>
-        </div>
+          <div class="card-top">
+            <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
+            <span class="who">
+              <span class="name">{{ identity.name }}</span>
+              <span class="acct mono">{{ identity.username }}</span>
+            </span>
+            <span
+              class="state mono"
+              :class="{
+                live: Boolean(store.instanceFor(identity.id)),
+                warn: identity.status === 'expired',
+              }"
+            >
+              <span class="dot"></span>{{ statusLabel(identity) }}
+            </span>
+          </div>
 
-        <div class="meta-row">
-          <span class="tag">{{ identity.role }}</span>
-          <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
-        </div>
+          <div class="meta-row">
+            <span class="tag">{{ identity.role }}</span>
+            <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
+          </div>
 
-        <div class="pw-row">
-          <span class="dots mono">{{ store.identityPasswordSet(identity) ? "••••••••" : "— — — —" }}</span>
-          <span class="inherit mono">{{ passwordLabel(identity) }}</span>
-        </div>
+          <div class="pw-row">
+            <span class="dots mono">{{ store.identityPasswordSet(identity) ? "••••••••" : "— — — —" }}</span>
+            <span class="inherit mono">{{ passwordLabel(identity) }}</span>
+          </div>
 
-        <div v-if="!selecting" class="card-actions">
-          <template v-if="store.instanceFor(identity.id)">
-            <span class="launch" @click.stop="launch(identity)">
+          <div v-if="!selecting" class="card-actions">
+            <template v-if="store.instanceFor(identity.id)">
+              <span class="launch" @click.stop="launch(identity)">
+                <Play :size="10" />
+                {{ $t("app.switchTo") }}
+              </span>
+              <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
+                <Square :size="9" />
+                {{ $t("app.stop") }}
+              </span>
+            </template>
+            <span v-else class="launch" @click.stop="launch(identity)">
               <Play :size="10" />
-              {{ $t("app.switchTo") }}
+              {{ $t("app.launch") }}
             </span>
-            <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
-              <Square :size="9" />
-              {{ $t("app.stop") }}
-            </span>
-          </template>
-          <span v-else class="launch" @click.stop="launch(identity)">
-            <Play :size="10" />
-            {{ $t("app.launch") }}
-          </span>
-          <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
-          <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
-          <span @click.stop="openEmbedded(identity)">{{ $t("app.embeddedBrowser") }}</span>
-          <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
-        </div>
-        <div v-else class="card-pick-note mono">
-          {{
-            store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
-          }}
-        </div>
-      </button>
+            <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
+            <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
+            <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
+          </div>
+          <div v-else class="card-pick-note mono">
+            {{
+              store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
+            }}
+          </div>
+        </button>
+      </template>
 
       <div v-if="!visibleIdentities.length" class="empty">
-        <p>{{ store.siteIdentities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
-        <button class="btn primary" type="button" @click="emit('newIdentity')">
+        <p>{{ store.identities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
+        <AppButton variant="primary" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
-        </button>
+        </AppButton>
       </div>
     </div>
   </section>
@@ -403,36 +588,6 @@ h1 {
   display: flex;
   gap: 8px;
   flex: 0 0 auto;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 12px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  transition: background 0.14s ease, border-color 0.14s ease;
-}
-
-.btn:hover {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-}
-
-.btn.primary {
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
-.btn.primary:hover {
-  filter: brightness(1.06);
 }
 
 .vault-banner {
@@ -534,6 +689,71 @@ h1 {
   text-decoration: underline;
 }
 
+/*
+ * Export panel. Sits under the selection bar and pushes the cards down only
+ * while it is open — this is a deliberate step, not a prompt that appears on its
+ * own, so it may take space.
+ */
+.export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: -4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  flex: 0 0 auto;
+}
+
+.export-copy {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.export-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.export-note {
+  margin: 3px 0 0;
+  font-size: 10.5px;
+  color: var(--faint);
+  line-height: 1.5;
+}
+
+.export-pass {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.export-pass input {
+  width: 190px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 11.5px;
+  outline: 0;
+}
+
+.export-pass input:focus {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
+.export-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
 .sel-count {
   font-size: 11px;
   color: var(--text-secondary);
@@ -569,9 +789,123 @@ h1 {
   overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* An explicit row floor: as an auto-sized grid item inside a scrolling flex
+     column, rows were compressed to the container's leftover height, and the
+     card's own `overflow: hidden` then clipped its action row. Rows must size to
+     their content — the grid scrolls, it does not shrink its cells. */
+  grid-auto-rows: min-content;
   gap: 10px;
   align-content: start;
   padding: 1px 2px 2px 1px;
+}
+
+/* Site group headers span the grid; they are the replacement for the old
+   title-bar site switcher, so they carry the address and the count. */
+.group-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 2px 2px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.group-head:first-child {
+  padding-top: 0;
+}
+
+.group-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.group-url {
+  font-size: 10.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.group-count {
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.group-add {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  border: 1px solid var(--line-soft);
+  color: var(--faint);
+}
+
+.group-add:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+/* One fixed line of chips that scrolls sideways. Wrapping made the toolbar grow
+   with every tag, pushing the cards out of view once a workspace had a dozen. */
+.tag-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -6px 0 12px;
+  flex: 0 0 auto;
+}
+
+.filters-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.chip-scroll {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 1px 0 2px;
+  scrollbar-width: thin;
+}
+
+.tag-chip {
+  --tag: var(--accent);
+  background: transparent;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.tag-chip.on {
+  border-color: color-mix(in srgb, var(--tag) 52%, var(--line));
+  background: color-mix(in srgb, var(--tag) 10%, transparent);
+  color: color-mix(in srgb, var(--tag) 78%, var(--text));
+}
+
+.chip-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tag);
+  opacity: 0.75;
 }
 
 .id-card {

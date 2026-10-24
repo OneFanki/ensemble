@@ -1,29 +1,28 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
 import { onClickOutside } from "@vueuse/core";
+import { AppWindow, Check, ChevronDown, Monitor } from "lucide-vue-next";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Check, ChevronDown, PanelsTopLeft, Settings2 } from "lucide-vue-next";
-import Logo from "./Logo.vue";
 import { useWorkspaceStore } from "../stores/workspace";
+import Logo from "./Logo.vue";
 
-defineProps<{ view: "browser" | "sites" | "identities" | "views" | "settings" }>();
-const emit = defineEmits<{ manageSites: []; openBrowser: []; menuOpen: [boolean] }>();
+const emit = defineEmits<{ menuOpen: [boolean] }>();
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
-const open = ref(false);
-const switcher = ref<HTMLElement | null>(null);
+const launchOpen = ref(false);
+const launchSwitcher = ref<HTMLElement | null>(null);
 
-onClickOutside(switcher, () => {
-  open.value = false;
+onClickOutside(launchSwitcher, () => {
+  launchOpen.value = false;
 });
 
 // A dropdown in the title bar extends over the browser stage, where the native
 // pages would paint on top of it. The browser page freezes its stage while this
 // is true so the menu stays readable.
-watch(open, (value) => emit("menuOpen", value));
+watch(launchOpen, (value) => emit("menuOpen", value));
 
 const engineLabel = computed(() => {
   if (!store.enginesReady) return t("app.scanningEngines");
@@ -32,94 +31,83 @@ const engineLabel = computed(() => {
   return `${engine.brand} ${engine.version ?? ""}`.trim();
 });
 
-function choose(id: string) {
-  store.setActiveSite(id);
-  open.value = false;
-}
+const launchTarget = computed(() => store.settings.launchTarget ?? "embedded");
 
-function manage() {
-  open.value = false;
-  emit("manageSites");
-}
+const launchOptions = computed(() => [
+  {
+    value: "embedded" as const,
+    label: t("app.launchTargetEmbedded"),
+    hint: t("app.launchTargetEmbeddedHint"),
+    icon: AppWindow,
+  },
+  {
+    value: "external" as const,
+    label: t("app.launchTargetExternal"),
+    hint: engineLabel.value,
+    icon: Monitor,
+  },
+]);
 
-function openEmbedded() {
-  emit("openBrowser");
+const launchLabel = computed(
+  () =>
+    launchOptions.value.find((option) => option.value === launchTarget.value)?.label ??
+    t("app.launchTargetEmbedded"),
+);
+
+function chooseLaunch(value: "embedded" | "external"): void {
+  launchOpen.value = false;
+  if (value === launchTarget.value) return;
+  void store.saveSettings({ launchTarget: value });
 }
 </script>
 
 <template>
   <header class="titlebar drag-region" :data-platform="platform">
-    <!--
-      The title bar itself is an OS drag region, which swallows mouse events, so
-      "click the empty bar to dismiss the menu" cannot be handled by a normal
-      listener. While the menu is open this no-drag layer covers the bar and
-      turns that click into a dismiss.
-    -->
-    <div v-if="open" class="dismiss-layer" @pointerdown="open = false"></div>
-
     <div class="brand no-drag" data-tour="brand">
       <Logo :size="22" />
       <span class="name">Ensemble</span>
       <span class="version mono">{{ store.snapshot?.appVersion ?? "0.1" }}</span>
     </div>
 
-    <div ref="switcher" class="env-switcher no-drag" data-tour="site-switcher">
-      <button
-        class="env-switch"
-        type="button"
-        :aria-expanded="open"
-        aria-haspopup="listbox"
-        @click="open = !open"
-      >
-        <span class="dot"></span>
-        <span class="env-name">{{ store.activeSite?.name ?? $t("app.notConfiguredSite") }}</span>
-        <ChevronDown :size="11" class="chevron" :class="{ flip: open }" />
-      </button>
-
-      <div v-if="open" class="env-menu" role="listbox">
-        <p class="menu-title">{{ $t("app.switchSite") }}</p>
-        <button
-          v-for="env in store.sites"
-          :key="env.id"
-          type="button"
-          role="option"
-          class="menu-item"
-          :class="{ active: env.id === store.activeSite?.id }"
-          :aria-selected="env.id === store.activeSite?.id"
-          @click="choose(env.id)"
-        >
-          <span class="dot"></span>
-          <span class="menu-copy">
-            <span class="menu-name">{{ env.name }}</span>
-            <span class="menu-url mono">{{ env.baseUrl }}</span>
-          </span>
-          <Check v-if="env.id === store.activeSite?.id" :size="12" class="check" />
-        </button>
-        <p v-if="!store.sites.length" class="menu-empty">{{ $t("app.emptySites") }}</p>
-
-        <div class="menu-sep"></div>
-        <button type="button" class="menu-action" @click="manage">
-          <Settings2 :size="12" />
-          {{ $t("app.manageSites") }}
-        </button>
-      </div>
-    </div>
-
     <div class="right no-drag">
-      <button
-        v-if="view !== 'browser'"
-        type="button"
-        class="embedded-open"
-        :title="$t('app.embeddedBrowserHint')"
-        @click="openEmbedded"
-      >
-        <PanelsTopLeft :size="13" />
-        <span>{{ $t("app.embeddedBrowser") }}</span>
-      </button>
-      <span class="engine-pill mono" :title="engineLabel">
-        <span class="led" :class="{ idle: !store.enginesReady || !store.defaultEngine }"></span>
-        <span class="engine-label">{{ engineLabel }}</span>
-      </span>
+      <!-- One switch decides where every launch goes. Adding a second button to
+           each management page made the same action look like two features. -->
+      <div ref="launchSwitcher" class="launch-switcher" data-tour="launch-target">
+        <button
+          type="button"
+          class="launch-switch"
+          :aria-expanded="launchOpen"
+          aria-haspopup="listbox"
+          :title="$t('app.launchTargetHint')"
+          @click="launchOpen = !launchOpen"
+        >
+          <AppWindow v-if="launchTarget === 'embedded'" :size="13" />
+          <Monitor v-else :size="13" />
+          <span class="launch-label">{{ launchLabel }}</span>
+          <ChevronDown :size="11" class="chevron" :class="{ flip: launchOpen }" />
+        </button>
+
+        <div v-if="launchOpen" class="launch-menu" role="listbox">
+          <p class="menu-title">{{ $t("app.launchTargetTitle") }}</p>
+          <button
+            v-for="option in launchOptions"
+            :key="option.value"
+            type="button"
+            role="option"
+            class="menu-item"
+            :class="{ active: option.value === launchTarget }"
+            :aria-selected="option.value === launchTarget"
+            @click="chooseLaunch(option.value)"
+          >
+            <component :is="option.icon" :size="13" class="launch-icon" />
+            <span class="menu-copy">
+              <span class="menu-name">{{ option.label }}</span>
+              <span class="menu-url">{{ option.hint }}</span>
+            </span>
+            <Check v-if="option.value === launchTarget" :size="12" class="check" />
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 </template>
@@ -165,63 +153,6 @@ function openEmbedded() {
   line-height: 1.2;
 }
 
-.env-switcher {
-  position: relative;
-  z-index: 6;
-  display: flex;
-  align-items: center;
-  height: 30px;
-}
-
-/*
- * Covers the draggable part of the bar while the site menu is open.
- * Window controls live in the right padding, so they are excluded.
- */
-.dismiss-layer {
-  position: absolute;
-  z-index: 5;
-  inset: 0 0 0 0;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar[data-platform="win32"] .dismiss-layer,
-.titlebar[data-platform="linux"] .dismiss-layer {
-  right: 146px;
-}
-
-/* Leave the macOS traffic lights clickable while the menu is open. */
-.titlebar[data-platform="darwin"] .dismiss-layer {
-  left: 86px;
-}
-
-/*
- * Every child is a flex item with line-height: 1 and the same vertical center.
- * The previous version mixed line-heights (`env-name` inherited 1.5 while the
- * badge had its own size), which made the row look a few pixels off-center even
- * though the box itself was centered.
- */
-.env-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  line-height: 1;
-  border: 1px solid var(--line);
-  background: var(--bg-elevated);
-  border-radius: var(--radius);
-  padding: 0 9px;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  max-width: 360px;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.env-switch:hover {
-  border-color: color-mix(in srgb, var(--line) 60%, var(--accent));
-  background: var(--surface-2);
-}
-
-.env-switch .dot,
 .menu-item .dot {
   width: 6px;
   height: 6px;
@@ -229,14 +160,6 @@ function openEmbedded() {
   flex: 0 0 6px;
   align-self: center;
   background: var(--accent);
-}
-
-.env-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1;
 }
 
 .chevron {
@@ -247,20 +170,6 @@ function openEmbedded() {
 
 .chevron.flip {
   transform: rotate(180deg);
-}
-
-.env-menu {
-  position: absolute;
-  z-index: 71;
-  top: calc(100% + 6px);
-  left: 0;
-  min-width: 288px;
-  max-width: 380px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
-  padding: 6px;
 }
 
 .menu-title {
@@ -357,51 +266,53 @@ function openEmbedded() {
   gap: 8px;
 }
 
-.embedded-open {
+.launch-switcher {
+  position: relative;
+  z-index: 6;
+}
+
+.launch-switch {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid var(--line-soft);
+  gap: 6px;
+  height: 26px;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 4px 10px;
-  background: transparent;
+  padding: 0 9px;
+  background: var(--bg-elevated);
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
 }
 
-.embedded-open:hover {
+.launch-switch:hover {
+  border-color: color-mix(in srgb, var(--line) 60%, var(--accent));
   background: var(--surface-2);
   color: var(--text);
 }
 
-.engine-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 10.5px;
-  color: var(--faint);
-  max-width: 260px;
-}
-
-.engine-label {
+.launch-label {
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.led {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--green);
-  flex: 0 0 5px;
+.launch-menu {
+  position: absolute;
+  z-index: 71;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 240px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 45%);
+  padding: 6px;
 }
 
-.led.idle {
-  background: var(--faint);
+.launch-icon {
+  color: var(--faint);
+  flex: 0 0 13px;
 }
 </style>

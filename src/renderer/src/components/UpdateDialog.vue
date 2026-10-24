@@ -8,6 +8,7 @@ import {
   type UpdateProgress,
 } from "@shared/update";
 import Modal from "./Modal.vue";
+import AppButton from "./ui/AppButton.vue";
 
 /**
  * The update prompt.
@@ -166,26 +167,18 @@ watch(
     </p>
 
     <template #footer>
-      <button type="button" class="btn" :disabled="phase === 'installing'" @click="later">
+      <AppButton :disabled="phase === 'installing'" @click="later">
         {{ $t("app.updateLater") }}
-      </button>
-      <button
-        type="button"
-        class="btn"
-        :disabled="phase === 'downloading' || phase === 'verifying' || phase === 'installing'"
-        @click="startDownload"
-      >
+      </AppButton>
+      <AppButton :disabled="phase === 'downloading' || phase === 'verifying' || phase === 'installing'"
+        @click="startDownload">
         <Download :size="12" />
         {{ phase === 'error' ? $t("app.updateRetry") : $t("app.updateDownload") }}
-      </button>
-      <button
-        type="button"
-        class="btn primary"
-        :disabled="phase !== 'ready' || !canAutoInstall"
-        @click="install"
-      >
+      </AppButton>
+      <AppButton variant="primary" :disabled="phase !== 'ready' || !canAutoInstall"
+        @click="install">
         {{ $t("app.updateInstall") }}
-      </button>
+      </AppButton>
     </template>
   </Modal>
 </template>
@@ -284,31 +277,6 @@ watch(
   font-size: 10px;
   color: var(--dim);
   word-break: break-all;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.btn.primary {
-  margin-left: auto;
-  background: linear-gradient(180deg, var(--accent-strong), color-mix(in srgb, var(--accent) 88%, black));
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
 }
 
 .spinning {

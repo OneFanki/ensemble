@@ -29,11 +29,14 @@ const panel = ref<HTMLElement | null>(null);
 const panelStyle = ref<Record<string, string>>({});
 const activeIndex = ref(-1);
 
-// The panel is teleported out of the trigger, so it needs its own listener.
-onClickOutside(root, () => {
-  open.value = false;
-});
-onClickOutside(panel, () => {
+// One handler for both parts. Two `onClickOutside` calls — one for the trigger,
+// one for the teleported panel — cancel each other out: the trigger's handler
+// fires while the panel is still mounted, unmounting it before the click lands.
+// The panel also marks itself `data-floating-panel`, so a dialog treats a press
+// inside it as belonging to the dialog instead of dismissing the whole form.
+onClickOutside(root, (event) => {
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-floating-panel]")) return;
   open.value = false;
 });
 
@@ -150,6 +153,7 @@ function onKeydown(event: KeyboardEvent) {
         class="select-panel"
         :style="panelStyle"
         role="listbox"
+        data-floating-panel
         @keydown="onKeydown"
       >
         <button
@@ -219,6 +223,12 @@ function onKeydown(event: KeyboardEvent) {
   flex-basis: 10px;
 }
 
+/* Dense triggers size to their text, so the chevron sits next to the label
+   instead of being pushed to the far edge of a fixed box. */
+.select.compact .select-value {
+  flex: 0 1 auto;
+}
+
 .select-value {
   flex: 1 1 auto;
   min-width: 0;
@@ -243,6 +253,10 @@ function onKeydown(event: KeyboardEvent) {
 
 .select-panel {
   position: fixed;
+  /* Reka UI locks the page with pointer-events: none while a dialog is open.
+     A teleported panel inherits that, which makes it both un-hoverable and
+     click-through onto the dialog fields underneath. */
+  pointer-events: auto;
   z-index: 90;
   max-height: 240px;
   overflow-y: auto;

@@ -1,5 +1,12 @@
 import type { EnsembleApi } from "@shared/ipc";
+import type { Flow, FlowDraft } from "@shared/flows";
 import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, findLayout, isFreeLayout } from "@shared/layouts";
+import {
+  DEFAULT_SEARCH_ENGINE_ID,
+  SEARCH_ENGINES,
+  type SearchEngine,
+} from "@shared/search";
+import { DEFAULT_NEW_TAB_BACKDROP, newTabBackdrop } from "@shared/newtab";
 import type {
   AppSettings,
   AuthBatchResult,
@@ -11,13 +18,15 @@ import type {
   LayoutId,
   LayoutPreset,
   LayoutPresetDraft,
+  LoginCaptureNotice,
   McpPatch,
+  McpStatus,
   PasswordOwner,
   ReloginBatchResult,
   SettingsPatch,
   Site,
   SiteDraft,
-  SiteTagDraft,
+  TagDraft,
   View,
   ViewDraft,
   WorkspaceSnapshot,
@@ -44,7 +53,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const loading = ref(true);
   const busy = ref<string | null>(null);
   const toasts = ref<ToastMessage[]>([]);
-  const activeSiteId = ref<string | null>(null);
+  /**
+   * The most recent login seen in an embedded page.
+   *
+   * One at a time on purpose: this is a "sort it out now" prompt, and a stack of
+   * them would sit over the page the user is still working in.
+   */
+  const loginCapture = ref<LoginCaptureNotice | null>(null);
+  /** Most recently used site; only a default for new drafts, not a global scope. */
+  const recentSiteId = ref<string | null>(null);
+  /**
+   * The MCP endpoint as the main process reports it.
+   *
+   * Shared rather than owned by the settings page: the status bar shows the same
+   * state on every screen, and a second copy would go stale the moment settings
+   * changed the port or switched the endpoint off.
+   */
+  const mcp = ref<McpStatus | null>(null);
   let toastSeq = 0;
 
   const api = computed(() => window.ensemble);
@@ -52,8 +77,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   function apply(next: WorkspaceSnapshot) {
     snapshot.value = next;
-    if (!activeSiteId.value || !next.sites.some((env) => env.id === activeSiteId.value)) {
-      activeSiteId.value = next.settings.lastSiteId ?? next.sites[0]?.id ?? null;
+    if (!recentSiteId.value || !next.sites.some((site) => site.id === recentSiteId.value)) {
+      recentSiteId.value = next.settings.lastSiteId ?? next.sites[0]?.id ?? null;
     }
   }
 
@@ -63,9 +88,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       apply(await window.ensemble.getWorkspace());
       window.ensemble.onWorkspaceChanged((next) => apply(next));
       window.ensemble.onAutoFilled((report) => announceAutoFill(report));
+      window.ensemble.onLoginCaptured((notice) => {
+        loginCapture.value = notice;
+      });
+      window.ensemble.onMcpChanged((status) => {
+        mcp.value = status;
+      });
     } finally {
       loading.value = false;
     }
+  }
+
+  /** Forgets a capture without saving it; the secret is dropped in the main process. */
+  async function dismissLoginCapture(notice: LoginCaptureNotice): Promise<void> {
+    if (loginCapture.value?.token === notice.token) loginCapture.value = null;
+    await window.ensemble.dismissLoginCapture(notice.token);
+  }
+
+  function clearLoginCapture(): void {
+    loginCapture.value = null;
   }
 
   function announceAutoFill(report: AutoFillReport) {
@@ -161,6 +202,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const sites = computed<Site[]>(() => snapshot.value?.sites ?? []);
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
   const views = computed<View[]>(() => snapshot.value?.views ?? []);
+  const flows = computed<Flow[]>(() => snapshot.value?.flows ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
   const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
   const settings = computed<AppSettings>(
@@ -175,7 +217,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         focusLabelEnabled: true,
         launchIntervalMs: 0,
         layout: "2x2",
+        launchTarget: "embedded",
         autoFillOnLaunch: true,
+        browserZoom: 100,
+        searchEngineId: DEFAULT_SEARCH_ENGINE_ID,
+        customSearchEngines: [],
+        newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
         closeToTray: true,
         onboardingVersion: 0,
         autoCheckUpdates: true,
@@ -190,22 +237,46 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     ...(snapshot.value?.layoutPresets ?? []),
   ]);
 
-  const activeSite = computed<Site | undefined>(
-    () => sites.value.find((env) => env.id === activeSiteId.value) ?? sites.value[0],
-  );
+  /**
+   * Engines a new tab can search with: the built-ins in code plus the user's.
+   *
+   * Built-ins live in code rather than in the store so an upgrade can fix a URL
+   * without a migration, and so a fresh install has something to search with
+   * before settings have ever been written.
+   */
+  const searchEngines = computed<SearchEngine[]>(() => [
+    ...SEARCH_ENGINES,
+    ...(settings.value.customSearchEngines ?? []),
+  ]);
 
-  const siteIdentities = computed<Identity[]>(() => {
-    const envId = activeSite.value?.id;
-    if (!envId) return [];
-    return identities.value.filter((identity) => identity.siteId === envId);
+  /** The engine the new-tab box uses; falls back if the choice disappeared. */
+  const searchEngine = computed<SearchEngine>(() => {
+    const id = settings.value.searchEngineId || DEFAULT_SEARCH_ENGINE_ID;
+    return (
+      searchEngines.value.find((engine) => engine.id === id) ??
+      searchEngines.value.find((engine) => engine.id === DEFAULT_SEARCH_ENGINE_ID) ??
+      SEARCH_ENGINES[0]!
+    );
   });
 
-  const siteViews = computed<View[]>(() =>
-    views.value.filter((view) => view.siteId === activeSite.value?.id),
+  /** Backdrop of the new-tab surface; a stale id falls back, it never throws. */
+  const newTabBackdropStyle = computed(
+    () => newTabBackdrop(settings.value.newTabBackground || DEFAULT_NEW_TAB_BACKDROP).css,
+  );
+
+  /**
+   * The site a new draft defaults to.
+   *
+   * There is no global "current site": the embedded browser takes any address,
+   * and a view spans sites. This is only the last site the user worked with, so
+   * "new identity" can pre-select something sensible.
+   */
+  const defaultSite = computed<Site | undefined>(
+    () => sites.value.find((site) => site.id === recentSiteId.value) ?? sites.value[0],
   );
 
   const defaultEngine = computed<Engine | undefined>(() => {
-    const preferredId = activeSite.value?.defaultEngineId;
+    const preferredId = defaultSite.value?.defaultEngineId;
     return (
       engines.value.find((engine) => engine.id === preferredId) ??
       engines.value.find((engine) => engine.cdp && engine.status === "ready") ??
@@ -213,9 +284,45 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     );
   });
 
-  function setActiveSite(id: string) {
-    activeSiteId.value = id;
+  function markSiteUsed(id: string) {
+    recentSiteId.value = id;
     void window.ensemble.saveSettings({ lastSiteId: id });
+  }
+
+  /** Identities of a site, in stored order. */
+  function identitiesOf(siteId: string): Identity[] {
+    return identities.value.filter((identity) => identity.siteId === siteId);
+  }
+
+  /** Identity counts per site, for the account page's group headers. */
+  const identityCountBySite = computed<Record<string, number>>(() => {
+    const counts: Record<string, number> = {};
+    for (const identity of identities.value) {
+      counts[identity.siteId] = (counts[identity.siteId] ?? 0) + 1;
+    }
+    return counts;
+  });
+
+  /**
+   * Tags that apply to an identity: its own plus its site's.
+   *
+   * Filtering with either level means a tag on the site covers every account
+   * there, without copying it onto each identity.
+   */
+  function tagsForIdentity(identity: Identity): string[] {
+    const site = sites.value.find((item) => item.id === identity.siteId);
+    return [...new Set([...(identity.tagIds ?? []), ...(site?.tagIds ?? [])])];
+  }
+
+  /** Tags of a view: its own plus every member's identity and site tags. */
+  function tagsForView(view: View): string[] {
+    const collected = new Set<string>(view.tagIds ?? []);
+    for (const identityId of view.identityIds) {
+      const identity = identities.value.find((item) => item.id === identityId);
+      if (!identity) continue;
+      for (const tagId of tagsForIdentity(identity)) collected.add(tagId);
+    }
+    return [...collected];
   }
 
   function identityPasswordSet(identity: Identity): boolean {
@@ -239,7 +346,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   function engineFor(identity: Identity): Engine | undefined {
-    const id = identity.engineId ?? activeSite.value?.defaultEngineId;
+    const id = identity.engineId ?? defaultSite.value?.defaultEngineId;
     return engines.value.find((engine) => engine.id === id) ?? defaultEngine.value;
   }
 
@@ -274,12 +381,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("site", () => window.ensemble.deleteSite(id));
   }
 
-  async function saveSiteTag(draft: SiteTagDraft) {
-    return run("site", () => window.ensemble.saveSiteTag(toPlain(draft)));
+  async function saveTag(draft: TagDraft) {
+    return run("site", () => window.ensemble.saveTag(toPlain(draft)));
   }
 
-  async function deleteSiteTag(id: string) {
-    return run("site", () => window.ensemble.deleteSiteTag(id));
+  async function deleteTag(id: string) {
+    return run("site", () => window.ensemble.deleteTag(id));
   }
 
   async function saveIdentity(draft: IdentityDraft) {
@@ -331,6 +438,29 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function deleteView(id: string) {
     return run("view", () => window.ensemble.deleteView(id));
+  }
+
+  async function saveFlow(draft: FlowDraft) {
+    return run("flow", () => window.ensemble.saveFlow(toPlain(draft)));
+  }
+
+  async function deleteFlow(id: string) {
+    return run("flow", () => window.ensemble.deleteFlow(id));
+  }
+
+  /**
+   * Runs a flow and reports the outcome.
+   *
+   * A failed step is not an IPC error — the run completed and says where it
+   * stopped — so this returns the result rather than letting `run` swallow it.
+   */
+  async function runFlow(input: {
+    flowId: string;
+    identityId?: string;
+    params?: Record<string, string>;
+    tabId?: string;
+  }) {
+    return run("flow", () => window.ensemble.runFlow(toPlain(input)));
   }
 
   /** Changes the stored preset of one view without opening its dialog. */
@@ -423,9 +553,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  /** Convenience wrapper for the views scoped to the active site. */
+  /** Opens a clean window on the most recently used site's login page. */
   async function launchScopedCleanSession() {
-    return launchCleanSession(activeSite.value?.id);
+    return launchCleanSession(defaultSite.value?.id);
   }
 
   async function stopInstance(id: string) {
@@ -582,11 +712,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   async function mcpStatus() {
-    return window.ensemble.mcpStatus();
+    mcp.value = await window.ensemble.mcpStatus();
+    return mcp.value;
   }
 
   async function updateMcp(patch: McpPatch) {
-    return run("mcp", () => window.ensemble.updateMcp(toPlain(patch)));
+    const next = await run("mcp", () => window.ensemble.updateMcp(toPlain(patch)));
+    if (next) mcp.value = next;
+    return next;
   }
 
   return {
@@ -594,6 +727,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loading,
     busy,
     toasts,
+    loginCapture,
+    dismissLoginCapture,
+    clearLoginCapture,
+    mcp,
     sites,
     identities,
     views,
@@ -602,16 +739,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     settings,
     instances,
     credentials,
-    activeSite,
-    activeSiteId,
-    siteIdentities,
-    siteViews,
+    defaultSite,
+    recentSiteId,
+    identitiesOf,
+    identityCountBySite,
+    tagsForIdentity,
+    tagsForView,
+    markSiteUsed,
     defaultEngine,
     layoutPresets,
+    searchEngines,
+    searchEngine,
+    newTabBackdropStyle,
     api,
     init,
     notify,
-    setActiveSite,
     identityPasswordSet,
     instanceFor,
     engineFor,
@@ -619,10 +761,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     presetName,
     viewLayoutPresets,
     isFreeLayout,
+    flows,
     saveSite,
     deleteSite,
-    saveSiteTag,
-    deleteSiteTag,
+    saveTag,
+    deleteTag,
     saveIdentity,
     deleteIdentity,
     rebuildIdentityProfile,
@@ -632,6 +775,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     copyViewToSite,
     saveView,
     deleteView,
+    saveFlow,
+    deleteFlow,
+    runFlow,
     setViewLayout,
     setViewSlots,
     saveLayoutPreset,

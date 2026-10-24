@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { RoleColor, Site, SiteTag } from "@shared/types";
-import { Check, Globe, Pencil, Plus, Tag, Trash2, Waypoints } from "lucide-vue-next";
-import { computed, nextTick, ref } from "vue";
+import type { Site, Tag as WorkspaceTag } from "@shared/types";
+import { Globe, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 const emit = defineEmits<{
   newSite: [];
   editSite: [id: string];
+  openSite: [id: string];
 }>();
 
 const store = useWorkspaceStore();
@@ -16,18 +17,7 @@ const confirm = useConfirmStore();
 const { t } = useI18n();
 
 const sites = computed(() => store.sites);
-const tags = computed(() => store.snapshot?.siteTags ?? []);
-
-const tagsOpen = ref(false);
-const newTagName = ref("");
-const newTagColor = ref<RoleColor>("slate");
-const tagError = ref("");
-/** Tag being renamed inline; `null` means no chip is in edit mode. */
-const renamingTagId = ref<string | null>(null);
-const renameTagName = ref("");
-const renameInput = ref<HTMLInputElement[] | null>(null);
-
-const TAG_COLORS: RoleColor[] = ["amber", "teal", "violet", "rose", "blue", "slate"];
+const tags = computed(() => store.snapshot?.tags ?? []);
 
 /**
  * Sites grouped by tag. A site with several tags appears in each group — the
@@ -35,7 +25,7 @@ const TAG_COLORS: RoleColor[] = ["amber", "teal", "violet", "rose", "blue", "sla
  * trailing "no tag" group.
  */
 const groups = computed(() => {
-  const result: Array<{ key: string; tag?: SiteTag; sites: Site[] }> = [];
+  const result: Array<{ key: string; tag?: WorkspaceTag; sites: Site[] }> = [];
   for (const tag of tags.value) {
     const members = sites.value.filter((site) => site.tagIds?.includes(tag.id));
     if (members.length > 0) result.push({ key: tag.id, tag, sites: members });
@@ -64,10 +54,6 @@ function passwordSet(site: Site): boolean {
   return Boolean(store.credentials?.site[site.id]);
 }
 
-function isActive(site: Site): boolean {
-  return store.activeSite?.id === site.id;
-}
-
 async function remove(site: Site) {
   const accepted = await confirm.ask({
     title: t("app.delete"),
@@ -79,50 +65,9 @@ async function remove(site: Site) {
   await store.deleteSite(site.id);
 }
 
-async function createTag() {
-  tagError.value = "";
-  const name = newTagName.value.trim();
-  if (!name) {
-    tagError.value = t("app.errTagName");
-    return;
-  }
-  // `run` in the store turns a rejection into a toast; a failed save comes back
-  // as `undefined`, so the draft is only cleared on success.
-  const saved = await store.saveSiteTag({ name, color: newTagColor.value });
-  if (saved !== undefined) newTagName.value = "";
-}
 
-/**
- * Renaming happens in place on the chip: a native prompt for one short string
- * was both out of place visually and impossible to style.
- */
-function startRenameTag(tag: SiteTag): void {
-  renamingTagId.value = tag.id;
-  renameTagName.value = tag.name;
-  void nextTick(() => renameInput.value?.[0]?.select());
-}
-
-async function commitRenameTag(tag: SiteTag): Promise<void> {
-  // Enter commits and unmounts the input, which also fires `blur`; the guard
-  // makes the second call a no-op instead of a duplicate save.
-  if (renamingTagId.value !== tag.id) return;
-  const name = renameTagName.value.trim();
-  renamingTagId.value = null;
-  if (!name || name === tag.name) return;
-  // `run` in the store reports failures as a toast; the chip keeps the old name.
-  await store.saveSiteTag({ id: tag.id, name, color: tag.color });
-}
-
-async function removeTag(tag: SiteTag) {
-  const accepted = await confirm.ask({
-    title: t("app.delete"),
-    body: t("app.deleteTagConfirm", { name: tag.name }),
-    confirmLabel: t("app.delete"),
-    tone: "danger",
-  });
-  if (!accepted) return;
-  await store.deleteSiteTag(tag.id);
-}
+import AppButton from "./ui/AppButton.vue";
+import IconButton from "./ui/IconButton.vue";
 </script>
 
 <template>
@@ -133,77 +78,24 @@ async function removeTag(tag: SiteTag) {
         <p class="head-note">{{ $t("app.sitesSubtitle") }}</p>
       </div>
       <div class="head-actions">
-        <button class="btn" type="button" @click="tagsOpen = !tagsOpen">
-          <Tag :size="13" />
-          {{ $t("app.siteTags") }}
-          <span v-if="tags.length" class="tag-count mono">{{ tags.length }}</span>
-        </button>
-        <button class="btn" type="button" @click="store.launchCleanSession()">
+        <AppButton @click="store.launchCleanSession()">
           <Globe :size="13" />
           {{ $t("app.cleanSessionNoEnv") }}
-        </button>
-        <button class="btn primary" type="button" data-tour="new-site" @click="emit('newSite')">
+        </AppButton>
+        <AppButton variant="primary" data-tour="new-site" @click="emit('newSite')">
           <Plus :size="13" />
           {{ $t("app.newSite") }}
-        </button>
+        </AppButton>
       </div>
     </header>
-
-    <!-- Tag management: create, rename, delete. Tags never affect sites' data. -->
-    <div v-if="tagsOpen" class="tag-panel">
-      <div class="tag-create">
-        <input
-          v-model="newTagName"
-          type="text"
-          :placeholder="$t('app.tagNamePlaceholder')"
-          @keydown.enter.prevent="createTag"
-        />
-        <span class="color-row">
-          <button
-            v-for="color in TAG_COLORS"
-            :key="color"
-            type="button"
-            class="color-dot"
-            :class="{ picked: newTagColor === color }"
-            :style="{ background: `var(--role-${color})` }"
-            :aria-label="color"
-            @click="newTagColor = color"
-          ></button>
-        </span>
-        <button class="btn" type="button" @click="createTag">{{ $t("app.tagCreate") }}</button>
-      </div>
-      <p v-if="tagError" class="tag-error">{{ tagError }}</p>
-
-      <div v-if="tags.length" class="tag-list">
-        <span v-for="tag in tags" :key="tag.id" class="tag-pill" :style="{ '--tag': `var(--role-${tag.color})` }">
-          <span class="tag-dot"></span>
-          <input
-            v-if="renamingTagId === tag.id"
-            ref="renameInput"
-            v-model="renameTagName"
-            class="tag-rename"
-            @keydown.enter.prevent="commitRenameTag(tag)"
-            @keydown.esc.prevent="renamingTagId = null"
-            @blur="commitRenameTag(tag)"
-          />
-          <button v-else type="button" class="tag-name" @click="startRenameTag(tag)">
-            {{ tag.name }}
-          </button>
-          <button type="button" class="tag-remove" :aria-label="$t('app.delete')" @click="removeTag(tag)">
-            ×
-          </button>
-        </span>
-      </div>
-      <p v-else class="tag-empty">{{ $t("app.noSiteTags") }}</p>
-    </div>
 
     <div v-if="!sites.length" class="empty">
       <Waypoints :size="22" />
       <p>{{ $t("app.emptySites") }}</p>
-      <button class="btn primary" type="button" @click="emit('newSite')">
+      <AppButton variant="primary" @click="emit('newSite')">
         <Plus :size="13" />
         {{ $t("app.newSite") }}
-      </button>
+      </AppButton>
     </div>
 
     <div v-else class="group-list">
@@ -225,15 +117,10 @@ async function removeTag(tag: SiteTag) {
             v-for="site in group.sites"
             :key="site.id"
             class="env-card"
-            :class="{ active: isActive(site) }"
           >
             <div class="card-head">
               <span class="env-dot"></span>
               <h2 class="env-name">{{ site.name }}</h2>
-              <span v-if="isActive(site)" class="active-chip">
-                <Check :size="10" />
-                {{ $t("app.currentSiteBadge") }}
-              </span>
             </div>
 
             <p class="env-url mono" :title="site.baseUrl">
@@ -261,26 +148,18 @@ async function removeTag(tag: SiteTag) {
             </dl>
 
             <div class="card-actions">
-              <button
-                v-if="!isActive(site)"
-                class="btn small"
-                type="button"
-                @click="store.setActiveSite(site.id)"
-              >
-                {{ $t("app.switchHere") }}
-              </button>
-              <span v-else class="active-note">{{ $t("app.alreadyActive") }}</span>
-              <button class="icon-btn" type="button" :aria-label="$t('app.edit')" @click="emit('editSite', site.id)">
+              <AppButton size="sm" :title="$t('app.openSiteHint')"
+                @click="store.markSiteUsed(site.id); emit('openSite', site.id)">
+                <Globe :size="12" />
+                {{ $t("app.openSite") }}
+              </AppButton>
+              <IconButton :ariaLabel="$t('app.edit')" @click="emit('editSite', site.id)">
                 <Pencil :size="12" />
-              </button>
-              <button
-                class="icon-btn danger"
-                type="button"
-                :aria-label="$t('app.delete')"
-                @click="remove(site)"
-              >
+              </IconButton>
+              <IconButton variant="danger" :ariaLabel="$t('app.delete')"
+                @click="remove(site)">
                 <Trash2 :size="12" />
-              </button>
+              </IconButton>
             </div>
           </article>
         </div>
@@ -342,6 +221,9 @@ h1 {
   margin-top: 10px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  /* Rows size to their card, never to leftover container height: the cards clip
+     their own overflow, so a compressed row silently eats their footer. */
+  grid-auto-rows: min-content;
   gap: 12px;
   align-content: start;
 }
@@ -376,130 +258,6 @@ h1 {
 
 .group-count {
   font-size: 10px;
-  color: var(--faint);
-}
-
-.tag-panel {
-  margin-top: 14px;
-  padding: 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.tag-create {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tag-create input {
-  flex: 1 1 180px;
-  min-width: 140px;
-  padding: 5px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-}
-
-.color-row {
-  display: flex;
-  gap: 4px;
-}
-
-.color-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-  padding: 0;
-}
-
-.color-dot.picked {
-  border-color: var(--text);
-}
-
-.tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.tag-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 4px 2px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--tag) 14%, var(--surface-2));
-  border: 1px solid color-mix(in srgb, var(--tag) 35%, transparent);
-}
-
-.tag-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--tag);
-  flex: 0 0 6px;
-}
-
-.tag-name {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
-}
-
-.tag-name:hover {
-  color: var(--text);
-}
-
-.tag-rename {
-  width: 96px;
-  border: none;
-  border-bottom: 1px solid var(--tag);
-  background: transparent;
-  color: var(--text);
-  font-size: 11px;
-  padding: 0 0 1px;
-  outline: none;
-}
-
-.tag-remove {
-  border: none;
-  background: transparent;
-  color: var(--faint);
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  padding: 0 3px;
-}
-
-.tag-remove:hover {
-  color: var(--red);
-}
-
-.tag-count {
-  font-size: 10px;
-  color: var(--faint);
-}
-
-.tag-error {
-  font-size: 11px;
-  color: var(--red);
-}
-
-.tag-empty {
-  font-size: 11px;
   color: var(--faint);
 }
 
@@ -613,34 +371,8 @@ h1 {
   padding-top: 10px;
 }
 
-.active-note {
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.icon-btn {
-  width: 28px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--faint);
-  border: 1px solid var(--line-soft);
-  margin-left: auto;
-}
-
 .icon-btn + .icon-btn {
   margin-left: 0;
-}
-
-.icon-btn:hover {
-  background: var(--surface-3);
-  color: var(--text-secondary);
-}
-
-.icon-btn.danger:hover {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 40%, var(--line));
 }
 
 .empty {
@@ -661,37 +393,8 @@ h1 {
   margin: 0;
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 11px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-}
-
 .btn.small {
   padding: 5px 10px;
-}
-
-.btn.primary {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
 }
 
 /* Base `.btn:hover` also matches primary buttons and would turn them gray. */

@@ -1,16 +1,18 @@
 <script setup lang="ts">
+import type { Engine, SiteDraft, Tag } from "@shared/types";
+import { Trash2 } from "lucide-vue-next";
 import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Trash2 } from "lucide-vue-next";
-import Modal from "./Modal.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
+import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
-import type { Engine, SiteDraft, SiteTag } from "@shared/types";
+import TagPicker from "./TagPicker.vue";
+import AppButton from "./ui/AppButton.vue";
 
 const props = defineProps<{
   draft: SiteDraft;
   engines: Engine[];
-  tags?: SiteTag[];
+  tags?: Tag[];
 }>();
 
 const emit = defineEmits<{
@@ -23,13 +25,6 @@ const form = reactive<SiteDraft>({ ...props.draft });
 const { t } = useI18n();
 const error = reactive<{ message: string | null }>({ message: null });
 const tags = computed(() => props.tags ?? []);
-
-function toggleTag(id: string) {
-  const current = form.tagIds ?? [];
-  form.tagIds = current.includes(id)
-    ? current.filter((tagId) => tagId !== id)
-    : [...current, id];
-}
 
 watch(
   () => props.draft,
@@ -118,22 +113,9 @@ function normalizePath(event: Event) {
         />
       </div>
 
-      <div v-if="tags.length" class="field">
-        <span class="label">{{ $t("app.siteTags") }}</span>
-        <div class="tag-row">
-          <button
-            v-for="tag in tags"
-            :key="tag.id"
-            type="button"
-            class="tag-toggle"
-            :class="{ on: form.tagIds?.includes(tag.id) }"
-            :style="{ '--tag': `var(--role-${tag.color})` }"
-            @click="toggleTag(tag.id)"
-          >
-            <span class="tag-dot"></span>
-            {{ tag.name }}
-          </button>
-        </div>
+      <div class="field">
+        <span class="label">{{ $t("app.tags") }}</span>
+        <TagPicker v-model="form.tagIds" :tags="tags" />
         <span class="hint">{{ $t("app.siteTagHint") }}</span>
       </div>
 
@@ -183,13 +165,13 @@ function normalizePath(event: Event) {
     </div>
 
     <template #footer>
-      <button v-if="form.id" type="button" class="btn danger" @click="emit('delete')">
+      <AppButton variant="danger" v-if="form.id" @click="emit('delete')">
         <Trash2 :size="12" />
         {{ $t("app.delete") }}
-      </button>
+      </AppButton>
       <span class="spacer"></span>
-      <button type="button" class="btn" @click="emit('close')">{{ $t("app.cancel") }}</button>
-      <button type="button" class="btn primary" @click="submit">{{ $t("app.save") }}</button>
+      <AppButton @click="emit('close')">{{ $t("app.cancel") }}</AppButton>
+      <AppButton variant="primary" @click="submit">{{ $t("app.save") }}</AppButton>
     </template>
   </Modal>
 </template>
@@ -227,44 +209,6 @@ function normalizePath(event: Event) {
 .hint {
   font-size: 10.5px;
   color: var(--faint);
-}
-
-.tag-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.tag-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--faint);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.tag-toggle.on {
-  color: var(--text-secondary);
-  border-color: color-mix(in srgb, var(--tag) 45%, var(--line));
-  background: color-mix(in srgb, var(--tag) 14%, transparent);
-}
-
-.tag-toggle .tag-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--tag);
-  flex: 0 0 6px;
-  opacity: 0.55;
-}
-
-.tag-toggle.on .tag-dot {
-  opacity: 1;
 }
 
 .input {
@@ -329,34 +273,6 @@ function normalizePath(event: Event) {
   color: var(--red);
 }
 
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 7px 12px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-}
-
-.btn.primary {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  font-weight: 500;
-}
-
 /* `.btn:hover` matches primary buttons too; restate the gradient so the button
    does not turn gray while the cursor is over it. */
 .btn.primary:hover:not(:disabled) {
@@ -368,11 +284,6 @@ function normalizePath(event: Event) {
   border-color: color-mix(in srgb, var(--accent) 80%, black);
   color: var(--accent-foreground);
   filter: brightness(1.07);
-}
-
-.btn.danger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
 }
 
 .spacer {

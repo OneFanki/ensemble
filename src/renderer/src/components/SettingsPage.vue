@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ImportPreview, ImportResult } from "@shared/transfer";
-import type { McpStatus } from "@shared/types";
+import type { BundleImportResult, BundlePreview } from "@shared/accounts-transfer";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   Bot,
@@ -19,11 +19,13 @@ import {
   Upload,
 } from "lucide-vue-next";
 import type { Component } from "vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
+import AppButton from "./ui/AppButton.vue";
 
 type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
 
@@ -37,6 +39,22 @@ const tabs: Array<{ id: SettingsTab; labelKey: string; icon: Component }> = [
 ];
 
 const activeTab = ref<SettingsTab>("general");
+
+/**
+ * A tab requested from outside (the status bar's AI entry).
+ *
+ * Keyed on the request counter, not the tab id: the settings page stays mounted,
+ * so returning to the requested tab after a manual change has to be a new
+ * request even though the prop still names the same tab.
+ */
+const props = defineProps<{ tab?: SettingsTab; tabSeq?: number }>();
+watch(
+  () => props.tabSeq,
+  () => {
+    if (props.tab) activeTab.value = props.tab;
+  },
+  { immediate: true },
+);
 
 const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
@@ -68,7 +86,10 @@ const importResult = ref<ImportResult | null>(null);
 const transferError = ref<string | null>(null);
 
 // ---- MCP ----
-const mcp = ref<McpStatus | null>(null);
+// `storeToRefs`, not destructuring: a plain `const { mcp } = store` snapshots the
+// value, so toggling the endpoint updated the main process while the segmented
+// control kept rendering the old state.
+const { mcp } = storeToRefs(store);
 const portDraft = ref("");
 const showToken = ref(false);
 
@@ -132,13 +153,12 @@ const mcpSnippet = computed(() => {
 });
 
 onMounted(async () => {
-  mcp.value = await store.mcpStatus();
+  await store.mcpStatus();
   portDraft.value = String(mcp.value?.port ?? "");
 });
 
 async function refreshMcp(patch: Parameters<typeof store.updateMcp>[0]) {
-  const next = await store.updateMcp(patch);
-  if (next) mcp.value = next;
+  await store.updateMcp(patch);
 }
 
 async function updatePort() {
@@ -198,6 +218,37 @@ async function doApplyImport() {
   importResult.value = result;
   importPreview.value = null;
   importPassphrase.value = "";
+}
+
+/* ---- account bundles: a colleague's shared logins, not a whole workspace ---- */
+const accountsPreview = ref<{ path: string; preview: BundlePreview } | null>(null);
+const accountsPassphrase = ref("");
+const accountsResult = ref<BundleImportResult | null>(null);
+
+async function pickAccountsImport(): Promise<void> {
+  transferError.value = null;
+  accountsResult.value = null;
+  const picked = await window.ensemble.pickAccountsImport();
+  if (picked.canceled || !picked.preview) return;
+  accountsPreview.value = { path: picked.path ?? "", preview: picked.preview };
+}
+
+async function applyAccountsImport(): Promise<void> {
+  transferError.value = null;
+  if (accountsPreview.value?.preview.hasSecrets && accountsPassphrase.value.length === 0) {
+    transferError.value = t("app.importNeedsPassphrase");
+    return;
+  }
+  try {
+    const outcome = await window.ensemble.applyAccountsImport(
+      accountsPreview.value?.preview.hasSecrets ? accountsPassphrase.value : undefined,
+    );
+    accountsResult.value = outcome.result;
+    accountsPreview.value = null;
+    accountsPassphrase.value = "";
+  } catch (error) {
+    transferError.value = (error as Error).message;
+  }
 }
 
 async function quitApp() {
@@ -295,14 +346,14 @@ async function submitMaster() {
             <p>{{ $t("app.engineHint") }}</p>
           </div>
           <div class="block-actions">
-            <button class="btn" type="button" :disabled="scanning" @click="store.addManualEngine()">
+            <AppButton :disabled="scanning" @click="store.addManualEngine()">
               <Plus :size="12" />
               {{ $t("app.addManual") }}
-            </button>
-            <button class="btn" type="button" :disabled="scanning" @click="store.scanEngines()">
+            </AppButton>
+            <AppButton :disabled="scanning" @click="store.scanEngines()">
               <RefreshCw :size="12" :class="{ spin: scanning }" />
               {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
-            </button>
+            </AppButton>
           </div>
         </div>
 
@@ -438,6 +489,49 @@ async function submitMaster() {
           </div>
         </div>
         <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.browserZoomSetting") }}</span>
+          <div class="interval">
+            <input
+              class="input mono interval-input"
+              type="number"
+              min="50"
+              max="200"
+              step="5"
+              :value="store.settings.browserZoom"
+              @change="
+                store.saveSettings({
+                  browserZoom: Math.min(
+                    200,
+                    Math.max(
+                      50,
+                      Math.round(Number(($event.target as HTMLInputElement).value)) || 100,
+                    ),
+                  ),
+                })
+              "
+            />
+            <span class="unit mono">%</span>
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.browserZoomNote") }}</p>
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.searchEngineSetting") }}</span>
+          <div class="select-slot">
+            <SelectField
+              :model-value="store.settings.searchEngineId"
+              :options="
+                store.searchEngines.map((engine) => ({ value: engine.id, label: engine.name }))
+              "
+              @update:model-value="
+                store.saveSettings({
+                  searchEngineId: $event ?? store.settings.searchEngineId,
+                })
+              "
+            />
+          </div>
+        </div>
+        <p class="fineprint">{{ $t("app.searchEngineNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.launchInterval") }}</span>
           <div class="interval">
@@ -597,9 +691,9 @@ async function submitMaster() {
         <p class="fineprint">{{ $t("app.headlessUaNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.tourLabel") }}</span>
-          <button class="btn" type="button" @click="emit('startTour')">
+          <AppButton @click="emit('startTour')">
             {{ $t("app.tourReplay") }}
-          </button>
+          </AppButton>
         </div>
         <p class="fineprint">{{ $t("app.tourReplayNote") }}</p>
       </section>
@@ -634,26 +728,22 @@ async function submitMaster() {
             autocomplete="current-password"
             @keyup.enter="submitUnlock"
           />
-          <button class="btn primary" type="button" :disabled="!unlockPassword" @click="submitUnlock">
+          <AppButton variant="primary" :disabled="!unlockPassword" @click="submitUnlock">
             {{ $t("app.unlock") }}
-          </button>
+          </AppButton>
         </div>
 
         <div v-else-if="store.credentials?.mode === 'master'" class="vault-actions">
-          <button class="btn" type="button" @click="toggleMasterForm('change')">{{ $t("app.changeMaster") }}</button>
-          <button class="btn" type="button" @click="store.lockVault()">{{ $t("app.lockNow") }}</button>
-          <button
-            v-if="store.credentials.canManageMaster"
-            class="btn"
-            type="button"
-            @click="store.removeMasterPassword()"
-          >
+          <AppButton @click="toggleMasterForm('change')">{{ $t("app.changeMaster") }}</AppButton>
+          <AppButton @click="store.lockVault()">{{ $t("app.lockNow") }}</AppButton>
+          <AppButton v-if="store.credentials.canManageMaster"
+            @click="store.removeMasterPassword()">
             {{ $t("app.backToKeychain") }}
-          </button>
+          </AppButton>
         </div>
 
         <div v-else-if="store.credentials?.canManageMaster" class="vault-actions">
-          <button class="btn" type="button" @click="toggleMasterForm('set')">{{ $t("app.setMaster") }}</button>
+          <AppButton @click="toggleMasterForm('set')">{{ $t("app.setMaster") }}</AppButton>
         </div>
 
         <div v-if="masterForm" class="master-form">
@@ -680,10 +770,10 @@ async function submitMaster() {
             autocomplete="new-password"
           />
           <div class="vault-actions">
-            <button class="btn primary" type="button" :disabled="!canSubmitMaster" @click="submitMaster">
+            <AppButton variant="primary" :disabled="!canSubmitMaster" @click="submitMaster">
               {{ masterForm === "set" ? $t("app.enableMaster") : $t("app.saveNewMaster") }}
-            </button>
-            <button class="btn" type="button" @click="resetMasterForm">{{ $t("app.cancel") }}</button>
+            </AppButton>
+            <AppButton @click="resetMasterForm">{{ $t("app.cancel") }}</AppButton>
           </div>
           <p v-if="masterError" class="error" role="alert">{{ masterError }}</p>
         </div>
@@ -739,10 +829,10 @@ async function submitMaster() {
               :placeholder="$t('app.exportPassphrasePlaceholder')"
               autocomplete="new-password"
             />
-            <button class="btn primary" type="button" :disabled="store.busy === 'transfer'" @click="doExport">
+            <AppButton variant="primary" :disabled="store.busy === 'transfer'" @click="doExport">
               <Download :size="12" />
               {{ $t("app.exportAction") }}
-            </button>
+            </AppButton>
             <p class="fineprint">{{ $t("app.exportNote") }}</p>
           </div>
 
@@ -765,23 +855,19 @@ async function submitMaster() {
                 autocomplete="current-password"
               />
               <div class="vault-actions">
-                <button
-                  class="btn primary"
-                  type="button"
-                  :disabled="store.busy === 'transfer'"
-                  @click="doApplyImport"
-                >
+                <AppButton variant="primary" :disabled="store.busy === 'transfer'"
+                  @click="doApplyImport">
                   {{ $t("app.importApply") }}
-                </button>
-                <button class="btn" type="button" @click="importPreview = null">
+                </AppButton>
+                <AppButton @click="importPreview = null">
                   {{ $t("app.cancel") }}
-                </button>
+                </AppButton>
               </div>
             </div>
-            <button v-else class="btn" type="button" :disabled="store.busy === 'transfer'" @click="doPickImport">
+            <AppButton v-else :disabled="store.busy === 'transfer'" @click="doPickImport">
               <Upload :size="12" />
               {{ $t("app.importPick") }}
-            </button>
+            </AppButton>
             <p v-if="importResult" class="fineprint">
               {{
                 $t("app.importResult", {
@@ -792,6 +878,56 @@ async function submitMaster() {
               }}
             </p>
             <p class="fineprint">{{ $t("app.importNote") }}</p>
+          </div>
+
+          <!-- A colleague's shared logins. Not a workspace file: it lands by
+               site URL and username, and carries only the accounts they chose. -->
+          <div class="transfer-col">
+            <h3>{{ $t("app.accountsImportTitle") }}</h3>
+            <div v-if="accountsPreview" class="preview-box">
+              <p class="preview-name mono">{{ accountsPreview.path }}</p>
+              <dl class="preview-counts">
+                <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ accountsPreview.preview.sites }}</dd></div>
+                <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ accountsPreview.preview.accounts }}</dd></div>
+                <div>
+                  <dt>{{ $t("app.accountsImportWithPasswords") }}</dt>
+                  <dd class="mono">{{ accountsPreview.preview.withPasswords }}</dd>
+                </div>
+              </dl>
+              <p v-if="accountsPreview.preview.matchingSites.length" class="fineprint">
+                {{ $t("app.accountsImportMatching", { names: accountsPreview.preview.matchingSites.join("、") }) }}
+              </p>
+              <input
+                v-if="accountsPreview.preview.hasSecrets"
+                v-model="accountsPassphrase"
+                type="password"
+                class="input mono"
+                :placeholder="$t('app.importPassphrasePlaceholder')"
+                autocomplete="current-password"
+              />
+              <div class="vault-actions">
+                <AppButton variant="primary" @click="applyAccountsImport">
+                  {{ $t("app.importApply") }}
+                </AppButton>
+                <AppButton @click="accountsPreview = null">
+                  {{ $t("app.cancel") }}
+                </AppButton>
+              </div>
+            </div>
+            <AppButton v-else @click="pickAccountsImport">
+              <Upload :size="12" />
+              {{ $t("app.accountsImportPick") }}
+            </AppButton>
+            <p v-if="accountsResult" class="fineprint">
+              {{
+                $t("app.accountsImportResult", {
+                  added: accountsResult.accountsAdded,
+                  updated: accountsResult.accountsUpdated,
+                  passwords: accountsResult.passwordsWritten,
+                })
+              }}
+            </p>
+            <p class="fineprint">{{ $t("app.accountsImportNote") }}</p>
           </div>
         </div>
         <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
@@ -835,7 +971,7 @@ async function submitMaster() {
         <div class="option-row">
           <span class="option-label">{{ $t("app.mcpPort") }}</span>
           <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
-          <button class="btn" type="button" @click="updatePort">{{ $t("app.mcpApplyPort") }}</button>
+          <AppButton @click="updatePort">{{ $t("app.mcpApplyPort") }}</AppButton>
         </div>
 
         <div class="option-row">
@@ -873,33 +1009,33 @@ async function submitMaster() {
           <p class="fineprint">{{ $t("app.mcpEndpoint") }}</p>
           <div class="copy-row">
             <code class="mono">{{ mcp.url }}</code>
-            <button class="btn" type="button" @click="copyText(mcp.url)">
+            <AppButton @click="copyText(mcp.url)">
               <Copy :size="11" />
               {{ $t("app.copyUrl") }}
-            </button>
+            </AppButton>
           </div>
           <div class="copy-row">
             <code class="mono token">{{ showToken ? mcp.token : "•".repeat(28) }}</code>
-            <button class="btn" type="button" @click="showToken = !showToken">
+            <AppButton @click="showToken = !showToken">
               {{ showToken ? $t("app.hide") : $t("app.show") }}
-            </button>
-            <button class="btn" type="button" @click="copyText(mcp.token, 'app.toastTokenCopied')">
+            </AppButton>
+            <AppButton @click="copyText(mcp.token, 'app.toastTokenCopied')">
               <Copy :size="11" />
               {{ $t("app.copyToken") }}
-            </button>
-            <button class="btn danger" type="button" @click="refreshMcp({ rotateToken: true })">
+            </AppButton>
+            <AppButton variant="danger" @click="refreshMcp({ rotateToken: true })">
               {{ $t("app.mcpRotate") }}
-            </button>
+            </AppButton>
           </div>
           <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
 
           <details class="snippet">
             <summary>{{ $t("app.mcpConfigTitle") }}</summary>
             <pre class="mono">{{ mcpSnippet }}</pre>
-            <button class="btn" type="button" @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
+            <AppButton @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
               <Bot :size="11" />
               {{ $t("app.mcpCopyConfig") }}
-            </button>
+            </AppButton>
           </details>
         </div>
         <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
@@ -912,7 +1048,7 @@ async function submitMaster() {
             <p>{{ $t("app.aboutTagline") }}</p>
           </div>
           <div class="block-actions">
-            <button class="btn danger" type="button" @click="quitApp">{{ $t("app.quitApp") }}</button>
+            <AppButton variant="danger" @click="quitApp">{{ $t("app.quitApp") }}</AppButton>
           </div>
         </div>
         <dl class="about">
@@ -931,27 +1067,19 @@ async function submitMaster() {
               {{ $t("app.updateManualHint") }}
             </p>          </div>
           <div class="update-actions">
-            <button
-              class="btn"
-              type="button"
-              :disabled="checkingUpdate"
-              @click="checkUpdate"
-            >
+            <AppButton :disabled="checkingUpdate"
+              @click="checkUpdate">
               <RefreshCw :size="12" :class="{ spinning: checkingUpdate }" />
               {{ checkingUpdate ? $t("app.updateChecking") : $t("app.updateCheck") }}
-            </button>
-            <button
-              class="btn"
-              type="button"
-              @click="openExternal(update?.url ?? RELEASES_PAGE_URL)"
-            >
+            </AppButton>
+            <AppButton @click="openExternal(update?.url ?? RELEASES_PAGE_URL)">
               <ExternalLink :size="12" />
               {{ $t("app.openReleases") }}
-            </button>
-            <button class="btn" type="button" @click="openExternal(REPOSITORY_URL)">
+            </AppButton>
+            <AppButton @click="openExternal(REPOSITORY_URL)">
               <Github :size="12" />
               {{ $t("app.openRepository") }}
-            </button>
+            </AppButton>
           </div>
         </div>
       </section>
@@ -1065,23 +1193,6 @@ async function submitMaster() {
   display: flex;
   gap: 7px;
   flex: 0 0 auto;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 6px 10px;
-  font-size: 11px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
 }
 
 .spin {
@@ -1383,7 +1494,9 @@ async function submitMaster() {
 
 .transfer {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Three groups now (workspace export, workspace import, account import), but
+     they wrap rather than squeeze: each column has a form in it. */
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 12px;
   margin-top: 12px;
 }

@@ -12,13 +12,34 @@ import {
 
 defineProps<{ open: boolean; title: string; description?: string; width?: string }>();
 const emit = defineEmits<{ close: [] }>();
+
+/**
+ * Keeps clicks on teleported dropdowns from closing the dialog.
+ *
+ * A select's list cannot live inside the dialog body (that body scrolls and
+ * would clip it), so it is teleported to `<body>` — which puts it *outside* the
+ * dialog element. Reka's dismissable layer sees a pointer-down outside its
+ * content and closes the whole dialog, so choosing an option threw the user out
+ * of the form. Any panel that floats above a dialog marks itself with
+ * `data-floating-panel`; a press inside one belongs to the dialog.
+ */
+function onPointerDownOutside(event: CustomEvent<{ originalEvent: PointerEvent }>): void {
+  const target = event.detail.originalEvent.target;
+  if (target instanceof Element && target.closest("[data-floating-panel]")) {
+    event.preventDefault();
+  }
+}
 </script>
 
 <template>
   <DialogRoot :open="open" @update:open="(value) => !value && emit('close')">
     <DialogPortal>
       <DialogOverlay class="overlay" />
-      <DialogContent class="content" :style="{ width: width ?? '560px' }">
+      <DialogContent
+        class="content"
+        :style="{ width: width ?? '560px' }"
+        @pointer-down-outside="onPointerDownOutside"
+      >
         <header class="head">
           <div class="copy">
             <DialogTitle class="title">{{ title }}</DialogTitle>

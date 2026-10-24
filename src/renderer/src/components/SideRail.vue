@@ -4,7 +4,9 @@ import {
   ChevronRight,
   Globe2,
   Layers,
+  ListChecks,
   Settings2,
+  Tag,
   Users,
   Waypoints,
 } from "lucide-vue-next";
@@ -13,11 +15,13 @@ import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 
+type RailView = "browser" | "sites" | "identities" | "views" | "flows" | "tags" | "settings";
+
 const props = defineProps<{
-  view: "browser" | "sites" | "identities" | "views" | "settings";
+  view: RailView;
 }>();
 const emit = defineEmits<{
-  navigate: [view: "browser" | "sites" | "identities" | "views" | "settings"];
+  navigate: [view: RailView];
 }>();
 
 const store = useWorkspaceStore();
@@ -31,10 +35,8 @@ const { t } = useI18n();
  * again, so the state is one boolean rather than a pin plus a hover.
  */
 const expanded = ref(window.localStorage.getItem("ensemble.rail.expanded") === "1");
-/** Site name shown above the footer summary, kept short for the narrow state. */
-const activeSiteName = computed(() => store.activeSite?.name ?? t("app.notConfiguredSite"));
-
 const runningCount = computed(() => embedded.tabs.length + store.instances.length);
+const tags = computed(() => store.snapshot?.tags ?? []);
 
 function navigate(next: typeof props.view): void {
   emit("navigate", next);
@@ -43,11 +45,6 @@ function navigate(next: typeof props.view): void {
 function toggleExpanded(): void {
   expanded.value = !expanded.value;
   window.localStorage.setItem("ensemble.rail.expanded", expanded.value ? "1" : "0");
-}
-
-/** English needs a singular form; a bare `{count} views` reads wrong at 1. */
-function countLabel(singularKey: string, pluralKey: string, count: number): string {
-  return t(count === 1 ? singularKey : pluralKey, { count });
 }
 </script>
 
@@ -96,7 +93,7 @@ function countLabel(singularKey: string, pluralKey: string, count: number): stri
       >
         <Users :size="15" class="nav-icon" />
         <span class="nav-label">{{ t("app.identities") }}</span>
-        <span class="nav-tail mono">{{ store.siteIdentities.length }}</span>
+        <span class="nav-tail mono">{{ store.identities.length }}</span>
         <span v-if="!expanded" class="tip">{{ t("app.identities") }}</span>
       </button>
       <button
@@ -109,9 +106,43 @@ function countLabel(singularKey: string, pluralKey: string, count: number): stri
       >
         <Layers :size="15" class="nav-icon" />
         <span class="nav-label">{{ t("app.views") }}</span>
-        <span class="nav-tail mono">{{ store.siteViews.length }}</span>
+        <span class="nav-tail mono">{{ store.views.length }}</span>
         <span v-if="!expanded" class="tip">{{ t("app.views") }}</span>
       </button>
+      <button
+        type="button"
+        data-nav="flows"
+        class="nav-item"
+        :class="{ active: view === 'flows' }"
+        :aria-label="t('app.flows')"
+        @click="navigate('flows')"
+      >
+        <ListChecks :size="15" class="nav-icon" />
+        <span class="nav-label">{{ t("app.flows") }}</span>
+        <span class="nav-tail mono">{{ store.flows.length }}</span>
+        <span v-if="!expanded" class="tip">{{ t("app.flows") }}</span>
+      </button>
+      <button
+        type="button"
+        data-nav="tags"
+        class="nav-item"
+        :class="{ active: view === 'tags' }"
+        :aria-label="t('app.tags')"
+        @click="navigate('tags')"
+      >
+        <Tag :size="15" class="nav-icon" />
+        <span class="nav-label">{{ t("app.tags") }}</span>
+        <span class="nav-tail mono">{{ tags.length }}</span>
+        <span v-if="!expanded" class="tip">{{ t("app.tags") }}</span>
+      </button>
+    </nav>
+
+    <!--
+      Settings is not a resource like the pages above: it is where you go to
+      change the app, not where you keep things. Pinning it to the bottom keeps
+      it out of the working set and leaves the nav column for what you use.
+    -->
+    <div class="rail-foot">
       <button
         type="button"
         data-nav="settings"
@@ -121,29 +152,9 @@ function countLabel(singularKey: string, pluralKey: string, count: number): stri
         @click="navigate('settings')"
       >
         <Settings2 :size="15" class="nav-icon" />
-        <span class="nav-label">{{ t("app.settings") }}</span>
+        <span class="nav-label">{{ t('app.settings') }}</span>
         <span v-if="!expanded" class="tip">{{ t("app.settings") }}</span>
       </button>
-    </nav>
-
-    <div class="rail-foot">
-      <template v-if="expanded">
-        <span class="foot-label">{{ t("app.currentSite") }}</span>
-        <span class="foot-site">
-          <span class="dot"></span>
-          <span class="foot-name">{{ activeSiteName }}</span>
-        </span>
-        <span class="foot-url mono" :title="store.activeSite?.baseUrl">
-          {{ store.activeSite?.baseUrl ?? "—" }}
-        </span>
-        <span class="foot-counts mono">
-          {{
-            countLabel("app.identityCountOne", "app.identityCount", store.siteIdentities.length)
-          }}
-          ·
-          {{ countLabel("app.viewCountOne", "app.viewCount", store.siteViews.length) }}
-        </span>
-      </template>
       <button
         type="button"
         class="rail-toggle"
@@ -318,50 +329,6 @@ function countLabel(singularKey: string, pluralKey: string, count: number): stri
   color: var(--text-secondary);
   background: var(--surface-2);
   border-color: var(--line);
-}
-
-.foot-label {
-  font-size: 9.5px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--faint);
-  margin-top: 12px;
-}
-
-.foot-site {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 6px;
-}
-
-.foot-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.foot-url {
-  font-size: 10px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.foot-counts {
-  font-size: 10px;
-  color: var(--faint);
 }
 
 </style>

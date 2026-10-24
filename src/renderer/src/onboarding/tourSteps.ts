@@ -29,7 +29,7 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: "site-switcher",
-    target: '[data-tour="site-switcher"]',
+    target: '[data-tour="launch-target"]',
     titleKey: "app.tourSiteSwitcherTitle",
     bodyKey: "app.tourSiteSwitcherBody",
     placement: "bottom",

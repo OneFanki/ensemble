@@ -5,6 +5,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
+import AppButton from "./ui/AppButton.vue";
 
 const emit = defineEmits<{ close: [] }>();
 
@@ -36,14 +37,14 @@ function healthOf(identity: Identity): Health {
 
 const counts = computed(() => {
   const totals = { "signed-in": 0, expired: 0, unknown: 0 };
-  for (const identity of store.siteIdentities) totals[healthOf(identity)] += 1;
+  for (const identity of store.identities) totals[healthOf(identity)] += 1;
   return totals;
 });
 
 /** Problems first: an expired session is what this panel exists to surface. */
 const ordered = computed(() => {
   const rank: Record<Health, number> = { expired: 0, unknown: 1, "signed-in": 2 };
-  return [...store.siteIdentities].sort((left, right) => {
+  return [...store.identities].sort((left, right) => {
     const delta = rank[healthOf(left)] - rank[healthOf(right)];
     return delta !== 0 ? delta : left.name.localeCompare(right.name);
   });
@@ -52,7 +53,7 @@ const ordered = computed(() => {
 const busy = computed(() => store.busy === "auth-check-all" || store.busy === "auth-relogin");
 
 async function checkAll() {
-  const result = await store.checkAllAuth(store.activeSite?.id);
+  const result = await store.checkAllAuth();
   if (result) report.value = result;
 }
 
@@ -61,7 +62,7 @@ async function reloginAll() {
   // submitted, so checking immediately would mostly report the page that is
   // about to navigate away. The list keeps the previous verdict until the user
   // runs "Check all" again.
-  await store.reloginExpired(store.activeSite?.id);
+  await store.reloginExpired();
 }
 
 function label(health: Health): string {
@@ -123,15 +124,15 @@ function statusText(identity: Identity): string {
     <p class="note">{{ $t('app.healthNote') }}</p>
 
     <template #footer>
-      <button class="btn" type="button" :disabled="busy" @click="reloginAll">
+      <AppButton :disabled="busy" @click="reloginAll">
         <LogIn :size="12" />
         {{ $t('app.healthRelogin') }}
-      </button>
+      </AppButton>
       <span class="spacer"></span>
-      <button class="btn primary" type="button" :disabled="busy" @click="checkAll">
+      <AppButton variant="primary" :disabled="busy" @click="checkAll">
         <RefreshCw :size="12" :class="{ spinning: store.busy === 'auth-check-all' }" />
         {{ $t('app.healthCheckAll') }}
-      </button>
+      </AppButton>
     </template>
   </Modal>
 </template>

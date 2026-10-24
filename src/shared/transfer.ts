@@ -1,3 +1,4 @@
+import type { Flow, FlowParam, FlowStep } from "./flows";
 import type { Site, Identity, LayoutPreset, View, SlotRect } from "./types";
 
 /**
@@ -22,6 +23,8 @@ export interface WorkspaceExportFile {
   sites: Site[];
   identities: Identity[];
   views: View[];
+  /** Saved step sequences; they belong to a site and travel with it. */
+  flows?: Flow[];
   layoutPresets: LayoutPreset[];
   secrets?: SealedSecrets;
 }
@@ -30,6 +33,7 @@ export interface ExportCounts {
   sites: number;
   identities: number;
   views: number;
+  flows: number;
   layoutPresets: number;
 }
 
@@ -139,8 +143,88 @@ function sanitizeView(raw: unknown): View {
   };
 }
 
-function sanitizePreset(raw: unknown): LayoutPreset | undefined {
+/**
+ * Validates one imported flow.
+ *
+ * Steps are copied field by field rather than spread: an export is a file a
+ * person can edit, and an unknown key surviving into the workspace would be
+ * carried around forever. Structural problems drop the step; a flow with no
+ * steps left is dropped entirely.
+ */
+function sanitizeFlow(raw: unknown): Flow | undefined {
   if (!isRecord(raw)) return undefined;
+  const id = optionalText(raw["id"], 80);
+  const siteId = optionalText(raw["siteId"], 80);
+  const name = optionalText(raw["name"], 80);
+  if (!id || !siteId || !name) return undefined;
+  const steps: FlowStep[] = Array.isArray(raw["steps"])
+    ? raw["steps"].flatMap((item): FlowStep[] => {
+        if (!isRecord(item)) return [];
+        const action = optionalText(item["action"], 20) as FlowStep["action"] | undefined;
+        if (!action) return [];
+        const step: FlowStep = { action };
+        const writable = step as unknown as Record<string, unknown>;
+        for (const key of [
+          "selector",
+          "label",
+          "text",
+          "role",
+          "note",
+          "value",
+          "url",
+          "option",
+          "key",
+          "expect",
+          "as",
+          "condition",
+        ] as const) {
+          const value = optionalText(item[key], 4000);
+          if (value) writable[key] = value;
+        }
+        if (item["exact"] === true) step.exact = true;
+        if (item["optional"] === true) step.optional = true;
+        if (typeof item["timeoutMs"] === "number" && Number.isFinite(item["timeoutMs"])) {
+          step.timeoutMs = item["timeoutMs"];
+        }
+        return [step];
+      })
+    : [];
+  if (steps.length === 0) return undefined;
+  const params: FlowParam[] = Array.isArray(raw["params"])
+    ? raw["params"].flatMap((item): FlowParam[] => {
+        if (!isRecord(item)) return [];
+        const paramName = optionalText(item["name"], 60);
+        const label = optionalText(item["label"], 80);
+        if (!paramName || !label) return [];
+        return [
+          {
+            name: paramName,
+            label,
+            ...(item["required"] === true ? { required: true } : {}),
+            ...(item["secret"] === true ? { secret: true } : {}),
+            ...(optionalText(item["default"], 2000)
+              ? { default: optionalText(item["default"], 2000) }
+              : {}),
+            ...(optionalText(item["description"], 300)
+              ? { description: optionalText(item["description"], 300) }
+              : {}),
+          },
+        ];
+      })
+    : [];
+  return {
+    id,
+    siteId,
+    name,
+    description: optionalText(raw["description"], 1000) ?? "",
+    params,
+    steps,
+    createdAt: optionalText(raw["createdAt"]) ?? new Date().toISOString(),
+    updatedAt: optionalText(raw["updatedAt"]) ?? new Date().toISOString(),
+  };
+}
+
+function sanitizePreset(raw: unknown): LayoutPreset | undefined {  if (!isRecord(raw)) return undefined;
   const name = optionalText(raw["name"], 60);
   const id = optionalText(raw["id"], 80);
   if (!name || !id || !Array.isArray(raw["slots"])) return undefined;
@@ -178,6 +262,11 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     ? input["identities"].map(sanitizeIdentity)
     : [];
   const views = Array.isArray(input["views"]) ? input["views"].map(sanitizeView) : [];
+  const flows = Array.isArray(input["flows"])
+    ? input["flows"]
+        .map(sanitizeFlow)
+        .filter((flow): flow is Flow => Boolean(flow))
+    : [];
   const layoutPresets = Array.isArray(input["layoutPresets"])
     ? input["layoutPresets"]
         .map(sanitizePreset)
@@ -194,6 +283,7 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     sites,
     identities,
     views,
+    flows,
     layoutPresets,
     ...(secrets && typeof secrets.payload === "string" ? { secrets } : {}),
   };
@@ -204,6 +294,7 @@ export function exportCounts(file: WorkspaceExportFile): ExportCounts {
     sites: file.sites.length,
     identities: file.identities.length,
     views: file.views.length,
+    flows: file.flows?.length ?? 0,
     layoutPresets: file.layoutPresets.length,
   };
 }

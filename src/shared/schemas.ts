@@ -41,7 +41,7 @@ export const siteDraftSchema = z.object({
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
 });
 
-export const siteTagDraftSchema = z.object({
+export const tagDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(40),
   color: z.enum(["amber", "teal", "violet", "rose", "blue", "slate"]),
@@ -59,7 +59,9 @@ export const identityDraftSchema = z.object({
   passwordMode: z.enum(["inherit", "custom", "reference"]),
   credentialFrom: z.string().min(1).optional(),
   password: z.string().max(500).optional(),
+  captureToken: z.string().min(1).max(80).optional(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
+  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
   note: z.string().max(1000).optional(),
 });
 
@@ -71,6 +73,7 @@ export const viewDraftSchema = z.object({
   layoutId: z.string().min(1).max(64),
   slotAssignments: z.record(z.string(), z.number().int().min(0).max(15)),
   paths: z.record(z.string(), pathValue),
+  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
 });
 
 export const layoutPresetDraftSchema = z.object({
@@ -79,11 +82,61 @@ export const layoutPresetDraftSchema = z.object({
   slots: z.array(slotRectSchema).min(1).max(12),
 });
 
+const flowTargetShape = {
+  selector: z.string().max(500).optional(),
+  label: z.string().max(120).optional(),
+  text: z.string().max(200).optional(),
+  role: z.string().max(40).optional(),
+  exact: z.boolean().optional(),
+};
+
+/**
+ * One flow step.
+ *
+ * The shape is deliberately flat: a discriminated union of eight variants would
+ * read better in code and be worse for the one consumer that matters — a model
+ * writing these steps from a tool schema. Every field is optional here and the
+ * cross-field rules live in `validateFlow`, so a missing `value` produces
+ * "第 2 步（fill）需要 value" instead of a zod path nobody can act on.
+ */
+export const flowStepSchema = z.object({
+  action: z.enum(["navigate", "fill", "click", "select", "press", "login", "wait", "read"]),
+  ...flowTargetShape,
+  note: z.string().max(200).optional(),
+  value: z.string().max(4000).optional(),
+  url: z.string().max(2000).optional(),
+  option: z.string().max(200).optional(),
+  key: z.string().max(20).optional(),
+  condition: z.enum(["visible", "hidden", "text", "url", "value"]).optional(),
+  expect: z.string().max(500).optional(),
+  timeoutMs: z.number().int().min(100).max(120_000).optional(),
+  optional: z.boolean().optional(),
+  as: z.string().max(60).optional(),
+});
+
+export const flowParamSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  label: z.string().trim().min(1).max(80),
+  required: z.boolean().optional(),
+  secret: z.boolean().optional(),
+  default: z.string().max(2000).optional(),
+  description: z.string().max(300).optional(),
+});
+
+export const flowDraftSchema = z.object({
+  id: z.string().optional(),
+  siteId: z.string().min(1),
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(1000).optional(),
+  params: z.array(flowParamSchema).max(20).optional(),
+  steps: z.array(flowStepSchema).min(1).max(100),
+});
+
 export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(["zh", "en"]).optional(),
   lastSiteId: z.string().optional(),
-  lastView: z.enum(["browser", "sites", "identities", "views"]).optional(),
+  lastView: z.enum(["browser", "sites", "identities", "views", "flows", "tags"]).optional(),
   lastViewId: z.string().optional(),
   restoreLastView: z.boolean().optional(),
   overlayEnabled: z.boolean().optional(),
@@ -91,7 +144,35 @@ export const settingsPatchSchema = z.object({
   focusLabelEnabled: z.boolean().optional(),
   launchIntervalMs: z.number().int().min(0).max(5000).optional(),
   layout: z.string().min(1).max(64).optional(),
+  launchTarget: z.enum(["embedded", "external"]).optional(),
   autoFillOnLaunch: z.boolean().optional(),
+  browserZoom: z.number().int().min(50).max(200).optional(),
+  /**
+   * Only http(s) templates with `%s` are accepted. A custom engine is stored
+   * data that later becomes a navigation target, so the shape is checked at the
+   * write boundary rather than when it is used.
+   */
+  searchEngineId: z.string().min(1).max(64).optional(),
+  customSearchEngines: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(64),
+        name: z.string().min(1).max(40),
+        urlTemplate: z
+          .string()
+          .min(1)
+          .max(1000)
+          .refine((value) => /^https?:\/\//i.test(value) && value.includes("%s")),
+      }),
+    )
+    .max(20)
+    .optional(),
+  /**
+   * Preset id, not a URL. The new-tab surface must paint before any fetch, so
+   * the set is closed and validated here; an unknown id falls back to the
+   * default at render time rather than breaking the page.
+   */
+  newTabBackground: z.string().min(1).max(32).optional(),
   closeToTray: z.boolean().optional(),
   onboardingVersion: z.number().int().min(0).max(999).optional(),
   autoCheckUpdates: z.boolean().optional(),

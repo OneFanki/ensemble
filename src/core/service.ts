@@ -2,7 +2,18 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  type AccountBundleFile,
+  accountBundleCounts,
+  accountSecretKey,
+  type BundleCounts,
+  type BundleImportResult,
+  type BundlePreview,
+  type BundleSecrets,
+  buildAccountBundle,
+} from "@shared/accounts-transfer";
 import { DEFAULT_SETTINGS } from "@shared/defaults";
+import { type Flow, type FlowDraft, validateFlow } from "@shared/flows";
 import { findLayout, isFreeLayout } from "@shared/layouts";
 import {
   EXPORT_FORMAT,
@@ -18,10 +29,6 @@ import type {
   AutoFillReport,
   CredentialPresence,
   Engine,
-  Site,
-  SiteDraft,
-  SiteTag,
-  SiteTagDraft,
   Identity,
   IdentityDraft,
   LaunchResult,
@@ -35,11 +42,15 @@ import type {
   ReloginBatchResult,
   ReloginResult,
   RunningInstance,
+  SettingsPatch,
+  Site,
+  SiteDraft,
+  Tag,
+  TagDraft,
   View,
   ViewCopyResult,
   ViewDraft,
   ViewRestoreOutcome,
-  SettingsPatch,
   WorkspaceSnapshot,
 } from "@shared/types";
 import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
@@ -57,9 +68,9 @@ import { t } from "./i18n/translate";
 import { findInstanceByPid } from "./launch/active-instance";
 import { cdpRegistry, launchBrowser, stopInstances } from "./launch/browser";
 import {
+  type HeadlessSession,
   openHeadlessSession,
   supportsHeadlessSession,
-  type HeadlessSession,
 } from "./launch/headless";
 import {
   activateWindowForPid,
@@ -265,9 +276,10 @@ export class WorkspaceService {
   snapshot(): WorkspaceSnapshot {
     return {
       sites: this.data.sites,
-      siteTags: this.data.siteTags,
+      tags: this.data.tags,
       identities: this.data.identities,
       views: this.data.views,
+      flows: this.data.flows,
       engines: this.engines,
       enginesReady: this.enginesReady,
       instances: [...this.liveInstances.values()],
@@ -358,46 +370,69 @@ export class WorkspaceService {
    */
   private resolveTagIds(tagIds: string[] | undefined): string[] | undefined {
     if (!tagIds) return undefined;
-    const known = new Set(this.data.siteTags.map((tag) => tag.id));
+    const known = new Set(this.data.tags.map((tag) => tag.id));
     const kept = [...new Set(tagIds.filter((id) => known.has(id)))];
     return kept.length > 0 ? kept : undefined;
   }
 
-  /** Creates or renames a site tag. Tags are display-only; nothing else changes. */
-  saveSiteTag(draft: SiteTagDraft): SiteTag {
+  /**
+   * Creates or renames a tag.
+   *
+   * One namespace for sites, identities and views: the same word describes the
+   * same grouping wherever it is applied.
+   */
+  saveTag(draft: TagDraft): Tag {
     const name = draft.name.trim();
     if (!name) throw new Error(t("error.tagName"));
-    const duplicate = this.data.siteTags.find(
+    const duplicate = this.data.tags.find(
       (tag) => tag.id !== draft.id && tag.name.toLowerCase() === name.toLowerCase(),
     );
     if (duplicate) throw new Error(t("error.tagDuplicate"));
     if (draft.id) {
-      const existing = this.data.siteTags.find((tag) => tag.id === draft.id);
+      const existing = this.data.tags.find((tag) => tag.id === draft.id);
       if (!existing) throw new Error(t("error.tagMissing"));
       existing.name = name;
       existing.color = draft.color;
       this.persist();
       return existing;
     }
-    const tag: SiteTag = {
+    const tag: Tag = {
       id: randomUUID(),
       name,
       color: draft.color,
       createdAt: new Date().toISOString(),
     };
-    this.data.siteTags.push(tag);
+    this.data.tags.push(tag);
     this.persist();
     return tag;
   }
 
-  /** Removes a tag and unlinks it from every site. Sites themselves are kept. */
-  deleteSiteTag(id: string): void {
-    this.data.siteTags = this.data.siteTags.filter((tag) => tag.id !== id);
+  /**
+   * Removes a tag and unlinks it from sites, identities and views.
+   *
+   * Nothing else changes: a tag never owned behaviour, so deleting one only
+   * changes how things are found.
+   */
+  deleteTag(id: string): void {
+    this.data.tags = this.data.tags.filter((tag) => tag.id !== id);
+    const now = new Date().toISOString();
     for (const site of this.data.sites) {
       if (!site.tagIds?.includes(id)) continue;
       const kept = site.tagIds.filter((tagId) => tagId !== id);
       site.tagIds = kept.length > 0 ? kept : undefined;
-      site.updatedAt = new Date().toISOString();
+      site.updatedAt = now;
+    }
+    for (const identity of this.data.identities) {
+      if (!identity.tagIds?.includes(id)) continue;
+      const kept = identity.tagIds.filter((tagId) => tagId !== id);
+      identity.tagIds = kept.length > 0 ? kept : undefined;
+      identity.updatedAt = now;
+    }
+    for (const view of this.data.views) {
+      if (!view.tagIds?.includes(id)) continue;
+      const kept = view.tagIds.filter((tagId) => tagId !== id);
+      view.tagIds = kept.length > 0 ? kept : undefined;
+      view.updatedAt = now;
     }
     this.persist();
   }
@@ -417,6 +452,10 @@ export class WorkspaceService {
     this.data.sites = this.data.sites.filter((item) => item.id !== id);
     this.data.identities = this.data.identities.filter((item) => item.siteId !== id);
     this.data.views = this.data.views.filter((item) => item.siteId !== id);
+    // A flow is a sequence of steps against one site's UI; without the site it
+    // has nowhere to run, so it goes with it rather than lingering as an entry
+    // that can only fail.
+    this.data.flows = this.data.flows.filter((item) => item.siteId !== id);
     for (const identityId of identityIds) {
       this.vault.clear({ kind: "identity", id: identityId });
     }
@@ -438,6 +477,7 @@ export class WorkspaceService {
     // anything: pointing at a missing or second-hand reference would produce an
     // identity that cannot log in and gives no clue why.
     const source = this.resolveCredentialSource(draft);
+    const tagIds = this.resolveTagIds(draft.tagIds);
 
     let identity: Identity;
     if (draft.id) {
@@ -459,6 +499,7 @@ export class WorkspaceService {
         credentialFrom: draft.passwordMode === "reference" ? draft.credentialFrom : undefined,
         // Extra login fields are site-specific, so they never follow a reference.
         extraFields: sanitizeLoginFields(draft.extraFields),
+        tagIds,
         note: source ? source.note : draft.note,
         updatedAt: now,
       });
@@ -478,6 +519,7 @@ export class WorkspaceService {
           ? { credentialFrom: draft.credentialFrom }
           : {}),
         extraFields: sanitizeLoginFields(draft.extraFields),
+        tagIds,
         note: source ? source.note : draft.note,
         status: "unknown",
         createdAt: now,
@@ -559,7 +601,12 @@ export class WorkspaceService {
     // no visible reason why. Materialise the resolved password into each of them
     // before the source disappears.
     const dependents = this.data.identities.filter((item) => item.credentialFrom === id);
-    const resolved = resolvePassword(this.vault, { id, passwordMode: "custom" }, "", this.data.identities);
+    const resolved = resolvePassword(
+      this.vault,
+      { id, passwordMode: "custom" },
+      "",
+      this.data.identities,
+    );
     for (const dependent of dependents) {
       if (resolved.password) {
         this.vault.set({ kind: "identity", id: dependent.id }, resolved.password);
@@ -636,11 +683,11 @@ export class WorkspaceService {
     const site = this.data.sites.find((item) => item.id === draft.siteId);
     if (!site) throw new Error(t("error.siteMissing"));
     // Members may come from any site: a view is one screen, not one deployment.
-    // `siteId` stays the view's home — it decides where the definition is listed
-    // and which site's accounts the picker opens by default.
+    // `siteId` stays the view's home — it records where the definition was made.
     const known = new Set(this.data.identities.map((identity) => identity.id));
     const identityIds = draft.identityIds.filter((id) => known.has(id));
     if (identityIds.length === 0) throw new Error(t("error.viewMembers"));
+    const tagIds = this.resolveTagIds(draft.tagIds);
 
     const layout = this.presetFor(draft.layoutId);
     const slotAssignments = this.sanitizeAssignments(layout, identityIds, draft.slotAssignments);
@@ -654,6 +701,7 @@ export class WorkspaceService {
         layoutId: layout.id,
         slotAssignments,
         paths: draft.paths,
+        tagIds,
         updatedAt: now,
       });
       this.persist();
@@ -668,6 +716,7 @@ export class WorkspaceService {
       layoutId: layout.id,
       slotAssignments,
       paths: draft.paths,
+      tagIds,
       createdAt: now,
       updatedAt: now,
     };
@@ -754,6 +803,8 @@ export class WorkspaceService {
       // rather than copied over — the ids are different people on this site.
       slotAssignments: {},
       paths: {},
+      // Tags describe the arrangement, not the site it came from, so they follow.
+      ...(source.tagIds ? { tagIds: [...source.tagIds] } : {}),
       copiedFrom: { siteId: source.siteId, viewId: source.id },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -772,17 +823,69 @@ export class WorkspaceService {
     this.persist();
   }
 
+  /**
+   * Creates or updates a flow.
+   *
+   * Validation happens here rather than in the dialog so every entry point —
+   * UI, IPC and MCP — rejects the same definitions with the same messages. A
+   * flow that references an undefined variable would otherwise fail halfway
+   * through a run, after it has already touched the page.
+   */
+  saveFlow(draft: FlowDraft): Flow {
+    const site = this.data.sites.find((item) => item.id === draft.siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    const name = draft.name.trim();
+    if (!name) throw new Error("流程名称不能为空");
+    const params = (draft.params ?? []).map((param) => ({ ...param }));
+    const steps = draft.steps.map((step) => ({ ...step }));
+    const problems = validateFlow({ params, steps });
+    if (problems.length > 0) throw new Error(problems.join("；"));
+
+    const now = new Date().toISOString();
+    if (draft.id) {
+      const existing = this.data.flows.find((item) => item.id === draft.id);
+      if (!existing) throw new Error("流程不存在");
+      Object.assign(existing, {
+        siteId: draft.siteId,
+        name,
+        description: (draft.description ?? "").trim(),
+        params,
+        steps,
+        updatedAt: now,
+      });
+      this.persist();
+      return existing;
+    }
+
+    const flow: Flow = {
+      id: randomUUID(),
+      siteId: draft.siteId,
+      name,
+      description: (draft.description ?? "").trim(),
+      params,
+      steps,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.data.flows.push(flow);
+    this.persist();
+    return flow;
+  }
+
+  deleteFlow(id: string): void {
+    const before = this.data.flows.length;
+    this.data.flows = this.data.flows.filter((item) => item.id !== id);
+    if (this.data.flows.length === before) throw new Error("流程不存在");
+    this.persist();
+  }
+
   /** Switching the preset clears assignments that no longer point at a real slot. */
   setViewLayout(viewId: string, layoutId: LayoutId): void {
     const view = this.data.views.find((item) => item.id === viewId);
     if (!view) throw new Error(t("error.viewMissing"));
     const layout = this.presetFor(layoutId);
     view.layoutId = layout.id;
-    view.slotAssignments = this.sanitizeAssignments(
-      layout,
-      view.identityIds,
-      view.slotAssignments,
-    );
+    view.slotAssignments = this.sanitizeAssignments(layout, view.identityIds, view.slotAssignments);
     view.updatedAt = new Date().toISOString();
     this.persist();
   }
@@ -913,6 +1016,11 @@ export class WorkspaceService {
         slotAssignments: { ...item.slotAssignments },
         paths: { ...item.paths },
       })),
+      flows: this.data.flows.map((flow) => ({
+        ...flow,
+        params: flow.params.map((param) => ({ ...param })),
+        steps: flow.steps.map((step) => ({ ...step })),
+      })),
       layoutPresets: this.data.layoutPresets.map((item) => ({
         ...item,
         slots: item.slots.map((slot) => ({ ...slot })),
@@ -945,9 +1053,7 @@ export class WorkspaceService {
    * site is missing are skipped rather than attached to the wrong scope.
    */
   importWorkspace(file: WorkspaceExportFile, passphrase?: string): ImportResult {
-    let secrets:
-      | { site: Record<string, string>; identity: Record<string, string> }
-      | undefined;
+    let secrets: { site: Record<string, string>; identity: Record<string, string> } | undefined;
     if (file.secrets) {
       if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
       try {
@@ -1027,9 +1133,37 @@ export class WorkspaceService {
       }
     }
 
+    /*
+     * Flows merge by id like everything else, but a flow whose site is not in
+     * this workspace is skipped: the steps are written against that site's UI,
+     * and re-homing them onto a different site would point them at a page they
+     * were never meant for.
+     */
+    for (const flow of file.flows ?? []) {
+      if (!siteIds.has(flow.siteId)) {
+        skipped += 1;
+        continue;
+      }
+      const existing = this.data.flows.find((item) => item.id === flow.id);
+      if (existing) {
+        Object.assign(existing, flow, {
+          params: flow.params.map((param) => ({ ...param })),
+          steps: flow.steps.map((step) => ({ ...step })),
+          updatedAt: new Date().toISOString(),
+        });
+        updated += 1;
+      } else {
+        this.data.flows.push({
+          ...flow,
+          params: flow.params.map((param) => ({ ...param })),
+          steps: flow.steps.map((step) => ({ ...step })),
+        });
+        added += 1;
+      }
+    }
+
     const builtinIds = new Set(["free", "1x1", "2x1", "1x2", "2x2", "3x1"]);
-    for (const preset of file.layoutPresets) {
-      if (builtinIds.has(preset.id)) continue;
+    for (const preset of file.layoutPresets) {      if (builtinIds.has(preset.id)) continue;
       const existing = this.data.layoutPresets.find((item) => item.id === preset.id);
       if (existing) {
         Object.assign(existing, preset, { builtin: false });
@@ -1061,6 +1195,219 @@ export class WorkspaceService {
       updated,
       importedSecrets,
       skipped,
+    };
+  }
+
+  // ---------- account bundles (share a subset of accounts) ----------
+
+  /**
+   * Packages selected sites/accounts for another person.
+   *
+   * Separate from `exportWorkspace` on purpose: that one is a machine-migration
+   * file (everything, ids preserved). This one carries only what was chosen, and
+   * leaves ids out of the matching path so it can land in someone else's
+   * workspace, where the ids differ.
+   */
+  exportAccounts(input: {
+    siteIds: string[];
+    identityIds: string[];
+    passphrase?: string;
+    note?: string;
+  }): { file: AccountBundleFile; counts: BundleCounts } {
+    const wantedSites = new Set(input.siteIds);
+    const wantedIdentities = new Set(input.identityIds);
+    // An account selection implies its site, otherwise the account would have
+    // nowhere to attach on the receiving side.
+    for (const identity of this.data.identities) {
+      if (wantedIdentities.has(identity.id)) wantedSites.add(identity.siteId);
+    }
+    const sites = this.data.sites.filter((site) => wantedSites.has(site.id));
+    if (sites.length === 0) throw new Error("没有选择任何站点或账号");
+
+    const identities = this.data.identities.filter(
+      (identity) =>
+        wantedSites.has(identity.siteId) &&
+        (wantedIdentities.size === 0 || wantedIdentities.has(identity.id)),
+    );
+
+    let passwords: BundleSecrets | undefined;
+    if (input.passphrase) {
+      if (this.vault.locked) throw new Error(t("vault.locked"));
+      passwords = { site: {}, identity: {} };
+      for (const site of sites) {
+        const password = this.vault.get({ kind: "site", id: site.id });
+        if (password) passwords.site[site.baseUrl] = password;
+      }
+      for (const identity of identities) {
+        const site = sites.find((item) => item.id === identity.siteId);
+        if (!site) continue;
+        const resolved = resolvePassword(
+          this.vault,
+          identity,
+          identity.siteId,
+          this.data.identities,
+        );
+        if (resolved.password) {
+          passwords.identity[accountSecretKey(site.baseUrl, identity.username)] = resolved.password;
+        }
+      }
+    }
+
+    const file = buildAccountBundle({
+      sites,
+      identities,
+      ...(passwords ? { passwords } : {}),
+      ...(input.note ? { note: input.note } : {}),
+    });
+    // The plaintext never becomes part of the bundle object; only the sealed
+    // blob is attached, and only after this point.
+    if (input.passphrase && passwords) {
+      const kdf = createKdfParams();
+      file.secrets = {
+        kdf,
+        payload: seal(deriveKey(input.passphrase, kdf), JSON.stringify(passwords)),
+      };
+    }
+    return { file, counts: accountBundleCounts(file) };
+  }
+
+  /**
+   * Decrypts a bundle's password blob.
+   *
+   * Lives here rather than in `shared/` because the crypto helpers belong to the
+   * core layer; the shared module only describes the format.
+   */
+  private openBundleSecrets(file: AccountBundleFile, passphrase: string): BundleSecrets {
+    if (!file.secrets) return { site: {}, identity: {} };
+    try {
+      const parsed = JSON.parse(
+        open(deriveKey(passphrase, file.secrets.kdf), file.secrets.payload),
+      ) as { site?: Record<string, string>; identity?: Record<string, string> };
+      return { site: parsed.site ?? {}, identity: parsed.identity ?? {} };
+    } catch {
+      throw new Error("口令不对，无法解开这个文件里的密码");
+    }
+  }
+
+  /** What importing this bundle would touch, so the user can decide. */
+  previewAccountBundle(file: AccountBundleFile): BundlePreview {
+    const matchingSites = file.sites
+      .filter((bundled) => this.data.sites.some((site) => site.baseUrl === bundled.baseUrl))
+      .map((bundled) => bundled.name);
+    return {
+      ...accountBundleCounts(file),
+      version: file.version,
+      exportedAt: file.exportedAt,
+      hasSecrets: Boolean(file.secrets),
+      matchingSites,
+    };
+  }
+
+  /**
+   * Merges a bundle into this workspace.
+   *
+   * Sites are matched by base URL and accounts by username within the resolved
+   * site: the sender's ids mean nothing here, and matching on them would either
+   * overwrite an unrelated local account or create a duplicate of one.
+   */
+  importAccountBundle(file: AccountBundleFile, passphrase?: string): BundleImportResult {
+    let secrets: BundleSecrets | undefined;
+    if (file.secrets) {
+      if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
+      if (this.vault.locked) throw new Error(t("vault.locked"));
+      secrets = this.openBundleSecrets(file, passphrase);
+    }
+
+    let sitesAdded = 0;
+    let accountsAdded = 0;
+    let accountsUpdated = 0;
+    let passwordsWritten = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+
+    for (const bundled of file.sites) {
+      let site = this.data.sites.find((item) => item.baseUrl === bundled.baseUrl);
+      if (!site) {
+        site = {
+          id: randomUUID(),
+          name: bundled.name,
+          baseUrl: bundled.baseUrl,
+          loginPath: bundled.loginPath,
+          ...(bundled.authCheckPath ? { authCheckPath: bundled.authCheckPath } : {}),
+          autoSubmit: bundled.autoSubmit,
+          extraFields: bundled.extraFields.map((field) => ({ ...field })),
+          tagIds: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.data.sites.push(site);
+        sitesAdded += 1;
+      }
+      const sitePassword = secrets?.site[bundled.baseUrl];
+      if (bundled.hasPassword && sitePassword) {
+        this.vault.set({ kind: "site", id: site.id }, sitePassword);
+        passwordsWritten += 1;
+      }
+
+      for (const account of bundled.accounts) {
+        const secretKey = accountSecretKey(bundled.baseUrl, account.username);
+        const existing = this.data.identities.find(
+          (item) =>
+            item.siteId === site.id &&
+            item.username.trim().toLowerCase() === account.username.trim().toLowerCase(),
+        );
+        let identity: Identity;
+        if (existing) {
+          existing.name = account.name;
+          existing.role = account.role;
+          existing.color = account.color;
+          existing.startPath = account.startPath;
+          if (account.note) existing.note = account.note;
+          existing.extraFields = account.extraFields.map((field) => ({ ...field }));
+          if (account.hasPassword) existing.passwordMode = "custom";
+          existing.updatedAt = now;
+          identity = existing;
+          accountsUpdated += 1;
+        } else {
+          identity = {
+            id: randomUUID(),
+            siteId: site.id,
+            name: account.name,
+            username: account.username,
+            role: account.role,
+            color: account.color,
+            passwordMode: account.hasPassword ? "custom" : "inherit",
+            status: "unknown",
+            startPath: account.startPath,
+            extraFields: account.extraFields.map((field) => ({ ...field })),
+            ...(account.note ? { note: account.note } : {}),
+            createdAt: now,
+            updatedAt: now,
+          };
+          this.data.identities.push(identity);
+          accountsAdded += 1;
+        }
+
+        const password = secrets?.identity[secretKey];
+        if (account.hasPassword && password) {
+          this.vault.set({ kind: "identity", id: identity.id }, password);
+          passwordsWritten += 1;
+        } else if (account.hasPassword) {
+          // The bundle says it has a password but none decrypted: say so instead
+          // of silently saving an account that can never log in.
+          skipped += 1;
+        }
+      }
+    }
+
+    this.persist();
+    return {
+      ...accountBundleCounts(file),
+      sitesAdded,
+      accountsAdded,
+      accountsUpdated,
+      skipped,
+      passwordsWritten,
     };
   }
 
@@ -1101,8 +1448,7 @@ export class WorkspaceService {
     this.guardVaultUnlocked();
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) return undefined;
-    return resolvePassword(this.vault, identity, identity.siteId, this.data.identities)
-      .password;
+    return resolvePassword(this.vault, identity, identity.siteId, this.data.identities).password;
   }
 
   unlockVault(password: string): boolean {
@@ -1356,21 +1702,23 @@ export class WorkspaceService {
   async launchView(viewId: string): Promise<LaunchResult> {
     const view = this.data.views.find((item) => item.id === viewId);
     if (!view) throw new Error(t("error.viewMissing"));
-    const site = this.data.sites.find((item) => item.id === view.siteId);
-    if (!site) throw new Error(t("error.siteMissing"));
 
     const members = view.identityIds
       .map((id) => this.data.identities.find((identity) => identity.id === id))
       .filter((identity): identity is Identity => Boolean(identity));
     if (members.length === 0) throw new Error(t("error.viewMembers"));
-    // External windows are one launch per site (different engines and start
-    // URLs), so a view that spans sites is only supported on the built-in
-    // surface, where every tab is its own WebContentsView.
-    const sites = new Set(members.map((identity) => identity.siteId));
-    if (sites.size > 1) throw new Error(t("error.viewMixedSitesExternal"));
+    // A view may span sites: external windows are one window per identity, so
+    // each one opens against its own site. The shared layout still holds,
+    // because slot positions are screen coordinates, not per-site ones.
+    const sites = new Map<string, Site>();
+    for (const identity of members) {
+      const memberSite = this.data.sites.find((item) => item.id === identity.siteId);
+      if (!memberSite) throw new Error(t("error.siteMissing"));
+      sites.set(memberSite.id, memberSite);
+    }
 
     const result = await this.launchGroup(
-      site,
+      (identity) => sites.get(identity.siteId) as Site,
       members,
       this.presetFor(view.layoutId),
       view.slotAssignments,
@@ -1418,7 +1766,7 @@ export class WorkspaceService {
     const site = this.data.sites.find((item) => item.id === siteId);
     if (!site) throw new Error(t("error.siteMissing"));
     return this.launchGroup(
-      site,
+      () => site,
       members,
       this.presetFor(this.settings.layout),
       {},
@@ -1434,7 +1782,7 @@ export class WorkspaceService {
    * ends up with a half-applied layout.
    */
   private async launchGroup(
-    site: Site,
+    siteFor: (identity: Identity) => Site,
     members: Identity[],
     preset: LayoutPreset,
     assignments: Record<string, number>,
@@ -1448,13 +1796,7 @@ export class WorkspaceService {
 
     try {
       for (const [index, identity] of members.entries()) {
-        const slotIndex = this.resolveSlotIndex(
-          preset,
-          identity,
-          assignments,
-          takenSlots,
-          index,
-        );
+        const slotIndex = this.resolveSlotIndex(preset, identity, assignments, takenSlots, index);
         takenSlots.add(slotIndex);
 
         const running = [...this.liveInstances.values()].find(
@@ -1467,6 +1809,9 @@ export class WorkspaceService {
           running.slotIndex = slotIndex;
           continue;
         }
+        // Each member opens against its own site, so a cross-site view gets the
+        // right engine, base URL and default password per window.
+        const site = siteFor(identity);
         const engine = this.resolveEngine(identity, site);
         const startUrl = joinUrl(
           site.baseUrl,
@@ -1529,9 +1874,7 @@ export class WorkspaceService {
     const viewId = this.settings.lastViewId;
     if (!viewId) return { restored: false, reason: "no-view" };
     const view = this.data.views.find((item) => item.id === viewId);
-    const site = view
-      ? this.data.sites.find((item) => item.id === view.siteId)
-      : undefined;
+    const site = view ? this.data.sites.find((item) => item.id === view.siteId) : undefined;
     if (!view || !site) {
       // The workspace changed while the app was closed. Drop the dangling id
       // instead of retrying it on every start.
@@ -1632,9 +1975,7 @@ export class WorkspaceService {
   async launchCleanSession(siteId?: string): Promise<LaunchResult> {
     // Reuse of a directory the startup sweep is about to delete must not happen.
     await this.maintenanceDone;
-    const site = siteId
-      ? this.data.sites.find((item) => item.id === siteId)
-      : undefined;
+    const site = siteId ? this.data.sites.find((item) => item.id === siteId) : undefined;
     if (siteId && !site) throw new Error(t("error.siteMissing"));
     const engine =
       this.engines.find((item) => item.id === site?.defaultEngineId) ??
@@ -1660,9 +2001,7 @@ export class WorkspaceService {
       profileRoot: this.options.profileRoot,
       engine,
       profileKey: `${CLEAN_PROFILE_PREFIX}${instanceId}`,
-      startUrl: site
-        ? joinUrl(site.baseUrl, site.loginPath || "/")
-        : "about:blank",
+      startUrl: site ? joinUrl(site.baseUrl, site.loginPath || "/") : "about:blank",
       windowBounds: slot,
       label: t("instance.cleanLabel"),
       instanceId,
@@ -1948,7 +2287,8 @@ export class WorkspaceService {
     } catch (error) {
       return unknown((error as Error).message);
     }
-    if (!supportsHeadlessSession(engine)) return unknown(t("auth.noHeadless", { brand: engine.brand }));
+    if (!supportsHeadlessSession(engine))
+      return unknown(t("auth.noHeadless", { brand: engine.brand }));
 
     const base = site.baseUrl.replace(/\/+$/, "");
     const startUrl = `${base}${checkPath}`;
@@ -2048,9 +2388,7 @@ export class WorkspaceService {
    */
   async reloginExpired(siteId?: string): Promise<ReloginBatchResult> {
     const targets = this.data.identities.filter(
-      (identity) =>
-        (!siteId || identity.siteId === siteId) &&
-        identity.status === "expired",
+      (identity) => (!siteId || identity.siteId === siteId) && identity.status === "expired",
     );
     const results: ReloginResult[] = [];
     for (const [index, identity] of targets.entries()) {
@@ -2346,11 +2684,7 @@ export class WorkspaceService {
    * Runs the post-launch fill off the critical path: a view of four windows must
    * not wait eight seconds per identity before the UI reports success.
    */
-  private scheduleAutoFill(
-    identity: Identity,
-    site: Site,
-    instance: RunningInstance,
-  ): void {
+  private scheduleAutoFill(identity: Identity, site: Site, instance: RunningInstance): void {
     if (!this.settings.autoFillOnLaunch) return;
     void this.autoFillAfterLaunch(identity, site, instance)
       .then((report) => this.options.onAutoFill?.(report))
@@ -2369,6 +2703,50 @@ export class WorkspaceService {
 
   findSite(id: string): Site | undefined {
     return this.data.sites.find((item) => item.id === id);
+  }
+
+  /**
+   * Site whose address matches a page origin, for saving a login seen in the
+   * wild. The longest matching base URL wins, so a site mounted under a
+   * sub-path beats a site that only shares the origin.
+   */
+  findSiteByOrigin(origin: string): Site | undefined {
+    let best: { site: Site; length: number } | undefined;
+    for (const site of this.data.sites) {
+      let siteOrigin: string;
+      try {
+        siteOrigin = new URL(site.baseUrl).origin;
+      } catch {
+        continue;
+      }
+      if (siteOrigin !== origin) continue;
+      const length = site.baseUrl.length;
+      if (!best || length > best.length) best = { site, length };
+    }
+    return best?.site;
+  }
+
+  /**
+   * Whether the vault already holds the login for this username on this site.
+   *
+   * Used to keep the "save this login?" prompt for credentials the vault does
+   * not have yet: signing in as an account that is already saved would only
+   * offer a duplicate. An identity saved without a password does not count —
+   * that is exactly the case worth capturing.
+   */
+  hasSavedLogin(siteId: string, username: string): boolean {
+    const needle = username.trim().toLowerCase();
+    if (!needle) return false;
+    const identity = this.data.identities.find(
+      (item) => item.siteId === siteId && item.username.trim().toLowerCase() === needle,
+    );
+    if (!identity) return false;
+    try {
+      return Boolean(resolvePassword(this.vault, identity, siteId, this.data.identities).password);
+    } catch {
+      // A locked vault cannot tell; prompting is the safer side of that doubt.
+      return false;
+    }
   }
 
   findView(id: string): View | undefined {

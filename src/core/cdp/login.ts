@@ -76,6 +76,26 @@ export function buildFillExpression(input: LoginFillInput): string {
       }
       const wrapper = el.closest("label");
       if (wrapper) parts.push(wrapper.textContent || "");
+      // Component libraries (Naive UI, Ant Design, Element Plus) put the field
+      // label in its own div next to — but not wrapping — the control, so none of
+      // the three lookups above finds it. Climb the wrapper chain and take the
+      // first ancestor that holds a single label-looking element.
+      if (parts.join(" ").trim() === "") {
+        let scope = el.parentElement;
+        for (let depth = 0; scope && depth < 5; depth += 1, scope = scope.parentElement) {
+          const labels = Array.from(
+            scope.querySelectorAll(
+              'label,legend,[role=columnheader],[class*="label"],[class*="Label"],[class*="title"],[class*="Title"]',
+            ),
+          ).filter((node) => (node.textContent || "").trim());
+          if (labels.length === 1) {
+            parts.push(labels[0].textContent || "");
+            break;
+          }
+          // More than one label in the scope means it is the form, not a field.
+          if (labels.length > 1) break;
+        }
+      }
       return parts.join(" ");
     };
     const hintOf = (el) =>

@@ -1,3 +1,6 @@
+import type { Flow } from "./flows";
+import type { SearchEngine } from "./search";
+
 export type Platform = "win32" | "darwin" | "linux";
 
 export type EngineFamily = "chromium" | "firefox" | "webkit";
@@ -32,13 +35,13 @@ export interface LoginField {
 }
 
 /**
- * A user-created label for grouping sites.
+ * A user-created label, shared by sites, identities and views.
  *
- * Tags carry no behaviour: they only decide how the site list and the title-bar
- * switcher are organised. A site may have many, and deleting a tag merely
- * unlinks it — sites and identities are never touched.
+ * One namespace on purpose: a tag answers "how do I find this again", and the
+ * same words ("生产", "测试", "客户A") apply to a deployment, an account and an
+ * arrangement. Tags carry no behaviour — deleting one only unlinks it.
  */
-export interface SiteTag {
+export interface Tag {
   id: string;
   name: string;
   color: RoleColor;
@@ -55,7 +58,7 @@ export interface Site {
   autoSubmit: boolean;
   /** Login fields shared by every identity in this site. */
   extraFields?: LoginField[];
-  /** Site tag ids; display grouping only. */
+  /** Tag ids; finding and grouping only. */
   tagIds?: string[];
   /**
    * Origin credentials were last used against.
@@ -99,6 +102,8 @@ export interface Identity {
   lastCheckedAt?: string;
   /** Overrides site fields with the same label; an empty value removes one. */
   extraFields?: LoginField[];
+  /** Tag ids; the site's own tags are matched when filtering, not copied here. */
+  tagIds?: string[];
   note?: string;
   createdAt: string;
   updatedAt: string;
@@ -139,6 +144,11 @@ export interface View {
   /** identityId -> slot index. Missing entries fall back to launch order. */
   slotAssignments: Record<string, number>;
   paths: Record<string, string>;
+  /**
+   * Tag ids for finding a view. Filters also match tags of the member accounts
+   * and their sites, so "everything touching 生产" works without tagging twice.
+   */
+  tagIds?: string[];
   /**
    * Set when this view was copied from another site. It records provenance only:
    * the copy is independent, and "sync from source" is a manual action.
@@ -260,7 +270,7 @@ export interface AppSettings {
   theme: "dark" | "light" | "system";
   locale: "zh" | "en";
   lastSiteId?: string;
-  lastView: "browser" | "sites" | "identities" | "views";
+  lastView: "browser" | "sites" | "identities" | "views" | "flows" | "tags";
   /**
    * View launched most recently. Only used when {@link restoreLastView} is on;
    * it is not the "selected view in the UI" and may point at another site.
@@ -294,8 +304,46 @@ export interface AppSettings {
   launchIntervalMs: number;
   /** Preset used when identities are launched outside a view. */
   layout: LayoutId;
+  /**
+   * Where "launch" sends a view or identity.
+   *
+   * One switch in the title bar decides it: launching never asks twice, and the
+   * management pages do not each need their own pair of buttons. "embedded" is
+   * the default because that surface is the reason the app exists; "external"
+   * is the fidelity check against the real browser.
+   */
+  launchTarget: "embedded" | "external";
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
+  /**
+   * Default zoom for pages in the built-in browser, in percent.
+   *
+   * Applied to new pages and to pages the user has not adjusted by hand. Ctrl +
+   * plus/minus adjusts one page only; Ctrl+0 returns it to this value. There is
+   * deliberately no per-site zoom: a site is one login recipe shared by several
+   * accounts, so a site-level factor would silently apply to identities that
+   * only happen to share it, and the extra dimension is hard to explain.
+   */
+  browserZoom: number;
+  /**
+   * Engine a blank tab searches with, and the one the address bar falls back to
+   * for text that is not an address.
+   *
+   * A blank tab is a search box in this app because the surface is meant to
+   * replace the user's own browser while developing: opening a new page to look
+   * something up must not require leaving the app.
+   */
+  searchEngineId: string;
+  /** Engines the user added; built-ins live in code and are always available. */
+  customSearchEngines: SearchEngine[];
+  /**
+   * Backdrop of the new-tab surface, by preset id (see `shared/newtab.ts`).
+   *
+   * A preset rather than a file path: the surface must paint before any network
+   * or disk read, and a user-supplied image would need its own storage and its
+   * own cleanup path. Presets are a closed set that can grow later.
+   */
+  newTabBackground: string;
   /**
    * Keep running in the tray when the window is closed. On by default: the local
    * MCP endpoint dies with the process, so an accidental close would disconnect
@@ -335,9 +383,11 @@ export interface CredentialPresence {
 export interface WorkspaceSnapshot {
   sites: Site[];
   /** User-created site tags; ordering here is the display order. */
-  siteTags: SiteTag[];
+  tags: Tag[];
   identities: Identity[];
   views: View[];
+  /** Reusable step sequences, one per repeatable job on a site. */
+  flows: Flow[];
   engines: Engine[];
   /** False while the background engine scan is still running. */
   enginesReady: boolean;
@@ -363,7 +413,7 @@ export interface SiteDraft {
   tagIds?: string[];
 }
 
-export interface SiteTagDraft {
+export interface TagDraft {
   id?: string;
   name: string;
   color: RoleColor;
@@ -395,7 +445,14 @@ export interface IdentityDraft {
   credentialFrom?: string;
   /** Only sent when the user typed a new password. Never returned by the main process. */
   password?: string;
+  /**
+   * Token from a captured login. The main process holds the password; sending
+   * the token is how the form saves it without the secret ever being here.
+   */
+  captureToken?: string;
   extraFields?: LoginField[];
+  /** Tag ids; the site's tags are matched too when filtering. */
+  tagIds?: string[];
   note?: string;
 }
 
@@ -407,6 +464,24 @@ export interface ViewDraft {
   layoutId: LayoutId;
   slotAssignments: Record<string, number>;
   paths: Record<string, string>;
+  /** Tag ids for finding the view; member tags are matched as well. */
+  tagIds?: string[];
+}
+
+/**
+ * A login form submission seen on the built-in surface.
+ *
+ * Carries no password: the secret stays in the main process until the user
+ * accepts the save, and the renderer only ever holds this token.
+ */
+export interface LoginCaptureNotice {
+  token: string;
+  username: string;
+  origin: string;
+  path: string;
+  tabId: string;
+  /** Site matched by origin, when one exists; new sites are created instead. */
+  siteId?: string;
 }
 
 export interface LayoutPresetDraft {
@@ -429,7 +504,12 @@ export type SettingsPatch = Partial<
     | "focusLabelEnabled"
     | "launchIntervalMs"
     | "layout"
+    | "launchTarget"
     | "autoFillOnLaunch"
+    | "browserZoom"
+    | "searchEngineId"
+    | "customSearchEngines"
+    | "newTabBackground"
     | "closeToTray"
     | "onboardingVersion"
     | "autoCheckUpdates"

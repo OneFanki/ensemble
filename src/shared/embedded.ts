@@ -17,6 +17,15 @@ export interface EmbeddedTab {
   color?: RoleColor;
   url: string;
   title: string;
+  /**
+   * Site icon, already inlined as a `data:` URL.
+   *
+   * The app renderer never loads a remote image: the main process fetches the
+   * icon through the page's own session (so a logged-in site resolves it the
+   * same way the page does) and hands over bytes. Absent for blank pages and
+   * for sites that publish no icon.
+   */
+  favicon?: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -36,6 +45,18 @@ export interface EmbeddedTab {
   openerId?: string;
   /** True for the page currently shown by its instance. */
   active: boolean;
+  /** Effective zoom in percent; `100` means the page renders at its natural size. */
+  zoom: number;
+  /** True while this page's DevTools are open (docked by default). */
+  devtoolsOpen: boolean;
+  /**
+   * Native view geometry, in window content coordinates.
+   *
+   * Reported so a test can prove an off-stage page is really outside the window
+   * rather than trusting the code that moved it — a parked view left inside
+   * paints over whatever page is on screen, which is invisible to the renderer.
+   */
+  bounds?: StageRect;
 }
 
 /**
@@ -169,6 +190,29 @@ export function embeddedSlotCount(layoutId: LayoutId, custom?: SlotRect[]): numb
   return preset.slots.length;
 }
 
+/**
+ * Bounds for a page that is alive but must not be seen.
+ *
+ * Every number here was measured on Electron 44 / Chromium 152, because both
+ * obvious choices are wrong in ways that only show up later:
+ *
+ * - `setVisible(false)` keeps scripts running but makes CDP screenshots time
+ *   out, and the AI surface takes screenshots.
+ * - A large negative coordinate (the classic `-100000` park) makes Chromium
+ *   hand the renderer a 0×0 viewport: scripts run, but the document lays out at
+ *   zero width, so "is this text visible" and every element position are wrong.
+ *
+ * So the view keeps its size and sits immediately past the window's content
+ * edge. The edge is the *window's*, not the stage's: the stage starts to the
+ * right of the navigation rail, so parking at the stage's width leaves the page
+ * sitting inside the window, painted over whatever page is on screen.
+ */
+export function parkedViewBounds(content: { width: number; height: number }): StageRect {
+  const width = Math.max(1, Math.round(content.width));
+  const height = Math.max(1, Math.round(content.height));
+  return { x: width, y: 0, width, height };
+}
+
 export function embeddedSlotRects(
   layoutId: LayoutId,
   stage: StageRect,
@@ -195,6 +239,39 @@ export function embeddedSlotRects(
 }
 
 /**
+ * Zoom levels a Ctrl +/- step moves through, in percent.
+ *
+ * Mirrors Chrome's list so two keystrokes land on the same factor a real browser
+ * would pick, rather than drifting through arbitrary percentages.
+ */
+export const ZOOM_STEPS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200] as const;
+
+/**
+ * Index of the step next to `percent` in `direction`.
+ *
+ * A value between steps (for example after the default setting changed) snaps to
+ * the neighbouring step instead of skipping one, so a single keystroke always
+ * produces a visible change.
+ */
+export function neighborZoomStep(percent: number, direction: "in" | "out"): number {
+  if (direction === "in") {
+    const index = ZOOM_STEPS.findIndex((step) => step > percent);
+    return index < 0 ? ZOOM_STEPS.length - 1 : index;
+  }
+  for (let index = ZOOM_STEPS.length - 1; index >= 0; index -= 1) {
+    const step = ZOOM_STEPS[index];
+    if (step !== undefined && step < percent) return index;
+  }
+  return 0;
+}
+
+/** Default clamp used by both the setting and the per-page override. */
+export function clampZoom(percent: number): number {
+  if (!Number.isFinite(percent)) return 100;
+  return Math.min(200, Math.max(50, Math.round(percent)));
+}
+
+/**
  * What a tab is called in the chrome.
  *
  * A browser shows the page title, not the fact that the tab was opened. The
@@ -210,6 +287,47 @@ export function tabDisplayTitle(tab: Pick<EmbeddedTab, "title" | "label" | "url"
 /** A tab that has not navigated anywhere yet; its address field starts empty. */
 export function isBlankTab(tab: Pick<EmbeddedTab, "url">): boolean {
   return !tab.url || tab.url === "about:blank";
+}
+
+/** Largest site icon worth inlining; anything bigger is a misconfigured page. */
+export const FAVICON_MAX_BYTES = 512 * 1024;
+
+/**
+ * Turns a downloaded icon into a `data:` URL the app renderer may draw.
+ *
+ * The renderer's CSP only allows `data:` images, so this conversion is the whole
+ * reason the main process fetches icons at all. Lives here rather than in the
+ * browser manager because the rules are the security-relevant part: anything
+ * that is not a plain image type is refused rather than guessed at, since an
+ * icon is untrusted bytes from a remote site.
+ */
+export function inlineFavicon(contentType: string | null, bytes: Uint8Array): string | undefined {
+  const type = (contentType ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!type.startsWith("image/")) return undefined;
+  if (bytes.byteLength === 0 || bytes.byteLength > FAVICON_MAX_BYTES) return undefined;
+  return `data:${type};base64,${toBase64(bytes)}`;
+}
+
+/**
+ * Base64 without `Buffer` or `btoa`.
+ *
+ * This module is bundled for the renderer as well as the main process, so it has
+ * to run in both: `Buffer` does not exist in a sandboxed renderer, and `btoa`
+ * would need the whole payload copied into a binary string first.
+ */
+function toBase64(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const a = bytes[index] ?? 0;
+    const b = bytes[index + 1];
+    const c = bytes[index + 2];
+    out += alphabet[a >> 2];
+    out += alphabet[((a & 3) << 4) | ((b ?? 0) >> 4)];
+    out += b === undefined ? "=" : alphabet[((b & 15) << 2) | ((c ?? 0) >> 6)];
+    out += c === undefined ? "=" : alphabet[c & 63];
+  }
+  return out;
 }
 
 /**

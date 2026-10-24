@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import {
+  FLOW_ACTIONS,
+  type Flow,
+  type FlowAction,
+  type FlowParam,
+  type FlowStep,
+  WAIT_CONDITIONS,
+  type WaitCondition,
+} from "@shared/flows";
 import { clampSlot } from "@shared/layouts";
-import type {
-  Site,
-  SiteTag,
-  Engine,
-  Identity,
-  LayoutPreset,
-  View,
-  SlotRect,
-} from "@shared/types";
+import type { Engine, Identity, LayoutPreset, Site, SlotRect, Tag, View } from "@shared/types";
 
 export interface StoredInstance {
   id: string;
@@ -153,9 +154,10 @@ export function profileExists(profileDir: string): boolean {
 export interface WorkspaceData {
   version: 2;
   sites: Site[];
-  siteTags: SiteTag[];
+  tags: Tag[];
   identities: Identity[];
   views: View[];
+  flows: Flow[];
   instances: StoredInstance[];
   manualEngines: string[];
   layoutPresets: LayoutPreset[];
@@ -171,9 +173,10 @@ export function emptyWorkspace(): WorkspaceData {
   return {
     version: 2,
     sites: [],
-    siteTags: [],
+    tags: [],
     identities: [],
     views: [],
+    flows: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
@@ -212,6 +215,9 @@ function sanitizeViews(input: unknown): View[] {
               : "2x2",
         slotAssignments: assignments,
         paths: view.paths && typeof view.paths === "object" ? view.paths : {},
+        // Dangling ids are pruned later, once the tag list is known.
+        ...(Array.isArray(view.tagIds) ? { tagIds: view.tagIds } : {}),
+        ...(view.copiedFrom ? { copiedFrom: view.copiedFrom } : {}),
         createdAt: view.createdAt ?? new Date().toISOString(),
         updatedAt: view.updatedAt ?? new Date().toISOString(),
       };
@@ -256,12 +262,12 @@ function sanitizeSites(input: unknown): Site[] {
   });
 }
 
-function sanitizeSiteTags(input: unknown): SiteTag[] {
+function sanitizeTags(input: unknown): Tag[] {
   if (!Array.isArray(input)) return [];
   const colors = new Set(["amber", "teal", "violet", "rose", "blue", "slate"]);
-  const tags: SiteTag[] = [];
+  const tags: Tag[] = [];
   const seen = new Set<string>();
-  for (const raw of input as SiteTag[]) {
+  for (const raw of input as Tag[]) {
     if (!raw || typeof raw.id !== "string" || typeof raw.name !== "string") continue;
     if (!raw.name.trim() || seen.has(raw.id)) continue;
     seen.add(raw.id);
@@ -276,16 +282,39 @@ function sanitizeSiteTags(input: unknown): SiteTag[] {
 }
 
 /**
- * Drops tag references that no longer have a tag, so a deleted tag cannot leave
- * sites pointing at nothing.
+ * Keeps only tag ids that still exist.
+ *
+ * A dangling reference would make the entity vanish from every filter group
+ * while looking fine on its own page, so it is dropped instead of stored.
  */
-function pruneDanglingTags(sites: Site[], tags: SiteTag[]): Site[] {
+function tagIdsOf(value: unknown, known: Set<string>): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const kept = [
+    ...new Set(
+      value.filter((id): id is string => typeof id === "string" && id.length > 0 && known.has(id)),
+    ),
+  ];
+  return kept.length > 0 ? kept : undefined;
+}
+
+function withTagIds<T extends { tagIds?: string[] }>(item: T, tagIds: string[] | undefined): T {
+  return { ...item, ...(tagIds ? { tagIds } : { tagIds: undefined }) };
+}
+
+function pruneDanglingTags(
+  sites: Site[],
+  identities: Identity[],
+  views: View[],
+  tags: Tag[],
+): { sites: Site[]; identities: Identity[]; views: View[] } {
   const known = new Set(tags.map((tag) => tag.id));
-  return sites.map((site) => {
-    if (!site.tagIds) return site;
-    const kept = site.tagIds.filter((id) => known.has(id));
-    return { ...site, tagIds: kept.length > 0 ? kept : undefined };
-  });
+  return {
+    sites: sites.map((site) => withTagIds(site, tagIdsOf(site.tagIds, known))),
+    identities: identities.map((identity) =>
+      withTagIds(identity, tagIdsOf(identity.tagIds, known)),
+    ),
+    views: views.map((view) => withTagIds(view, tagIdsOf(view.tagIds, known))),
+  };
 }
 
 /**
@@ -316,20 +345,101 @@ function upgradeV1(raw: Record<string, unknown>): Partial<WorkspaceData> {
   };
 }
 
+/**
+ * Reads flows from disk without trusting them.
+ *
+ * A workspace file can be hand-edited or come from an older build, and a flow is
+ * a list of instructions that will be executed against a live page. Anything that
+ * does not parse is dropped rather than repaired: a half-understood step is more
+ * dangerous than a missing one. Flows whose site no longer exists are dropped
+ * too — they have nowhere to run.
+ */
+function sanitizeFlows(input: unknown, siteIds: Set<string>): Flow[] {
+  if (!Array.isArray(input)) return [];
+  const flows: Flow[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const record = raw as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : "";
+    const siteId = typeof record.siteId === "string" ? record.siteId : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!id || !name || !siteIds.has(siteId)) continue;
+
+    const params: FlowParam[] = Array.isArray(record.params)
+      ? record.params
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => ({
+            name: String(item.name ?? "").trim(),
+            label: String(item.label ?? "").trim(),
+            ...(item.required === true ? { required: true } : {}),
+            ...(item.secret === true ? { secret: true } : {}),
+            ...(typeof item.default === "string" ? { default: item.default } : {}),
+            ...(typeof item.description === "string" ? { description: item.description } : {}),
+          }))
+          .filter((param) => param.name && param.label)
+      : [];
+
+    const steps: FlowStep[] = Array.isArray(record.steps)
+      ? record.steps
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => {
+            const action = String(item.action ?? "") as FlowAction;
+            const step: FlowStep = { action };
+            for (const key of ["selector", "label", "text", "role", "note", "value", "url", "option", "key", "expect", "as"] as const) {
+              const value = item[key];
+              if (typeof value === "string" && value.trim()) step[key] = value;
+            }
+            if (item.exact === true) step.exact = true;
+            if (item.optional === true) step.optional = true;
+            if (typeof item.timeoutMs === "number" && Number.isFinite(item.timeoutMs)) {
+              step.timeoutMs = Math.min(Math.max(Math.trunc(item.timeoutMs), 100), 120_000);
+            }
+            if (typeof item.condition === "string" && WAIT_CONDITIONS.includes(item.condition as WaitCondition)) {
+              step.condition = item.condition as WaitCondition;
+            }
+            return step;
+          })
+          .filter((step) => FLOW_ACTIONS.includes(step.action))
+      : [];
+    if (steps.length === 0) continue;
+
+    flows.push({
+      id,
+      siteId,
+      name: name.slice(0, 80),
+      description: typeof record.description === "string" ? record.description.slice(0, 1000) : "",
+      params,
+      steps,
+      createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
+      updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+    });
+  }
+  return flows;
+}
+
 export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData {
   const base = emptyWorkspace();
   const raw = input as Partial<WorkspaceData> & Record<string, unknown>;
   // A v1 file has no `sites` key but does have `environments`; treat anything
   // without the current shape as the previous schema.
-  const source =
-    Array.isArray(raw.sites) || !("environments" in raw) ? raw : upgradeV1(raw);
-  const siteTags = sanitizeSiteTags(source.siteTags);
+  const source = Array.isArray(raw.sites) || !("environments" in raw) ? raw : upgradeV1(raw);
+  // The tag namespace used to be site-only (`siteTags`). Same ids and colours,
+  // so the rename is a straight read; identities and views simply start with no
+  // tags of their own.
+  const tags = sanitizeTags(source.tags ?? raw["siteTags"]);
+  const pruned = pruneDanglingTags(
+    sanitizeSites(source.sites),
+    Array.isArray(source.identities) ? source.identities : base.identities,
+    sanitizeViews(source.views),
+    tags,
+  );
   return {
     version: 2,
-    sites: pruneDanglingTags(sanitizeSites(source.sites), siteTags),
-    siteTags,
-    identities: Array.isArray(source.identities) ? source.identities : base.identities,
-    views: sanitizeViews(source.views),
+    sites: pruned.sites,
+    tags,
+    identities: pruned.identities,
+    views: pruned.views,
+    flows: sanitizeFlows(source.flows, new Set(pruned.sites.map((site) => site.id))),
     instances: Array.isArray(source.instances) ? source.instances : base.instances,
     manualEngines: Array.isArray(source.manualEngines) ? source.manualEngines : base.manualEngines,
     layoutPresets: sanitizeLayoutPresets(source.layoutPresets),

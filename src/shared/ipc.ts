@@ -1,31 +1,4 @@
-import type {
-  AppSettings,
-  AuthBatchResult,
-  AuthCheckResult,
-  AutoFillReport,
-  Engine,
-  SiteDraft,
-  SiteTagDraft,
-  FocusLabelPayload,
-  IdentityDraft,
-  LaunchResult,
-  LayoutId,
-  LayoutPreset,
-  LayoutPresetDraft,
-  McpPatch,
-  McpStatus,
-  PasswordOwner,
-  ReloginBatchResult,
-  SlotRect,
-  ViewCopyResult,
-  ViewDraft,
-  ViewRestoreOutcome,
-  SettingsPatch,
-  WorkspaceSnapshot,
-  OriginChangedNotice,
-} from "./types";
-import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
-import type { UpdateCheckResult, UpdateProgress } from "./update";
+import type { BundleCounts, BundleImportResult, BundlePreview } from "./accounts-transfer";
 import type {
   EmbeddedDropTarget,
   EmbeddedState,
@@ -33,6 +6,36 @@ import type {
   FrozenSlot,
   StageRect,
 } from "./embedded";
+import type { FlowDraft, FlowRunResult } from "./flows";
+import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
+import type {
+  AppSettings,
+  AuthBatchResult,
+  AuthCheckResult,
+  AutoFillReport,
+  Engine,
+  FocusLabelPayload,
+  IdentityDraft,
+  LaunchResult,
+  LayoutId,
+  LayoutPreset,
+  LayoutPresetDraft,
+  LoginCaptureNotice,
+  McpPatch,
+  McpStatus,
+  OriginChangedNotice,
+  PasswordOwner,
+  ReloginBatchResult,
+  SettingsPatch,
+  SiteDraft,
+  SlotRect,
+  TagDraft,
+  ViewCopyResult,
+  ViewDraft,
+  ViewRestoreOutcome,
+  WorkspaceSnapshot,
+} from "./types";
+import type { UpdateCheckResult, UpdateProgress } from "./update";
 
 export interface ExportOutcome {
   canceled: boolean;
@@ -47,6 +50,32 @@ export interface ImportPickOutcome {
   preview?: ImportPreview;
 }
 
+/** Account bundles: a chosen subset of accounts, for sharing with a colleague. */
+export interface AccountsExportOutcome {
+  canceled: boolean;
+  path?: string;
+  counts?: BundleCounts;
+  secretsIncluded?: boolean;
+}
+
+export interface AccountsImportPickOutcome {
+  canceled: boolean;
+  path?: string;
+  preview?: BundlePreview;
+}
+
+export interface AccountsImportApplyOutcome {
+  result: BundleImportResult;
+  snapshot: WorkspaceSnapshot;
+}
+
+/** What a flow run reports back: which tab it drove, and how far it got. */
+export interface FlowRunOutcome {
+  tabId: string;
+  identityId?: string;
+  run: FlowRunResult;
+}
+
 export const IPC = {
   workspaceGet: "workspace:get",
   workspaceChanged: "workspace:changed",
@@ -56,9 +85,9 @@ export const IPC = {
   siteSave: "site:save",
   siteDelete: "site:delete",
   /** Creates or renames a display-only site tag. */
-  siteTagSave: "site-tag:save",
+  tagSave: "site-tag:save",
   /** Deletes a tag and unlinks it from every site; sites themselves stay. */
-  siteTagDelete: "site-tag:delete",
+  tagDelete: "site-tag:delete",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
   identityRebuildProfile: "identity:rebuild-profile",
@@ -71,6 +100,10 @@ export const IPC = {
   viewRetile: "view:retile",
   /** Copies a view to another site, resolving members by username. */
   viewCopyToSite: "view:copy-to-site",
+  flowSave: "flow:save",
+  flowDelete: "flow:delete",
+  /** Runs a saved flow against a tab and reports every step's outcome. */
+  flowRun: "flow:run",
   /** Accepts a changed site address so credential filling may proceed again. */
   siteAcceptOrigin: "site:accept-origin",
   /** Reads the address-change notice left by the last blocked fill. */
@@ -80,8 +113,12 @@ export const IPC = {
   dataExport: "data:export",
   dataImportPick: "data:import-pick",
   dataImportApply: "data:import-apply",
+  accountsExport: "accounts:export",
+  accountsImportPick: "accounts:import-pick",
+  accountsImportApply: "accounts:import-apply",
   mcpInfo: "mcp:info",
   mcpUpdate: "mcp:update",
+  mcpChanged: "mcp:changed",
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
@@ -119,6 +156,10 @@ export const IPC = {
   embeddedStateGet: "embedded:state-get",
   /** Asks the renderer to switch to the browser page. */
   embeddedPage: "embedded:page",
+  /** Main → renderer: a login form was submitted in an embedded page. */
+  embeddedLoginCaptured: "embedded:login-captured",
+  /** Renderer → main: forget a pending capture the user declined. */
+  embeddedLoginDismiss: "embedded:login-dismiss",
   /** Sends the stage rectangle (content area under the chrome) to the manager. */
   embeddedStage: "embedded:stage",
   embeddedOpen: "embedded:open",
@@ -126,6 +167,12 @@ export const IPC = {
   embeddedOpenInView: "embedded:open-in-view",
   /** Opens a blank tab pinned to one slot of a view. */
   embeddedOpenInSlot: "embedded:open-in-slot",
+  /** Opens a blank page in an existing instance, so one profile gets several tabs. */
+  embeddedOpenInInstance: "embedded:open-in-instance",
+  /** Duplicates one page into the instance that owns it. */
+  embeddedDuplicate: "embedded:duplicate",
+  /** Closes every other page of the same instance. */
+  embeddedCloseOthers: "embedded:close-others",
   embeddedOpenIdentity: "embedded:open-identity",
   embeddedOpenView: "embedded:open-view",
   embeddedClose: "embedded:close",
@@ -149,6 +196,8 @@ export const IPC = {
   /** Fills the tab's saved credentials; refuses cross-origin pages. */
   embeddedFill: "embedded:fill",
   embeddedDevTools: "embedded:devtools",
+  embeddedDevToolsClose: "embedded:devtools-close",
+  embeddedZoom: "embedded:zoom",
   embeddedFind: "embedded:find",
   embeddedStopFind: "embedded:stop-find",
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
@@ -182,8 +231,8 @@ export interface EnsembleApi {
 
   saveSite(draft: SiteDraft): Promise<WorkspaceSnapshot>;
   deleteSite(id: string): Promise<WorkspaceSnapshot>;
-  saveSiteTag(draft: SiteTagDraft): Promise<WorkspaceSnapshot>;
-  deleteSiteTag(id: string): Promise<WorkspaceSnapshot>;
+  saveTag(draft: TagDraft): Promise<WorkspaceSnapshot>;
+  deleteTag(id: string): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
   /** Deletes the browser profile directory so the next launch starts signed out. */
@@ -201,6 +250,18 @@ export interface EnsembleApi {
   retileView(viewId: string): Promise<void>;
   /** Copies a view to another site; members are matched by username. */
   copyViewToSite(viewId: string, targetSiteId: string): Promise<ViewCopyResult>;
+  saveFlow(draft: FlowDraft): Promise<WorkspaceSnapshot>;
+  deleteFlow(id: string): Promise<WorkspaceSnapshot>;
+  /**
+   * Runs a flow. Omitting `identityId` opens a fresh tab as the site's first
+   * usable account; the result names the tab so the caller can watch it.
+   */
+  runFlow(input: {
+    flowId: string;
+    identityId?: string;
+    params?: Record<string, string>;
+    tabId?: string;
+  }): Promise<FlowRunOutcome>;
   /** Records the site's current address as trusted. */
   acceptSiteOrigin(siteId: string): Promise<void>;
   /** Takes the pending address-change notice, if a fill was blocked by one. */
@@ -216,10 +277,24 @@ export interface EnsembleApi {
   /** Asks for a file, validates it, and keeps it pending for `applyImport`. */
   pickImport(): Promise<ImportPickOutcome>;
   applyImport(passphrase?: string): Promise<ImportResult>;
+  /**
+   * Writes a shareable account bundle: only the chosen sites and accounts.
+   * Distinct from `exportWorkspace`, which is a whole-workspace migration file.
+   */
+  exportAccounts(options: {
+    siteIds: string[];
+    identityIds: string[];
+    passphrase?: string;
+    note?: string;
+  }): Promise<AccountsExportOutcome>;
+  pickAccountsImport(): Promise<AccountsImportPickOutcome>;
+  applyAccountsImport(passphrase?: string): Promise<AccountsImportApplyOutcome>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
 
   mcpStatus(): Promise<McpStatus>;
   updateMcp(patch: McpPatch): Promise<McpStatus>;
+  /** Fires when the endpoint starts, stops, or moves to another port. */
+  onMcpChanged(listener: (status: McpStatus) => void): () => void;
 
   setPassword(owner: PasswordOwner, password: string): Promise<WorkspaceSnapshot>;
   clearPassword(owner: PasswordOwner): Promise<WorkspaceSnapshot>;
@@ -306,10 +381,28 @@ export interface EnsembleApi {
   openEmbeddedTabInView(viewId: string): Promise<EmbeddedState>;
   /** Opens a blank tab and pins it to `slotIndex`, then focuses it. */
   openEmbeddedTabInSlot(viewId: string, slotIndex: number): Promise<EmbeddedState>;
-  /** Opens an identity's start page as a loose tab. */
+  /**
+   * Opens a blank page in an existing instance and shows it.
+   *
+   * A browser instance is a session, not a single page: one account usually
+   * needs a console tab, a docs tab and the page under test at the same time.
+   */
+  openEmbeddedTabInInstance(instanceId: string): Promise<EmbeddedState>;
+  /** Duplicates a page (same instance, same URL) and shows the copy. */
+  duplicateEmbeddedTab(tabId: string): Promise<EmbeddedState>;
+  /** Closes every page of an instance except `tabId`. */
+  closeOtherEmbeddedTabs(tabId: string): Promise<EmbeddedState>;
+  /**
+   * Opens an identity as a new page in the flat tab strip, even when a view is
+   * on stage. This is what clicking an account card means.
+   */
   openEmbeddedIdentity(identityId: string): Promise<EmbeddedState>;
   /** Opens (or merges into) the container of a saved view. */
   openEmbeddedView(viewId: string): Promise<EmbeddedState>;
+  /** Login fields seen in an embedded page; never includes the password. */
+  onLoginCaptured(listener: (notice: LoginCaptureNotice) => void): () => void;
+  /** Forgets a pending capture the user declined to save. */
+  dismissLoginCapture(token: string): Promise<void>;
   closeEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   activateEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   navigateEmbeddedTab(tabId: string, url: string): Promise<EmbeddedTab>;
@@ -324,11 +417,7 @@ export interface EnsembleApi {
   /** Applies slot geometry dragged by hand (fractions of the stage). */
   setEmbeddedViewSlots(viewId: string, rects: SlotRect[]): Promise<EmbeddedState>;
   /** Binds a tab to one slot of a view; null empties the slot. */
-  pinEmbeddedTab(
-    viewId: string,
-    slotIndex: number,
-    tabId: string | null,
-  ): Promise<EmbeddedState>;
+  pinEmbeddedTab(viewId: string, slotIndex: number, tabId: string | null): Promise<EmbeddedState>;
   renameEmbeddedView(viewId: string, name: string): Promise<EmbeddedState>;
   colorEmbeddedView(viewId: string, color: string | null): Promise<EmbeddedState>;
   collapseEmbeddedView(viewId: string, collapsed: boolean): Promise<EmbeddedState>;
@@ -341,7 +430,17 @@ export interface EnsembleApi {
     submitted?: boolean;
     missingFields?: string[];
   }>;
-  openEmbeddedDevTools(tabId: string): Promise<void>;
+  /** Opens DevTools for one page; docked inside the page by default. */
+  openEmbeddedDevTools(tabId: string, mode?: "docked" | "window"): Promise<void>;
+  closeEmbeddedDevTools(tabId: string): Promise<void>;
+  /**
+   * Ctrl +/-/0 on one page. Returns the new factor in percent.
+   *
+   * Per page on purpose: two accounts side by side may need different sizes (a
+   * dense table vs. a form), and a per-site factor would silently apply to every
+   * account that happens to share the site.
+   */
+  zoomEmbeddedTab(tabId: string, direction: "in" | "out" | "reset"): Promise<number>;
   findInEmbeddedTab(
     tabId: string,
     text: string,

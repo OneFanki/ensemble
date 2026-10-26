@@ -7,13 +7,18 @@
  * one `pnpm dist` writes, but building a second version while a copy of the
  * packaged app is running leaves that directory locked, so a parallel build
  * goes elsewhere and the smoke test is told where.
+ *
+ * `SMOKE_PORT` overrides the endpoint port: Windows can make a high port
+ * unbindable machine-wide (listen EACCES with no matching excluded-portrange
+ * entry — seen on 49821 and its neighbours), and the smoke test must be able
+ * to move instead of debugging the OS.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const PORT = 49821;
+const PORT = Number(process.env.SMOKE_PORT ?? 49821);
 const TOKEN = "packaged-smoke-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-packaged-"));
 mkdirSync(join(userData, "profiles"), { recursive: true });

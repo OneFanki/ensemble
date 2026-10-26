@@ -365,6 +365,149 @@ try {
   })()`);
   check("closing DevTools clears the open state", closed?.open === false, closed);
 
+  // --- F12 toggles from the page, and the panel reports its split ----------
+  const f12 = await client.evaluate(`(async () => {
+    return { openBefore: (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}')?.devtoolsOpen === true };
+  })()`);
+  // A real F12 press into the page, through CDP: the toggle lives in the page's
+  // before-input-event, which a synthetic DOM key never exercises.
+  async function pressF12(marker) {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const target = list.find((item) => item.url === `${PAGE_URL}?tab=${marker}`);
+    if (!target) return false;
+    const c = await connect(target.webSocketDebuggerUrl);
+    try {
+      await c.send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown", key: "F12", code: "F12", windowsVirtualKeyCode: 123, nativeVirtualKeyCode: 123,
+      });
+      await c.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "F12", code: "F12", windowsVirtualKeyCode: 123, nativeVirtualKeyCode: 123,
+      });
+      return true;
+    } finally {
+      c.close();
+    }
+  }
+  await pressF12("a");
+  await new Promise((r) => setTimeout(r, 900));
+  const afterF12 = await client.evaluate(
+    `(async () => {
+      const tab = (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}');
+      return { open: tab?.devtoolsOpen === true, width: tab?.devtoolsWidth ?? null };
+    })()`,
+  );
+  check(
+    "F12 opens DevTools and the docked split is reported",
+    f12?.openBefore === false && afterF12?.open === true && afterF12?.width !== null,
+    { f12, afterF12 },
+  );
+  await pressF12("a");
+  await new Promise((r) => setTimeout(r, 900));
+  const f12Closed = await client.evaluate(
+    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}')?.devtoolsOpen === true)()`,
+  );
+  check("F12 again closes DevTools", f12Closed === false, f12Closed);
+
+  // --- The drag handle: visible in the gap, and moving it re-splits --------
+  const grip = await client.evaluate(`(async () => {
+    await window.ensemble.openEmbeddedDevTools('${opened.a}', 'docked');
+    await new Promise((r) => setTimeout(r, 800));
+    const gripEl = document.querySelector('.devtools-grip');
+    const before = (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}');
+    const pageBefore = before?.bounds;
+    // Keyboard path first: the separator's arrows.
+    gripEl?.focus();
+    gripEl?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 600));
+    const after = (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}');
+    return {
+      present: Boolean(gripEl),
+      labelled: Boolean(gripEl?.getAttribute('aria-label')),
+      widthBefore: before?.devtoolsWidth ?? null,
+      widthAfter: after?.devtoolsWidth ?? null,
+      pageMoved: Boolean(pageBefore && after?.bounds && pageBefore.width !== after.bounds.width),
+    };
+  })()`);
+  check(
+    "the DevTools grip exists and arrow keys re-split the cell",
+    grip?.present === true &&
+      grip?.labelled === true &&
+      typeof grip?.widthBefore === "number" &&
+      typeof grip?.widthAfter === "number" &&
+      Math.abs(grip.widthAfter - grip.widthBefore - 0.04) < 0.001 &&
+      grip?.pageMoved === true,
+    grip,
+  );
+
+  // A drag hands the split to the main process: the width lands where the
+  // cursor is. The scripted cursor cannot move, so begin-then-end proves the
+  // session lifecycle (state restored, listeners dropped) rather than geometry.
+  const drag = await client.evaluate(`(async () => {
+    await window.ensemble.beginEmbeddedDevToolsResize('${opened.a}');
+    await new Promise((r) => setTimeout(r, 200));
+    await window.ensemble.endEmbeddedDevToolsResize();
+    await new Promise((r) => setTimeout(r, 400));
+    const tab = (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}');
+    return { open: tab?.devtoolsOpen === true, width: tab?.devtoolsWidth ?? null };
+  })()`);
+  check(
+    "a resize session opens and closes without breaking the panel",
+    drag?.open === true && typeof drag?.width === "number",
+    drag,
+  );
+
+  // --- The language prompt answers itself ----------------------------------
+  // The prompt's choice is never persisted (Electron keeps DevTools prefs in
+  // memory only) and clicking "switch" reloads the front-end, so what the app
+  // really owes the user is the switched UI. Assert on that: Chinese tab
+  // titles inside the DevTools front-end, after the answer and its reload.
+  // The prompt itself may legitimately reappear after the reload — the choice
+  // cannot be persisted — so it is not what this check is about.
+  await client.evaluate(`(async () => {
+    await window.ensemble.closeEmbeddedDevTools('${opened.a}');
+    await new Promise((r) => setTimeout(r, 600));
+    await window.ensemble.openEmbeddedDevTools('${opened.a}', 'docked');
+    return true;
+  })()`);
+  const locale = await (async () => {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const dev = list.find((item) => item.url.startsWith("devtools"));
+    if (!dev) return { error: "no devtools target" };
+    const c = await connect(dev.webSocketDebuggerUrl);
+    try {
+      await new Promise((r) => setTimeout(r, 6000));
+      return await c.evaluate(`(() => {
+        const texts = [];
+        const walk = (root) => {
+          for (const el of root.querySelectorAll('*')) {
+            if (el.shadowRoot) walk(el.shadowRoot);
+          }
+        };
+        walk(document);
+        // Tab titles live in the front-end's own strings; the switched UI says
+        // 元素/控制台 where the unswitched one says Elements/Console.
+        const ui = document.body.textContent || '';
+        for (const el of document.querySelectorAll('*')) {
+          if (el.shadowRoot) texts.push(el.shadowRoot.textContent ?? '');
+        }
+        const all = (ui + texts.join(''));
+        return {
+          chinese: all.includes('元素') && (all.includes('控制台') || all.includes('网络')),
+          english: all.includes('Elements') && all.includes('Console'),
+          navLang: navigator.language,
+        };
+      })()`);
+    } finally {
+      c.close();
+    }
+  })();
+  check(
+    "the DevTools front-end answers the language prompt and switches to Chinese",
+    locale?.chinese === true,
+    locale,
+  );
+
+
   // --- Per-page isolation is structural, not a global factor ---------------
   const isolated = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();

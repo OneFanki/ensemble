@@ -2231,8 +2231,14 @@ function registerIpc(workspace: WorkspaceService): void {
       // passes `viewId: null` because there the answer is the opposite.
       const explicit = input !== undefined && input !== null && "viewId" in input;
       const viewId = explicit ? (input?.viewId ?? undefined) : browser.defaultViewId();
+      // Batch launch names identities without URLs; those pages must land on the
+      // account's start page, same as clicking the card — not on a blank tab.
+      // Every caller that wants a blank tab omits `identityId`.
+      const resolvedUrl =
+        input?.url ??
+        (input?.identityId ? embeddedStartUrl(String(input.identityId)) : undefined);
       const tab = await browser.createTab({
-        ...(input?.url ? { url: input.url } : {}),
+        ...(resolvedUrl ? { url: resolvedUrl } : {}),
         ...(input?.identityId ? { identityId: input.identityId } : {}),
         ...(input?.siteId ? { siteId: input.siteId } : {}),
         ...(input?.label ? { label: input.label } : {}),

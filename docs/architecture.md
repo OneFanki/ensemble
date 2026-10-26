@@ -496,7 +496,8 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 - 自动填充前校验当前页面 origin 属于目标站点，且与站点记住的 `lastOrigin` 一致，否则拒绝或要求确认。
 - **启动自动登录例程**：站点配了 `authCheckPath` 时，内置表面的每次账号启动都会先在页内
   fetch 检查路径判定登录态（结果只留在主进程），未登录则导航到 `site.loginPath` 填充凭据；
-  是否替用户点提交仍完全由 `site.autoSubmit` 决定——这个开关的语义就是「授权自动提交」。
+  是否替用户点提交由 `site.autoSubmit ?? settings.autoSubmitLogin` 决定（站点可选覆盖，全局
+  默认开启），这个开关的语义就是「授权自动提交」，提交动作是点登录按钮本身而不是提交表单。
   登录确认后页面回到账号 `startPath`。凭据的读取与填充全程在主进程，渲染层只收到不含
   密码的 `AutoFillReport`。没配检查路径的站点维持旧行为（等密码框出现就填，仅此而已）。
 - MCP 端点只绑回环、必须带 Token、校验 Host/Origin；工具永远不返回明文密码。

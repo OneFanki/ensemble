@@ -25,6 +25,8 @@
 - 新增日常档案：不带身份的标签（新标签页、书签、地址栏输入）登录一次长期有效，可以直接拿它当日常浏览器，也让 AI 在已登录的页面上帮忙做事
 - 新增书签：新标签页上一排图标，只有名字和地址，双击改名、右键删除、拖拽排序；地址栏的星标一键收藏当前页
 - 「从站点打开」多了「日常打开」，与「干净打开」并列；干净打开现在是真正的临时会话，退出即消失
+- 自动填充后可以真的登录进去了：默认会点登录按钮本身，不再只填账号密码等人手点一下
+- 视图列表可以拖动排序，顺序会被记住；筛选状态下拖动也落在你看到的位置
 
 #### 完整变更
 
@@ -48,6 +50,41 @@
 - 账号导入导出的说明里去掉了「同事」这类限定场景的措辞；「批量启动」改名为「选择账号」，导出就在那里面。
 - 浅色主题下的浮层、菜单与确认弹窗改用暖色投影，不再是发灰的黑色光晕。
 
+**默认标签页补齐同一套能力**
+
+- 扁平（默认标签组）舞台现在也有页面标签条：标签、图标、关闭、右键菜单、「＋」全都有，
+  和视图里的某一格完全一致。此前默认标签组里的浏览器没有标签条，同一实例放进视图反倒有，
+  读起来像两个不同的东西。
+- 扁平舞台的头带只占一条 26px 的横条，原生页面从它下面开始，尺寸规则与格位共用同一套。
+- 扁平列表也能选布局了：运行栏「标签页」组头的布局选择器选中一个网格，就把当前所有扁平
+  实例收成一个新视图并铺开，结果与手动把行拖到一起一致。
+
+**分组折叠与批量建视图**
+
+- 站点（按标签）、账号（按站点）、流程（按站点）三个列表的分组都能折叠了：点分组头整行收起，
+  组名与计数留在原处；页头多了一个「全部折叠 / 全部展开」开关，一次处理整页。
+- 折叠状态按页面分别记住，重启后还在；按标签筛掉一些组再清空筛选，之前折叠过的组不会自己弹开。
+- 账号页的「全选可见」只选展开着的组——折叠起来的卡片看不见，不该被「可见」算进去。
+- 批量选账号现在除了「启动所选」，还能「创建视图」：同一批勾选的账号直接进新建视图表单，
+  取名、选布局、挂标签后保存成视图，下次按同一布局重新打开。
+
+**自动登录与视图排序**
+
+- 自动填充之后现在会真的提交登录：设置 → 常规 里的「填完后自动登录」默认打开，账号进站即登录，
+  不用再补点一次按钮。
+- 提交方式从「提交表单」改为**点登录按钮本身**。此前只调 `requestSubmit()`，遇到按钮是
+  `type="button"`、提交逻辑写在脚本里的登录页就完全没反应——表单上看不出问题，页面上却
+  什么也没发生。现在先在表单与页面里找登录按钮并点它，找不到才退回提交表单。按钮筛选会
+  排除「忘记密码」「显示密码」「注册」这类陷阱，优先认「登录 / 登入 / 提交 / Sign in」等文字
+  或表单内的 `type=submit`。
+- 自动提交改成分层开关，与「默认浏览器」同一套逻辑：全局默认在设置里，站点可以单独覆盖成
+  「总是」或「从不」，默认那一档显示当前全局实际生效的值，一眼能看出这个站点会不会提交。
+  旧版本给每个新建站点都写过 `false` 的记录原样保留，不猜哪些是「当时没人表态」。
+- 站点对话框里的自动提交从勾选框换成三态选择；账号包导出导入也带上这个可选字段。
+- 视图列表支持拖动排序：列表顺序就是显示顺序，拖到哪一行就落到那一行之后，重启后仍在。
+  按站点或标签筛选时拖拽同样准确——落点按视图 id 反查完整列表，不会因为隐藏了几行而错位。
+- MCP 的站点摘要新增 `autoSubmitEffective`，AI 能看到某个站点当前实际会不会自动提交。
+
 **交互与措辞**
 
 - 关闭视图这类确认弹窗重做成独立的警示样式：图标 + 问题 + 两个按钮，不再是一个中间空着的表单框。
@@ -58,6 +95,8 @@
 - New daily profile: tabs with no identity (new tabs, bookmarks, typed addresses) stay signed in across restarts, so the built-in browser works as an everyday browser and an AI can act on pages you are already signed in to
 - New bookmarks: a row of icons on the new tab — a name and an address, double-click to rename, right-click to remove, drag to reorder — plus a star in the address bar
 - "Open from site" gained "Open daily" next to "Open clean"; a clean open is now a real throwaway session that ends with the process
+- Auto-fill now signs you in: it clicks the login button itself by default, instead of filling the fields and leaving the last step to you
+- Views can be dragged into any order, and the order is remembered — including while the list is filtered
 
 #### Full changes
 
@@ -78,6 +117,28 @@
 - One global default browser: sites no longer carry a default engine each and follow the title-bar choice; an account may still override it.
 - Account import/export wording no longer assumes a "colleague" scenario, and "批量启动" is now "选择账号" — where the export lives.
 - Floating surfaces, menus and confirmation dialogs use a warm shadow in the light theme instead of a grey halo.
+
+**The default tab group gets the same controls**
+
+- The flat stage — the default tab group — now has a page strip too: tabs, icons, close, right-click menu and "+", exactly like a cell of a view. It previously had none, so the same browser instance gained a strip only once it was put into a view, which read like two different features.
+- The flat stage's header is a single 26px band; native pages start below it, using the same arithmetic as a view cell.
+- The flat list can take a layout: picking a grid from the layout picker on the dock's "tabs" block groups every loose instance into a new view and lays it out, which is what dragging the rows together does by hand.
+
+**Folded groups and batch-to-view**
+
+- All three grouped lists fold now — sites by tag, accounts by site, flows by site: clicking the header row collapses it, and the name plus count stay where they were. A header switch folds or opens every group at once.
+- The folded state is remembered per page across restarts, and a group you collapsed stays collapsed after filtering the list and clearing the filter again.
+- "Select visible" on the accounts page only reaches groups that are open; cards behind a folded header are not on screen and should not count as visible.
+- Picking accounts now also has "create view": the same selection goes straight into the new-view form, where it gets a name, a layout and tags, and is saved as a view you can reopen with that layout later.
+
+**Automatic sign-in and view ordering**
+
+- Auto-fill now actually submits the login. "Sign in automatically after filling", under Settings → General, is on by default, so opening an account lands you signed in instead of waiting for one more click.
+- Submitting now **clicks the login button itself** rather than only submitting the form. The old code called `requestSubmit()`, which does nothing at all on pages whose button is `type="button"` with the submit logic in a script — the form looked fine and the page simply never moved. It now finds a login button in the form (then on the page) and clicks it, falling back to submitting the form only when there is no button. Button matching skips decoys such as "forgot password", "show password" and "register", and prefers "login / sign in / submit" text or a `type=submit` inside the form.
+- Automatic submission is a layered switch, the same shape as "default browser": a global default in Settings, with a per-site override of "always" or "never". The "follow global" choice shows the value currently in effect, so a site's real behaviour is visible without reading two screens. Existing sites that were written with `false` by older versions keep that value — guessing which ones were never actually chosen would be worse than leaving them alone.
+- The site form's submit checkbox became a three-way choice, and the account-bundle export/import carries the optional field.
+- The view list can be dragged into any order: the list order is the display order, a row dropped onto another lands after it, and the order survives a restart. Dragging also works with a site or tag filter on, because the drop target is looked up by view id in the full list instead of trusting an index into the visible subset.
+- The MCP site summary gained `autoSubmitEffective`, so an AI can tell whether a site will currently submit on its own.
 
 **Interaction and wording**
 

@@ -67,11 +67,15 @@ Site 1—N identities, site 1—N views. A view is optional: without one the sur
 
 **The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock on the right lists which accounts are open and in which slot — on every page, always. The left rail collapses to an icon strip by default and expands when the pointer reaches the left edge.
 
-With no view open, startup lands on one blank page whose surface is a search box: type an address or words and press enter. Collapsed, the dock keeps one site icon per running instance and hands the width back to the page:
+With no view open, startup lands on one blank page whose surface is a search box: type an address or words and press enter. The stage still carries a page strip along the top, just like a cell of a view. Collapsed, the dock keeps one site icon per running instance and hands the width back to the page:
 
 <p align="center">
   <img src="docs/screenshots/new-tab.png" alt="The blank page: one search field and a built-in backdrop" width="440" />
   <img src="docs/screenshots/dock-collapsed.png" alt="The dock collapsed to one icon per instance" width="440" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/flat-strip.png" alt="No view open, and the stage still shows its page strip" width="900" />
 </p>
 
 The identities page is where most of the day is spent: one card per identity with its role, login, session status and running state. Clicking a card opens a page in the default tab group of the built-in surface — it never rearranges the view that happens to be on stage. To put a page into a view, drag the tab there or use the view's own “+”. Launching a batch is the one exception: it opens its own view in the default layout, because a batch is about seeing several at once.
@@ -84,7 +88,8 @@ The identities page is where most of the day is spent: one card per identity wit
 
 - **Running-instances overlay**: a small always-on-top strip on the desktop lists every running identity, grouped by site. One click raises that browser window, restoring it if minimized — no relaunch, no reload. The row of the window that actually owns the OS foreground is highlighted live, so taskbar and Alt+Tab switches follow too. When you do not need it, it collapses into a small square showing only the window count, and snaps to the screen edge after a drag
 - **One-click cleanup**: close every instance at once from the bottom of the overlay, the running dock, or the tray menu; stopping a view closes only the tabs it launched, never hand-made or AI-added pages
-- **Batch launch**: a selection mode on the identities page opens several identities at once in the default layout, instead of clicking one by one while every new window covers the next card
+- **Batch launch**: click “select accounts” on the identities page, tick several, and open them at once in the default layout instead of clicking one by one while every new window covers the next card; the same selection can also be saved as a named view with its own layout
+- **Foldable groups**: sites by tag, accounts by site and flows by site each fold as a whole, and the page header has one switch that folds or opens all of them; the folded state is remembered per page across restarts
 - **Switch receipt**: after switching from the overlay, the account name floats briefly (~2 s) over the window that was raised, so the right account is obvious even when every page looks the same. The pill is click-through, never takes focus, and injects nothing into the page
 - **Fill on launch**: credentials are typed in as soon as the login form appears; the app names any input still unconfigured
 - **Per-page zoom**: Ctrl plus/minus zooms the page you are on and Ctrl + 0 returns it to the default; Settings carries the global default, which never overwrites a page you adjusted by hand. Each page keeps its own factor, so one cell can be enlarged for a dense table while the next stays at 100%
@@ -93,6 +98,7 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Built-in browser**: pages live inside the app window, so nothing pops up; several identities share one screen, and an AI client can read, click, type and screenshot while you watch and take over
 - **A view is one shared screen region**: create one from the running dock, then drag tabs into it (the drop point decides side by side or stacked), switch layouts, drag the seams to re-proportion slots; only one view is on stage at a time and the rest keep running off screen
 - **One slot = one browser instance**: a page opened from a page (`target="_blank"`, an OAuth popup) stays inside the same instance and just becomes the page that slot shows — it never takes an extra slot. Switching those pages does not require the dock: the slot header carries a tab strip for the instance in that cell, and one click decides which of its pages the cell shows. The dock lists one row per instance, with that instance's other pages indented beneath it
+- **The default tab group has the same strip as a view**: without any view, the stage still carries a page strip at the top — tabs, icons, close, right-click menu and “+”. To see several side by side, pick a layout from the “tabs” block of the running dock and every loose instance is grouped into a new view laid out that way
 - **On stage / off stage / selected**: a view shows only as many instances as it has slots; one click on an off-stage instance swaps it into the selected slot, and clicking again swaps back. A dock row can also be dragged straight onto a slot to replace it. Slot numbers make “which pages are on screen right now” a readable fact; an empty slot is a dashed cell with an “add a page here” button that drops a fresh tab straight into that cell
 - **One switch for built-in vs external**: pick the launch target at the top right of the title bar once, and launching from the identities page, batch launch, re-login and the views page all follow it. The same menu offers “open a clean session”, which opens in whichever surface that switch names. The dock's “add tab” always opens a built-in tab; the overlay always lists external windows only
 - **A site is a login recipe; a bookmark is an address**: the split new-tab button next to the address bar, the dock's ＋ and typing a site name all open a site — daily (reusing whatever login the daily profile already has), clean, or as one of its accounts with that account's session already loaded. An address that needs no login and no site is a bookmark

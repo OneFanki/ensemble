@@ -92,7 +92,11 @@ SaaS 登录常见「租户名 / 公司码 + 用户名 + 密码」三段式表单
 - 不阻塞启动：视图四开不会每个身份等 8 秒。
 - 找不到密码框时按「已登录」处理（`skipped: "not-login-page"`），不报错。
 - 外部模式（Firefox）与未存密码的情况直接跳过，`skipped` 里写明原因。
-- `autoSubmit` 打开时自动提交；双因素验证码仍需人工输入。
+- 是否提交按 `site.autoSubmit ?? settings.autoSubmitLogin` 解析（全局默认开）；提交动作是
+  **点登录按钮本身**，只有页面里真找不到按钮才退回 `requestSubmit()` / `form.submit()`。
+  `requestSubmit()` 对「按钮是 `type="button"`、提交逻辑写在脚本里」的 SPA 登录页完全无效，
+  却会让调用方以为已经提交——这条踩过，见 [踩坑库](./踩坑库.md)。
+- 双因素验证码仍需人工输入。
 
 ## 登录态检测
 

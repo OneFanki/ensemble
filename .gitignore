@@ -1,9 +1,11 @@
 node_modules/
 out/
 dist/
-release/
-release-new/
-release-old/
+# Packaged artifacts. One pattern rather than a line per ad-hoc output dir:
+# the electron-builder output path gets overridden (release-new, release-preview,
+# ...) whenever the usual one is held open by a running build, and a missed line
+# means 99 MB of installer staged into git.
+release*/
 *.local
 *.log
 # Local registry mirrors or credentials must stay machine specific.

@@ -1523,9 +1523,9 @@ export class EmbeddedBrowser {
 
     const view = this.activeView();
     if (!view) {
-      // Flat mode: one page fills the stage. No slot header exists here, so the
-      // page starts at the very top — reserving a header band would leave a
-      // black strip above a page that already has its title in the toolbar.
+      // Flat mode: one page fills the stage below a header band that carries the
+      // instance's page tabs. The band is the same height as a slot header, so
+      // switching between a view and the flat list does not move the page.
       const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
       const page = tab ? this.activePageOf(tab.instanceId) : undefined;
       // A page that has not navigated anywhere stays parked so the app's own
@@ -1533,7 +1533,7 @@ export class EmbeddedBrowser {
       // renderer draws it in the empty stage; it is plain HTML and needs no
       // native view behind it.
       if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
-        page.view.setBounds(this.stage);
+        page.view.setBounds(embeddedViewRect(this.stage));
       }
       if (tab?.devtools?.mode === "docked") this.placeDevTools(tab);
       return;
@@ -2577,7 +2577,8 @@ export class EmbeddedBrowser {
     }
     const active = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
     if (!active || active.instanceId !== tab.instanceId) return undefined;
-    return stage;
+    // The flat header band belongs to the renderer, like a slot header does.
+    return embeddedViewRect(stage);
   }
 
   /** Per-slot label height, exported so the chrome and the manager agree. */

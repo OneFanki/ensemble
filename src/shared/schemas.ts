@@ -36,7 +36,7 @@ export const siteDraftSchema = z.object({
   loginPath: localPath,
   authCheckPath: pathValue.optional(),
   defaultEngineId: z.string().optional(),
-  autoSubmit: z.boolean(),
+  autoSubmit: z.boolean().optional(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
 });
@@ -160,6 +160,7 @@ export const settingsPatchSchema = z.object({
   launchTarget: z.enum(["embedded", "external"]).optional(),
   defaultEngineId: z.string().optional(),
   autoFillOnLaunch: z.boolean().optional(),
+  autoSubmitLogin: z.boolean().optional(),
   browserZoom: z.number().int().min(50).max(200).optional(),
   /**
    * Only http(s) templates with `%s` are accepted. A custom engine is stored

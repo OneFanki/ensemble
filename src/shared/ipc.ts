@@ -97,6 +97,7 @@ export const IPC = {
   identityDetachReference: "identity:detach-reference",
   viewSave: "view:save",
   viewDelete: "view:delete",
+  viewMove: "view:move",
   viewSetLayout: "view:set-layout",
   viewSetSlots: "view:set-slots",
   viewRetile: "view:retile",
@@ -196,6 +197,8 @@ export const IPC = {
   /** Creates an empty view container; views are never created by dragging. */
   embeddedViewCreate: "embedded:view-create",
   embeddedViewLayout: "embedded:view-layout",
+  /** Groups every loose page into a new view with this layout. */
+  embeddedGroupLoose: "embedded:group-loose",
   /** Hand-dragged slot geometry, in fractions of the stage. */
   embeddedViewSlots: "embedded:view-slots",
   embeddedViewPin: "embedded:view-pin",
@@ -252,6 +255,8 @@ export interface EnsembleApi {
   detachReference(id: string): Promise<WorkspaceSnapshot>;
   saveView(draft: ViewDraft): Promise<WorkspaceSnapshot>;
   deleteView(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a view within the list; the stored array order is the list order. */
+  moveView(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   setViewLayout(viewId: string, layoutId: LayoutId): Promise<WorkspaceSnapshot>;
   setViewSlotAssignments(
     viewId: string,
@@ -447,6 +452,8 @@ export interface EnsembleApi {
   /** Creates an empty view and puts it on stage. */
   createEmbeddedView(input: { name?: string; layoutId?: LayoutId }): Promise<EmbeddedState>;
   setEmbeddedViewLayout(viewId: string, layoutId: LayoutId): Promise<EmbeddedState>;
+  /** Groups every loose page into a new view with this layout; returns its id. */
+  groupLooseTabs(layoutId: LayoutId): Promise<string | undefined>;
   /** Applies slot geometry dragged by hand (fractions of the stage). */
   setEmbeddedViewSlots(viewId: string, rects: SlotRect[]): Promise<EmbeddedState>;
   /** Binds a tab to one slot of a view; null empties the slot. */

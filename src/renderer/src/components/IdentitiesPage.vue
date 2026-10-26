@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import type { Identity, RoleColor } from "@shared/types";
-import { Check, CheckSquare, Download, HeartPulse, Play, Plus, Search, Square } from "lucide-vue-next";
+import { Check, CheckSquare, Download, HeartPulse, LayoutGrid, Play, Plus, Search, Square } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import GroupChevron from "./GroupChevron.vue";
+import GroupCollapseAll from "./GroupCollapseAll.vue";
 
 const emit = defineEmits<{
   newIdentity: [siteId?: string];
   editIdentity: [id: string];
   sessionHealth: [];
+  /** Opens the view form with these accounts already chosen. */
+  createView: [identityIds: string[]];
 }>();
 
 const store = useWorkspaceStore();
@@ -26,10 +31,29 @@ const query = ref("");
 const selecting = ref(false);
 const selected = ref<Set<string>>(new Set());
 
+const groupCollapse = useGroupCollapse("ensemble.groups.identities");
+
+/**
+ * Accounts "全选可见" reaches.
+ *
+ * A folded group's cards are not on screen, so counting them as visible would
+ * make the label lie: the button says "select visible" and the user cannot see
+ * what it picked. Accounts picked while their group was open stay picked — the
+ * selection set is independent of what is drawn.
+ */
+const selectableIdentities = computed(() =>
+  visibleIdentities.value.filter(
+    (identity) =>
+      !groupCollapse.isCollapsed(
+        store.sites.some((site) => site.id === identity.siteId) ? identity.siteId : "__orphan__",
+      ),
+  ),
+);
+
 const allSelected = computed(
   () =>
-    visibleIdentities.value.length > 0 &&
-    visibleIdentities.value.every((identity) => selected.value.has(identity.id)),
+    selectableIdentities.value.length > 0 &&
+    selectableIdentities.value.every((identity) => selected.value.has(identity.id)),
 );
 
 const notRunningSelected = computed(() =>
@@ -49,7 +73,7 @@ function toggleSelected(identityId: string) {
 function toggleAll() {
   selected.value = allSelected.value
     ? new Set()
-    : new Set(visibleIdentities.value.map((identity) => identity.id));
+    : new Set(selectableIdentities.value.map((identity) => identity.id));
 }
 
 function startSelecting() {
@@ -71,6 +95,22 @@ async function launchSelected() {
   } else {
     await store.launchIdentities(ids);
   }
+  endSelecting();
+}
+
+/**
+ * Turns the selection into a saved view.
+ *
+ * Launching a batch already opens a container, but that container is scratch:
+ * it is named by the surface and gone from the workspace once closed. The
+ * question after picking six accounts is often "this is the group I keep coming
+ * back to" — so the selection also routes into the view form, where it gets a
+ * name, a layout and a place in the views page.
+ */
+function createViewFromSelection() {
+  const ids = [...selected.value];
+  if (ids.length === 0) return;
+  emit("createView", ids);
   endSelecting();
 }
 
@@ -175,6 +215,9 @@ const groups = computed(() => {
   }
   return result;
 });
+
+const groupKeys = computed(() => groups.value.map((group) => group.siteId));
+const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
 
 /** Tags that actually appear on some account, so the filter never lists dead ends. */
 const filterTags = computed(() => {
@@ -337,11 +380,17 @@ import AppButton from "./ui/AppButton.vue";
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
       <AppButton v-if="!selecting"
+        data-batch-select
         :title="$t('app.batchSelectHint')"
         @click="startSelecting">
         <CheckSquare :size="12" />
         {{ $t("app.batchSelect") }}
       </AppButton>
+      <GroupCollapseAll
+        v-if="!selecting && groups.length > 1"
+        :all-collapsed="allCollapsed"
+        @toggle="groupCollapse.toggleAll(groupKeys)"
+      />
       <AppButton class="health" @click="emit('sessionHealth')">
         <HeartPulse :size="13" />
         {{ $t("app.sessionHealth") }}
@@ -395,6 +444,13 @@ import AppButton from "./ui/AppButton.vue";
       </span>
       <span class="sel-note">{{ $t("app.batchLaunchNote") }}</span>
       <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
+      <!-- Saving the selection as a view is the durable version of the batch
+           launch: same picking gesture, but the group gets a name, a layout and
+           a row on the views page instead of a scratch container. -->
+      <AppButton :disabled="selected.size === 0" data-batch-create-view @click="createViewFromSelection">
+        <LayoutGrid :size="12" />
+        {{ $t("app.batchCreateView") }}
+      </AppButton>
       <!-- Sharing accounts is a selection action too: pick the ones a colleague
            needs, not the whole workspace. -->
       <AppButton :disabled="selected.size === 0"
@@ -438,7 +494,22 @@ import AppButton from "./ui/AppButton.vue";
       <!-- Grouped by site; a view may span sites, so the account page no longer
            hides everything outside one global "current site". -->
       <template v-for="group in groups" :key="group.siteId">
-        <div class="group-head">
+        <!-- The whole header folds the group: the arrow alone is a 16px target,
+             and this row is what the eye is on when it wants the section gone. -->
+        <div
+          class="group-head"
+          :class="{ collapsed: groupCollapse.isCollapsed(group.siteId) }"
+          role="button"
+          tabindex="0"
+          :aria-expanded="!groupCollapse.isCollapsed(group.siteId)"
+          @click="groupCollapse.toggle(group.siteId)"
+          @keydown.enter.prevent="groupCollapse.toggle(group.siteId)"
+        >
+          <GroupChevron
+            :collapsed="groupCollapse.isCollapsed(group.siteId)"
+            :name="group.name"
+            @toggle="groupCollapse.toggle(group.siteId)"
+          />
           <span class="group-name">{{ group.name }}</span>
           <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
           <span class="group-count mono">{{ group.people.length }}</span>
@@ -447,88 +518,90 @@ import AppButton from "./ui/AppButton.vue";
             type="button"
             class="group-add"
             :title="$t('app.newIdentityHere')"
-            @click="emit('newIdentity', group.siteId)"
+            @click.stop="emit('newIdentity', group.siteId)"
           >
             <Plus :size="11" />
           </button>
         </div>
-        <button
-          v-for="identity in group.people"
-          :key="identity.id"
-          type="button"
-          class="id-card"
-          :class="{
-            running: Boolean(store.instanceFor(identity.id)),
-            picking: selecting,
-            picked: selected.has(identity.id),
-          }"
-          :style="{ '--role': roleVar(identity.color) }"
-          :aria-pressed="selecting ? selected.has(identity.id) : undefined"
-          @click="
-            selecting
-              ? toggleSelected(identity.id)
-              : store.instanceFor(identity.id)
-                ? launch(identity)
-                : emit('editIdentity', identity.id)
-          "
-        >
-          <!-- Selection mode hides the per-card actions: in that mode the card is a
-               checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
-          <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
-            <Check v-if="selected.has(identity.id)" :size="11" />
-          </span>
-          <div class="card-top">
-            <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
-            <span class="who">
-              <span class="name">{{ identity.name }}</span>
-              <span class="acct mono">{{ identity.username }}</span>
+        <template v-if="!groupCollapse.isCollapsed(group.siteId)">
+          <button
+            v-for="identity in group.people"
+            :key="identity.id"
+            type="button"
+            class="id-card"
+            :class="{
+              running: Boolean(store.instanceFor(identity.id)),
+              picking: selecting,
+              picked: selected.has(identity.id),
+            }"
+            :style="{ '--role': roleVar(identity.color) }"
+            :aria-pressed="selecting ? selected.has(identity.id) : undefined"
+            @click="
+              selecting
+                ? toggleSelected(identity.id)
+                : store.instanceFor(identity.id)
+                  ? launch(identity)
+                  : emit('editIdentity', identity.id)
+            "
+          >
+            <!-- Selection mode hides the per-card actions: in that mode the card is a
+                 checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
+            <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
+              <Check v-if="selected.has(identity.id)" :size="11" />
             </span>
-            <span
-              class="state mono"
-              :class="{
-                live: Boolean(store.instanceFor(identity.id)),
-                warn: identity.status === 'expired',
-              }"
-            >
-              <span class="dot"></span>{{ statusLabel(identity) }}
-            </span>
-          </div>
+            <div class="card-top">
+              <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
+              <span class="who">
+                <span class="name">{{ identity.name }}</span>
+                <span class="acct mono">{{ identity.username }}</span>
+              </span>
+              <span
+                class="state mono"
+                :class="{
+                  live: Boolean(store.instanceFor(identity.id)),
+                  warn: identity.status === 'expired',
+                }"
+              >
+                <span class="dot"></span>{{ statusLabel(identity) }}
+              </span>
+            </div>
 
-          <div class="meta-row">
-            <span class="tag">{{ identity.role }}</span>
-            <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
-          </div>
+            <div class="meta-row">
+              <span class="tag">{{ identity.role }}</span>
+              <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
+            </div>
 
-          <div class="pw-row">
-            <span class="dots mono">{{ store.identityPasswordSet(identity) ? "••••••••" : "— — — —" }}</span>
-            <span class="inherit mono">{{ passwordLabel(identity) }}</span>
-          </div>
+            <div class="pw-row">
+              <span class="dots mono">{{ store.identityPasswordSet(identity) ? "••••••••" : "— — — —" }}</span>
+              <span class="inherit mono">{{ passwordLabel(identity) }}</span>
+            </div>
 
-          <div v-if="!selecting" class="card-actions">
-            <template v-if="store.instanceFor(identity.id)">
-              <span class="launch" @click.stop="launch(identity)">
+            <div v-if="!selecting" class="card-actions">
+              <template v-if="store.instanceFor(identity.id)">
+                <span class="launch" @click.stop="launch(identity)">
+                  <Play :size="10" />
+                  {{ $t("app.switchTo") }}
+                </span>
+                <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
+                  <Square :size="9" />
+                  {{ $t("app.stop") }}
+                </span>
+              </template>
+              <span v-else class="launch" @click.stop="launch(identity)">
                 <Play :size="10" />
-                {{ $t("app.switchTo") }}
+                {{ $t("app.launch") }}
               </span>
-              <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
-                <Square :size="9" />
-                {{ $t("app.stop") }}
-              </span>
-            </template>
-            <span v-else class="launch" @click.stop="launch(identity)">
-              <Play :size="10" />
-              {{ $t("app.launch") }}
-            </span>
-            <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
-            <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
-            <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
-          </div>
-          <div v-else class="card-pick-note mono">
-            {{
-              store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
-            }}
-          </div>
-        </button>
+              <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
+              <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
+              <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
+            </div>
+            <div v-else class="card-pick-note mono">
+              {{
+                store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
+              }}
+            </div>
+          </button>
+        </template>
       </template>
 
       <div v-if="!visibleIdentities.length" class="empty">
@@ -800,14 +873,27 @@ h1 {
 .group-head {
   grid-column: 1 / -1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 10px 2px 2px;
   border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
 }
 
 .group-head:first-child {
   padding-top: 0;
+}
+
+.group-head:hover .group-name {
+  color: var(--text);
+}
+
+/* Folded: the name and count stay, the cards go. A dashed rule is the quiet
+   version of "this section is closed" — a solid rule with nothing under it reads
+   as a rendering bug. */
+.group-head.collapsed {
+  border-bottom-style: dashed;
+  padding-bottom: 6px;
 }
 
 .group-name {

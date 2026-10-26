@@ -825,6 +825,25 @@ export class WorkspaceService {
   }
 
   /**
+   * Moves a view within the list.
+   *
+   * The stored order *is* the list order: `data.views` is a JSON array, so the
+   * order a user drags into is the order that survives a restart, and nothing has
+   * to keep a parallel `order` field in sync with it. `toIndex` is the position
+   * the view should occupy after the move, counting from 0 in the list the user
+   * is looking at.
+   */
+  moveView(id: string, toIndex: number): void {
+    const from = this.data.views.findIndex((item) => item.id === id);
+    if (from < 0) throw new Error(t("error.viewMissing"));
+    const [moved] = this.data.views.splice(from, 1);
+    if (!moved) return;
+    const target = Math.max(0, Math.min(this.data.views.length, Math.trunc(toIndex)));
+    this.data.views.splice(target, 0, moved);
+    this.persist();
+  }
+
+  /**
    * Creates or updates a flow.
    *
    * Validation happens here rather than in the dialog so every entry point —
@@ -1615,6 +1634,17 @@ export class WorkspaceService {
    */
   defaultEngine(): Engine | undefined {
     return this.engines.find((item) => item.cdp) ?? this.engines[0];
+  }
+
+  /**
+   * Whether filling a site's login form should also press the button.
+   *
+   * Same shape as the engine default: one global answer, with a per-site escape
+   * hatch. Resolved in one place so the external launcher, the embedded surface
+   * and the MCP fill tool cannot disagree about it.
+   */
+  effectiveAutoSubmit(site: Pick<Site, "autoSubmit">): boolean {
+    return site.autoSubmit ?? this.settings.autoSubmitLogin;
   }
 
   /**
@@ -2766,7 +2796,7 @@ export class WorkspaceService {
       buildFillExpression({
         username: identity.username,
         password: resolved.password,
-        submit: site.autoSubmit,
+        submit: this.effectiveAutoSubmit(site),
         extraFields: resolveLoginFields(site, identity),
       }),
     );

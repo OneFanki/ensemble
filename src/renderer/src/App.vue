@@ -214,7 +214,8 @@ function openNewSite(seed?: Partial<SiteDraft>) {
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     authCheckPath: "",
-    autoSubmit: false,
+    // No opinion: follow the global setting until someone decides otherwise.
+    autoSubmit: undefined,
     extraFields: [],
     tagIds: [],
     ...seed,
@@ -296,18 +297,30 @@ function openEditIdentity(identityId: string) {
 /**
  * A new view starts with members from the most recently used site, but the
  * dialog lists every identity — a view is one screen, not one deployment.
+ *
+ * `seed` is how a batch selection becomes a saved view: the accounts come in
+ * already chosen, and the rest of the form (name, layout, tags) is the normal
+ * new-view experience. The home site follows the first member so a cross-site
+ * selection still lands on a real site instead of the last-used one.
  */
-function openNewView() {
+function openNewView(seed?: { identityIds: string[] }) {
   const site = store.defaultSite;
+  const seeded = seed?.identityIds.filter((id) => store.identities.some((item) => item.id === id));
+  const firstMemberSite = seeded?.length
+    ? store.identities.find((item) => item.id === seeded[0])?.siteId
+    : undefined;
   viewDraft.value = {
-    siteId: site?.id ?? store.sites[0]?.id ?? "",
+    siteId: firstMemberSite ?? site?.id ?? store.sites[0]?.id ?? "",
     name: "",
-    identityIds: site
-      ? store
-          .identitiesOf(site.id)
-          .slice(0, 3)
-          .map((item) => item.id)
-      : [],
+    identityIds:
+      seeded && seeded.length > 0
+        ? seeded
+        : site
+          ? store
+              .identitiesOf(site.id)
+              .slice(0, 3)
+              .map((item) => item.id)
+          : [],
     layoutId: store.settings.layout,
     slotAssignments: {},
     paths: {},
@@ -416,7 +429,7 @@ async function createSiteFromIdentity(input: { name: string; baseUrl: string }) 
     name: input.name,
     baseUrl: input.baseUrl,
     loginPath: "/login",
-    autoSubmit: false,
+    autoSubmit: undefined,
   });
   if (!result) return;
   const saved = result.sites.find((item) => item.name === input.name);
@@ -528,6 +541,7 @@ async function handleLocale(locale: "zh" | "en") {
           @new-identity="openNewIdentity"
           @edit-identity="openEditIdentity"
           @session-health="healthOpen = true"
+          @create-view="openNewView({ identityIds: $event })"
         />
         <ViewsPage
           v-else-if="view === 'views'"

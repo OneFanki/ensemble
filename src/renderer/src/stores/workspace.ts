@@ -244,6 +244,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         layout: "2x2",
         launchTarget: "embedded",
         autoFillOnLaunch: true,
+        autoSubmitLogin: true,
         browserZoom: 100,
         searchEngineId: DEFAULT_SEARCH_ENGINE_ID,
         customSearchEngines: [],
@@ -475,6 +476,21 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function deleteView(id: string) {
     return run("view", () => window.ensemble.deleteView(id));
+  }
+
+  /**
+   * Drag-to-reorder for the views list.
+   *
+   * Applies the returned snapshot instead of waiting for the broadcast: the row
+   * the user just dropped has to stay where they put it, and a re-broadcast that
+   * lands a frame later would let the list visibly snap back first.
+   */
+  async function moveView(id: string, toIndex: number) {
+    return run("view", async () => {
+      const next = await window.ensemble.moveView(id, toIndex);
+      apply(next);
+      return next;
+    });
   }
 
   async function saveFlow(draft: FlowDraft) {
@@ -866,6 +882,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     copyViewToSite,
     saveView,
     deleteView,
+    moveView,
     saveFlow,
     deleteFlow,
     saveBookmark,

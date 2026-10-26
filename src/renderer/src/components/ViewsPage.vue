@@ -36,6 +36,15 @@ const selectedViewId = ref("");
 const selectedMemberId = ref<string | null>(null);
 const draggedId = ref<string | null>(null);
 const dropTarget = ref<number | null>(null);
+/**
+ * Reordering the list itself.
+ *
+ * Kept separate from `draggedId` (which carries slot members): the two drags
+ * start from different elements and drop onto different targets, and sharing one
+ * piece of state would let a member drag reorder the list or vice versa.
+ */
+const draggedViewId = ref<string | null>(null);
+const viewDropIndex = ref<number | null>(null);
 /** Target site of the "copy to another site" dialog. */
 const copyTargetId = ref<string | null>(null);
 /** Filters: a view matches if any member (or the view) belongs to this site/tag. */
@@ -187,6 +196,48 @@ function selectMember(identityId: string) {
   selectedMemberId.value = selectedMemberId.value === identityId ? null : identityId;
 }
 
+/*
+ * Reordering the list by dragging a row.
+ *
+ * The drop index is an index into `visibleViews`, which is filtered — so it is
+ * translated back to a position in the stored array before the move. Using the
+ * visible index directly would jump the view to the wrong place as soon as a site
+ * or tag filter is on, which is exactly when a user would not notice until the
+ * next reload.
+ */
+function onViewDragStart(view: View, event: DragEvent): void {
+  draggedViewId.value = view.id;
+  event.dataTransfer?.setData("text/plain", `view:${view.id}`);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onViewDragOver(index: number, event: DragEvent): void {
+  if (!draggedViewId.value) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  viewDropIndex.value = index;
+}
+
+function onViewDragLeave(index: number): void {
+  if (viewDropIndex.value === index) viewDropIndex.value = null;
+}
+
+async function onViewDrop(target: View, event: DragEvent): Promise<void> {
+  event.preventDefault();
+  const movingId = draggedViewId.value;
+  draggedViewId.value = null;
+  viewDropIndex.value = null;
+  if (!movingId || movingId === target.id) return;
+  const toIndex = store.views.findIndex((item) => item.id === target.id);
+  if (toIndex < 0) return;
+  await store.moveView(movingId, toIndex);
+}
+
+function onViewDragEnd(): void {
+  draggedViewId.value = null;
+  viewDropIndex.value = null;
+}
+
 function chooseLayout(preset: LayoutPreset) {
   const view = selectedView.value;
   if (!view || view.layoutId === preset.id) return;
@@ -336,9 +387,21 @@ async function confirmCopy(): Promise<void> {
           type="button"
           role="option"
           class="view-row"
-          :class="{ running: viewStatus(view) !== $t('app.notStarted'), selected: view.id === selectedView?.id }"
+          :class="{
+            running: viewStatus(view) !== $t('app.notStarted'),
+            selected: view.id === selectedView?.id,
+            dragging: draggedViewId === view.id,
+            'drop-here': viewDropIndex === index && draggedViewId !== view.id,
+          }"
           :aria-selected="view.id === selectedView?.id"
+          :draggable="true"
+          :title="$t('app.viewReorderHint')"
           @click="selectedViewId = view.id"
+          @dragstart="onViewDragStart(view, $event)"
+          @dragover="onViewDragOver(index, $event)"
+          @dragleave="onViewDragLeave(index)"
+          @drop="onViewDrop(view, $event)"
+          @dragend="onViewDragEnd"
         >
           <span class="idx mono">{{ String(index + 1).padStart(2, "0") }}</span>
           <span class="view-copy">
@@ -656,6 +719,17 @@ h1 {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
   background: color-mix(in srgb, var(--accent) 5%, var(--surface));
   color: var(--text);
+}
+
+/* The row being dragged fades; the row it will land on gets a rule on its top
+   edge. Two marks for two different facts — fading for "this is moving", the
+   rule for "it goes here" — rather than highlighting both rows the same way. */
+.view-row.dragging {
+  opacity: 0.45;
+}
+
+.view-row.drop-here {
+  box-shadow: inset 0 2px 0 0 var(--accent);
 }
 
 .view-row.running .state {

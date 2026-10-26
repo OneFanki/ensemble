@@ -5,8 +5,11 @@ import type { Identity, Site } from "@shared/types";
 import { ArrowRight, ListChecks, Pencil, Play, Plus, Trash2, X } from "lucide-vue-next";
 import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
+import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
+import GroupChevron from "./GroupChevron.vue";
+import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
@@ -52,6 +55,10 @@ const groups = computed(() => {
     flows: items,
   }));
 });
+
+const groupCollapse = useGroupCollapse("ensemble.groups.flows");
+const groupKeys = computed(() => groups.value.map((group) => group.siteId));
+const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
 
 const selected = computed<Flow | undefined>(
   () => flows.value.find((flow) => flow.id === selectedId.value) ?? flows.value[0],
@@ -221,6 +228,11 @@ async function saveDraft() {
         <p class="head-note">{{ $t("app.flowsSubtitle") }}</p>
       </div>
       <div class="head-actions">
+        <GroupCollapseAll
+          v-if="groups.length > 1"
+          :all-collapsed="allCollapsed"
+          @toggle="groupCollapse.toggleAll(groupKeys)"
+        />
         <AppButton variant="primary" :disabled="!store.sites.length"
           :title="store.sites.length ? '' : $t('app.flowNoSite')"
           @click="openEditor()">
@@ -242,12 +254,25 @@ async function saveDraft() {
     <div v-else class="workspace">
       <div class="flow-list" role="listbox" :aria-label="$t('app.flows')">
         <template v-for="group in groups" :key="group.siteId">
-          <div class="group-head">
+          <div
+            class="group-head"
+            :class="{ collapsed: groupCollapse.isCollapsed(group.siteId) }"
+            role="button"
+            tabindex="0"
+            :aria-expanded="!groupCollapse.isCollapsed(group.siteId)"
+            @click="groupCollapse.toggle(group.siteId)"
+            @keydown.enter.prevent="groupCollapse.toggle(group.siteId)"
+          >
+            <GroupChevron
+              :collapsed="groupCollapse.isCollapsed(group.siteId)"
+              :name="group.name"
+              @toggle="groupCollapse.toggle(group.siteId)"
+            />
             <span class="group-name">{{ group.name }}</span>
             <span class="group-count mono">{{ group.flows.length }}</span>
           </div>
           <button
-            v-for="flow in group.flows"
+            v-for="flow in groupCollapse.isCollapsed(group.siteId) ? [] : group.flows"
             :key="flow.id"
             type="button"
             role="option"
@@ -663,6 +688,19 @@ async function saveDraft() {
   color: var(--faint);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  cursor: pointer;
+  /* The arrow is pulled into the row's own padding, so the group label keeps the
+     left edge the flow rows below it have. */
+  margin-left: -4px;
+}
+
+.group-head:hover .group-name {
+  color: var(--text-secondary);
+}
+
+/* Folded: the label and its count remain, the rows go. */
+.group-head.collapsed {
+  padding-bottom: 8px;
 }
 
 .group-name {

@@ -22,6 +22,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // which is the whole point. Switching to external is one click in the title bar.
   launchTarget: "embedded",
   autoFillOnLaunch: true,
+  // Submitting is what turns a filled form into a signed-in session; leaving it
+  // off parks every launch one click short of useful.
+  autoSubmitLogin: true,
   // 100% is what a site expects; the setting exists for high-DPI screens and
   // small laptops, not as something to tune up front.
   browserZoom: 100,

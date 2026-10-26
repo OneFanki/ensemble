@@ -79,7 +79,10 @@ writeFileSync(
         loginPath: "/login",
         authCheckPath: "/api/me",
         autoSubmit: false,
-        tagIds: [],
+        // One tag each, so the sites page renders two foldable groups. With
+        // every site untagged there was a single group and "collapse all" could
+        // not be exercised at all.
+        tagIds: [tags[0].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -93,7 +96,7 @@ writeFileSync(
         baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
         loginPath: "/login",
         autoSubmit: false,
-        tagIds: [],
+        tagIds: [tags[1].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -686,14 +689,15 @@ try {
       tagNote: Boolean(document.querySelector('.tag-note')),
       active: rows.filter((el) => el.classList.contains('active')).length,
       // The live page must be parked before the panel shows; the frozen frame
-      // is what proves the parking finished.
+      // is what proves the parking finished. The header band (and the page strip
+      // it carries) is app chrome and stays visible — only the native page has
+      // to go, which is exactly what the frozen frame stands in for.
       frozen: document.querySelectorAll('.stage .frozen').length,
-      stageOnScreen: Boolean(document.querySelector('.stage .slot-header')),
     };
   })()`);
   check(
     "the chevron opens the site menu with the live page already parked",
-    menuOpen?.open === true && menuOpen?.frozen > 0 && menuOpen?.stageOnScreen === false,
+    menuOpen?.open === true && menuOpen?.frozen > 0,
     menuOpen,
   );
   check(
@@ -1012,6 +1016,115 @@ try {
 
   await client.evaluate(`(() => {
     document.getElementById('__e2e-no-transition')?.remove();
+    return true;
+  })()`);
+
+  // --- Flat mode: the default tab group has the same controls as a cell ----
+  // The stage showed one page with no strip at all: an instance opened into the
+  // default tab group could not reach its other pages, had no "+" and no page
+  // menu. Same instance, same controls — only the number of cells differs.
+  const flatStrip = await client.evaluate(`(async () => {
+    for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
+      await window.ensemble.closeEmbeddedTab(tab.id);
+    }
+    // A loose page on a real URL, then a second page inside the same instance.
+    const first = await window.ensemble.openEmbeddedTab({ viewId: null, url: ${JSON.stringify(PAGE_URL)} });
+    await new Promise((r) => setTimeout(r, 1400));
+    await window.ensemble.openEmbeddedTabInInstance(first.instanceId);
+    await new Promise((r) => setTimeout(r, 900));
+    const state = await window.ensemble.getEmbeddedState();
+    const heads = () => document.querySelectorAll('.stage .slot-header').length;
+    const flatHeads = () => document.querySelectorAll('.stage .slot-header.flat').length;
+    const tabs = () => [...document.querySelectorAll('.stage .slot-tab')];
+    const before = {
+      viewOnStage: state.activeViewId ?? null,
+      heads: heads(),
+      flatHeads: flatHeads(),
+      tabs: tabs().length,
+      hasAdd: Boolean(document.querySelector('.stage .slot-tab-add')),
+      current: tabs().findIndex((el) => el.classList.contains('current')),
+    };
+    // Switching pages from the strip must move the page, not the cell.
+    const other = tabs().find((el) => !el.classList.contains('current'));
+    other?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const switched = {
+      activeTabId: (await window.ensemble.getEmbeddedState()).activeTabId,
+      clickedId: other?.getAttribute('data-tab-id') ?? null,
+      current: tabs().findIndex((el) => el.classList.contains('current')),
+    };
+    return { before, switched };
+  })()`);
+  check(
+    "the flat stage carries a page strip for its instance",
+    flatStrip?.before.viewOnStage === null &&
+      flatStrip?.before.heads === 1 &&
+      flatStrip?.before.flatHeads === 1 &&
+      flatStrip?.before.tabs === 2 &&
+      flatStrip?.before.hasAdd === true &&
+      flatStrip?.before.current >= 0,
+    flatStrip,
+  );
+  check(
+    "a flat page tab switches which page the stage shows",
+    flatStrip?.switched.clickedId !== null &&
+      flatStrip?.switched.activeTabId === flatStrip?.switched.clickedId &&
+      flatStrip?.switched.current >= 0,
+    flatStrip,
+  );
+
+  // A layout for the flat list: choosing one groups the loose pages into a view
+  // with that layout, which is how the default tab group stops being the one
+  // place with no layout.
+  const flatLayout = await client.evaluate(`(async () => {
+    const select = document.querySelector('.dock [data-flat-layout] .select-trigger');
+    const before = await window.ensemble.getEmbeddedState();
+    select?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const options = [...document.querySelectorAll('.select-panel .option')].map((el) =>
+      el.querySelector('.option-label')?.textContent.trim(),
+    );
+    const target = [...document.querySelectorAll('.select-panel .option')].find((el) =>
+      (el.querySelector('.option-label')?.textContent ?? "").includes("2 × 1"),
+    );
+    target?.click();
+    await new Promise((r) => setTimeout(r, 1200));
+    const after = await window.ensemble.getEmbeddedState();
+    const view = after.views.find((item) => item.id === after.activeViewId);
+    const instancesOf = (tabs) => new Set(tabs.filter((tab) => !tab.viewId).map((tab) => tab.instanceId)).size;
+    return {
+      trigger: Boolean(select),
+      options,
+      beforeViews: before.views.length,
+      beforeLoose: before.tabs.filter((tab) => !tab.viewId).length,
+      beforeLooseInstances: instancesOf(before.tabs),
+      afterViews: after.views.length,
+      activeViewId: after.activeViewId ?? null,
+      layoutId: view?.layoutId ?? null,
+      // A cell holds an instance, so the two pages of one browser are one member.
+      members: view?.slotTabs?.filter(Boolean).length ?? 0,
+      looseLeft: after.tabs.filter((tab) => !tab.viewId).length,
+      cells: document.querySelectorAll('.stage .slot-header:not(.flat)').length,
+    };
+  })()`);
+  check(
+    "the tabs block offers layouts and turns loose pages into a view",
+    flatLayout?.trigger === true &&
+      flatLayout?.options?.some((label) => label.includes("2 × 1")) === true &&
+      flatLayout?.afterViews === flatLayout?.beforeViews + 1 &&
+      flatLayout?.layoutId === "2x1" &&
+      flatLayout?.members === flatLayout?.beforeLooseInstances &&
+      flatLayout?.looseLeft === 0 &&
+      flatLayout?.cells === 1,
+    flatLayout,
+  );
+
+  // Put the surface back to one view with one page: the checks below count cells.
+  await client.evaluate(`(async () => {
+    for (const view of (await window.ensemble.getEmbeddedState()).views) {
+      await window.ensemble.closeEmbeddedView(view.id, "all");
+    }
+    await new Promise((r) => setTimeout(r, 500));
     return true;
   })()`);
 
@@ -1426,7 +1539,17 @@ try {
 
   const menu = await client.evaluate(`(async () => {
     const tab = document.querySelector('.stage .slot-tab');
-    if (!tab) return null;
+    if (!tab) {
+      const state = await window.ensemble.getEmbeddedState();
+      return {
+        missing: true,
+        tabs: state.tabs.length,
+        activeTabId: state.activeTabId ?? null,
+        activeViewId: state.activeViewId ?? null,
+        heads: document.querySelectorAll('.stage .slot-header').length,
+        stage: Boolean(document.querySelector('.stage')),
+      };
+    }
     const rect = tab.getBoundingClientRect();
     tab.dispatchEvent(new MouseEvent("contextmenu", {
       bubbles: true,
@@ -1684,6 +1807,405 @@ try {
       flowsEmpty?.dx <= 2 &&
       Math.abs(flowsEmpty.above - flowsEmpty.below) <= 6,
     flowsEmpty,
+  );
+
+  // --- Group headers fold, per group and all at once -----------------------
+  // Every grouped list (sites by tag, accounts by site, flows by site) had fixed
+  // headers: fifteen tags meant fifteen sections and no way to tidy up.
+  await client.evaluate(`(() => { document.querySelector('[data-nav="sites"]')?.click(); return true; })()`);
+  await waitFor(client, `document.querySelectorAll('.sites .group-head').length >= 2`);
+
+  const sitesFold = await client.evaluate(`(async () => {
+    const heads = () => [...document.querySelectorAll('.sites .group-head')];
+    const cards = () => document.querySelectorAll('.sites .env-card').length;
+    const before = { heads: heads().length, cards: cards() };
+    // Collapse the first group through its header row, not the tiny arrow.
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const folded = {
+      cards: cards(),
+      expanded: heads()[0]?.getAttribute('aria-expanded'),
+      nameStillShown: Boolean(heads()[0]?.querySelector('.group-name')?.textContent.trim()),
+      secondStillOpen: heads()[1]?.getAttribute('aria-expanded'),
+    };
+    // The whole header stays: a folded section must still say what is folded.
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const reopened = { cards: cards(), expanded: heads()[0]?.getAttribute('aria-expanded') };
+
+    // One switch for the page. It lives in the header row and changes its own
+    // label, so its direction is checkable from the DOM.
+    const all = () => document.querySelector('.sites [data-group-collapse-all]');
+    const label = () => [...document.querySelectorAll('.sites .head-actions button')]
+      .map((el) => el.textContent.replace(/\\s+/g, ' ').trim());
+    const beforeLabel = label();
+    all()?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const collapsedAll = {
+      cards: cards(),
+      anyOpen: heads().some((h) => h.getAttribute('aria-expanded') === 'true'),
+      labels: label(),
+    };
+    // Same button, now the other direction.
+    all()?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const expandedAll = { cards: cards(), anyClosed: heads().some((h) => h.getAttribute('aria-expanded') === 'false') };
+    return { before, folded, reopened, beforeLabel, collapsedAll, expandedAll };
+  })()`);
+  check(
+    "a group header folds its cards and keeps saying what is folded",
+    sitesFold?.before.heads >= 2 &&
+      sitesFold?.before.cards > 0 &&
+      sitesFold?.folded.cards < sitesFold?.before.cards &&
+      sitesFold?.folded.expanded === "false" &&
+      sitesFold?.folded.nameStillShown === true &&
+      sitesFold?.folded.secondStillOpen === "true",
+    sitesFold,
+  );
+  check(
+    "clicking the header again reopens the group",
+    sitesFold?.reopened.cards === sitesFold?.before.cards &&
+      sitesFold?.reopened.expanded === "true",
+    sitesFold,
+  );
+  check(
+    "one switch folds every group, and it turns into the opposite action",
+    sitesFold?.collapsedAll.cards === 0 &&
+      sitesFold?.collapsedAll.anyOpen === false &&
+      sitesFold?.collapsedAll.labels?.some((text) => text.includes("全部展开")) === true,
+    sitesFold,
+  );
+  check(
+    "the same switch expands every group again",
+    sitesFold?.expandedAll.cards === sitesFold?.before.cards &&
+      sitesFold?.expandedAll.anyClosed === false,
+    sitesFold,
+  );
+
+  // --- Auto-submit: global default, per-site override, resolved value ------
+  // The control is three-way because "follow the global setting" is not a
+  // boolean. The resolved value has to be readable without opening the dropdown:
+  // "follow global" is what most sites will be left on, so answering "will this
+  // site submit?" only while the list is open answers it when it no longer matters.
+  const submitMode = await client.evaluate(`(async () => {
+    const dialog = () => [...document.querySelectorAll('[role="dialog"]')].find(
+      (el) => el.querySelector('.field .select'),
+    );
+    const effective = () => dialog()?.querySelector('[data-submit-effective]')?.textContent.trim() ?? "";
+    const trigger = () => dialog()?.querySelector('.select-trigger .select-value')?.textContent.trim() ?? "";
+    const openForm = async () => {
+      document.querySelector('.sites .head-actions .btn.primary')?.click();
+      await new Promise((r) => setTimeout(r, 500));
+      return dialog();
+    };
+    const closeForm = async () => {
+      dialog()?.querySelector('.close')?.click();
+      await new Promise((r) => setTimeout(r, 300));
+    };
+
+    const before = await window.ensemble.getWorkspace();
+    document.querySelector('[data-nav="sites"]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+
+    await openForm();
+    const onDefault = { trigger: trigger(), effective: effective() };
+    await closeForm();
+
+    // Flip the global answer and reopen: the same "follow global" state must now
+    // report the other outcome, without the site storing anything.
+    await window.ensemble.saveSettings({ autoSubmitLogin: false });
+    await new Promise((r) => setTimeout(r, 400));
+    await openForm();
+    const offDefault = { trigger: trigger(), effective: effective() };
+
+    // Picking an explicit answer hides the resolved line — the choice is right
+    // there in the trigger, and two statements of the same thing would drift.
+    dialog()?.querySelector('.select-trigger')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const always = [...document.querySelectorAll('.select-panel .option')].find(
+      (el) => el.textContent.trim() === '总是自动提交',
+    );
+    always?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const overridden = { trigger: trigger(), effective: effective() };
+    await closeForm();
+
+    await window.ensemble.saveSettings({ autoSubmitLogin: before.settings.autoSubmitLogin });
+    await new Promise((r) => setTimeout(r, 400));
+    // Closing the form cancels: test site fixtures already carry a stored
+    // autoSubmit, so counting how many sites have one says nothing. The
+    // question here is whether cancelling created a site, and it must not.
+    return {
+      globalWas: before.settings.autoSubmitLogin,
+      onDefault,
+      offDefault,
+      overridden,
+      siteCount: { was: before.sites.length, now: (await window.ensemble.getWorkspace()).sites.length },
+    };
+  })()`);
+  check(
+    "the resolved auto-submit answer is visible while following the global setting",
+    submitMode?.globalWas === true &&
+      submitMode?.onDefault?.trigger === "跟随全局设置" &&
+      submitMode?.onDefault?.effective.includes("总是") &&
+      submitMode?.offDefault?.trigger === "跟随全局设置" &&
+      submitMode?.offDefault?.effective.includes("从不") &&
+      submitMode?.overridden?.trigger === "总是自动提交" &&
+      submitMode?.overridden?.effective === "" &&
+      submitMode?.siteCount?.was === submitMode?.siteCount?.now,
+    submitMode,
+  );
+
+  // --- Accounts: folding, and turning a selection into a saved view ---------
+  await client.evaluate(`(() => { document.querySelector('[data-nav="identities"]')?.click(); return true; })()`);
+  await waitFor(client, `document.querySelectorAll('.identities .group-head').length >= 2`);
+
+  const accountsFold = await client.evaluate(`(async () => {
+    const heads = () => [...document.querySelectorAll('.identities .group-head')];
+    const cards = () => document.querySelectorAll('.identities .id-card').length;
+    const before = cards();
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const folded = cards();
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Selection → view. The dialog is the existing new-view form, seeded with
+    // exactly the picked accounts; anything else would be a second, drifting
+    // way to define a view.
+    document.querySelector('.identities [data-batch-select]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const entering = {
+      buttonFound: Boolean(document.querySelector('.identities [data-batch-select]')),
+      selectBar: Boolean(document.querySelector('.identities .select-bar')),
+    };
+    const picks = [...document.querySelectorAll('.identities .id-card')].slice(0, 2);
+    picks[0]?.click();
+    picks[1]?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    // Re-read after the re-render: the clicked nodes are replaced, so counting
+    // the "picked" class on the old references always said zero.
+    const selectedCount = document.querySelectorAll('.identities .id-card.picked').length;
+    document.querySelector('.identities [data-batch-create-view]')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    // The view form specifically: a login-capture prompt from earlier in this
+    // suite is also role="dialog", and matching that one made this check read an
+    // empty member list.
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((el) =>
+      el.querySelector(".member-group, .members"),
+    );
+    const chosen = [...(dialog?.querySelectorAll('.member.on') ?? [])].map((el) =>
+      el.querySelector('.m-name')?.textContent.trim(),
+    );
+    const dialogInfo = {
+      title: dialog?.querySelector("h2, .title")?.textContent?.trim() ?? "",
+      members: dialog?.querySelectorAll(".member").length ?? 0,
+      onMembers: dialog?.querySelectorAll(".member.on").length ?? 0,
+      anyDialog: dialog?.className ?? "",
+    };
+    dialog?.querySelector('.close')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    return {
+      before,
+      folded,
+      reopened: cards(),
+      entering,
+      selectedCount,
+      dialogOpen: Boolean(dialog),
+      dialogInfo,
+      chosen,
+      stillSelecting: Boolean(document.querySelector('.identities .select-bar')),
+    };
+  })()`);
+  check(
+    "an account group folds and reopens",
+    accountsFold?.folded > 0 &&
+      accountsFold?.folded < accountsFold?.before &&
+      accountsFold?.reopened === accountsFold?.before,
+    accountsFold,
+  );
+  check(
+    "picking accounts and choosing 创建视图 opens the view form with them chosen",
+    accountsFold?.selectedCount === 2 &&
+      accountsFold?.dialogOpen === true &&
+      accountsFold?.chosen?.length === 2 &&
+      accountsFold?.stillSelecting === false,
+    accountsFold,
+  );
+
+  // --- Views reorder by dragging -------------------------------------------
+  // Real HTML5 drags, not direct calls to the move API: the drop handler is what
+  // is on trial here. A list that looks reorderable but never persists the order
+  // (or that moves a filtered row to the wrong place) is the failure mode.
+  //
+  // Shared in page context so both checks below drag the same way.
+  const dragRow = `async (fromIndex, toIndex) => {
+    const rows = () => [...document.querySelectorAll('.views .view-row')];
+    const source = rows()[fromIndex];
+    const target = rows()[toIndex];
+    const transfer = new DataTransfer();
+    const fire = (el, type) =>
+      el?.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    fire(source, 'dragstart');
+    fire(target, 'dragover');
+    fire(target, 'drop');
+    fire(source, 'dragend');
+    await new Promise((r) => setTimeout(r, 900));
+    return {
+      names: rows().map((el) => el.querySelector('.view-name')?.textContent.trim()),
+      draggable: source?.getAttribute('draggable'),
+    };
+  }`;
+  const viewOrder = await client.evaluate(`(async () => {
+    const snap = await window.ensemble.getWorkspace();
+    const identity = snap.identities[0];
+    if (!identity) return { error: "no identity to build a view with" };
+    const names = ["排序甲", "排序乙", "排序丙"];
+    for (const view of snap.views) {
+      if (names.includes(view.name)) await window.ensemble.deleteView(view.id);
+    }
+    for (const name of names) {
+      await window.ensemble.saveView({
+        siteId: identity.siteId,
+        name,
+        identityIds: [identity.id],
+        layoutId: "1x1",
+        slotAssignments: {},
+        paths: {},
+      });
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    document.querySelector('[data-nav="views"]')?.click();
+    await new Promise((r) => setTimeout(r, 800));
+    if (!document.querySelector('.views')) return { error: "views page did not open" };
+
+    const before = [...document.querySelectorAll('.views .view-row')].map((el) =>
+      el.querySelector('.view-name')?.textContent.trim(),
+    );
+    // Drag the first of the three onto the last: the expected result is that it
+    // ends up after the row it was dropped on.
+    const dragRow = ${dragRow};
+    const moved = await dragRow(0, 2);
+    // What the workspace stores is the real answer: the DOM would look right
+    // even if the move never reached disk.
+    const stored = (await window.ensemble.getWorkspace()).views.map((view) => view.name);
+    for (const view of (await window.ensemble.getWorkspace()).views) {
+      if (names.includes(view.name)) await window.ensemble.deleteView(view.id);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    return { before, after: moved.names, stored, draggable: moved.draggable };
+  })()`);
+  check(
+    "a view row can be dragged and the new order is what gets stored",
+    viewOrder?.draggable === "true" &&
+      viewOrder?.before?.slice(-3).join(",") === "排序甲,排序乙,排序丙" &&
+      viewOrder?.after?.slice(-3).join(",") === "排序乙,排序丙,排序甲" &&
+      viewOrder?.stored?.slice(-3).join(",") === "排序乙,排序丙,排序甲",
+    viewOrder,
+  );
+
+  // The list is filtered by site/tag, so the drop index a row reports is an
+  // index into the *visible* subset. Moving by that number puts the view at the
+  // wrong place in storage — visible only after the filter is cleared. Dragging
+  // under an active tag filter is the cheapest way to prove the id lookup.
+  const filteredOrder = await client.evaluate(`(async () => {
+    const snap = await window.ensemble.getWorkspace();
+    const identity = snap.identities[0];
+    if (!identity) return { error: "no identity to build a view with" };
+    const names = ["筛选甲", "筛选乙", "筛选丙"];
+    const tagName = "排序筛选";
+    for (const view of snap.views) {
+      if (names.includes(view.name)) await window.ensemble.deleteView(view.id);
+    }
+    for (const tag of snap.tags) {
+      if (tag.name === tagName) await window.ensemble.deleteTag(tag.id);
+    }
+    const tagged = await window.ensemble.saveTag({ name: tagName, color: "amber" });
+    const tag = tagged.tags.find((item) => item.name === tagName);
+    // 甲 and 丙 carry the tag, 乙 does not: with the filter on, the visible list
+    // skips 乙 at the same time as its stored index still counts it.
+    for (const [index, name] of names.entries()) {
+      await window.ensemble.saveView({
+        siteId: identity.siteId,
+        name,
+        identityIds: [identity.id],
+        layoutId: "1x1",
+        slotAssignments: {},
+        paths: {},
+        ...(index === 1 ? {} : { tagIds: [tag.id] }),
+      });
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    document.querySelector('[data-nav="views"]')?.click();
+    await new Promise((r) => setTimeout(r, 800));
+    const chip = [...document.querySelectorAll('.views .filters .filter-chip')].find(
+      (el) => el.textContent.trim() === tagName,
+    );
+    chip?.click();
+    await new Promise((r) => setTimeout(r, 500));
+
+    const dragRow = ${dragRow};
+    const moved = await dragRow(0, 1);
+    const stored = (await window.ensemble.getWorkspace()).views.map((view) => view.name);
+    for (const view of (await window.ensemble.getWorkspace()).views) {
+      if (names.includes(view.name)) await window.ensemble.deleteView(view.id);
+    }
+    for (const item of (await window.ensemble.getWorkspace()).tags) {
+      if (item.name === tagName) await window.ensemble.deleteTag(item.id);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    return { filtered: moved.names, stored };
+  })()`);
+  check(
+    "dragging under a filter lands the view where the row showed it",
+    filteredOrder?.filtered?.join(",") === "筛选丙,筛选甲" &&
+      filteredOrder?.stored?.slice(-3).join(",") === "筛选乙,筛选丙,筛选甲",
+    filteredOrder,
+  );
+
+  // --- Flows: the same folding, over rows rather than cards ----------------
+  const flowsFold = await client.evaluate(`(async () => {
+    const sites = (await window.ensemble.getWorkspace()).sites;
+    for (const [index, site] of sites.entries()) {
+      await window.ensemble.saveFlow({
+        siteId: site.id,
+        name: "分组折叠检查 " + (index + 1),
+        description: "",
+        params: [],
+        steps: [{ action: "navigate", url: site.baseUrl }],
+      });
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    document.querySelector('[data-nav="flows"]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const heads = () => [...document.querySelectorAll('.flows .group-head')];
+    const rows = () => document.querySelectorAll('.flows .flow-row').length;
+    const before = { heads: heads().length, rows: rows() };
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const folded = { rows: rows(), expanded: heads()[0]?.getAttribute('aria-expanded') };
+    heads()[0]?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    // Count the reopened rows *before* cleaning up: deleting the probes first
+    // made the count 0 and the assertion could never pass.
+    const reopened = rows();
+    // Remove the two probes: the flows page is a workspace asset, and leaving
+    // test flows behind would show up in the user's own workspace.
+    for (const flow of (await window.ensemble.getWorkspace()).flows) {
+      if (flow.name.startsWith("分组折叠检查")) await window.ensemble.deleteFlow(flow.id);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    return { before, folded, reopened, remaining: rows() };
+  })()`);
+  check(
+    "a flow group folds its rows and reopens",
+    flowsFold?.before.heads >= 2 &&
+      flowsFold?.before.rows >= 2 &&
+      flowsFold?.folded.rows < flowsFold?.before.rows &&
+      flowsFold?.folded.expanded === "false" &&
+      flowsFold?.reopened === flowsFold?.before.rows &&
+      flowsFold?.remaining === 0,
+    flowsFold,
   );
 
   // --- AI entry in the status bar ------------------------------------------

@@ -34,6 +34,7 @@ const api: EnsembleApi = {
   detachReference: (id) => ipcRenderer.invoke(IPC.identityDetachReference, id),
   saveView: (draft) => ipcRenderer.invoke(IPC.viewSave, draft),
   deleteView: (id) => ipcRenderer.invoke(IPC.viewDelete, id),
+  moveView: (id, toIndex) => ipcRenderer.invoke(IPC.viewMove, id, toIndex),
   setViewLayout: (viewId, layoutId) => ipcRenderer.invoke(IPC.viewSetLayout, viewId, layoutId),
   setViewSlotAssignments: (viewId, assignments) =>
     ipcRenderer.invoke(IPC.viewSetSlots, viewId, assignments),
@@ -163,6 +164,7 @@ const api: EnsembleApi = {
   createEmbeddedView: (input) => ipcRenderer.invoke(IPC.embeddedViewCreate, input),
   setEmbeddedViewLayout: (viewId, layoutId) =>
     ipcRenderer.invoke(IPC.embeddedViewLayout, viewId, layoutId),
+  groupLooseTabs: (layoutId) => ipcRenderer.invoke(IPC.embeddedGroupLoose, layoutId),
   setEmbeddedViewSlots: (viewId, rects) => ipcRenderer.invoke(IPC.embeddedViewSlots, viewId, rects),
   pinEmbeddedTab: (viewId, slotIndex, tabId) =>
     ipcRenderer.invoke(IPC.embeddedViewPin, viewId, slotIndex, tabId),

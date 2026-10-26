@@ -253,7 +253,9 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       return {
         username: identity.username,
         password: resolved,
-        submit: site.autoSubmit,
+        // One resolver for the global default and the per-site override, so the
+        // built-in surface and the external launcher cannot answer differently.
+        submit: service ? service.effectiveAutoSubmit(site) : site.autoSubmit !== false,
         extraFields: [...merged.entries()].map(([label, value]) => ({ label, value })),
         baseUrl: site.baseUrl,
       };
@@ -1808,6 +1810,12 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.viewMove, (id: string, toIndex: number) => {
+    workspace.moveView(String(id), Number(toIndex));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
   handle(IPC.viewSetLayout, (viewId: string, layoutId: LayoutId) => {
     workspace.setViewLayout(String(viewId), String(layoutId));
     broadcastWorkspace();
@@ -2537,6 +2545,19 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedViewLayout, (viewId: string, layoutId: LayoutId) =>
     ensureEmbeddedBrowser().setViewLayout(String(viewId), String(layoutId)),
   );
+  /**
+   * Layout for the flat list: no container exists yet, so this creates one.
+   *
+   * The dock offers a layout picker on the "tabs" block even though those pages
+   * are not in any view — choosing a grid there is the honest way to say "I want
+   * these side by side", and it goes through the same grouping the AI tool uses.
+   */
+  handle(IPC.embeddedGroupLoose, (layoutId: LayoutId) => {
+    const browser = ensureEmbeddedBrowser();
+    const viewId = browser.layoutTargetView(String(layoutId));
+    if (viewId) browser.focusPage();
+    return viewId;
+  });
   handle(IPC.embeddedViewSlots, (viewId: string, rects: SlotRect[]) =>
     ensureEmbeddedBrowser().setViewSlotRects(String(viewId), rects),
   );

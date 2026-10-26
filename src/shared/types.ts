@@ -86,7 +86,21 @@ export interface Site {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  autoSubmit: boolean;
+  /**
+   * Whether to press the login button after filling.
+   *
+   * Absent means "follow `settings.autoSubmitLogin`", which is the shape a
+   * per-site override should have: a site only stores a value when someone made
+   * a decision about *this* site.
+   *
+   * A stored boolean is honoured as-is, `false` included. Older builds wrote
+   * `false` on every new site, so some of those values mean "nobody chose
+   * anything" rather than "keep this one manual" — but the two are
+   * indistinguishable in the data, and silently starting to submit a login form
+   * someone may have deliberately kept manual is the worse mistake. The dialog
+   * shows the resolved value, so a stale `false` is one click from correction.
+   */
+  autoSubmit?: boolean;
   /** Login fields shared by every identity in this site. */
   extraFields?: LoginField[];
   /** Tag ids; finding and grouping only. */
@@ -366,6 +380,17 @@ export interface AppSettings {
   /** Fill saved credentials as soon as a launched window reaches a login form. */
   autoFillOnLaunch: boolean;
   /**
+   * Press the login button right after a fill, unless a site says otherwise.
+   *
+   * Filling without submitting leaves every account parked on a filled form, one
+   * click short of signed in — which for a view of six accounts is six clicks.
+   * The default is on because that is what "open this account" is supposed to
+   * mean. A site can override it (`Site.autoSubmit`), which is the escape hatch
+   * for a console that hates being submitted by a robot, or one with a captcha
+   * that would be burned by a wasted attempt.
+   */
+  autoSubmitLogin: boolean;
+  /**
    * Default zoom for pages in the built-in browser, in percent.
    *
    * Applied to new pages and to pages the user has not adjusted by hand. Ctrl +
@@ -466,7 +491,8 @@ export interface SiteDraft {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  autoSubmit: boolean;
+  /** Absent = follow the global default. */
+  autoSubmit?: boolean;
   extraFields?: LoginField[];
   tagIds?: string[];
 }
@@ -565,6 +591,7 @@ export type SettingsPatch = Partial<
     | "launchTarget"
     | "defaultEngineId"
     | "autoFillOnLaunch"
+    | "autoSubmitLogin"
     | "browserZoom"
     | "searchEngineId"
     | "customSearchEngines"

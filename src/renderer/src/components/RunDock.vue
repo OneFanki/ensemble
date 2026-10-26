@@ -312,6 +312,22 @@ async function changeLayout(view: EmbeddedView, value: string | undefined): Prom
   await embedded.setLayout(view.id, value as LayoutId);
 }
 
+/**
+ * Flat list has no container of its own, so its "layout" picker means "make one
+ * out of these pages".
+ *
+ * The placeholder value mirrors a view's: `free` is what "no layout" is called
+ * once a preset exists. Choosing a grid goes through the main process, which
+ * creates the container, moves every loose page into it and focuses it — the same
+ * result as dragging the rows together, so there is no second layout code path.
+ */
+const flatLayout = computed(() => (embedded.looseInstances.length ? "free" : undefined));
+
+async function applyFlatLayout(value: string | undefined): Promise<void> {
+  if (!value || value === "free") return;
+  await embedded.groupIntoLooseView(value as LayoutId);
+}
+
 /** Closes an instance and every page it opened. */
 async function closeInstance(root: EmbeddedTab): Promise<void> {
   const pages = pagesOf(root);
@@ -647,7 +663,24 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
             <span class="view-name">{{ t("app.browserLooseTabs") }}</span>
             <span class="view-count mono">{{ embedded.looseInstances.length }}</span>
             <span class="grow"></span>
-            <span class="layout-spacer"></span>
+            <!--
+              A layout for the flat list. Choosing one groups the loose instances
+              into a view with that layout — the same thing dragging them together
+              does — which is how the default tab group stops being the one place
+              with no layout. "无布局" is the current state and is not offered
+              again once a grid is chosen; pick another to switch.
+            -->
+            <SelectField
+              v-if="embedded.looseInstances.length"
+              class="layout-field"
+              compact
+              data-flat-layout
+              :model-value="flatLayout"
+              :options="layoutOptions"
+              :aria-label="t('app.browserLayout')"
+              @update:model-value="applyFlatLayout"
+            />
+            <span v-else class="layout-spacer"></span>
             <OpenSiteButton
               compact
               @open-blank="embedded.openLooseTab()"

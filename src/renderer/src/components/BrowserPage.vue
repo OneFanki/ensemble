@@ -30,6 +30,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import InstanceTabStrip from "./InstanceTabStrip.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
 
@@ -64,6 +65,26 @@ const stageOrigin = ref({ x: 0, y: 0 });
 
 const activeTab = computed(() => store.activeTab);
 const activeView = computed(() => store.activeView);
+
+/**
+ * The instance on the flat stage, when no view is on stage.
+ *
+ * Flat mode shows one instance filling the stage. It still gets a header band and
+ * a page strip, exactly like a cell of a view: the difference between the two is
+ * how many instances are on screen, not whether an instance has tabs. Leaving the
+ * band out here is what made "a browser opened from the tab list" behave like a
+ * different, lesser thing than the same browser inside a view.
+ */
+const flatInstance = computed(() => {
+  if (activeView.value) return undefined;
+  const tab = activeTab.value;
+  if (!tab) return undefined;
+  const pages = store.instancePages(tab.instanceId);
+  return {
+    instanceId: tab.instanceId,
+    currentId: pages.find((page) => page.active)?.id ?? tab.id,
+  };
+});
 
 /**
  * Whether the active page is already a bookmark.
@@ -212,11 +233,19 @@ function slotPage(rootId: string | null): EmbeddedTab | undefined {
   return pages.find((page) => page.active) ?? root;
 }
 
-/** Every page of the instance in a slot, oldest first; a slot shows one. */
-function slotPages(rootId: string | null): EmbeddedTab[] {
+/**
+ * Instance id behind a slot's entry.
+ *
+ * `slotTabs` holds the root page's id, and closing that page re-points the slot
+ * at the oldest survivor — whose `instanceId` still names the original instance.
+ * Passing the slot entry straight to the strip therefore looked up pages by a
+ * page id and found none, which is exactly how a cell lost its tab strip after
+ * its root page was closed.
+ */
+function slotInstanceId(rootId: string | null): string | null {
+  if (!rootId) return null;
   const root = tabById(rootId);
-  if (!root) return [];
-  return store.instancePages(root.instanceId);
+  return root?.instanceId ?? null;
 }
 
 /** Name of the account the slot's instance belongs to, when it has one. */
@@ -234,12 +263,6 @@ function slotAccount(rootId: string | null): string {
  */
 function selectPage(pageId: string): void {
   void store.activate(pageId);
-}
-
-/** "+" in a slot's strip: one more page in the same instance. */
-function openPageInInstance(rootId: string | null): void {
-  const instanceId = tabById(rootId)?.instanceId;
-  if (instanceId) void store.openTabInInstance(instanceId);
 }
 
 /**
@@ -320,7 +343,21 @@ const blankSurfaces = computed(() => {
   const view = activeView.value;
   if (!view) {
     const tab = activeTab.value;
-    return tab && !tab.viewId && isBlankTab(tab) ? [{ tab, slot: null }] : [];
+    if (!tab || tab.viewId || !isBlankTab(tab)) return [];
+    // Flat mode reserves the same header band as a view cell, so the search
+    // surface starts below it instead of underlapping the tab strip.
+    const box = stageBox.value;
+    return [
+      {
+        tab,
+        slot: {
+          x: 0,
+          y: EMBEDDED_SLOT_HEADER,
+          width: box.width,
+          height: Math.max(1, box.height - EMBEDDED_SLOT_HEADER),
+        },
+      },
+    ];
   }
   return slotChrome.value
     .map((slot, index) => ({ slot, index }))
@@ -1166,6 +1203,38 @@ function fillMessage(reason?: string): string {
         <NewTabPage :tab="surface.tab" @open-bookmark="openBookmark" />
       </div>
 
+      <!--
+        Flat mode gets the same band a view cell has.
+
+        Without it, an instance opened into the default tab group had no page
+        strip at all: no way to reach its other pages, nowhere for the "+" to
+        live, no right-click menu. The instance was not a lesser browser, only a
+        browser without its controls — so the band is drawn here too, with the
+        slot number and the layout picker omitted because there is exactly one
+        cell and no grid to arrange.
+      -->
+      <div
+        v-if="flatInstance"
+        class="slot-header flat"
+        :style="{ left: '0px', top: '0px', width: '100%', height: `${EMBEDDED_SLOT_HEADER}px` }"
+      >
+        <span
+          v-if="activeTab?.color"
+          class="dot"
+          :style="{ background: `var(--role-${activeTab.color})` }"
+        ></span>
+        <span v-if="slotAccount(flatInstance.instanceId)" class="slot-account">
+          {{ slotAccount(flatInstance.instanceId) }}
+        </span>
+        <span v-if="activeTab?.loading" class="spinner"></span>
+        <InstanceTabStrip
+          :instance-id="flatInstance.instanceId"
+          :current-id="flatInstance.currentId"
+          @select="selectPage"
+          @menu="openTabMenu"
+        />
+      </div>
+
       <!-- Native views paint over this area; only the slot headers stay visible. -->
       <div
         v-for="slot in slotChrome.filter((item) => item.tabId)"
@@ -1204,52 +1273,12 @@ function fillMessage(reason?: string): string {
           what says "this cell is a browser with tabs" and the only place the
           "+" for a second page can live.
         -->
-        <div
-          class="slot-tabs"
-          role="tablist"
-          :aria-label="t('app.browserInstancePages')"
-        >
-          <div
-            v-for="page in slotPages(slot.tabId)"
-            :key="page.id"
-            class="slot-tab"
-            :class="{ current: page.id === slotPage(slot.tabId)?.id }"
-            role="tab"
-            :aria-selected="page.id === slotPage(slot.tabId)?.id"
-            :data-tab-id="page.id"
-            @click.stop="selectPage(page.id)"
-            @mousedown.stop
-            @contextmenu.prevent.stop="openTabMenu(page, $event)"
-          >
-            <img
-              v-if="page.favicon"
-              class="slot-tab-fav"
-              :src="page.favicon"
-              alt=""
-              draggable="false"
-            />
-            <span class="slot-tab-label">{{ store.titleOf(page) }}</span>
-            <button
-              type="button"
-              class="slot-tab-close"
-              :aria-label="t('app.browserCloseTab')"
-              :data-close-tab="page.id"
-              @click.stop="store.closeTab(page.id)"
-              @mousedown.stop
-            >
-              <X :size="9" />
-            </button>
-          </div>
-          <button
-            type="button"
-            class="slot-tab-add"
-            :aria-label="t('app.browserNewTabHere')"
-            @click.stop="openPageInInstance(slot.tabId)"
-            @mousedown.stop
-          >
-            <Plus :size="11" />
-          </button>
-        </div>
+        <InstanceTabStrip
+          :instance-id="slotInstanceId(slot.tabId)"
+          :current-id="slotPage(slot.tabId)?.id"
+          @select="selectPage"
+          @menu="openTabMenu"
+        />
       </div>
 
       <!--
@@ -1617,6 +1646,17 @@ function fillMessage(reason?: string): string {
   background: var(--surface-2);
 }
 
+/* The flat stage has one cell and no grid, so its band is a plain strip: no
+   hover tint (clicking it selects nothing), no slot number, and no layout
+   picker. What it does carry is the page tabs — that was the whole point. */
+.slot-header.flat {
+  cursor: default;
+}
+
+.slot-header.flat:hover {
+  background: var(--surface);
+}
+
 /* The selected cell is the keyboard target and the one a new page replaces, so
    it is marked structurally — an accent rail plus a lifted background — instead
    of spending band width on the word "selected". Tinted with the page colour
@@ -1727,113 +1767,6 @@ function fillMessage(reason?: string): string {
   white-space: nowrap;
   font-size: 10.5px;
   color: var(--text-secondary);
-}
-
-.slot-tabs {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.slot-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-/*
- * A page tab. Unselected tabs used to be transparent text on the header's own
- * background, which made the strip indistinguishable from the slot label. They
- * now sit in their own recessed pill, the current one is raised and lit, so the
- * band reads as "window title, then tabs" at a glance.
- */
-.slot-tab {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 1 auto;
-  min-width: 54px;
-  max-width: 170px;
-  height: 20px;
-  padding: 0 4px 0 6px;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  font-size: 10px;
-  line-height: 18px;
-  color: var(--faint);
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
-}
-
-/* Site mark, the way every browser tab strip carries one: it survives a
-   truncated title and tells two pages of the same site apart from two sites. */
-.slot-tab-fav {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  border-radius: 2px;
-  object-fit: contain;
-}
-
-.slot-tab:hover {
-  background: var(--surface-3);
-  color: var(--text-secondary);
-}
-
-.slot-tab.current {
-  background: var(--bg-elevated);
-  border-color: color-mix(in srgb, var(--line) 80%, var(--accent));
-  color: var(--text);
-}
-
-.slot-tab-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The close affordance appears on hover and on the current tab: always-on
-   crosses in a 20px pill would eat the title. */
-.slot-tab-close {
-  display: grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  color: var(--faint);
-  opacity: 0;
-  flex: 0 0 14px;
-}
-
-.slot-tab:hover .slot-tab-close,
-.slot-tab.current .slot-tab-close {
-  opacity: 1;
-}
-
-.slot-tab-close:hover {
-  background: color-mix(in srgb, var(--red) 22%, transparent);
-  color: var(--red);
-}
-
-.slot-tab-add {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  color: var(--faint);
-  flex: 0 0 18px;
-}
-
-.slot-tab-add:hover {
-  background: var(--surface-3);
-  color: var(--text);
 }
 
 .dot {

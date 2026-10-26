@@ -3,8 +3,11 @@ import type { Site, Tag as WorkspaceTag } from "@shared/types";
 import { Globe, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
+import GroupChevron from "./GroupChevron.vue";
+import GroupCollapseAll from "./GroupCollapseAll.vue";
 
 const emit = defineEmits<{
   newSite: [];
@@ -34,6 +37,11 @@ const groups = computed(() => {
   if (untagged.length > 0) result.push({ key: "__untagged__", sites: untagged });
   return result;
 });
+
+const groupCollapse = useGroupCollapse("ensemble.groups.sites");
+/** Keys of the groups on screen; the collapse-all switch works on these. */
+const groupKeys = computed(() => groups.value.map((group) => group.key));
+const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
 
 function identityCount(site: Site): number {
   return store.identities.filter((identity) => identity.siteId === site.id).length;
@@ -71,6 +79,11 @@ import IconButton from "./ui/IconButton.vue";
         <p class="head-note">{{ $t("app.sitesSubtitle") }}</p>
       </div>
       <div class="head-actions">
+        <GroupCollapseAll
+          v-if="groups.length > 1"
+          :all-collapsed="allCollapsed"
+          @toggle="groupCollapse.toggleAll(groupKeys)"
+        />
         <AppButton variant="primary" data-tour="new-site" @click="emit('newSite')">
           <Plus :size="13" />
           {{ $t("app.newSite") }}
@@ -88,8 +101,26 @@ import IconButton from "./ui/IconButton.vue";
     </div>
 
     <div v-else class="group-list">
+      <!--
+        Group headers are the fold control. The whole row is clickable rather
+        than only the arrow: a 16px arrow is a small target, and the header is
+        the line the eye is already on when it wants "hide this section".
+      -->
       <section v-for="group in groups" :key="group.key" class="group">
-        <header class="group-head">
+        <header
+          class="group-head"
+          :class="{ collapsed: groupCollapse.isCollapsed(group.key) }"
+          role="button"
+          tabindex="0"
+          :aria-expanded="!groupCollapse.isCollapsed(group.key)"
+          @click="groupCollapse.toggle(group.key)"
+          @keydown.enter.prevent="groupCollapse.toggle(group.key)"
+        >
+          <GroupChevron
+            :collapsed="groupCollapse.isCollapsed(group.key)"
+            :name="group.tag?.name ?? t('app.untaggedSites')"
+            @toggle="groupCollapse.toggle(group.key)"
+          />
           <span
             v-if="group.tag"
             class="group-dot"
@@ -101,7 +132,7 @@ import IconButton from "./ui/IconButton.vue";
           <span class="group-count mono">{{ group.sites.length }}</span>
         </header>
 
-        <div class="env-grid">
+        <div v-if="!groupCollapse.isCollapsed(group.key)" class="env-grid">
           <article
             v-for="site in group.sites"
             :key="site.id"
@@ -226,6 +257,20 @@ h1 {
   gap: 7px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  /* The 16px arrow is pulled left into the page's own padding so the group name
+     keeps the alignment the cards below it have. */
+  margin-left: -3px;
+}
+
+.group-head:hover .group-name {
+  color: var(--text);
+}
+
+/* A folded group still shows its name and count: what went away is the cards,
+   and a header that also loses its colour would read as an empty section. */
+.group-head.collapsed {
+  border-bottom-style: dashed;
 }
 
 .group-dot {

@@ -351,6 +351,19 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     state.value = await window.ensemble.setEmbeddedViewLayout(viewId, layoutId);
   }
 
+  /**
+   * Turns the flat list into a view with this layout.
+   *
+   * The dock's layout picker on the "tabs" block is the one place a layout can be
+   * chosen for pages that have no container yet. The grouping itself happens in
+   * the main process (`layoutTargetView`), which is also what the AI tool uses —
+   * one implementation, so a manual click and a tool call cannot diverge.
+   */
+  async function groupIntoLooseView(layoutId: LayoutId): Promise<void> {
+    const viewId = await window.ensemble.groupLooseTabs(layoutId);
+    if (viewId) state.value = await window.ensemble.getEmbeddedState();
+  }
+
   /** Applies hand-dragged slot geometry (fractions of the stage). */
   async function setSlotRects(viewId: string, rects: SlotRect[]): Promise<void> {
     state.value = await window.ensemble.setEmbeddedViewSlots(viewId, rects);
@@ -446,6 +459,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     activateView,
     createView,
     setLayout,
+    groupIntoLooseView,
     setSlotRects,
     pin,
     renameView,

@@ -148,6 +148,15 @@ const SHOTS = [
   { name: "browser", locale: "zh", view: "browser" },
   { name: "browser-en", locale: "en", view: "browser" },
   { name: "slot-tabs", locale: "zh", view: "browser", popup: true },
+  {
+    // The flat stage — no view at all — carries the same page strip a cell does.
+    // Worth its own shot: this is the state a user lands in when they only ever
+    // click a site, and the strip there is the thing that used to be missing.
+    name: "flat-strip",
+    locale: "zh",
+    view: "browser",
+    flatStrip: true,
+  },
   { name: "new-tab", locale: "zh", view: "browser", blankTab: true },
   {
     // The collapsed dock keeps one icon per running instance; the shot proves
@@ -518,6 +527,31 @@ async function capture(shot) {
          })()`,
       );
       await wait(2500);
+      // A flat strip shot wants two pages in one instance and no view at all:
+      // that is the state the strip now covers, and a view would hide it.
+      if (shot.flatStrip) {
+        await client.evaluate(`(async () => {
+          const api = window.ensemble;
+          for (const view of (await api.getEmbeddedState()).views) {
+            await api.closeEmbeddedView(view.id, "all");
+          }
+          const tabs = (await api.getEmbeddedState()).tabs;
+          const keep = tabs[0];
+          for (const tab of tabs) {
+            if (tab.id !== keep?.id) await api.closeEmbeddedTab(tab.id);
+          }
+          if (keep) {
+            await api.navigateEmbeddedTab(keep.id, "http://127.0.0.1:${PAGE_PORT}/console");
+            await new Promise((r) => setTimeout(r, 1600));
+            const again = await api.getEmbeddedState();
+            const root = again.tabs.find((tab) => tab.id === keep.id);
+            if (root) await api.openEmbeddedTabInInstance(root.instanceId);
+            await new Promise((r) => setTimeout(r, 1200));
+          }
+          return true;
+        })()`);
+        await wait(1500);
+      }
       // A blank tab is what the new-tab surface lives on: it is drawn by the
       // app, because the main process keeps a blank page's native view parked.
       if (shot.blankTab) {

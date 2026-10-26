@@ -22,11 +22,82 @@
 
 ### 中文
 
+#### 完整变更
+
+### English
+
+#### Full changes
+
+## [1.0.0] - 2026-10-26
+
+### 中文
+
+- **内置浏览器**：多账号一屏并行，不依赖外部浏览器；页面/实例/视图三层模型，布局、多标签、缩放、开发者工具停靠齐备
+- **站点模型定稿**：站点是登录配方，一套全局标签贯穿站点/账号/视图；流程沉淀可重跑的重复操作，账号包加密分享
+- **AI 全链路**：语义定位与页面内等待，建号场景端到端可跑；未授权的站点对 AI 默认只读
+- **界面重构**：全新浏览器舞台与运行栏，分组折叠、视图排序、书签与日常档案
+- 自动填充后自动登录：账号进站即登录，不用补点一次按钮
+- 开发者工具：F12 快捷开关、停靠面板可拖宽、语言跟随应用设置
+
+#### 完整变更
+
+**内置浏览器表面**
+
+- 浏览器页面不再依赖外部浏览器：页面直接承载在主窗口里，每个账号一个隔离会话，一屏并行；
+  外部浏览器模式保留，由顶栏的启动目标决定去向。
+- 三层模型：**页面**（一个标签）、**实例**（共享登录会话的一组页面）、**视图**（一屏内的格位
+  编排）。页面里点开的弹窗属于同一实例，不会多占格位；离台的页面继续运行，点一下即换进
+  选中格位。
+- 多标签：每个实例自带页面标签条（图标、关闭、右键菜单、「＋」），不建视图的默认标签组
+  同样有；运行栏「标签页」组头选一个布局，可把扁平实例一键收成视图。
+- 布局与缩放：2×1、1×2、2×2、3×1 与自由布局，分界线可拖；缩放分全局默认与单页覆盖两级，
+  档位沿用 Chrome。
+- 开发者工具默认停靠在格位内，可拆出独立窗口；支持 F12 快捷开关与拖宽。
+- 新标签页是搜索落地页：地址或搜索词、引擎选择与自定义引擎、内置背景预设；冷启动直接落在
+  搜索框。
+
+**站点模型与资产定稿**
+
+- **站点降级为登录配方**：只描述「怎么登录」（地址、登录入口、凭据配方、额外字段），不再
+  承载环境概念；原有的环境/场景并入站点。
+- **一套全局标签**：站点、账号、视图共用同一套标签，筛选按成员关系派生。
+- **流程**：可重跑的步骤清单（导航/填写/点击/选择/按键/登录/等待/读取八种动作），保存时
+  校验、按站点归属、失败即停（可标记跳过）。
+- **账号包**：把勾选的账号连同站点配方导出为一个文件，导入方按地址+用户名合并；密码可选
+  口令加密，不落明文。
+- 账号引用与站点地址变更检测：站点地址改了，引用它的账号下次登录前会先确认。
+- 视图可跨站点复制。
+
+**AI 与 MCP**
+
+- 浏览器工具面向语义而非坐标：按标签文字、占位符、角色定位元素；等待条件（可见/消失/文本/
+  地址/值）在页面内轮询；批量填表逐项标注密文。
+- 建号全链路：给一个测试环境地址和超管账号，AI 可以存站点、登录、批量建租户账号并存成
+  身份、按视图一起打开。
+- **AI 来源只读闸门**：未授权的站点默认只读（可看可读、不可交互），已授权来源的操作按来源
+  计数显示在运行栏；导航目标只接受用户或工作区数据，不采纳页面内容里的链接。
+- 书签与流程均有对应的 MCP 工具。
+
+**界面重构**
+
+- 浏览器舞台与运行栏重做：展开态一行一个实例（页面缩进在下面），折叠态一个实例一个站点
+  图标，同视图的实例分组相邻；在任何页面点击运行栏都会切到浏览器页。
+- 全部按钮收敛为共享组件；应用内确认弹窗独立成警示样式；中英双语与文案编译护栏。
+- 底栏常驻 AI 接入入口：端点状态一目了然，点击直达设置。
+
+**自动化与质量**
+
+- 自动化运行不弹窗：端到端脚本与截图全部在无头模式运行，不再打扰正在使用的桌面。
+- 20 套端到端脚本、近 500 条单元测试；打包产物有独立冒烟检查（含凭据不外泄）。
+
+**日常档案与书签**
+
 - 新增日常档案：不带身份的标签（新标签页、书签、地址栏输入）登录一次长期有效，可以直接拿它当日常浏览器，也让 AI 在已登录的页面上帮忙做事
 - 新增书签：新标签页上一排图标，只有名字和地址，双击改名、右键删除、拖拽排序；地址栏的星标一键收藏当前页
 - 「从站点打开」多了「日常打开」，与「干净打开」并列；干净打开现在是真正的临时会话，退出即消失
 - 自动填充后可以真的登录进去了：默认会点登录按钮本身，不再只填账号密码等人手点一下
 - 视图列表可以拖动排序，顺序会被记住；筛选状态下拖动也落在你看到的位置
+- 开发者工具支持 F12 快捷开关、拖动分隔条调宽度，且不再每次弹出语言设置提示
 
 #### 完整变更
 
@@ -85,6 +156,14 @@
   按站点或标签筛选时拖拽同样准确——落点按视图 id 反查完整列表，不会因为隐藏了几行而错位。
 - MCP 的站点摘要新增 `autoSubmitEffective`，AI 能看到某个站点当前实际会不会自动提交。
 
+**开发者工具**
+
+- F12 与 Ctrl+Shift+I 现在能开关开发者工具——页面上按、工具面板里按都行；此前只有工具栏按钮一个入口。
+- 停靠的开发者工具可以拖动分隔条调宽度（20%–70% 钳制），方向键也能微调；此前固定 42%。
+- 打开开发者工具时不再每次弹「切换界面语言」的提示条，语言自动跟随应用设置。
+  说明：这条提示的选择在 Electron 里根本不会被记住（点过、重启后照样弹），应用改为
+  每次打开时代答，语言跟随应用界面语言。
+
 **交互与措辞**
 
 - 关闭视图这类确认弹窗重做成独立的警示样式：图标 + 问题 + 两个按钮，不再是一个中间空着的表单框。
@@ -92,13 +171,52 @@
 
 ### English
 
-- New daily profile: tabs with no identity (new tabs, bookmarks, typed addresses) stay signed in across restarts, so the built-in browser works as an everyday browser and an AI can act on pages you are already signed in to
-- New bookmarks: a row of icons on the new tab — a name and an address, double-click to rename, right-click to remove, drag to reorder — plus a star in the address bar
-- "Open from site" gained "Open daily" next to "Open clean"; a clean open is now a real throwaway session that ends with the process
-- Auto-fill now signs you in: it clicks the login button itself by default, instead of filling the fields and leaving the last step to you
-- Views can be dragged into any order, and the order is remembered — including while the list is filtered
+- **The built-in browser**: many accounts side by side on one screen, no external browser needed; a page/instance/view model with layouts, tabs, zoom and docked developer tools
+- **The site model is settled**: a site is a login recipe, one global set of tags runs across sites, identities and views; flows capture repeatable steps and account bundles share them encrypted
+- **AI end to end**: semantic targeting and in-page waits, the account-provisioning scenario runs start to finish; sites the user has not authorized are read-only to the AI
+- **A rebuilt interface**: a new browser stage and running dock, folded groups, view ordering, bookmarks and the daily profile
+- Auto-fill signs you in: it clicks the login button itself, so an account opens already signed in
+- Developer tools: F12, a draggable docked panel, and a language that follows the app
 
 #### Full changes
+
+**The embedded browser surface**
+
+- Browser pages no longer depend on an external browser: pages live inside the main window, one isolated session per account, all on one screen. The external browser mode remains, chosen by the title-bar launch target.
+- Three layers: a **page** (one tab), an **instance** (the set of pages sharing one login session), and a **view** (the grid arranging instances on screen). Popups a page opens belong to the same instance and never take extra cells; off-stage pages keep running and rejoin the selected cell on one click.
+- Tabs: every instance carries its own page strip (icons, close, context menu, "+"), and so does the default tab group when no view exists; picking a layout on the dock's "tabs" block folds loose instances into a view in one step.
+- Layouts and zoom: 2×1, 1×2, 2×2, 3×1 and free layout with draggable dividers; zoom has a global default plus per-page override on Chrome's steps.
+- Developer tools dock inside the cell by default and can detach into their own window; F12 toggles them and the docked panel is resizable.
+- The new tab is a search landing page: address or query, engine choice with custom engines, built-in backdrops; a cold start lands in the search box.
+
+**The site model and assets**
+
+- **Sites are login recipes**: only "how to sign in" (address, login path, credential recipe, extra fields), no environment concept; environments and scenes merged into sites.
+- **One global set of tags** runs across sites, identities and views, with filters derived from membership.
+- **Flows**: re-runnable step lists (navigate / fill / click / select / press / login / wait / read), validated on save, owned by a site, stopping on failure unless a step is marked optional.
+- **Account bundles**: export the selected accounts with their site recipes to one file; import merges by address plus username, passwords optionally sealed under a passphrase.
+- Account references and site-address change detection: when a site's address changes, accounts referencing it confirm before the next login.
+- Views can be copied across sites.
+
+**AI and MCP**
+
+- Browser tools target semantics, not coordinates: elements are found by label text, placeholder or role; wait conditions (visible / hidden / text / URL / value) poll inside the page; batch form fills mark each secret per field.
+- The provisioning scenario works end to end: given a test environment address and an admin login, the AI can store the site, sign in, create tenant accounts in bulk, save them as identities and open them in a view.
+- **A per-origin read-only gate for the AI**: unauthorized sites are read-only (visible and readable, not interactive), actions are counted per origin in the dock, and navigation targets must come from the user or workspace data — never from page content.
+- Bookmarks and flows have their own MCP tools.
+
+**A rebuilt interface**
+
+- A new browser stage and running dock: expanded, one row per instance with its pages indented; collapsed, one site icon per instance, grouped by view; clicking the dock from anywhere brings the browser forward.
+- All buttons converge on shared components; in-app confirmations have their own warning layout; Chinese and English with a compile-time message guard.
+- A persistent AI entry in the status bar: endpoint state at a glance, one click to settings.
+
+**Automation and quality**
+
+- Automated runs no longer pop windows: end-to-end scripts and screenshots run headless and leave the desktop alone.
+- 20 end-to-end suites, close to 500 unit tests, and a separate smoke check for packaged builds (including credential-leak checks).
+
+**Daily profile and bookmarks**
 
 - Identity-less pages moved from one shared persistent partition (misleadingly named "clean") to an explicit **daily profile**. The old partition string is reused on purpose so existing logins survive the upgrade.
 - A **clean open** is now one in-memory session per instance (no `persist:` prefix): gone when the process exits, invisible to other clean opens. A login popup opened by a page inherits that session and cannot leak into the daily profile.
@@ -139,6 +257,12 @@
 - The site form's submit checkbox became a three-way choice, and the account-bundle export/import carries the optional field.
 - The view list can be dragged into any order: the list order is the display order, a row dropped onto another lands after it, and the order survives a restart. Dragging also works with a site or tag filter on, because the drop target is looked up by view id in the full list instead of trusting an index into the visible subset.
 - The MCP site summary gained `autoSubmitEffective`, so an AI can tell whether a site will currently submit on its own.
+
+**Developer tools**
+
+- F12 and Ctrl+Shift+I now toggle the developer tools, from the page and from inside the panel; the toolbar button used to be the only way in.
+- The docked panel can be resized by dragging its divider (clamped to 20–70% of the cell), with arrow keys for small steps; it used to be fixed at 42%.
+- The "switch interface language" prompt no longer appears on every open; the language follows the app's setting. Note that Electron never remembers that choice — clicking it never survived a restart — so the app now answers the prompt itself on each open.
 
 **Interaction and wording**
 

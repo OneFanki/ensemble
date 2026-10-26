@@ -7,7 +7,7 @@ A local multi-account browser workbench: keep several identities of the same sys
 same time, work in parallel and compare side by side, to confirm that each one sees and can do what
 it should.
 
-[中文](README.md) · [Architecture](docs/architecture.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[中文](README.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/OneFanki/ensemble/actions/workflows/ci.yml/badge.svg)](https://github.com/OneFanki/ensemble/actions/workflows/ci.yml)
@@ -403,7 +403,7 @@ src/renderer/   Vue 3 control panel
 
 The control panel renders in Electron's own window; pages under test live in real, separate browser processes. `src/core` never imports Electron and can be tested under plain Node.
 
-The primary path talks to browsers over CDP directly rather than hosting human-driven windows through Playwright, which by default takes over dialogs, downloads and extensions and would distort what you are testing. The trade-offs are recorded in the [ADRs](docs/architecture/adr/).
+The primary path talks to browsers over CDP directly rather than hosting human-driven windows through Playwright, which by default takes over dialogs, downloads and extensions and would distort what you are testing.
 
 ## Non-goals
 
@@ -412,16 +412,6 @@ The primary path talks to browsers over CDP directly rather than hosting human-d
 - No Chrome replacement: no extension store, no password manager, no sync — and bookmarks stay local (a name and an address, carried with the workspace export) rather than syncing across devices
 - No test-case management, reporting or CI platform
 - No multi-account Safari (it has no per-profile directory model)
-
-## Documentation
-
-| Topic | Location |
-| --- | --- |
-| Architecture and data model | [docs/architecture.md](docs/architecture.md) |
-| Architecture decision records | [docs/architecture/adr/](docs/architecture/adr/) |
-| CDP playbook | [docs/engineering/cdp-playbook.md](docs/engineering/cdp-playbook.md) |
-| Pitfall library | [docs/engineering/踩坑库.md](docs/engineering/踩坑库.md) |
-| Release process | [docs/engineering/release.md](docs/engineering/release.md) |
 
 ## Contributing
 

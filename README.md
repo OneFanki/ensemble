@@ -6,7 +6,7 @@
 一个本地多账号浏览器工作台：同一套系统里让多个身份同时在场，并行操作、并排对比，
 验证每个身份看到的内容和能做的操作是否符合预期。
 
-[English](README.en.md) · [架构](docs/architecture.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md)
+[English](README.en.md) · [安全策略](SECURITY.md) · [贡献指南](CONTRIBUTING.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/OneFanki/ensemble/actions/workflows/ci.yml/badge.svg)](https://github.com/OneFanki/ensemble/actions/workflows/ci.yml)
@@ -477,7 +477,7 @@ src/renderer/   Vue 3 管理台界面与浏览器页
 `src/core` 不依赖 Electron，可以在纯 Node 下测试。
 
 主链路直接使用 CDP，而不是用 Playwright 托管人工窗口——Playwright 默认会接管对话框、下载和扩展，
-会改变被测环境。设计取舍记录在 [ADR](docs/architecture/adr/)。
+会改变被测环境。
 
 ## 非目标
 
@@ -486,16 +486,6 @@ src/renderer/   Vue 3 管理台界面与浏览器页
   （本机书签是有的：一个名字加一个地址，跟着工作区导出导入）
 - 不做用例管理、测试报告或 CI 平台
 - 不支持 Safari 多开（Safari 没有独立的 profile 目录模型）
-
-## 文档
-
-| 内容 | 位置 |
-| --- | --- |
-| 架构与数据模型 | [docs/architecture.md](docs/architecture.md) |
-| 架构决策记录 | [docs/architecture/adr/](docs/architecture/adr/) |
-| CDP 操作手册 | [docs/engineering/cdp-playbook.md](docs/engineering/cdp-playbook.md) |
-| 踩坑库 | [docs/engineering/踩坑库.md](docs/engineering/踩坑库.md) |
-| 发布流程 | [docs/engineering/release.md](docs/engineering/release.md) |
 
 ## 贡献
 

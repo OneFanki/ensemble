@@ -370,7 +370,7 @@ async function openEmbeddedView(
     // Without this, opening a saved view left every login form empty while the
     // single-account path filled fine — the same action behaved differently
     // depending on which entry point was used.
-    scheduleEmbeddedFill(tab.id, identityId);
+    scheduleEmbeddedLogin(tab.id, identityId);
   }
   // The saved slot assignments are identity ids; map them onto the tabs that
   // exist so a reopened view comes back in the same arrangement.
@@ -387,24 +387,71 @@ async function openEmbeddedView(
 }
 
 /**
- * Fills an identity's saved login into an embedded tab, once, in the background.
+ * Launch pipeline for an embedded identity tab: confirm the session, sign in
+ * when needed, and land on the account's start path.
  *
- * The tab is created before its page has loaded, and a client-rendered login
- * form can take several seconds to appear. Polling until the deadline mirrors
- * the external path, which waits for the same reason: giving up on the first
- * "no password field" reads as "autofill is broken".
+ * With a check path configured on the site, an in-page fetch decides: signed in
+ * → done, the tab stays on startPath; signed out → navigate to the site's login
+ * page, fill, and — only when the site's `autoSubmit` is on, which is the
+ * user's standing consent to press the button — submit, wait for the session to
+ * appear, then navigate back to startPath. A failed sign-in leaves the filled
+ * form on the login page for manual takeover.
+ *
+ * Without a check path there is no way to tell "already signed in" from "the
+ * login page redirected somewhere else", so the routine keeps the old behavior:
+ * poll for a password field and fill it, nothing more.
  *
  * Deliberately not awaited: a four-member view must not hold the launch result
  * for a minute while each page comes up.
  */
-function scheduleEmbeddedFill(tabId: string, identityId: string): void {
+function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
   if (!service?.settingsSnapshot().autoFillOnLaunch) return;
   const identity = service.findIdentity(identityId);
   if (!identity) return;
+  const site = identity.siteId ? service.findSite(identity.siteId) : undefined;
   const browser = ensureEmbeddedBrowser();
+  const startUrl = embeddedStartUrl(identityId);
 
-  void (async () => {
-    const deadline = Date.now() + 15_000;
+  const report = (extra: {
+    filled: boolean;
+    submitted: boolean;
+    loggedIn?: boolean;
+    missingFields?: string[];
+    skipped?: "no-password" | "not-login-page" | "cross-origin" | "login-failed";
+  }): void => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.authAutoFilled, {
+        identityId,
+        label: identity.name,
+        missingFields: [],
+        unmatchedFields: [],
+        ...extra,
+      });
+    }
+  };
+
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** true = signed in, false = signed out, "pending" = page not ready yet. */
+  const probe = async (): Promise<boolean | "pending" | "unknown"> => {
+    if (!site?.authCheckPath) return "unknown";
+    try {
+      const result = await browser.authProbe(tabId, site.authCheckPath, site.baseUrl);
+      if (result.ok) return result.signedIn === true;
+      if (result.reason === "cross-origin" || result.reason === "bad-site") return "unknown";
+    } catch {
+      // The tab may be mid-navigation; the caller decides whether to retry.
+    }
+    return "pending";
+  };
+
+  /**
+   * Polls fillLogin until the form is found or the deadline passes. Polling
+   * mirrors the external path: a client-rendered login form can take seconds,
+   * and giving up on the first "no password field" reads as autofill broken.
+   */
+  const fillOnLoginPage = async (deadlineMs: number) => {
+    const deadline = Date.now() + deadlineMs;
     let last: Awaited<ReturnType<typeof browser.fillLogin>> | undefined;
     while (Date.now() < deadline) {
       try {
@@ -414,27 +461,101 @@ function scheduleEmbeddedFill(tabId: string, identityId: string): void {
       }
       if (last?.ok) break;
       if (last && last.reason !== "password-field-not-found") break;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await wait(500);
     }
-    const skipped = last?.ok
+    return last;
+  };
+
+  void (async () => {
+    if (site?.authCheckPath) {
+      // The page was loaded by createTab, but a client-side redirect may still
+      // be settling; give the probe a few attempts before concluding.
+      let state: boolean | "pending" | "unknown" = "pending";
+      for (let attempt = 0; attempt < 6 && state === "pending"; attempt += 1) {
+        state = await probe();
+        if (state === "pending") await wait(500);
+      }
+      if (state === true) {
+        // Already signed in: the launch lands on startPath untouched.
+        report({ filled: false, submitted: false, loggedIn: true });
+        return;
+      }
+      if (state === false) {
+        // --- Sign in, then return to the start path. ---
+        try {
+          await browser.navigate(tabId, new URL(site.loginPath, site.baseUrl).toString());
+        } catch {
+          // A path normalizeEmbeddedUrl rejects leaves the tab where it is;
+          // the fill below still runs, protected by its same-origin check.
+        }
+        const filled = await fillOnLoginPage(15_000);
+        if (!filled?.ok) {
+          report({
+            filled: false,
+            submitted: false,
+            skipped:
+              filled?.reason === "cross-origin"
+                ? "cross-origin"
+                : filled?.reason === "no-password" || filled?.reason === "no-identity"
+                  ? "no-password"
+                  : "not-login-page",
+          });
+          return;
+        }
+        if (!filled.submitted) {
+          // autoSubmit is off: the filled form waits for the user's own button.
+          report({ filled: true, submitted: false, missingFields: filled.missingFields });
+          return;
+        }
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          if ((await probe()) === true) {
+            if (startUrl) {
+              try {
+                await browser.navigate(tabId, startUrl);
+              } catch {
+                // Stay wherever the site landed after sign-in.
+              }
+            }
+            report({
+              filled: true,
+              submitted: true,
+              loggedIn: true,
+              missingFields: filled.missingFields,
+            });
+            return;
+          }
+          await wait(700);
+        }
+        // Still signed out after the deadline: the form is filled and the
+        // user takes over (captcha, wrong password, extra steps).
+        report({
+          filled: true,
+          submitted: true,
+          skipped: "login-failed",
+          missingFields: filled.missingFields,
+        });
+        return;
+      }
+      // state === "unknown": the probe cannot run on this page; fall through
+      // to the legacy fill below instead of guessing.
+    }
+
+    // --- Legacy behavior without a check path: poll for a password field. ---
+    const filled = await fillOnLoginPage(15_000);
+    const skipped = filled?.ok
       ? undefined
-      : last?.reason === "cross-origin"
+      : filled?.reason === "cross-origin"
         ? ("cross-origin" as const)
-        : last?.reason === "no-password" || last?.reason === "no-identity"
+        : filled?.reason === "no-password" || filled?.reason === "no-identity"
           ? ("no-password" as const)
           : ("not-login-page" as const);
-    const report = {
-      identityId,
-      label: identity.name,
-      filled: last?.ok === true,
-      submitted: last?.submitted === true,
-      missingFields: last?.missingFields ?? [],
-      unmatchedFields: [],
+    report({
+      filled: filled?.ok === true,
+      submitted: filled?.submitted === true,
+      missingFields: filled?.missingFields ?? [],
       ...(skipped ? { skipped } : {}),
-    };
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.authAutoFilled, report);
-    }
+    });
   })();
 }
 
@@ -481,7 +602,7 @@ async function openFlowTab(
     label: flow.name,
   });
   browser.activate(created.id);
-  scheduleEmbeddedFill(created.id, identityId);
+  scheduleEmbeddedLogin(created.id, identityId);
   // The document is still loading; a step that runs immediately would look at
   // about:blank and fail with "not-found" for a page that is a moment away.
   await new Promise((done) => setTimeout(done, 800));
@@ -2252,7 +2373,7 @@ function registerIpc(workspace: WorkspaceService): void {
       // Opening a bookmark as one of its accounts is the same intent as
       // clicking that account's card, so it fills the same way. A blank tab or
       // a clean session names no identity and is skipped inside the scheduler.
-      if (input?.identityId) scheduleEmbeddedFill(tab.id, input.identityId);
+      if (input?.identityId) scheduleEmbeddedLogin(tab.id, input.identityId);
       // A "+" that omits `viewId` means "add a page here and show it". When the
       // grid is full, the new page has no free cell, so swap it into the
       // selected one — otherwise the stage keeps showing the old page and the
@@ -2352,7 +2473,7 @@ function registerIpc(workspace: WorkspaceService): void {
       origin: "manual",
     });
     browser.focusPage();
-    scheduleEmbeddedFill(tab.id, identity.id);
+    scheduleEmbeddedLogin(tab.id, identity.id);
     return browser.state();
   });
 
@@ -2611,7 +2732,7 @@ if (!gotLock) {
           //
           // The tab still lands on stage when the browser page happens to be
           // visible, because the view on stage is what `viewId` names.
-          if (input.identityId) scheduleEmbeddedFill(created.id, input.identityId);
+          if (input.identityId) scheduleEmbeddedLogin(created.id, input.identityId);
           return created;
         },
         navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),

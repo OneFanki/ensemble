@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleAlert, CircleCheck, Info } from "lucide-vue-next";
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-vue-next";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const store = useWorkspaceStore();
@@ -16,6 +16,7 @@ const store = useWorkspaceStore();
     >
       <CircleAlert v-if="toast.tone === 'error'" :size="13" />
       <CircleCheck v-else-if="toast.tone === 'success'" :size="13" />
+      <TriangleAlert v-else-if="toast.tone === 'warning'" :size="13" />
       <Info v-else :size="13" />
       <span>{{ toast.text }}</span>
     </div>
@@ -71,6 +72,14 @@ const store = useWorkspaceStore();
 
 .toast.error svg {
   color: var(--red);
+}
+
+.toast.warning {
+  border-color: color-mix(in srgb, var(--amber) 38%, var(--line));
+}
+
+.toast.warning svg {
+  color: var(--amber);
 }
 
 @keyframes toast-in {

@@ -73,6 +73,7 @@ describe("automation scripts", () => {
     "capture-screenshots.mjs",
     "smoke-packaged-mcp.mjs",
     "e2e-autofill.mjs",
+    "e2e-batch-launch.mjs",
     "e2e-browser-views.mjs",
     "e2e-dom-resolver.mjs",
     "e2e-embedded.mjs",

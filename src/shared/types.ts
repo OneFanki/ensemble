@@ -284,6 +284,11 @@ export interface AutoFillReport {
   label: string;
   filled: boolean;
   submitted: boolean;
+  /**
+   * True when the launch pipeline confirmed a signed-in session — either it was
+   * already there, or the auto-login routine just established one.
+   */
+  loggedIn?: boolean;
   /** Configured fields whose input could not be located on the page. */
   missingFields: string[];
   /** Visible inputs the page has that no configuration describes yet. */
@@ -294,7 +299,8 @@ export interface AutoFillReport {
     | "cross-origin"
     | "origin-changed"
     | "external"
-    | "failed";
+    | "failed"
+    | "login-failed";
 }
 
 export interface AppSettings {

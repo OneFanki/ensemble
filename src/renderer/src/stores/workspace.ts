@@ -47,7 +47,7 @@ declare global {
 export interface ToastMessage {
   id: number;
   text: string;
-  tone: "info" | "error" | "success";
+  tone: "info" | "error" | "success" | "warning";
 }
 
 export const useWorkspaceStore = defineStore("workspace", () => {
@@ -129,6 +129,16 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     if (report.skipped === "origin-changed") {
       void confirmChangedOrigin(report);
+      return;
+    }
+    if (report.skipped === "login-failed") {
+      notify(tr("app.toastLoginFailed", { name: report.label }), "warning");
+      return;
+    }
+    // A confirmed session with nothing to fill is the expected quiet outcome —
+    // announcing every already-signed-in launch would be six toasts for one view.
+    if (report.filled && report.loggedIn) {
+      notify(tr("app.toastAutoLoggedIn", { name: report.label }), "success");
       return;
     }
     if (!report.filled) return;

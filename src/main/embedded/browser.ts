@@ -16,7 +16,7 @@ import {
   type WaitCondition,
   type WaitResult,
 } from "@core/cdp/inspect";
-import { buildFillExpression } from "@core/cdp/login";
+import { buildAuthCheckExpression, buildFillExpression } from "@core/cdp/login";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -2149,6 +2149,46 @@ export class EmbeddedBrowser {
     const file = join(this.options.shotDir, `${tab.id.slice(0, 8)}-${stamp}.${extension}`);
     writeFileSync(file, buffer);
     return { path: file, bytes: buffer.length };
+  }
+
+  /**
+   * Checks the tab's session against a protected path: an in-page fetch with
+   * cookies, so the answer reflects this tab's own partition, not a cached
+   * record. Callers use it to decide whether a launch still needs a login.
+   */
+  async authProbe(
+    tabId: string,
+    checkPath: string,
+    baseUrl: string,
+  ): Promise<{ ok: boolean; signedIn?: boolean; reason?: string }> {
+    const tab = this.requireTab(tabId);
+    let expected = "";
+    try {
+      expected = new URL(baseUrl).origin;
+    } catch {
+      return { ok: false, reason: "bad-site" };
+    }
+    let origin = "";
+    try {
+      origin = await tab.cdp.evaluate<string>("location.origin");
+    } catch {
+      return { ok: false, reason: "not-loaded" };
+    }
+    if (!origin || origin === "null") return { ok: false, reason: "not-loaded" };
+    if (origin !== expected) return { ok: false, reason: "cross-origin" };
+    let result: { ok?: boolean } | undefined;
+    try {
+      // awaitPromise is mandatory here: the expression is an async IIFE around
+      // a fetch, and without it Runtime.evaluate returns the unsettled Promise,
+      // which serializes to `{}` — every probe would read as signed out.
+      result = await tab.cdp.evaluate<{ ok: boolean }>(buildAuthCheckExpression(checkPath), {
+        awaitPromise: true,
+      });
+    } catch {
+      return { ok: false, reason: "probe-failed" };
+    }
+    if (!result) return { ok: false, reason: "probe-failed" };
+    return { ok: true, signedIn: result.ok === true };
   }
 
   /** Fills the saved credentials of the tab's identity, when it has any. */

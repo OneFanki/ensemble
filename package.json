@@ -57,6 +57,7 @@
     "e2e:zoom-devtools": "node scripts/e2e-zoom-devtools.mjs",
     "e2e:dom-resolver": "node scripts/e2e-dom-resolver.mjs",
     "e2e:flows": "node scripts/e2e-flows.mjs",
+    "e2e:batch-launch": "node scripts/e2e-batch-launch.mjs",
     "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs"
   },
   "devDependencies": {

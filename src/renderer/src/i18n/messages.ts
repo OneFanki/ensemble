@@ -693,6 +693,8 @@ export const messages = {
       toastCopied: "已复制，30 秒后清除剪贴板",
       toastNothingToCopy: "没有可复制的密码",
       toastAutoFilled: "已为「{name}」填充登录表单",
+      toastAutoLoggedIn: "「{name}」已自动登录",
+      toastLoginFailed: "「{name}」自动登录未完成，登录页已填好凭据，请手动接管",
       toastMissingFields: "未找到字段：{fields}",
       toastUnmatchedFields: "页面还有未配置的字段：{fields}",
       toastCrossOrigin: "「{name}」的登录页跳转到了别的域名，已停止自动填充",
@@ -1540,6 +1542,9 @@ export const messages = {
       toastCopied: "Copied. Clipboard clears in 30 seconds.",
       toastNothingToCopy: "No password to copy",
       toastAutoFilled: "Filled the login form for “{name}”",
+      toastAutoLoggedIn: "“{name}” signed in automatically",
+      toastLoginFailed:
+        "“{name}” did not finish signing in; the login form is filled, take over manually",
       toastMissingFields: "Fields not found: {fields}",
       toastUnmatchedFields: "Unconfigured fields on the page: {fields}",
       toastCrossOrigin: "“{name}” redirected to another domain; autofill stopped",

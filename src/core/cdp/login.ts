@@ -184,7 +184,11 @@ export function buildFillExpression(input: LoginFillInput): string {
 }
 
 export function buildAuthCheckExpression(checkPath: string): string {
-  const target = JSON.stringify(checkPath);
+  // Cache-bust on every evaluation: the answer flips with the session (401
+  // before sign-in, 2xx after), and a cached pre-login 401 made the auto-login
+  // routine wait out its whole deadline believing the sign-in had failed.
+  const separator = checkPath.includes("?") ? "&" : "?";
+  const target = JSON.stringify(`${checkPath}${separator}_=${Date.now()}`);
   return `(async () => {
     try {
       const response = await fetch(${target}, {

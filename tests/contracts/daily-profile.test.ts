@@ -133,7 +133,12 @@ describe("AI origin gate contract", () => {
   });
 
   it("sends an AI's own identity-less tab to a clean session, never the profile", () => {
-    const main = readFileSync(join(process.cwd(), "src/main/index.ts"), "utf8");
+    // A Windows checkout carries CRLF; the assertion is on source shape, not
+    // line endings, so normalise before slicing.
+    const main = readFileSync(join(process.cwd(), "src/main/index.ts"), "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
     const start = main.indexOf("createTab: async (input) => {");
     const block = main.slice(start, start + 1200);
     expect(block).toContain("...(input.identityId ? {} : { clean: true })");

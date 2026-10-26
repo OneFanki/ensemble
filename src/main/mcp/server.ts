@@ -920,7 +920,11 @@ export class McpServer {
       baseUrl: site.baseUrl,
       loginPath: site.loginPath,
       ...(site.authCheckPath ? { authCheckPath: site.authCheckPath } : {}),
-      autoSubmit: site.autoSubmit,
+      // Both the explicit override and what it resolves to: a client asking
+      // "will this site submit after filling" needs the answer, while one that
+      // wants to change it needs to know whether a site-level value exists.
+      ...(site.autoSubmit === undefined ? {} : { autoSubmit: site.autoSubmit }),
+      autoSubmitEffective: service.effectiveAutoSubmit(site),
       // The origin the password was last used with; a different current origin
       // means filling will ask for confirmation first.
       lastOrigin: site.lastOrigin ?? null,

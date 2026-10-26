@@ -38,7 +38,8 @@ export interface BundledSite {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
-  autoSubmit: boolean;
+  /** Absent = the receiver keeps its own global default. */
+  autoSubmit?: boolean;
   extraFields: BundledLogin[];
   /** Site default password, when the bundle was made with passwords included. */
   hasPassword: boolean;
@@ -152,7 +153,10 @@ export function parseAccountBundle(raw: unknown): AccountBundleFile {
       ...(optionalText(item["authCheckPath"], "登录检测地址", 500)
         ? { authCheckPath: optionalText(item["authCheckPath"], "登录检测地址", 500) }
         : {}),
-      autoSubmit: item["autoSubmit"] === true,
+      // Only a bundle that states a choice carries one; a bundle written before
+      // the field became an override has no value at all, and turning that into
+      // `false` would pin the receiver's site to manual forever.
+      ...(typeof item["autoSubmit"] === "boolean" ? { autoSubmit: item["autoSubmit"] } : {}),
       extraFields: loginFields(item["extraFields"]),
       hasPassword: item["hasPassword"] === true,
       accounts: accounts.map((account, accountIndex) => {
@@ -244,7 +248,7 @@ export function buildAccountBundle(input: {
       baseUrl: site.baseUrl,
       loginPath: site.loginPath,
       ...(site.authCheckPath ? { authCheckPath: site.authCheckPath } : {}),
-      autoSubmit: site.autoSubmit,
+      ...(site.autoSubmit === undefined ? {} : { autoSubmit: site.autoSubmit }),
       extraFields: (site.extraFields ?? []).map((field) => ({ ...field })),
       hasPassword: Boolean(secrets?.site[site.baseUrl]),
       accounts: accounts.map((identity) => ({

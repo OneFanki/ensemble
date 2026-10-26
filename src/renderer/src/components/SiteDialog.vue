@@ -3,8 +3,10 @@ import type { SiteDraft, Tag } from "@shared/types";
 import { Trash2 } from "lucide-vue-next";
 import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useWorkspaceStore } from "../stores/workspace";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
 import Modal from "./Modal.vue";
+import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
 
@@ -21,8 +23,36 @@ const emit = defineEmits<{
 
 const form = reactive<SiteDraft>({ ...props.draft });
 const { t } = useI18n();
+const store = useWorkspaceStore();
 const error = reactive<{ message: string | null }>({ message: null });
 const tags = computed(() => props.tags ?? []);
+
+/**
+ * The auto-submit choice as three options instead of a boolean.
+ *
+ * `default` stores nothing, so the site follows Settings → auto-submit after
+ * filling. That has to be the default state of the control: a new site should
+ * not carry a private copy of a global answer.
+ */
+type SubmitMode = "default" | "always" | "never";
+
+const submitMode = computed<SubmitMode>(() => {
+  if (form.autoSubmit === true) return "always";
+  if (form.autoSubmit === false) return "never";
+  return "default";
+});
+
+const submitModeOptions = computed(() => [
+  { value: "default", label: t("app.autoSubmitFollowGlobal") },
+  { value: "always", label: t("app.autoSubmitAlways") },
+  { value: "never", label: t("app.autoSubmitNever") },
+]);
+
+function setSubmitMode(value: string | undefined): void {
+  if (value === "always") form.autoSubmit = true;
+  else if (value === "never") form.autoSubmit = false;
+  else delete form.autoSubmit;
+}
 
 watch(
   () => props.draft,
@@ -123,9 +153,33 @@ function normalizePath(event: Event) {
           <span class="group-note">{{ $t("app.loginFormGroupNote") }}</span>
         </div>
 
-        <label class="check">
-          <input v-model="form.autoSubmit" type="checkbox" />
-          <span>{{ $t("app.autoSubmitNote") }}</span>
+        <!--
+          Three states, not a checkbox: the boolean could not express "whatever
+          the global default says", and that default is now the answer for almost
+          every site. An override is stored only when someone means *this* site,
+          so changing the global setting still reaches sites with no opinion.
+
+          The resolved value sits under the field rather than inside the dropdown:
+          "follow global" is the answer for most sites, and an option hint is only
+          visible while the list is open — i.e. exactly when the question is moot.
+        -->
+        <label class="field">
+          <span class="label">{{ $t("app.autoSubmitLabel") }}</span>
+          <SelectField
+            :model-value="submitMode"
+            :options="submitModeOptions"
+            @update:model-value="setSubmitMode"
+          />
+          <span v-if="submitMode === 'default'" class="hint" data-submit-effective>
+            {{
+              $t("app.autoSubmitEffective", {
+                state: store.settings.autoSubmitLogin
+                  ? $t("app.autoSubmitAlways")
+                  : $t("app.autoSubmitNever"),
+              })
+            }}
+          </span>
+          <span class="hint">{{ $t("app.autoSubmitNote") }}</span>
         </label>
 
         <ExtraLoginFields v-model="form.extraFields" :scope-hint="$t('app.envFieldsScope')" />

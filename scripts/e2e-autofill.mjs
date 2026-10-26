@@ -14,7 +14,56 @@ import { join, resolve } from "node:path";
 
 const PAGE_PORT = 3986;
 const DEBUG_PORT = 9791;
+const SPA_PORT = 3985;
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-autofill-"));
+
+/**
+ * A login page shaped like a modern single-page app: the button is
+ * `type="button"` with a JS handler and the form has no submit listener.
+ *
+ * This is the shape that broke automatic sign-in. `requestSubmit()` on such a
+ * page fires a submit event nobody listens to, so the fill reported success
+ * while the page sat there — the user then had to click the button by hand.
+ * `submitHits` counts what the page's own handler saw, which is what makes the
+ * difference observable: the number only moves if the button was really clicked.
+ */
+let submitHits = 0;
+const spa = createServer((req, res) => {
+  const url = new URL(req.url ?? "/", `http://127.0.0.1:${SPA_PORT}`);
+  if (url.pathname === "/api/hit") {
+    // POST is the button's own signal; GET is the test reading the count. Keeping
+    // them apart means the number only moves when the page's handler ran.
+    if (req.method === "POST") submitHits += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ submitHits }));
+    return;
+  }
+  if (url.pathname === "/done") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html><head><meta charset="utf-8"><title>已登录</title></head>
+<body><p id="done">signed in</p></body></html>`);
+    return;
+  }
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>SPA 登录</title></head>
+<body>
+<form id="f">
+  <label>账号 <input id="user" name="user" type="text" autocomplete="username" /></label>
+  <label>密码 <input id="pass" name="pass" type="password" autocomplete="current-password" /></label>
+  <!-- No type="submit": the page drives sign-in from its own click handler. -->
+  <button id="go" type="button">登录</button>
+  <button id="forgot" type="button">忘记密码</button>
+</form>
+<script>
+  document.getElementById("go").addEventListener("click", () => {
+    fetch("/api/hit", { method: "POST" }).then(() => { location.href = "/done"; });
+  });
+  document.getElementById("forgot").addEventListener("click", () => {
+    document.title = "忘记密码";
+  });
+</script>
+</body></html>`);
+});
 
 const page = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -28,6 +77,7 @@ const page = createServer((req, res) => {
 </body></html>`);
 });
 await new Promise((done) => page.listen(PAGE_PORT, "127.0.0.1", done));
+await new Promise((done) => spa.listen(SPA_PORT, "127.0.0.1", done));
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
@@ -305,6 +355,66 @@ try {
     bookmarkFields,
   );
 
+  // --- A single-page login form: the button must actually be clicked -------
+  // This is the shape that made "it fills but I still have to press login"
+  // happen: no submit listener on the form, the button is `type="button"`.
+  // `submitHits` only moves when the page's own click handler runs, so a
+  // requestSubmit()-based implementation cannot pass this.
+  const spaSite = await client.evaluate(`(async () => {
+    const snap = await window.ensemble.getWorkspace();
+    // Turn auto-submit on through the global setting, which is also what a
+    // fresh install gets: this check is about the click, not about the switch.
+    await window.ensemble.saveSettings({ autoSubmitLogin: true });
+    const site = await window.ensemble.saveSite({
+      name: 'SPA 登录站点',
+      baseUrl: '${`http://127.0.0.1:${SPA_PORT}`}',
+      loginPath: '/login',
+      autoSubmit: undefined,
+    });
+    const identity = await window.ensemble.saveIdentity({
+      siteId: site.sites.find((item) => item.name === 'SPA 登录站点').id,
+      name: 'SPA 账号',
+      username: 'spa@example.test',
+      role: 'member',
+      color: 'blue',
+      passwordMode: 'custom',
+      password: 'pw-spa',
+      startPath: '/login',
+    });
+    const saved = site.sites.find((item) => item.name === 'SPA 登录站点');
+    const identityId = identity.identities.find((item) => item.name === 'SPA 账号').id;
+    for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
+      await window.ensemble.closeEmbeddedTab(tab.id);
+    }
+    await window.ensemble.openEmbeddedIdentity(identityId);
+    await new Promise((r) => setTimeout(r, 6000));
+    const state = await window.ensemble.getEmbeddedState();
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    return { siteId: saved.id, identityId, url: tab?.url ?? '', title: tab?.title ?? '' };
+  })()`);
+
+  let spaProbe = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const info = await (await fetch(`http://127.0.0.1:${SPA_PORT}/api/hit`)).json();
+    if (info.submitHits > 0) {
+      spaProbe = info;
+      break;
+    }
+    await wait(400);
+  }
+  check(
+    "an SPA login form is submitted by clicking its button, not by requestSubmit",
+    spaProbe?.submitHits === 1 && String(spaSite?.url).includes("/done"),
+    { spaSite, spaProbe },
+  );
+  // The "forgot password" affordance sits in the same form and must never be the
+  // element that gets clicked.
+  check(
+    "the wrong button is not the one that gets pressed",
+    String(spaSite?.title).includes("已登录") || String(spaSite?.url).includes("/done"),
+    spaSite,
+  );
+
   client.close();
 } catch (error) {
   check("run completed", false, String(error));
@@ -317,6 +427,7 @@ try {
     console.log("note: temp dir left behind at", userData);
   }
   page.close();
+  spa.close();
   const failed = results.filter((item) => !item.ok);
   console.log(`\nSUMMARY ${results.length - failed.length}/${results.length} passed`);
   process.exit(failed.length > 0 ? 1 : 0);

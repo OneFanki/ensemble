@@ -644,6 +644,38 @@ async function submitMaster() {
         <p class="fineprint">
           {{ $t("app.autoFillLaunchNote") }}
         </p>
+        <!--
+          Auto-submit is its own switch, next to autofill but not part of it:
+          "type my password in" and "press the button for me" are two decisions,
+          and someone may want the first without the second (a site with a
+          captcha, or one that locks the account after a couple of tries). A site
+          can override this in its own dialog; that override is the exception, so
+          the normal answer belongs here.
+        -->
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.autoSubmitLabel") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.autoSubmitLogin }"
+              @click="store.saveSettings({ autoSubmitLogin: true })"
+            >
+              {{ $t("app.on") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: !store.settings.autoSubmitLogin }"
+              @click="store.saveSettings({ autoSubmitLogin: false })"
+            >
+              {{ $t("app.off") }}
+            </button>
+          </div>
+        </div>
+        <p class="fineprint">
+          {{ $t("app.autoSubmitNote") }}
+        </p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.restoreView") }}</span>
           <div class="segmented">

@@ -157,18 +157,56 @@ export function buildFillExpression(input: LoginFillInput): string {
 
     let submitted = false;
     if (${submit}) {
-      if (form && typeof form.requestSubmit === "function") {
+      // Click the login button the way a person does, before falling back to
+      // submitting the form. Most login pages today are single-page apps: the
+      // button is type="button" (or a div) with a JS handler, and there is often
+      // no submit handler on the form at all. requestSubmit() on such a page
+      // fires a submit event nobody listens to, so the fill reported success
+      // while the page just sat there — which read exactly like "autofill filled
+      // it but I still have to press the button myself".
+      const clickTarget = (() => {
+        const formNow = passwordField.form;
+        const scopes = formNow ? [formNow, doc] : [doc];
+        for (const scopeRoot of scopes) {
+          const candidates = Array.from(
+            scopeRoot.querySelectorAll('button, input[type="submit"], [role="button"]'),
+          ).filter(visible);
+          const loginLooking = candidates.find((el) => {
+            if (el.disabled) return false;
+            const text = [
+              el.textContent || "",
+              el.getAttribute("value") || "",
+              el.getAttribute("aria-label") || "",
+              el.getAttribute("title") || "",
+            ]
+              .join(" ")
+              .toLowerCase();
+            // Reject the affordances that sit in every login form but do not
+            // sign in: forgot-password, show-password, register, cancel.
+            if (/forgot|reset|忘记|找回|show|显示|register|注册|sign\\s*up|cancel|取消/.test(text)) {
+              return false;
+            }
+            if (/login|log\\s*in|sign\\s*in|submit|登录|登入|登陆|确定|确认|进入/.test(text)) {
+              return true;
+            }
+            // A submit button inside the login form needs no word to explain
+            // itself; it is the form's default action.
+            return el.getAttribute("type") === "submit" && Boolean(formNow) && formNow.contains(el);
+          });
+          if (loginLooking) return loginLooking;
+        }
+        return undefined;
+      })();
+
+      if (clickTarget) {
+        clickTarget.click();
+        submitted = true;
+      } else if (form && typeof form.requestSubmit === "function") {
         form.requestSubmit();
         submitted = true;
       } else if (form) {
         form.submit();
         submitted = true;
-      } else {
-        const button = Array.from(scope.querySelectorAll('button, input[type="submit"]')).find(visible);
-        if (button) {
-          button.click();
-          submitted = true;
-        }
       }
     }
 

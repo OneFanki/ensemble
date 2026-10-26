@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EmbeddedTab, FrozenSlot, StageRect } from "@shared/embedded";
 import {
+  DEVTOOLS_GRIP_WIDTH,
   EMBEDDED_DIVIDER,
   EMBEDDED_SLOT_HEADER,
   embeddedSlotRects,
@@ -379,6 +380,67 @@ function embeddedSlotRectsForSlot(index: number): StageRect | null {
     width: slot.width,
     height: Math.max(1, slot.height - EMBEDDED_SLOT_HEADER),
   };
+}
+
+/**
+ * Drag handles between a docked DevTools panel and its page.
+ *
+ * The gap the handle lives in is real: the main process parts the two native
+ * views around `DEVTOOLS_GRIP_WIDTH` precisely because renderer HTML paints
+ * below them. Same arithmetic on both sides, one shared constant.
+ */
+const devtoolsGrips = computed(() => {
+  const grips: Array<{ tabId: string; x: number; y: number; width: number; height: number }> = [];
+  const push = (page: EmbeddedTab | undefined, rect: StageRect | null) => {
+    if (!page?.devtoolsOpen || page.devtoolsWidth === undefined || !rect) return;
+    const split = Math.round(rect.width * (1 - page.devtoolsWidth));
+    grips.push({
+      tabId: page.id,
+      x: rect.x + split - Math.round(DEVTOOLS_GRIP_WIDTH / 2),
+      y: rect.y,
+      width: DEVTOOLS_GRIP_WIDTH,
+      height: rect.height,
+    });
+  };
+  for (const slot of slotChrome.value) {
+    push(slotPage(slot.tabId), embeddedSlotRectsForSlot(slot.index));
+  }
+  const tab = activeTab.value;
+  if (!activeView.value && tab && !tab.viewId) {
+    const box = stageBox.value;
+    push(tab, {
+      x: 0,
+      y: EMBEDDED_SLOT_HEADER,
+      width: box.width,
+      height: Math.max(1, box.height - EMBEDDED_SLOT_HEADER),
+    });
+  }
+  return grips;
+});
+
+/**
+ * A drag is handed to the main process, which follows the cursor itself — the
+ * pointer spends the drag over the native views, where HTML events never reach.
+ * The renderer's mouseup is the fallback for a release over app chrome; over a
+ * view, the view's own input-event reports it.
+ */
+function onGripDown(tabId: string, event: MouseEvent): void {
+  event.preventDefault();
+  void window.ensemble.beginEmbeddedDevToolsResize(tabId);
+  const stop = () => {
+    window.removeEventListener("mouseup", stop);
+    void window.ensemble.endEmbeddedDevToolsResize();
+  };
+  window.addEventListener("mouseup", stop);
+}
+
+/** Arrow keys move the split in small steps, as a separator should. */
+function onGripKey(tabId: string, event: KeyboardEvent): void {
+  const page = tabById(tabId);
+  const step = event.key === "ArrowLeft" ? -0.04 : event.key === "ArrowRight" ? 0.04 : 0;
+  if (!step || !page || page.devtoolsWidth === undefined) return;
+  event.preventDefault();
+  void window.ensemble.setEmbeddedDevToolsWidth(tabId, page.devtoolsWidth + step);
 }
 
 function activateSlot(rootId: string | null): void {
@@ -1204,6 +1266,29 @@ function fillMessage(reason?: string): string {
       </div>
 
       <!--
+        One handle per docked DevTools panel, standing in the gap the main
+        process leaves between the page and the tools. Dragging re-splits the
+        cell live; arrows nudge it from the keyboard.
+      -->
+      <div
+        v-for="grip in devtoolsGrips"
+        :key="`grip-${grip.tabId}`"
+        class="devtools-grip"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('app.devtoolsGrip')"
+        tabindex="0"
+        :style="{
+          left: `${grip.x}px`,
+          top: `${grip.y}px`,
+          width: `${grip.width}px`,
+          height: `${grip.height}px`,
+        }"
+        @mousedown="onGripDown(grip.tabId, $event)"
+        @keydown="onGripKey(grip.tabId, $event)"
+      ></div>
+
+      <!--
         Flat mode gets the same band a view cell has.
 
         Without it, an instance opened into the default tab group had no page
@@ -1626,6 +1711,35 @@ function fillMessage(reason?: string): string {
   position: absolute;
   z-index: 0;
   overflow: hidden;
+}
+
+/*
+ * The DevTools drag handle. It stands in a real gap between the page and the
+ * tools — the only place renderer HTML can exist between two native views —
+ * and shows as a hairline until hovered or focused.
+ */
+.devtools-grip {
+  position: absolute;
+  cursor: col-resize;
+  z-index: 1;
+  outline: none;
+}
+
+.devtools-grip::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+}
+
+.devtools-grip:hover::before,
+.devtools-grip:focus-visible::before {
+  left: 2px;
+  width: 3px;
+  background: var(--accent);
 }
 
 .slot-header {

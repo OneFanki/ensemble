@@ -2,6 +2,16 @@ import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID } from "./layouts";
 import type { LayoutId, RoleColor, SlotRect } from "./types";
 
 /**
+ * Width of the gap between a docked DevTools panel and its page.
+ *
+ * The drag handle is renderer HTML, which paints below every native view, so
+ * the views must physically part around this many DIP for the handle to exist.
+ * Main process (layout) and renderer (handle) share the constant so the gap
+ * and the handle stay the same width.
+ */
+export const DEVTOOLS_GRIP_WIDTH = 7;
+
+/**
  * A page hosted inside the app's own browser surface.
  *
  * The embedded surface exists so AI-driven work does not open a system window per
@@ -57,6 +67,14 @@ export interface EmbeddedTab {
   zoom: number;
   /** True while this page's DevTools are open (docked by default). */
   devtoolsOpen: boolean;
+  /**
+   * Fraction of the cell the docked panel takes, while it is docked.
+   *
+   * The renderer draws the drag handle between page and tools, so it needs the
+   * same split the native views were laid out with — a stale guess would put
+   * the handle over one of the two surfaces.
+   */
+  devtoolsWidth?: number;
   /**
    * Native view geometry, in window content coordinates.
    *

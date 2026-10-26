@@ -753,6 +753,7 @@ export const messages = {
       browserDevTools: "开发者工具",
       browserDevToolsClose: "关闭开发者工具",
       browserDevToolsDetach: "在独立窗口打开开发者工具",
+      devtoolsGrip: "拖动调整页面与开发者工具的宽度，左右方向键微调",
       browserZoomIn: "放大这一页（Ctrl + 加号）",
       browserZoomOut: "缩小这一页（Ctrl + 减号）",
       browserZoomReset:
@@ -1614,6 +1615,7 @@ export const messages = {
       browserDevTools: "Developer tools",
       browserDevToolsClose: "Close developer tools",
       browserDevToolsDetach: "Open developer tools in a separate window",
+      devtoolsGrip: "Drag to resize the page and the developer tools; arrow keys nudge it",
       browserZoomIn: "Zoom in on this page (Ctrl + plus)",
       browserZoomOut: "Zoom out of this page (Ctrl + minus)",
       browserZoomReset:

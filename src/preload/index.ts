@@ -177,6 +177,11 @@ const api: EnsembleApi = {
   fillEmbeddedLogin: (tabId) => ipcRenderer.invoke(IPC.embeddedFill, tabId),
   openEmbeddedDevTools: (tabId, mode) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId, mode),
   closeEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevToolsClose, tabId),
+  setEmbeddedDevToolsWidth: (tabId, width) =>
+    ipcRenderer.invoke(IPC.embeddedDevToolsWidth, tabId, width),
+  beginEmbeddedDevToolsResize: (tabId) =>
+    ipcRenderer.invoke(IPC.embeddedDevToolsResizeStart, tabId),
+  endEmbeddedDevToolsResize: () => ipcRenderer.invoke(IPC.embeddedDevToolsResizeEnd),
   zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
   findInEmbeddedTab: (tabId, text, options) =>
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),

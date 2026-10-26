@@ -9,8 +9,8 @@ import type {
 import type { FlowDraft, FlowRunResult } from "./flows";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
-  AppSettings,
   AiPageAction,
+  AppSettings,
   AuthBatchResult,
   AuthCheckResult,
   AutoFillReport,
@@ -211,6 +211,9 @@ export const IPC = {
   embeddedFill: "embedded:fill",
   embeddedDevTools: "embedded:devtools",
   embeddedDevToolsClose: "embedded:devtools-close",
+  embeddedDevToolsWidth: "embedded:devtools-width",
+  embeddedDevToolsResizeStart: "embedded:devtools-resize-start",
+  embeddedDevToolsResizeEnd: "embedded:devtools-resize-end",
   embeddedZoom: "embedded:zoom",
   embeddedFind: "embedded:find",
   embeddedStopFind: "embedded:stop-find",
@@ -473,6 +476,11 @@ export interface EnsembleApi {
   /** Opens DevTools for one page; docked inside the page by default. */
   openEmbeddedDevTools(tabId: string, mode?: "docked" | "window"): Promise<void>;
   closeEmbeddedDevTools(tabId: string): Promise<void>;
+  /** Sets the docked panel's fraction of the cell; clamped main-process side. */
+  setEmbeddedDevToolsWidth(tabId: string, width: number): Promise<void>;
+  /** Hands a handle drag to the main process, which follows the cursor itself. */
+  beginEmbeddedDevToolsResize(tabId: string): Promise<void>;
+  endEmbeddedDevToolsResize(): Promise<void>;
   /**
    * Ctrl +/-/0 on one page. Returns the new factor in percent.
    *

@@ -104,6 +104,20 @@ const headless = process.env["ENSEMBLE_HEADLESS"] === "1";
 const userDataOverride = process.env["ENSEMBLE_USER_DATA"]?.trim();
 if (userDataOverride) app.setPath("userData", userDataOverride);
 
+// Chromium's UI language follows the app's. This is what keeps `navigator.language`
+// inside a DevTools front-end consistent with the app's setting, so the prompt
+// answerer (see the embedded browser) picks the same language the user chose.
+// The DevTools front-end's own language cannot be fixed here — it only follows
+// its per-run preference — which is why the answerer exists at all. Must be set
+// before app ready; reading settings.json here is fine because userData was
+// resolved just above.
+try {
+  const settings = JSON.parse(readFileSync(join(app.getPath("userData"), "settings.json"), "utf8"));
+  app.commandLine.appendSwitch("lang", settings.locale === "en" ? "en-US" : "zh-CN");
+} catch {
+  // No settings yet (first run): Chromium picks the system language.
+}
+
 class SafeStorageBox implements SecretBox {
   get available(): boolean {
     try {
@@ -236,6 +250,10 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // The detached DevTools window is created by the browser manager, so it
     // needs the icon too rather than falling back to electron.exe's.
     ...(appIconPath() ? { appIcon: appIconPath() } : {}),
+    // The DevTools language prompt is answered with the app's language, which
+    // the user can change at runtime — hence a getter, not a snapshot. The
+    // Chromium-side `--lang` switch reads the same setting at startup.
+    locale: () => service?.settingsSnapshot().locale ?? "zh",
     resolveLogin: async (identityId) => {
       if (!service) return undefined;
       const identity = service.findIdentity(identityId);
@@ -1434,6 +1452,17 @@ async function createWindow(): Promise<void> {
     }
   });
 
+  // F12 / Ctrl+Shift+I with the focus on the app's own chrome (a tab strip, the
+  // dock, an address bar). When the focus is inside a page, that page's
+  // `before-input-event` handles the toggle and this listener never fires; from
+  // the chrome, no page sees the key at all — which read as "F12 does nothing".
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const key = input.key.toLowerCase();
+    if (key !== "f12" && !(input.control && input.shift && key === "i")) return;
+    event.preventDefault();
+    ensureEmbeddedBrowser().toggleDevToolsForFocusedPage();
+  });
+
   mainWindow.on("close", (event) => {
     if (quitting) return;
     // Closing the window is the common accident; the tray keeps the MCP endpoint
@@ -2595,6 +2624,15 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedDevToolsClose, (tabId: string) => {
     ensureEmbeddedBrowser().closeDevTools(String(tabId));
   });
+  handle(IPC.embeddedDevToolsWidth, (tabId: string, width: number) => {
+    ensureEmbeddedBrowser().setDevToolsWidth(String(tabId), Number(width));
+  });
+  handle(IPC.embeddedDevToolsResizeStart, (tabId: string) => {
+    ensureEmbeddedBrowser().beginDevToolsResize(String(tabId));
+  });
+  handle(IPC.embeddedDevToolsResizeEnd, () => {
+    ensureEmbeddedBrowser().endDevToolsResize();
+  });
   handle(IPC.embeddedZoom, (tabId: string, direction: "in" | "out" | "reset") =>
     ensureEmbeddedBrowser().zoomBy(
       String(tabId),
@@ -2649,6 +2687,17 @@ if (!gotLock) {
   app.on("second-instance", () => {
     showMainWindow();
   });
+
+  // Windows' native window occlusion tracking has been observed to mark a
+  // docked DevTools view (a WebContentsView beside another one) as occluded:
+  // its chrome paints once, the content area never does, and the panel reads as
+  // a black rectangle. The headless probe cannot see this — it reproduces only
+  // on a real, composited window. The app keeps its pages on screen by design,
+  // so the tracker's savings are worthless here and the false positives are
+  // fatal. Must be set before `app.whenReady`.
+  if (process.platform === "win32") {
+    app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+  }
 
   app.whenReady().then(async () => {
     mkdirSync(profileRoot(), { recursive: true });

@@ -21,6 +21,7 @@ import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
   desktopUserAgent,
+  DEVTOOLS_GRIP_WIDTH,
   EMBEDDED_SLOT_HEADER,
   type EmbeddedState,
   type EmbeddedTab,
@@ -49,7 +50,7 @@ import {
   interpolateStep,
 } from "@shared/flows";
 import type { LayoutId, RoleColor, SlotRect } from "@shared/types";
-import { BrowserWindow, Menu, session, shell, WebContentsView } from "electron";
+import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type WebContents } from "electron";
 import { EmbeddedCdp } from "./cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 
@@ -131,6 +132,13 @@ export interface EmbeddedBrowserOptions {
   shotDir: string;
   /** Icon for app-owned windows (the DevTools window), so none shows Electron's. */
   appIcon?: string;
+  /**
+   * The app's UI language, re-read on every DevTools open.
+   *
+   * The DevTools language prompt is answered on the user's behalf with this
+   * language; see `answerDevToolsLocale` for why that has to happen every time.
+   */
+  locale?: () => string;
   resolveLogin?: (identityId: string) => Promise<EmbeddedLoginPayload | undefined>;
   onStateChange?: (state: EmbeddedState) => void;
   /** Asks the renderer to switch to the browser page. */
@@ -301,6 +309,7 @@ export class EmbeddedBrowser {
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       zoom: tab.zoomOverride ?? this.defaultZoom,
       devtoolsOpen: this.devtoolsOpen(tab),
+      ...(tab.devtools?.mode === "docked" ? { devtoolsWidth: tab.devtools.width } : {}),
       ...(contents.isDestroyed()
         ? {}
         : {
@@ -1239,6 +1248,14 @@ export class EmbeddedBrowser {
       if (modifier && key === "w") {
         event.preventDefault();
         this.closeTab(tab.id);
+      }
+      // The same toggle Chrome offers: F12, and Ctrl+Shift+I for laptops whose
+      // F12 shares a row with volume. The DevTools' own webContents gets the
+      // same handler below — with focus inside the panel, this one never fires.
+      if (key === "f12" || (modifier && input.shift && key === "i")) {
+        event.preventDefault();
+        if (this.devtoolsOpen(tab)) this.closeDevTools(tab.id);
+        else this.openDevTools(tab.id, "docked");
       }
       // Zoom has to be intercepted here: a page can swallow Ctrl +/- itself
       // (code editors do), and the gesture must still work on that page.
@@ -2435,19 +2452,139 @@ export class EmbeddedBrowser {
     if (!tab.devtools) {
       // DevTools needs the devtools:// scheme and their own preload; the page's
       // identity partition would block both, so this view gets its own default
-      // session and no preload of ours.
+      // session and no preload of ours. Background throttling is off because
+      // the panel's content area is one large tiled layer: when throttling
+      // kicks in the tiles stop rasterizing while the chrome keeps its last
+      // frame, which reads as a panel with a black middle — exactly what a
+      // headed window produced and a headless one (throttling off there
+      // already) never did.
       const view = new WebContentsView({
-        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          backgroundThrottling: false,
+        },
       });
       view.setBackgroundColor("#101317");
       contents.setDevToolsWebContents(view.webContents);
       tab.devtools = { view, mode, width: 0.42 };
+      this.watchDevToolsKeys(tab);
+      this.answerDevToolsLocale(tab);
     }
     tab.devtools.mode = mode;
     this.placeDevTools(tab);
     contents.openDevTools({ mode: "detach" });
     this.applyLayout();
     this.emitState();
+  }
+
+  /**
+   * F12 / Ctrl+Shift+I while focus is inside the panel.
+   *
+   * The page's handler never sees those keys then, and without this the panel
+   * would be a one-way door from the keyboard.
+   */
+  private watchDevToolsKeys(tab: TabRecord): void {
+    const contents = tab.devtools?.view.webContents;
+    if (!contents) return;
+    contents.on("before-input-event", (event, input) => {
+      const key = input.key.toLowerCase();
+      const modifier = process.platform === "darwin" ? input.meta : input.control;
+      if (key === "f12" || (modifier && input.shift && key === "i")) {
+        event.preventDefault();
+        this.closeDevTools(tab.id);
+      }
+    });
+  }
+
+  /**
+   * Brings a reloaded panel's content layer back.
+   *
+   * Any reload of the docked DevTools front-end — the language switch does one,
+   * and so does F5 inside the panel — has been observed to come back with its
+   * content tiles never rasterizing: the chrome keeps its frame, the middle of
+   * the panel reads as a black rectangle, and it happens only on a headed,
+   * composited window, which is why the headless checks never saw it. Nudging
+   * the view by a pixel and back forces the compositor to re-allocate the
+   * layer, which restores the content. Nothing else — throttling, occlusion,
+   * invalidation — was sufficient.
+   */
+  private reviveDevToolsCompositing(tab: TabRecord): void {
+    const devtools = tab.devtools;
+    if (!devtools || devtools.mode !== "docked") return;
+    const bounds = devtools.view.getBounds();
+    devtools.view.setBounds({ ...bounds, width: Math.max(1, bounds.width - 1) });
+    devtools.view.setBounds(bounds);
+  }
+
+  /**
+   * Switches the DevTools front-end to the app's language, once, after it has
+   * settled.
+   *
+   * The prompt's choice lives in host preferences Electron never persists, so
+   * it reappears on every open no matter how often it is answered — the app
+   * answers it instead. Switching reloads the front-end; `reviveDevToolsCompositing`
+   * (wired on `did-finish-load`) brings the content layer back afterwards.
+   */
+  private answerDevToolsLocale(tab: TabRecord): void {
+    const contents = tab.devtools?.view.webContents;
+    if (!contents) return;
+    // Exactly once per panel: clicking the switch reloads the front-end, and
+    // answering on every load would reload it forever. One click lands the
+    // choice in the host's in-memory preferences, so after that reload the
+    // prompt stays gone for the rest of the run.
+    let answered = false;
+    contents.on("did-finish-load", () => {
+      // Reloads of the front-end also land here; nudge the layer back to life.
+      // One pass right away is not enough — the recovery only sticks once the
+      // reload's first commit has actually landed, so a few delayed passes
+      // cover the window.
+      for (const delay of [400, 1500, 3000]) {
+        const timer = setTimeout(() => {
+          clearTimeout(timer);
+          this.reviveDevToolsCompositing(tab);
+        }, delay);
+      }
+      if (answered) return;
+      answered = true;
+      // The prompt renders some time after the load event, so a fixed early
+      // click lands on nothing. Poll slowly, click only when the button is
+      // really there, and stop at the first hit.
+      let attempts = 0;
+      const poll = () => {
+        if (contents.isDestroyed()) return;
+        attempts += 1;
+        // The app's language decides the answer, not the system's: the person
+        // running Ensemble already picked a UI language. A zh app gets the
+        // Chinese front-end; anything else just silences the prompt for this
+        // session.
+        const wanted = this.options.locale?.() === "en" ? "Don\u2019t show again" : "Switch DevTools to Chinese";
+        void contents
+          .executeJavaScript(
+            `(() => {
+              const wanted = ${JSON.stringify(wanted)};
+              const found = { el: null };
+              const walk = (root) => {
+                for (const el of root.querySelectorAll('*')) {
+                  if (el.shadowRoot) walk(el.shadowRoot);
+                  if (!found.el && /^(devtools-button|button)$/i.test(el.tagName) && (el.textContent || '').includes(wanted)) found.el = el;
+                }
+              };
+              walk(document);
+              if (found.el) { found.el.click(); return wanted; }
+              return null;
+            })()`,
+            true,
+          )
+          .then((hit) => {
+            if (hit || attempts >= 12 || contents.isDestroyed()) return;
+            setTimeout(poll, 1000);
+          })
+          .catch(() => undefined);
+      };
+      setTimeout(poll, 1200);
+    });
   }
 
   /** Moves an open panel between its cell and its own window. */
@@ -2464,12 +2601,112 @@ export class EmbeddedBrowser {
     this.emitState();
   }
 
+  /**
+   * Live drag of the docked split.
+   *
+   * The pointer spends most of the drag over one of the two native views, so
+   * the renderer cannot follow it there — HTML events stop at the view's edge.
+   * Instead the main process polls the cursor and re-splits on every move, and
+   * the drag ends from a mouse-up seen by either view (`input-event`) or by the
+   * renderer's own mouseup when the pointer is back over app chrome.
+   */
+  private resizeSession?: {
+    tabId: string;
+    timer: NodeJS.Timeout;
+    listeners: Array<{ contents: WebContents; handler: () => void }>;
+  };
+
+  beginDevToolsResize(tabId: string): void {
+    const tab = this.requireTab(tabId);
+    if (!tab.devtools || tab.devtools.mode !== "docked" || !this.host || this.host.isDestroyed()) {
+      return;
+    }
+    this.endDevToolsResize();
+    const rect = this.pageRect(tab);
+    const host = this.host;
+    if (!rect || !host || host.isDestroyed()) return;
+    const move = () => {
+      const live = this.findTab(tabId);
+      if (!live?.devtools || live.devtools.mode !== "docked") {
+        this.endDevToolsResize();
+        return;
+      }
+      const cursor = screen.getCursorScreenPoint();
+      const content = host.getContentBounds();
+      // Cursor and window bounds are both in screen DIP, so the difference is
+      // the position inside the content area — the same space `pageRect` uses.
+      const localX = cursor.x - content.x;
+      const fraction = (rect.width - (localX - rect.x)) / rect.width;
+      const next = Math.min(0.7, Math.max(0.2, fraction));
+      if (Math.abs(next - live.devtools.width) < 0.001) return;
+      live.devtools.width = next;
+      this.placeDevTools(live);
+    };
+    const timer = setInterval(move, 16);
+    const listeners: Array<{ contents: WebContents; handler: (...args: never[]) => void }> = [];
+    for (const contents of [tab.view.webContents, tab.devtools.view.webContents]) {
+      // Parameter types are left to be inferred from the listener signature:
+      // only "did the pointer go up" matters here.
+      const handler = (...args: [unknown, { type?: string }]) => {
+        if (args[1]?.type === "mouseUp") this.endDevToolsResize();
+      };
+      contents.on("input-event", handler);
+      listeners.push({ contents, handler });
+    }
+    this.resizeSession = { tabId, timer, listeners };
+    move();
+  }
+
+  endDevToolsResize(): void {
+    const session = this.resizeSession;
+    if (!session) return;
+    this.resizeSession = undefined;
+    clearInterval(session.timer);
+    for (const { contents, handler } of session.listeners) {
+      if (!contents.isDestroyed()) contents.removeListener("input-event", handler);
+    }
+    // One state push for the whole drag: the renderer's handle jumps to where
+    // the split actually landed.
+    this.emitState();
+  }
+
+  /**
+   * While the handle is dragged, the page and the panel must not take the
+   * pointer: events have to reach the renderer's HTML handle even when the
+   * pointer crosses over one of the native views.
+   */
+  setDevToolsWidth(tabId: string, width: number): void {
+    const tab = this.requireTab(tabId);
+    if (!tab.devtools || tab.devtools.mode !== "docked") return;
+    const next = Math.min(0.7, Math.max(0.2, width));
+    if (Math.abs(next - tab.devtools.width) < 0.001) return;
+    tab.devtools.width = next;
+    this.placeDevTools(tab);
+    this.emitState();
+  }
+
   closeDevTools(tabId: string): void {
     const tab = this.requireTab(tabId);
     tab.view.webContents.closeDevTools();
     this.dropDevTools(tab);
     this.applyLayout();
     this.emitState();
+  }
+
+  /**
+   * Toggles DevTools for whichever page the user is looking at.
+   *
+   * Called when the key never reached a page — the focus sat on the app's own
+   * chrome — so "the focused page" is the one the stage is showing: the focused
+   * page of the view on stage, or the active flat tab.
+   */
+  toggleDevToolsForFocusedPage(): void {
+    const view = this.activeView();
+    const tabId = view?.focusedTabId ?? this.activeTabId;
+    const tab = tabId ? this.findTab(tabId) : undefined;
+    if (!tab) return;
+    if (this.devtoolsOpen(tab)) this.closeDevTools(tab.id);
+    else this.openDevTools(tab.id, "docked");
   }
 
   private dropDevTools(tab: TabRecord): void {
@@ -2548,17 +2785,26 @@ export class EmbeddedBrowser {
       devtools.view.setBounds({ ...parkedViewBounds(content), width: 800, height: 600 });
       return;
     }
+    // The drag handle lives in the renderer's HTML, which paints *below* every
+    // native view — so the two views must part around a real gap for the handle
+    // to be visible and clickable at all. `DEVTOOLS_GRIP_WIDTH` matches the
+    // renderer's constant; the split line runs through the gap's middle.
     const split = Math.round(rect.width * (1 - devtools.width));
+    const left = Math.max(1, split - Math.round(DEVTOOLS_GRIP_WIDTH / 2));
     // The page gives up the right-hand part of its cell; the tools take it.
     // `applyLayout` resets the page to the full cell first, and this runs right
     // after it, so the two agree on the same rect.
-    tab.view.setBounds({ ...rect, width: Math.max(1, split) });
+    tab.view.setBounds({ ...rect, width: left });
     devtools.view.setBounds({
-      x: rect.x + split,
+      x: rect.x + left + DEVTOOLS_GRIP_WIDTH,
       y: rect.y,
-      width: Math.max(1, rect.width - split),
+      width: Math.max(1, rect.width - left - DEVTOOLS_GRIP_WIDTH),
       height: rect.height,
     });
+    // A resize after the first paint has been observed to leave the panel's
+    // content area black (the chrome draws, the DOM tree does not) until
+    // something forces a repaint. Ask for one explicitly; harmless otherwise.
+    devtools.view.webContents.invalidate();
   }
 
   /** Cell a page occupies right now, in window DIP; undefined when off stage. */

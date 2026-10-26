@@ -1170,65 +1170,6 @@ try {
     slotStrip,
   );
 
-  // The hover card is per-cell state. It used to be one shared value, so every
-  // header rendered a copy and hovering one page showed the card over all of
-  // them. The strip's "+" needs no hint at all: an icon plus in a tab strip is
-  // already unambiguous, and a native title here would add a second tooltip.
-  //
-  // A second occupied cell is opened for this check and closed right after: with
-  // one header the "only the hovered cell shows a card" assertion would pass
-  // even if the shared-state bug came back.
-  const tipState = await client.evaluate(`(async () => {
-    const before = await window.ensemble.getEmbeddedState();
-    const viewId = before.activeViewId;
-    const second = await window.ensemble.openEmbeddedTab({ viewId });
-    // Put it in slot 1 explicitly: "+ into the view" would land wherever the
-    // focus was, which is slot 0 next to the page already there.
-    await window.ensemble.pinEmbeddedTab(viewId, 1, second.id);
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const headers = [...document.querySelectorAll('.stage .slot-header')];
-    const first = headers[0]?.querySelector('.slot-tab');
-    first?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
-    await new Promise((r) => setTimeout(r, 250));
-    const tips = [...document.querySelectorAll('.stage .slot-tip')];
-    const perHeader = headers.map((h) => h.querySelectorAll('.slot-tip').length);
-    const add = headers[0]?.querySelector('.slot-tab-add');
-    add?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
-    await new Promise((r) => setTimeout(r, 250));
-    const afterAdd = document.querySelectorAll('.stage .slot-tip').length;
-    const addHasTitle = add?.hasAttribute('title') ?? null;
-
-    // Leave the stage as it was: the checks below count this cell's pages.
-    await window.ensemble.closeEmbeddedTab(second.id);
-    await new Promise((r) => setTimeout(r, 900));
-    return {
-      headers: headers.length,
-      tipsWhileHoveringTab: tips.length,
-      perHeader,
-      tipHasHost: Boolean(tips[0]?.querySelector('.slot-tip-host')),
-      tipsAfterHoveringAdd: afterAdd,
-      addHasTitle,
-      cleanedUp:
-        (await window.ensemble.getEmbeddedState()).views.find((v) => v.id === viewId)
-          ?.slotTabs?.filter(Boolean).length === 1,
-    };
-  })()`);
-  check(
-    "the hover card appears once, in the hovered cell only",
-    tipState?.headers >= 2 &&
-      tipState?.tipsWhileHoveringTab === 1 &&
-      tipState?.perHeader?.filter((count) => count === 1).length === 1 &&
-      tipState?.tipHasHost === true &&
-      tipState?.cleanedUp === true,
-    tipState,
-  );
-  check(
-    "the strip's + needs no tooltip of its own",
-    tipState?.addHasTitle === false && tipState?.tipsAfterHoveringAdd === 0,
-    tipState,
-  );
-
   const beforeSwitch = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
     const view = state.views.find((item) => item.id === state.activeViewId);

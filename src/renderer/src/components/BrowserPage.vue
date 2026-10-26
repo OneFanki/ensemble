@@ -26,7 +26,7 @@ import {
   Star,
   X,
 } from "lucide-vue-next";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -241,63 +241,6 @@ function openPageInInstance(rootId: string | null): void {
   const instanceId = tabById(rootId)?.instanceId;
   if (instanceId) void store.openTabInInstance(instanceId);
 }
-
-/**
- * Hover hint for a page tab.
- *
- * Measured against the header band, not the tab, because the hint has to be
- * drawn inside the band: everything below a slot is painted by the native page.
- * It shows the full title *and the host* — a tab only ever shows a title, so a
- * card carrying an address cannot be mistaken for another tab. Placed beside the
- * tab (flipped left when the band runs out) rather than over it: covering the
- * truncated title with the full one looks like nothing happened.
- *
- * The tip carries the slot it belongs to. Without that, every cell's header
- * rendered the same shared tip and hovering one page showed the card over all of
- * them at once.
- */
-const hoverTip = ref<{ slot: number; text: string; host: string; left: number } | null>(null);
-const hoverTipMax = ref(0);
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return "";
-  }
-}
-
-async function showTip(page: EmbeddedTab, slotIndex: number, event: MouseEvent): Promise<void> {
-  const element = event.currentTarget as HTMLElement;
-  const header = element.closest(".slot-header");
-  if (!(header instanceof HTMLElement)) return;
-  const headerRect = header.getBoundingClientRect();
-  const tabRect = element.getBoundingClientRect();
-  const margin = 5;
-  hoverTipMax.value = Math.max(80, headerRect.width - margin * 2);
-  hoverTip.value = {
-    slot: slotIndex,
-    text: store.titleOf(page),
-    host: hostOf(page.url),
-    left: Math.max(margin, tabRect.right - headerRect.left + 4),
-  };
-  await nextTick();
-  // Queried from the header rather than kept as a template ref: a string ref
-  // inside `v-for` is collected into an array, and the flip needs one element.
-  const tip = header.querySelector<HTMLElement>(".slot-tip");
-  if (!tip) return;
-  const width = tip.offsetWidth;
-  if (hoverTip.value.left + width > headerRect.width - margin) {
-    // Flip to the other side of the tab; still clamped so a narrow cell keeps
-    // the card inside its own band rather than spilling past it.
-    hoverTip.value.left = Math.max(margin, tabRect.left - headerRect.left - width - 4);
-  }
-}
-
-const hoverTipStyle = computed(() => ({
-  left: `${hoverTip.value?.left ?? 0}px`,
-  maxWidth: `${hoverTipMax.value}px`,
-}));
 
 /**
  * Right-click menu for a page tab.
@@ -1265,7 +1208,6 @@ function fillMessage(reason?: string): string {
           class="slot-tabs"
           role="tablist"
           :aria-label="t('app.browserInstancePages')"
-          @mouseleave="hoverTip = null"
         >
           <div
             v-for="page in slotPages(slot.tabId)"
@@ -1277,7 +1219,6 @@ function fillMessage(reason?: string): string {
             :data-tab-id="page.id"
             @click.stop="selectPage(page.id)"
             @mousedown.stop
-            @mouseenter="showTip(page, slot.index, $event)"
             @contextmenu.prevent.stop="openTabMenu(page, $event)"
           >
             <img
@@ -1305,25 +1246,10 @@ function fillMessage(reason?: string): string {
             :aria-label="t('app.browserNewTabHere')"
             @click.stop="openPageInInstance(slot.tabId)"
             @mousedown.stop
-            @mouseenter="hoverTip = null"
           >
             <Plus :size="11" />
           </button>
         </div>
-        <!--
-          Self-drawn hint for a page tab: the native `title` tooltip is slow,
-          unthemed, and on some platforms pops up outside the window. It has to
-          live inside the header band, because the area below is painted by the
-          native page and would cover it. Only the hovered cell renders one.
-        -->
-        <span
-          v-if="hoverTip?.slot === slot.index"
-          class="slot-tip"
-          :style="hoverTipStyle"
-        >
-          <span class="slot-tip-title">{{ hoverTip.text }}</span>
-          <span v-if="hoverTip.host" class="slot-tip-host mono">{{ hoverTip.host }}</span>
-        </span>
       </div>
 
       <!--
@@ -1908,53 +1834,6 @@ function fillMessage(reason?: string): string {
 .slot-tab-add:hover {
   background: var(--surface-3);
   color: var(--text);
-}
-
-/* Drawn inside the header band: the space below a slot belongs to the native page. */
-.slot-tip {
-  position: absolute;
-  top: 3px;
-  z-index: 4;
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  height: 20px;
-  padding: 0 8px 0 9px;
-  border-radius: 4px;
-  background: var(--bg-elevated);
-  border: 1px solid color-mix(in srgb, var(--line) 40%, var(--accent));
-  box-shadow:
-    inset 2px 0 0 var(--accent),
-    0 6px 16px rgb(0 0 0 / 55%);
-  color: var(--text);
-  font-size: 10px;
-  line-height: 18px;
-  white-space: nowrap;
-  pointer-events: none;
-  animation: slot-tip-in 90ms ease-out;
-}
-
-.slot-tip-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 500;
-}
-
-/* The address is what makes this read as a hint: a tab never shows one. */
-.slot-tip-host {
-  color: var(--accent);
-  font-size: 9.5px;
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-@keyframes slot-tip-in {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
 }
 
 .dot {

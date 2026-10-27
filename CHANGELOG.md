@@ -22,15 +22,29 @@
 
 ### 中文
 
-<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+- 运行栏里「AI 操作次数」徽标悬停时的说明改成应用自己画的提示：立刻出现、跟着主题走，不再是一秒后才冒出来的系统原生提示框
+- README 补充这个数字的口径：它按**来源**计数，同一站点的两个标签显示同一个数字是设计如此，不是重复计数
 
 #### 完整变更
 
+- **AI 次数徽标的提示由原生 `title` 改为自绘**：原生提示不能改样式、要等一秒、还会以系统窗口的形式盖在应用之上；自绘的提示挂在徽标内部向左展开，始终留在停靠栏内。原因是停靠栏和各视图块都裁切溢出，而停在舞台上的被测页面是原生视图、永远画在应用 HTML 之上，所以提示不能往右或往舞台方向溢出
+- 提示文案为「本次会话在本站的操作次数」：数字已经在徽标上，再抄一遍既啰嗦又会让计数涨到三位数后撑破停靠栏；含中文的句子改用正文字体栈，不走等宽（等宽栈会让中文回退成宋体）
+- 行上的原生 URL 提示移到标题文字上：徽标在行尾，若整行仍挂着原生 `title`，悬停徽标会同时冒出系统提示与自绘提示两种
+- `e2e-ai-policy` 的徽标断言重写：断言徽标数字与审计日志里该来源的条数完全相等（这是「这个数字是真的吗」的直接答案，也顺带钉住「按来源算」而不是按工具调用或标签页算）；再断言徽标没有原生 `title`、悬停后出现自绘提示、移开后消失，并把停靠栏拖到最窄（240px）后量出提示相对每一层裁切祖先的位置，要求完全在内；同一处还会把提示换成英文再量一次宽度，确认两种语言都放得下。已分别把计数步长改成 2、把提示改成向右展开验证两条都会失败，确认有鉴别力
+- README 中英双版写明 AI 操作次数按来源计数，同一站点的两个标签显示同一个数字是设计如此
+
 ### English
 
-<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+- The hover hint on the dock's AI action count is now drawn by the app: it appears at once and follows the theme, instead of a native OS tooltip that waits a second
+- README now states the badge's unit: it counts per **origin**, so two tabs of one site showing the same number is by design, not double counting
 
 #### Full changes
+
+- **The AI-count tooltip is drawn by the app instead of a native `title`**: a native hint cannot be styled, waits a second, and paints as an OS window above the app; the drawn one sits inside the badge and opens leftwards, staying within the dock. It has to: the dock and every view block clip their overflow, and the pages parked on the stage are native views that always paint above app HTML, so the hint cannot spill rightwards or towards the stage
+- The hint reads "AI operations on this site so far": the number already sits in the badge, and repeating it made the sentence grow with the count until it no longer fit at three digits. The sentence also uses the body font stack — the badge is mono because it holds a number, and a mono stack falls back to a serif for Chinese
+- The row's native URL hint moves onto the title text: with it still on the whole row, hovering the badge would raise the OS tooltip alongside the drawn one
+- `e2e-ai-policy`'s badge check is rewritten: it asserts the badge number equals the number of audited entries for that origin — the direct answer to "is this number real", and what pins the count to origins rather than tool calls or tabs — then that there is no native `title`, that hovering opens a drawn hint and leaving closes it, and — after dragging the dock to its narrowest (240px) — that the hint sits inside every clipping ancestor; it finally swaps in the English text and measures again, so neither language can ship wider than the panel. Verified to fail both when the counter steps by two and when the hint is flipped to open rightwards
+- README (both languages) documents the badge as counting per origin, with two tabs of one site showing one number by design
 
 
 ## [1.1.3] - 2026-10-27
@@ -38,8 +52,7 @@
 ### 中文
 
 - **修复切走的页面截图要等 4 秒**：AI 操作的那页被你切到后台、或窗口最小化时，截图会先等满 4 秒超时才回退；现在直接走渲染器，同样的图 40ms 出来
-- 运行栏里「AI 操作次数」徽标的说明改成应用自己画的提示：悬停即可看到完整说法，跟着主题走，不再是一秒后才冒出来的系统原生提示框
-- README 新增「AI 操作时，你可以继续做你的事」一节：页面没有独立窗口可弹、切走不打断 AI、AI 不抢前台、测试全静默、AI 干了多少一眼能看到
+- README 新增「AI 操作时，你可以继续做你的事」一节：页面没有独立窗口可弹、切走不打断 AI、AI 不抢前台、测试全静默
 
 #### 完整变更
 
@@ -48,16 +61,12 @@
 - `CdpClient.screenshot` 新增 `preferRenderer` 参数，`EmbeddedBrowser.screenshot` 依据 `viewIsOnScreen` 传入；`capturePage` 回退保留，覆盖无法预判的状态
 - `tests/embedded.test.ts` 新增 6 条覆盖判定本身（在台上、已停放、最小化、隐藏、零尺寸、恰好贴边），已用「恒为真」验证会失败
 - `e2e-embedded` 新增一条：后台页面截图必须在 1.5s 内返回且有内容。注意无头模式下所有页面都离台，这条在无头里没有鉴别力，真正守住逻辑的是上面的单元测试
-- **AI 次数徽标的提示由原生 `title` 改为自绘**：原生提示不能改样式、要等一秒、还会以系统窗口的形式盖在应用之上；自绘的提示挂在徽标内部向左展开，始终留在停靠栏内。原因是停靠栏和各视图块都裁切溢出，而停在舞台上的被测页面是原生视图、永远画在应用 HTML 之上，所以提示不能往右或往舞台方向溢出
-- `e2e-ai-policy` 的徽标断言重写：除了次数正确，还断言徽标数字与审计日志里该来源的条数完全相等（这是「这个数字是真的吗」的直接答案，也顺带钉住「按来源算」而不是按工具调用或标签页算）；再断言徽标没有原生 `title`、悬停后出现自绘提示、移开后消失，并把停靠栏拖到最窄（240px）后量出提示相对每一层裁切祖先的位置，要求完全在内；同一处还会把提示换成英文再量一次宽度，确认两种语言都放得下。已分别把计数步长改成 2、把提示改成向右展开验证两条都会失败，确认有鉴别力
-- 提示文案收敛为「本次会话在本站的操作次数」：数字已经在徽标上，再抄一遍既啰嗦又会让计数涨到三位数后撑破停靠栏；含中文的句子改用正文字体栈，不走等宽（等宽栈会让中文回退成宋体）
-- README 中英双版新增「AI 操作时，你可以继续做你的事」：说明页面没有独立窗口、切走不打断、AI 不抢前台、20 套测试全部离屏运行；并写明 AI 操作次数徽标按**来源**计数，同一站点的两个标签显示同一个数字是设计如此
+- README 中英双版新增「AI 操作时，你可以继续做你的事」：说明页面没有独立窗口、切走不打断、AI 不抢前台、20 套测试全部离屏运行
 
 ### English
 
 - **Fixed screenshots of a switched-away page taking 4 seconds**: when the page the AI was driving moved to the background or the window was minimised, a screenshot waited out a full 4s timeout before falling back; it now reads from the renderer directly and returns the same image in ~40ms
-- The tooltip on the dock's AI action count is now drawn by the app: it appears at once, follows the theme, and no longer waits a second for the OS to show its own hint
-- README gains "The AI works; you keep working": pages have no separate window to pop up, switching away does not interrupt the AI, the AI never raises your window, the test suites run silently, and the AI's work is visible at a glance
+- README gains "The AI works; you keep working": pages have no separate window to pop up, switching away does not interrupt the AI, the AI never raises your window, and the test suites run silently
 
 #### Full changes
 
@@ -66,10 +75,7 @@
 - `CdpClient.screenshot` gains a `preferRenderer` flag that `EmbeddedBrowser.screenshot` sets from `viewIsOnScreen`; the `capturePage` fallback stays for states this cannot predict
 - `tests/embedded.test.ts` gains 6 cases covering the decision itself (on stage, parked, minimised, hidden, zero-sized, exactly at the edge), verified to fail when the predicate is forced to true
 - `e2e-embedded` gains one check: a backgrounded page must screenshot within 1.5s with real content. Note it has no discriminating power headless — every page is parked there — so the unit tests are what actually pin the logic
-- **The AI-count tooltip is drawn by the app instead of a native `title`**: a native hint cannot be styled, waits a second, and paints as an OS window above the app; the drawn one sits inside the badge and opens leftwards, staying within the dock. It has to: the dock and every view block clip their overflow, and the pages parked on the stage are native views that always paint above app HTML, so the hint cannot spill rightwards or towards the stage
-- `e2e-ai-policy`'s badge check is rewritten: besides the count, it asserts the badge number equals the number of audited entries for that origin — the direct answer to "is this number real", and what pins the count to origins rather than tool calls or tabs — then that there is no native `title`, that hovering opens a drawn hint and leaving closes it, and — after dragging the dock to its narrowest (240px) — that the hint sits inside every clipping ancestor; it finally swaps in the English text and measures again, so neither language can ship wider than the panel. Verified to fail both when the counter steps by two and when the hint is flipped to open rightwards
-- The hint text is "AI operations on this site so far": the number already sits in the badge, and repeating it made the sentence grow with the count until it no longer fit at three digits. The sentence also uses the body font stack — the badge is mono because it holds a number, and a mono stack falls back to a serif for Chinese
-- README (both languages) gains "The AI works; you keep working": no separate window, switching away is safe, the AI never steals focus, all 20 test suites run off-screen, and the AI-count badge is documented as counting **per origin** — two tabs of the same site showing one number is by design
+- README (both languages) gains "The AI works; you keep working": no separate window, switching away is safe, the AI never steals focus, and all 20 test suites run off-screen
 
 
 ## [1.1.2] - 2026-10-27

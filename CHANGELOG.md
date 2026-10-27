@@ -18,6 +18,51 @@
 2. **`#### 完整变更`**（可选）：详细的逐条变更，给 Release 页面和需要追溯的人看。
    更新弹窗会在这一行截断，永远不会显示它。
 
+## [未发布]
+
+### 中文
+
+<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+
+#### 完整变更
+
+### English
+
+<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+
+#### Full changes
+
+## [1.1.2] - 2026-10-27
+
+### 中文
+
+- **修复浏览器右侧出现一条被放大的页面内容**：窗口短暂测量不到尺寸时（例如最小化到托盘），离台页面会退到用「舞台宽度」当窗口宽度，结果停在了运行栏所在的位置，露出一条约 98px 的页面残影
+- 该兜底改为记住上一次真实的窗口尺寸，从未测量过时用足够大的默认值——离台页面必须停在窗口之外，这一点此前有注释却没被代码守住
+- 舞台容器补上裁剪：冻结快照按捕获时的矩形贴图，舞台变窄后不会再溢出到运行栏上
+
+#### 完整变更
+
+- **离台停放坐标的兜底值取错了维度**：`hostContentSize()` 在 `getContentBounds()` 不可用时会回退到 `stage.width`，而它自己的注释明确要求「必须停到窗口右缘之外，不能停到舞台宽度」——舞台比窗口窄（左侧还有导航栏），于是页面落到 `x = stage.width`，正好压在运行栏上。这是 1.0.0 起就存在的潜伏缺陷
+- 兜底改为记住最后一次可读的窗口尺寸（`lastContentSize`），从未测量过时返回足够大的默认值；新增 `tests/contracts/parking-uses-window-size.test.ts` 静态守住「兜底路径不得出现 stage」，已用改回旧实现验证会失败
+- `.stage` 增加 `overflow: hidden`：冻结快照是绝对定位的 `<img>`，尺寸取自捕获时的矩形且用 `object-fit: fill`，舞台变窄后既溢出边缘、又被拉伸，看起来像一条放大的页面条带
+- 冻结快照的监听条件加入舞台宽高：覆盖期间改变舞台尺寸（折叠/展开运行栏）会重新捕获，而不是沿用过期矩形
+- `e2e-ui-regressions` 新增两条：快照矩形不得越出舞台（含折叠/展开运行栏的复现路径）、舞台必须裁剪子元素
+
+### English
+
+- **Fixed a magnified band of page content down the right edge**: when the window briefly could not be measured (minimised to the tray, for instance), a parked page fell back to the stage width as the window width, so it stopped exactly where the run dock sits and left a ~98px ghost of page content
+- That fallback now remembers the last real window size, with a generous default before anything has been measured — off-stage pages must clear the window edge, which the comment required but the code did not enforce
+- The stage now clips its children, so a frozen snapshot can no longer spill over the dock when the stage gets narrower
+
+#### Full changes
+
+- **The off-stage parking fallback used the wrong dimension**: `hostContentSize()` fell back to `stage.width` whenever `getContentBounds()` was unavailable, while its own comment requires parking past the *window's* right edge — the stage is narrower than the window (the navigation rail sits to its left), so the page landed at `x = stage.width`, right on top of the run dock. This has been latent since 1.0.0
+- The fallback now remembers the last readable window size (`lastContentSize`) and returns a generous default before anything is measured; `tests/contracts/parking-uses-window-size.test.ts` pins the shape so the fallback path cannot mention the stage, verified by restoring the old implementation and watching it fail
+- `.stage` gains `overflow: hidden`: the `frozen` snapshot is an absolutely positioned `<img>` sized from the capture-time rect with `object-fit: fill`, so a narrower stage made it both overflow the edge and stretch, reading as a magnified band of the page
+- The frozen-snapshot watcher now includes the stage size, so changing it mid-overlay (collapsing or expanding the dock) re-captures instead of reusing a stale rect
+- `e2e-ui-regressions` gains two checks: a frozen frame must not exceed the stage (including the collapse/expand reproduction) and the stage must clip its children
+
+
 ## [1.1.1] - 2026-10-27
 
 ### 中文
@@ -47,20 +92,6 @@
 - Missing messages added: `app.copyToken` and `app.mcpConfigTitle` (removed together with the old controls), `app.mcpConnTitle` (the new heading), and the long-standing `app.toastRequestFailed` on the flow page
 - `tests/i18n.test.ts` gains "defines every key the renderer asks for": it scans every literal key in the renderer's `.vue` / `.ts` files and compares against the message table. All previous assertions started from the table, so they could only catch a defined-but-broken message, never a key the code asks for that no longer exists
 - `e2e-ui-regressions` gains two runtime assertions: the settings page must show no raw `app.*` key names, and the AI access block must contain no leftover disclosure
-
-## [未发布]
-
-### 中文
-
-<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
-
-#### 完整变更
-
-### English
-
-<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
-
-#### Full changes
 
 ## [1.1.0] - 2026-10-27
 

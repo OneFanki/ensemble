@@ -1,5 +1,5 @@
 import type { Flow, FlowParam, FlowStep } from "./flows";
-import type { Bookmark, Identity, LayoutPreset, Site, SlotRect, View } from "./types";
+import type { Bookmark, Identity, LayoutPreset, LoginField, Site, SlotRect, View } from "./types";
 
 /**
  * Portable workspace snapshot. IDs are preserved so re-importing an export on the
@@ -80,6 +80,13 @@ function optionalText(value: unknown, max = 400): string | undefined {
 function sanitizeSite(raw: unknown): Site {
   if (!isRecord(raw)) throw new Error("站点条目格式错误");
   const id = text(raw["id"], "站点 id", 80);
+  /*
+   * `extraFields` was a site-level feature; it belongs to accounts now. An export
+   * written before that change still carries the values, so they are read here and
+   * tagged onto the file's identities by `parseExportFile` rather than dropped.
+   * The site object itself never keeps them — a `Site` has no such field, and any
+   * stray key would survive into storage until the next load pruned it.
+   */
   return {
     id,
     name: text(raw["name"], "站点名称", 80),
@@ -89,10 +96,28 @@ function sanitizeSite(raw: unknown): Site {
       ? { authCheckPath: optionalText(raw["authCheckPath"], 300) }
       : {}),
     autoSubmit: raw["autoSubmit"] === true,
-    ...(Array.isArray(raw["extraFields"]) ? { extraFields: raw["extraFields"] as never } : {}),
     createdAt: optionalText(raw["createdAt"]) ?? new Date().toISOString(),
     updatedAt: optionalText(raw["updatedAt"]) ?? new Date().toISOString(),
   };
+}
+
+/** Legacy site-level login fields, keyed by site id, from an older export. */
+function legacySiteFields(raw: unknown): Map<string, LoginField[]> {
+  const out = new Map<string, LoginField[]>();
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    if (!isRecord(item)) continue;
+    const id = typeof item["id"] === "string" ? item["id"] : "";
+    const fields = Array.isArray(item["extraFields"]) ? item["extraFields"] : [];
+    const cleaned = fields.flatMap((field): LoginField[] => {
+      if (!isRecord(field)) return [];
+      const label = typeof field["label"] === "string" ? field["label"].trim() : "";
+      const value = typeof field["value"] === "string" ? field["value"].trim() : "";
+      return label ? [{ label, value }] : [];
+    });
+    if (id && cleaned.length > 0) out.set(id, cleaned);
+  }
+  return out;
 }
 
 function sanitizeIdentity(raw: unknown): Identity {
@@ -289,6 +314,20 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
   const identities = Array.isArray(input["identities"])
     ? input["identities"].map(sanitizeIdentity)
     : [];
+  // An export from before sites stopped owning login fields carries them on the
+  // site. Copy each onto its accounts unless the account already sets that label,
+  // which is exactly what the old merge produced at fill time.
+  const inherited = legacySiteFields(input["sites"]);
+  for (const identity of identities) {
+    const fields = identity.siteId ? inherited.get(identity.siteId) : undefined;
+    if (!fields) continue;
+    const own = identity.extraFields ?? [];
+    const labels = new Set(own.map((field) => field.label.trim().toLowerCase()));
+    identity.extraFields = [
+      ...own,
+      ...fields.filter((field) => !labels.has(field.label.trim().toLowerCase())),
+    ];
+  }
   const views = Array.isArray(input["views"]) ? input["views"].map(sanitizeView) : [];
   const flows = Array.isArray(input["flows"])
     ? input["flows"].map(sanitizeFlow).filter((flow): flow is Flow => Boolean(flow))

@@ -68,6 +68,79 @@ describe("sanitizeWorkspace", () => {
     expect(result.views[0]).not.toHaveProperty("environmentId");
   });
 
+  it("upgrades a v1 file whose sites array is empty but environments is not", () => {
+    // A build wrote `sites: []` next to the still-populated `environments`. The
+    // old upgrade only ran when `sites` was absent, so this file was taken as
+    // current: the site list came back empty and every account lost its site
+    // while the accounts themselves survived. Both sources must merge.
+    const mixed = {
+      version: 2,
+      sites: [],
+      environments: [{ ...site, id: "env-1" }],
+      identities: [{ ...identity, siteId: undefined, environmentId: "env-1" }],
+      scenes: [],
+      instances: [],
+      manualEngines: [],
+      layoutPresets: [],
+    } as unknown as Parameters<typeof sanitizeWorkspace>[0];
+
+    const result = sanitizeWorkspace(mixed);
+    expect(result.sites.map((item) => item.id)).toEqual(["env-1"]);
+    expect(result.identities[0]?.siteId).toBe("env-1");
+    expect(result.identities[0]).not.toHaveProperty("environmentId");
+  });
+
+  it("keeps a siteId that is already correct even when environmentId disagrees", () => {
+    const result = sanitizeWorkspace({
+      sites: [{ ...site, id: "env-1" }, { ...site, id: "env-2" }],
+      identities: [{ ...identity, siteId: "env-2", environmentId: "env-1" }],
+    } as unknown as Parameters<typeof sanitizeWorkspace>[0]);
+    expect(result.identities[0]?.siteId).toBe("env-2");
+  });
+
+  it("leaves an account with no site unlinked instead of inventing one", () => {
+    // The damage the merge above prevents is still readable: such a file opens,
+    // the accounts show under "no site", and nothing is guessed onto a wrong
+    // site — that would point the password at an address it never belonged to.
+    const result = sanitizeWorkspace({
+      sites: [{ ...site, id: "env-1" }],
+      identities: [{ ...identity, siteId: undefined }],
+    } as unknown as Parameters<typeof sanitizeWorkspace>[0]);
+    expect(result.identities[0]?.siteId).toBeUndefined();
+  });
+
+  it("moves site-level login fields onto the accounts that inherited them", () => {
+    // Sites used to hand their own extra fields to every account. The feature is
+    // gone, but the values must not be: each is copied onto the site's accounts
+    // unless an account already sets that label.
+    const result = sanitizeWorkspace({
+      sites: [
+        {
+          ...site,
+          id: "env-1",
+          extraFields: [
+            { label: "租户名", value: "acme" },
+            { label: "公司码", value: "sz" },
+          ],
+        },
+      ],
+      identities: [
+        { ...identity, siteId: "env-1", extraFields: [{ label: "租户名", value: "beta" }] },
+        { ...identity, id: "id-2", siteId: "env-1" },
+      ],
+    } as unknown as Parameters<typeof sanitizeWorkspace>[0]);
+
+    expect(result.sites[0]).not.toHaveProperty("extraFields");
+    expect(result.identities[0]?.extraFields).toEqual([
+      { label: "租户名", value: "beta" },
+      { label: "公司码", value: "sz" },
+    ]);
+    expect(result.identities[1]?.extraFields).toEqual([
+      { label: "租户名", value: "acme" },
+      { label: "公司码", value: "sz" },
+    ]);
+  });
+
   it("does not touch an already-current file", () => {
     const current = { sites: [site], views: [view()] };
     const result = sanitizeWorkspace(current);

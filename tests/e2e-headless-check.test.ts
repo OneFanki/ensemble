@@ -110,7 +110,6 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       loginPath: "/login",
       authCheckPath: "/api/session",
       autoSubmit: false,
-      extraFields: [],
     });
     const identity = workspace.saveIdentity({
       siteId: site.id,
@@ -161,7 +160,6 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       loginPath: "/login",
       authCheckPath: "/api/session",
       autoSubmit: false,
-      extraFields: [],
     });
     const identity = workspace.saveIdentity({
       siteId: site.id,
@@ -193,7 +191,6 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       loginPath: "/login",
       authCheckPath: "/api/session",
       autoSubmit: false,
-      extraFields: [],
     });
     for (const name of ["a", "b", "c"]) {
       workspace.saveIdentity({

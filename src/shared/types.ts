@@ -1,4 +1,5 @@
 import type { Flow } from "./flows";
+import type { LocaleSetting } from "./locale";
 import type { SearchEngine } from "./search";
 
 export type Platform = "win32" | "darwin" | "linux";
@@ -101,8 +102,6 @@ export interface Site {
    * shows the resolved value, so a stale `false` is one click from correction.
    */
   autoSubmit?: boolean;
-  /** Login fields shared by every identity in this site. */
-  extraFields?: LoginField[];
   /** Tag ids; finding and grouping only. */
   tagIds?: string[];
   /**
@@ -130,7 +129,16 @@ export type RoleColor = "amber" | "teal" | "violet" | "rose" | "blue" | "slate";
 
 export interface Identity {
   id: string;
-  siteId: string;
+  /**
+   * Site this account belongs to, or `undefined` for an account whose site is
+   * gone.
+   *
+   * Optional on purpose: the v2 rename dropped this key from every account it
+   * migrated, and those files are out in the wild. The account page shows them
+   * under {@link identityOrphanSite} and offers a bulk re-link, which is why the
+   * field must stay readable as absent instead of being coerced to `""`.
+   */
+  siteId?: string;
   name: string;
   username: string;
   role: string;
@@ -145,7 +153,7 @@ export interface Identity {
   credentialFrom?: string;
   status: IdentityStatus;
   lastCheckedAt?: string;
-  /** Overrides site fields with the same label; an empty value removes one. */
+  /** Extra login fields, per account — the only place they exist. */
   extraFields?: LoginField[];
   /** Tag ids; the site's own tags are matched when filtering, not copied here. */
   tagIds?: string[];
@@ -319,7 +327,8 @@ export interface AutoFillReport {
 
 export interface AppSettings {
   theme: "dark" | "light" | "system";
-  locale: "zh" | "en";
+  /** UI language; `"system"` follows the OS. See {@link LocaleSetting}. */
+  locale: LocaleSetting;
   lastSiteId?: string;
   lastView: "browser" | "sites" | "identities" | "views" | "flows" | "tags";
   /**
@@ -483,6 +492,15 @@ export interface WorkspaceSnapshot {
   platform: Platform;
   appVersion: string;
   userDataDir: string;
+  /**
+   * The OS language tag, e.g. "zh-CN".
+   *
+   * Sent so the renderer can resolve `settings.locale === "system"` itself —
+   * `navigator.language` inside Electron follows `--lang`, which this app sets,
+   * so asking the browser would answer with the app's own choice rather than the
+   * user's OS setting.
+   */
+  systemLocale: string;
 }
 
 export interface SiteDraft {
@@ -493,7 +511,6 @@ export interface SiteDraft {
   authCheckPath?: string;
   /** Absent = follow the global default. */
   autoSubmit?: boolean;
-  extraFields?: LoginField[];
   tagIds?: string[];
 }
 

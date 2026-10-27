@@ -4,7 +4,6 @@ import { Trash2 } from "lucide-vue-next";
 import { computed, reactive, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
-import ExtraLoginFields from "./ExtraLoginFields.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
@@ -181,8 +180,6 @@ function normalizePath(event: Event) {
           </span>
           <span class="hint">{{ $t("app.autoSubmitNote") }}</span>
         </label>
-
-        <ExtraLoginFields v-model="form.extraFields" :scope-hint="$t('app.envFieldsScope')" />
       </section>
 
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>

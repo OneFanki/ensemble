@@ -92,6 +92,8 @@ export const IPC = {
   tagDelete: "site-tag:delete",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
+  /** Points a batch of accounts at one site; also re-links accounts with none. */
+  identityLinkSite: "identity:link-site",
   identityRebuildProfile: "identity:rebuild-profile",
   /** Detaches a credential reference into an independent copy. */
   identityDetachReference: "identity:detach-reference",
@@ -252,6 +254,14 @@ export interface EnsembleApi {
   deleteTag(id: string): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
+  /**
+   * Points a batch of accounts at one site.
+   *
+   * The account form has a site picker, but re-linking a dozen accounts one at a
+   * time is the kind of chore that ends with them still unlinked. Returns the
+   * snapshot so the page updates in one pass.
+   */
+  linkIdentitiesToSite(identityIds: string[], siteId: string): Promise<WorkspaceSnapshot>;
   /** Deletes the browser profile directory so the next launch starts signed out. */
   rebuildIdentityProfile(id: string): Promise<WorkspaceSnapshot>;
   /** Turns a credential reference into an independent copy with its own password. */

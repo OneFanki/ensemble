@@ -8,7 +8,7 @@ import type {
   ViewDraft,
 } from "@shared/types";
 import type { UpdateCheckResult } from "@shared/update";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
@@ -32,6 +32,7 @@ import UpdateDialog from "./components/UpdateDialog.vue";
 import ViewDialog from "./components/ViewDialog.vue";
 import ViewsPage from "./components/ViewsPage.vue";
 import { type Locale, setLocale, tr } from "./i18n";
+import { type LocaleSetting, resolveLocale } from "@shared/locale";
 import {
   shouldAutoStartTour,
   TOUR_STEPS,
@@ -69,6 +70,21 @@ const updatePrompt = ref<UpdateCheckResult | null>(null);
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
 /**
+ * The language actually rendered: `settings.locale` with "system" resolved.
+ *
+ * Resolved here rather than in the store because both the initial call and the
+ * settings-page switch need it, and the system tag arrives with the snapshot.
+ */
+const resolvedLocale = computed<Locale>(() =>
+  resolveLocale(store.settings.locale, store.snapshot?.systemLocale),
+);
+
+// "system" has to follow a change of the OS language mid-session too. Electron
+// does not deliver that on Windows, so this only guards the common case of the
+// setting itself changing (picking 简体中文 / English / 跟随系统 in settings).
+watch(resolvedLocale, (next) => setLocale(next));
+
+/**
  * Native pages paint above every piece of app HTML, so any modal that covers
  * the stage has to freeze it first. Missing one dialog is not a cosmetic bug:
  * the dialog renders behind a live page and looks broken.
@@ -95,8 +111,7 @@ onMounted(async () => {
   // before the first settings visit.
   void store.mcpStatus();
   applyTheme(store.settings.theme);
-  setLocale(store.settings.locale as Locale);
-  const saved = store.settings.lastView;
+  setLocale(resolvedLocale.value);  const saved = store.settings.lastView;
   // The browser is the default page; returning to where the user left off beats
   // resetting them to a management page they only visited once.
   view.value =
@@ -216,7 +231,6 @@ function openNewSite(seed?: Partial<SiteDraft>) {
     authCheckPath: "",
     // No opinion: follow the global setting until someone decides otherwise.
     autoSubmit: undefined,
-    extraFields: [],
     tagIds: [],
     ...seed,
   };
@@ -248,7 +262,6 @@ function openEditSite(siteId?: string) {
     loginPath: env.loginPath,
     authCheckPath: env.authCheckPath ?? "",
     autoSubmit: env.autoSubmit,
-    extraFields: env.extraFields ? env.extraFields.map((field) => ({ ...field })) : [],
     tagIds: env.tagIds ? [...env.tagIds] : [],
   };
 }
@@ -279,7 +292,9 @@ function openEditIdentity(identityId: string) {
   if (!identity) return;
   identityDraft.value = {
     id: identity.id,
-    siteId: identity.siteId,
+    // An account with no site opens the form on "pick a site", which is the
+    // first thing that has to be fixed before it can log in anywhere.
+    siteId: identity.siteId ?? "",
     name: identity.name,
     username: identity.username,
     role: identity.role,
@@ -381,7 +396,7 @@ function saveCapturedLogin(notice: LoginCaptureNotice): void {
     // a second identity for one login would split its session in two.
     identityDraft.value = {
       id: existing.id,
-      siteId: existing.siteId,
+      siteId: existing.siteId ?? "",
       name: existing.name,
       username: existing.username,
       role: existing.role,
@@ -504,8 +519,7 @@ async function handleTheme(theme: "dark" | "light" | "system") {
   applyTheme(theme);
 }
 
-async function handleLocale(locale: "zh" | "en") {
-  setLocale(locale);
+async function handleLocale(locale: LocaleSetting) {
   await store.saveSettings({ locale });
 }
 </script>
@@ -579,8 +593,8 @@ async function handleLocale(locale: "zh" | "en") {
       <span class="status-right">
         <!-- Every screen needs the endpoint address, and copying it should not
              mean hunting through settings. The dot carries the on/off state on
-             its own when the endpoint is off, so the label and port only appear
-             while it is actually serving. -->
+             its own, so no extra words are needed when it is off; when it is on,
+             the label names the feature and the port says where. -->
         <button
           type="button"
           class="status-mcp"
@@ -590,10 +604,8 @@ async function handleLocale(locale: "zh" | "en") {
         >
           <Bot :size="12" />
           <span class="mcp-led" :class="{ on: store.mcp?.running }"></span>
-          <template v-if="store.mcp?.running">
-            <span class="mcp-label">AI</span>
-            <span class="mcp-port">:{{ store.mcp.port }}</span>
-          </template>
+          <span class="mcp-label">{{ $t("app.mcpAiAccess") }}</span>
+          <span v-if="store.mcp?.running" class="mcp-port">:{{ store.mcp.port }}</span>
         </button>
         <span>v{{ store.snapshot?.appVersion ?? "0.1.0" }}</span>
       </span>

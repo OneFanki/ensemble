@@ -50,7 +50,10 @@ const dropSlot = ref<number | null>(null);
 
 /** Site of an identity, used to label members that come from elsewhere. */
 function siteName(identity: Identity): string {
-  return props.sites.find((site) => site.id === identity.siteId)?.name ?? "";
+  return (
+    props.sites.find((site) => site.id === identity.siteId)?.name ??
+    t("app.identityOrphanSite")
+  );
 }
 
 /**
@@ -60,9 +63,13 @@ function siteName(identity: Identity): string {
 const groupedIdentities = computed(() => {
   const groups: Array<{ siteId: string; siteName: string; identities: Identity[] }> = [];
   for (const identity of props.identities) {
-    let group = groups.find((item) => item.siteId === identity.siteId);
+    // Accounts with no site still have to be selectable — a view is a way to
+    // notice they need one — so they share one "no site" group instead of being
+    // dropped from the list.
+    const key = identity.siteId ?? "";
+    let group = groups.find((item) => item.siteId === key);
     if (!group) {
-      group = { siteId: identity.siteId, siteName: siteName(identity), identities: [] };
+      group = { siteId: key, siteName: siteName(identity), identities: [] };
       groups.push(group);
     }
     group.identities.push(identity);

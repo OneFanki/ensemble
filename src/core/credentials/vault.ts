@@ -358,6 +358,10 @@ export function isMasterPayload(payload: string): boolean {
  * `identities` is only needed to follow a reference. Omitting it makes a
  * reference resolve as missing rather than silently falling back to the site
  * default, which would log in with the wrong credentials.
+ *
+ * `siteId` may be absent: an account whose site reference was lost still exists,
+ * and `inherit` then has no site default to fall back on. Resolving that as
+ * missing is what keeps the fill path from reporting a login it never had.
  */
 export function resolvePassword(
   vault: CredentialVault,
@@ -366,7 +370,7 @@ export function resolvePassword(
     passwordMode: "inherit" | "custom" | "reference";
     credentialFrom?: string;
   },
-  siteId: string,
+  siteId: string | undefined,
   identities?: Array<{ id: string; passwordMode: "inherit" | "custom" | "reference" }>,
 ): { password?: string; source: "identity" | "site" | "missing" } {
   if (identity.passwordMode === "custom") {
@@ -383,6 +387,7 @@ export function resolvePassword(
     const password = vault.get({ kind: "identity", id: sourceId });
     return password ? { password, source: "identity" } : { source: "missing" };
   }
+  if (!siteId) return { source: "missing" };
   const password = vault.get({ kind: "site", id: siteId });
   return password ? { password, source: "site" } : { source: "missing" };
 }

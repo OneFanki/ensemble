@@ -40,6 +40,13 @@ export interface BundledSite {
   authCheckPath?: string;
   /** Absent = the receiver keeps its own global default. */
   autoSubmit?: boolean;
+  /**
+   * Login fields a site used to hand to every account.
+   *
+   * Kept in the format only so a bundle written by an older build still imports
+   * its values: the importer copies them onto each account. New bundles leave
+   * this empty — fields belong to accounts.
+   */
   extraFields: BundledLogin[];
   /** Site default password, when the bundle was made with passwords included. */
   hasPassword: boolean;
@@ -249,7 +256,9 @@ export function buildAccountBundle(input: {
       loginPath: site.loginPath,
       ...(site.authCheckPath ? { authCheckPath: site.authCheckPath } : {}),
       ...(site.autoSubmit === undefined ? {} : { autoSubmit: site.autoSubmit }),
-      extraFields: (site.extraFields ?? []).map((field) => ({ ...field })),
+      // Empty by design: accounts own their login fields now. The key stays in
+      // the format so a receiver on an older build still reads a valid file.
+      extraFields: [],
       hasPassword: Boolean(secrets?.site[site.baseUrl]),
       accounts: accounts.map((identity) => ({
         name: identity.name,

@@ -35,7 +35,6 @@ function seed() {
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     autoSubmit: true,
-    extraFields: [{ label: "租户名", value: "acme" }],
   });
   service.setPassword({ kind: "site", id: site.id }, "env-secret");
   const identity = service.saveIdentity({
@@ -46,6 +45,7 @@ function seed() {
     color: "amber",
     passwordMode: "inherit",
     startPath: "/",
+    extraFields: [{ label: "租户名", value: "acme" }],
   });
   const view = service.saveView({
     siteId: site.id,
@@ -100,6 +100,73 @@ describe("workspace export", () => {
     const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
     expect(parsed.identities).toHaveLength(1);
     expect(parsed.views[0]?.slotAssignments).toBeTruthy();
+  });
+
+  it("moves a legacy export's site-level login fields onto its accounts", () => {
+    // Exports written before sites stopped owning login fields put them on the
+    // site. Reading one must not silently drop the tenant name: it is copied onto
+    // every account of that site, and the site itself comes back clean.
+    const legacy = {
+      format: EXPORT_FORMAT,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sites: [
+        {
+          id: "site-old",
+          name: "旧导出站点",
+          baseUrl: "http://localhost:3000",
+          loginPath: "/login",
+          extraFields: [
+            { label: "租户名", value: "acme" },
+            { label: "公司码", value: "sz" },
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      identities: [
+        {
+          id: "id-old-1",
+          siteId: "site-old",
+          name: "甲",
+          username: "a",
+          role: "member",
+          color: "amber",
+          passwordMode: "inherit",
+          status: "unknown",
+          extraFields: [{ label: "租户名", value: "beta" }],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: "id-old-2",
+          siteId: "site-old",
+          name: "乙",
+          username: "b",
+          role: "member",
+          color: "teal",
+          passwordMode: "inherit",
+          status: "unknown",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      views: [],
+      flows: [],
+      layoutPresets: [],
+      bookmarks: [],
+    };
+
+    const parsed = parseExportFile(legacy);
+    expect(parsed.sites[0]).not.toHaveProperty("extraFields");
+    expect(parsed.identities[0]?.extraFields).toEqual([
+      { label: "租户名", value: "beta" },
+      { label: "公司码", value: "sz" },
+    ]);
+    expect(parsed.identities[1]?.extraFields).toEqual([
+      { label: "租户名", value: "acme" },
+      { label: "公司码", value: "sz" },
+    ]);
   });
 });
 

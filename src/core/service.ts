@@ -111,6 +111,15 @@ export interface WorkspaceServiceOptions {
   platform: Platform;
   secretBox: SecretBox;
   appVersion: string;
+  /**
+   * The OS language tag, e.g. "zh-CN".
+   *
+   * Injected rather than read from `process.env` so the renderer can resolve
+   * `settings.locale === "system"` against the same value the core layer uses,
+   * and so tests can pin it. Optional: without it "system" resolves to English,
+   * which is what a test asserting English strings expects anyway.
+   */
+  systemLocale?: string;
   /** Returns the current window work area, injected by Electron so core stays UI free. */
   workArea?: () => Rect;
   onChange?: () => void;
@@ -292,6 +301,7 @@ export class WorkspaceService {
       platform: this.options.platform,
       appVersion: this.options.appVersion,
       userDataDir: this.options.userDataDir,
+      systemLocale: this.options.systemLocale ?? "",
     };
   }
 
@@ -340,7 +350,6 @@ export class WorkspaceService {
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
         autoSubmit: draft.autoSubmit,
-        extraFields: sanitizeLoginFields(draft.extraFields),
         tagIds,
         updatedAt: now,
       });
@@ -355,7 +364,6 @@ export class WorkspaceService {
       loginPath: draft.loginPath,
       authCheckPath: draft.authCheckPath,
       autoSubmit: draft.autoSubmit,
-      extraFields: sanitizeLoginFields(draft.extraFields),
       tagIds,
       createdAt: now,
       updatedAt: now,
@@ -490,6 +498,10 @@ export class WorkspaceService {
         throw new Error(t("error.referenceHasDependents"));
       }
       Object.assign(existing, {
+        // Without this line the dialog's site picker did nothing on an existing
+        // account: every other field was written, so the form reported success
+        // while the account stayed where it was.
+        siteId: draft.siteId,
         name: source ? source.name : draft.name,
         username: source ? source.username : draft.username,
         role: source ? source.role : draft.role,
@@ -498,7 +510,7 @@ export class WorkspaceService {
         startPath: draft.startPath,
         passwordMode: draft.passwordMode,
         credentialFrom: draft.passwordMode === "reference" ? draft.credentialFrom : undefined,
-        // Extra login fields are site-specific, so they never follow a reference.
+        // Extra login fields belong to the account, so they never follow a reference.
         extraFields: sanitizeLoginFields(draft.extraFields),
         tagIds,
         note: source ? source.note : draft.note,
@@ -541,6 +553,36 @@ export class WorkspaceService {
     if (identity.passwordMode !== "reference") this.syncDependents(identity);
     this.persist();
     return identity;
+  }
+
+  /**
+   * Points a set of accounts at one site.
+   *
+   * Two jobs, one method: accounts whose site was lost (see the identity type's
+   * `siteId` note) get a home again, and moving accounts between sites is the
+   * same write. Nothing else about the account changes — credentials, extra
+   * fields and tags are the account's own.
+   *
+   * The external-browser profile lives under `<root>/<siteId>/<id>`, so a moved
+   * account starts a fresh profile there. That is acceptable for the re-link
+   * case this exists for (an unlinked account could never launch at all); the
+   * built-in surface keeps its session, because its partition is keyed by the
+   * account id.
+   */
+  linkIdentitiesToSite(identityIds: string[], siteId: string): { linked: number } {
+    const site = this.data.sites.find((item) => item.id === siteId);
+    if (!site) throw new Error(t("error.siteMissing"));
+    const wanted = new Set(identityIds.map(String));
+    const now = new Date().toISOString();
+    let linked = 0;
+    for (const identity of this.data.identities) {
+      if (!wanted.has(identity.id) || identity.siteId === site.id) continue;
+      identity.siteId = site.id;
+      identity.updatedAt = now;
+      linked += 1;
+    }
+    if (linked > 0) this.persist();
+    return { linked };
   }
 
   /** Copies the synced fields of a reference source onto everyone referencing it. */
@@ -643,8 +685,8 @@ export class WorkspaceService {
       await this.stopInstance(running.id);
     }
 
-    const dir = join(this.options.profileRoot, identity.siteId, identity.id);
-    await rm(dir, { recursive: true, force: true });
+    const dir = this.profileDirFor(id);
+    if (dir) await rm(dir, { recursive: true, force: true });
 
     identity.status = "unknown";
     identity.lastCheckedAt = undefined;
@@ -1192,7 +1234,7 @@ export class WorkspaceService {
     const siteIds = new Set(this.data.sites.map((item) => item.id));
     let skipped = 0;
     for (const identity of file.identities) {
-      if (!siteIds.has(identity.siteId)) {
+      if (!identity.siteId || !siteIds.has(identity.siteId)) {
         skipped += 1;
         continue;
       }
@@ -1342,16 +1384,19 @@ export class WorkspaceService {
     const wantedSites = new Set(input.siteIds);
     const wantedIdentities = new Set(input.identityIds);
     // An account selection implies its site, otherwise the account would have
-    // nowhere to attach on the receiving side.
+    // nowhere to attach on the receiving side. An account with no site cannot be
+    // exported: `buildAccountBundle` groups accounts by site, so it would be
+    // dropped silently and the user would count accounts that never arrived.
     for (const identity of this.data.identities) {
-      if (wantedIdentities.has(identity.id)) wantedSites.add(identity.siteId);
+      if (wantedIdentities.has(identity.id) && identity.siteId) wantedSites.add(identity.siteId);
     }
     const sites = this.data.sites.filter((site) => wantedSites.has(site.id));
     if (sites.length === 0) throw new Error("没有选择任何站点或账号");
 
     const identities = this.data.identities.filter(
       (identity) =>
-        wantedSites.has(identity.siteId) &&
+        Boolean(identity.siteId) &&
+        wantedSites.has(identity.siteId as string) &&
         (wantedIdentities.size === 0 || wantedIdentities.has(identity.id)),
     );
 
@@ -1460,7 +1505,6 @@ export class WorkspaceService {
           loginPath: bundled.loginPath,
           ...(bundled.authCheckPath ? { authCheckPath: bundled.authCheckPath } : {}),
           autoSubmit: bundled.autoSubmit,
-          extraFields: bundled.extraFields.map((field) => ({ ...field })),
           tagIds: [],
           createdAt: now,
           updatedAt: now,
@@ -1468,17 +1512,30 @@ export class WorkspaceService {
         this.data.sites.push(site);
         sitesAdded += 1;
       }
+      const targetSite = site;
       const sitePassword = secrets?.site[bundled.baseUrl];
       if (bundled.hasPassword && sitePassword) {
-        this.vault.set({ kind: "site", id: site.id }, sitePassword);
+        this.vault.set({ kind: "site", id: targetSite.id }, sitePassword);
         passwordsWritten += 1;
       }
 
       for (const account of bundled.accounts) {
         const secretKey = accountSecretKey(bundled.baseUrl, account.username);
+        // Bundles written before sites stopped owning login fields carry them
+        // here. They meant "every account on this site" then, so each account
+        // gets them now unless it already sets the same label.
+        const fields = [
+          ...account.extraFields,
+          ...bundled.extraFields.filter(
+            (inherited) =>
+              !account.extraFields.some(
+                (own) => own.label.trim().toLowerCase() === inherited.label.trim().toLowerCase(),
+              ),
+          ),
+        ].map((field) => ({ ...field }));
         const existing = this.data.identities.find(
           (item) =>
-            item.siteId === site.id &&
+            item.siteId === targetSite.id &&
             item.username.trim().toLowerCase() === account.username.trim().toLowerCase(),
         );
         let identity: Identity;
@@ -1488,7 +1545,7 @@ export class WorkspaceService {
           existing.color = account.color;
           existing.startPath = account.startPath;
           if (account.note) existing.note = account.note;
-          existing.extraFields = account.extraFields.map((field) => ({ ...field }));
+          existing.extraFields = fields;
           if (account.hasPassword) existing.passwordMode = "custom";
           existing.updatedAt = now;
           identity = existing;
@@ -1496,7 +1553,7 @@ export class WorkspaceService {
         } else {
           identity = {
             id: randomUUID(),
-            siteId: site.id,
+            siteId: targetSite.id,
             name: account.name,
             username: account.username,
             role: account.role,
@@ -1504,7 +1561,7 @@ export class WorkspaceService {
             passwordMode: account.hasPassword ? "custom" : "inherit",
             status: "unknown",
             startPath: account.startPath,
-            extraFields: account.extraFields.map((field) => ({ ...field })),
+            extraFields: fields,
             ...(account.note ? { note: account.note } : {}),
             createdAt: now,
             updatedAt: now,
@@ -1868,7 +1925,11 @@ export class WorkspaceService {
     }
 
     const result = await this.launchGroup(
-      (identity) => sites.get(identity.siteId) as Site,
+      (identity) => {
+        const site = identity.siteId ? sites.get(identity.siteId) : undefined;
+        if (!site) throw new Error(t("error.siteMissing"));
+        return site;
+      },
       members,
       this.presetFor(view.layoutId),
       view.slotAssignments,
@@ -2797,7 +2858,7 @@ export class WorkspaceService {
         username: identity.username,
         password: resolved.password,
         submit: this.effectiveAutoSubmit(site),
-        extraFields: resolveLoginFields(site, identity),
+        extraFields: resolveLoginFields(identity),
       }),
     );
   }
@@ -2849,7 +2910,8 @@ export class WorkspaceService {
     return this.data.identities.find((item) => item.id === id);
   }
 
-  findSite(id: string): Site | undefined {
+  findSite(id: string | undefined): Site | undefined {
+    if (!id) return undefined;
     return this.data.sites.find((item) => item.id === id);
   }
 
@@ -2906,6 +2968,9 @@ export class WorkspaceService {
     if (instance) return instance.profileDir;
     const identity = this.findIdentity(identityId);
     if (!identity) return undefined;
+    // An account with no site has no profile directory: `<root>/undefined/<id>`
+    // is not a place anything was ever launched from.
+    if (!identity.siteId) return undefined;
     return join(this.options.profileRoot, identity.siteId, identity.id);
   }
 

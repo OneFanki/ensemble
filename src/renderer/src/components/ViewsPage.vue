@@ -55,7 +55,8 @@ function siteIdsOf(view: View): string[] {
   const ids = new Set<string>();
   for (const identityId of view.identityIds) {
     const identity = store.identities.find((item) => item.id === identityId);
-    if (identity) ids.add(identity.siteId);
+    // An unlinked member cannot match a site filter; it stays visible under "all".
+    if (identity?.siteId) ids.add(identity.siteId);
   }
   return [...ids];
 }

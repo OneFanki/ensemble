@@ -37,7 +37,6 @@ export const siteDraftSchema = z.object({
   authCheckPath: pathValue.optional(),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean().optional(),
-  extraFields: z.array(loginFieldSchema).max(6).optional(),
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
 });
 

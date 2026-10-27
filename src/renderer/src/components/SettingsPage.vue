@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { BundleImportResult, BundlePreview } from "@shared/accounts-transfer";
+import type { LocaleSetting } from "@shared/locale";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   Bot,
@@ -59,7 +60,7 @@ watch(
 
 const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
-  locale: [locale: "zh" | "en"];
+  locale: [locale: LocaleSetting];
   startTour: [];
   updateFound: [result: UpdateCheckResult];
 }>();
@@ -496,6 +497,15 @@ async function submitMaster() {
         <div class="option-row">
           <span class="option-label">{{ $t("app.language") }}</span>
           <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.locale === 'system' }"
+              :title="$t('app.languageSystemHint')"
+              @click="emit('locale', 'system')"
+            >
+              {{ $t("app.languageSystem") }}
+            </button>
             <button
               type="button"
               class="seg"

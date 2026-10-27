@@ -334,6 +334,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const identityCountBySite = computed<Record<string, number>>(() => {
     const counts: Record<string, number> = {};
     for (const identity of identities.value) {
+      // An account with no site has no group; the page counts those separately.
+      if (!identity.siteId) continue;
       counts[identity.siteId] = (counts[identity.siteId] ?? 0) + 1;
     }
     return counts;
@@ -373,7 +375,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     if (identity.passwordMode === "custom") {
       return Boolean(credentials.value?.identity[identity.id]);
     }
+    // An account with no site has no site default to inherit.
     const siteId = identity.siteId;
+    if (!siteId) return false;
     return Boolean(credentials.value?.site[siteId]);
   }
 
@@ -437,6 +441,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function deleteIdentity(id: string) {
     return run("identity", () => window.ensemble.deleteIdentity(id));
+  }
+
+  /** Points a batch of accounts at one site; the message names the count. */
+  async function linkIdentitiesToSite(identityIds: string[], siteId: string) {
+    const site = sites.value.find((item) => item.id === siteId);
+    const result = await run(
+      "identity",
+      () => window.ensemble.linkIdentitiesToSite(identityIds, siteId),
+      tr("app.toastIdentitiesLinked", {
+        count: identityIds.length,
+        site: site?.name ?? "",
+      }),
+    );
+    return result;
   }
 
   async function rebuildIdentityProfile(id: string) {
@@ -875,6 +893,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     deleteTag,
     saveIdentity,
     deleteIdentity,
+    linkIdentitiesToSite,
     rebuildIdentityProfile,
     detachReference,
     acceptSiteOrigin,

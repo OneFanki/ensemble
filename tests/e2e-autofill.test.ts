@@ -109,7 +109,6 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
       baseUrl,
       loginPath: "/login",
       autoSubmit: true,
-      extraFields: [{ label: "租户名", value: "acme" }],
     });
     workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
 
@@ -121,7 +120,9 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
       color: "amber",
       passwordMode: "inherit",
       startPath: "/login",
-      extraFields: [],
+      // The tenant name is an account fact: one person belongs to one tenant,
+      // so it travels with the account, not with the site's login recipe.
+      extraFields: [{ label: "租户名", value: "acme" }],
     });
 
     const { instance } = await workspace.launchIdentity(identity.id);
@@ -170,7 +171,6 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
       baseUrl: entryUrl,
       loginPath: "/login",
       autoSubmit: false,
-      extraFields: [],
     });
     workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
     const identity = workspace.saveIdentity({

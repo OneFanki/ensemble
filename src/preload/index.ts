@@ -30,6 +30,8 @@ const api: EnsembleApi = {
   deleteTag: (id) => ipcRenderer.invoke(IPC.tagDelete, id),
   saveIdentity: (draft) => ipcRenderer.invoke(IPC.identitySave, draft),
   deleteIdentity: (id) => ipcRenderer.invoke(IPC.identityDelete, id),
+  linkIdentitiesToSite: (identityIds, siteId) =>
+    ipcRenderer.invoke(IPC.identityLinkSite, identityIds, siteId),
   rebuildIdentityProfile: (id) => ipcRenderer.invoke(IPC.identityRebuildProfile, id),
   detachReference: (id) => ipcRenderer.invoke(IPC.identityDetachReference, id),
   saveView: (draft) => ipcRenderer.invoke(IPC.viewSave, draft),

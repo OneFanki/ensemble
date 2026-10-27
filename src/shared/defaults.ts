@@ -4,7 +4,9 @@ import { DEFAULT_SEARCH_ENGINE_ID } from "./search";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark",
-  locale: "zh",
+  // Follow the OS. A hardcoded default is a hardcoded opinion, and the app has
+  // no business deciding which language its user reads.
+  locale: "system",
   // The browser is the default page: it is where the work happens, and every
   // other page is a management view the user returns from.
   lastView: "browser",

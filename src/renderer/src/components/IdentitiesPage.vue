@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Identity, RoleColor } from "@shared/types";
-import { Check, CheckSquare, Download, HeartPulse, LayoutGrid, Play, Plus, Search, Square } from "lucide-vue-next";
+import { Check, CheckSquare, Download, HeartPulse, LayoutGrid, Link2, Play, Plus, Search, Square } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
@@ -8,6 +8,9 @@ import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import GroupChevron from "./GroupChevron.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
+import Modal from "./Modal.vue";
+import SelectField from "./SelectField.vue";
+import AppButton from "./ui/AppButton.vue";
 
 const emit = defineEmits<{
   newIdentity: [siteId?: string];
@@ -45,7 +48,9 @@ const selectableIdentities = computed(() =>
   visibleIdentities.value.filter(
     (identity) =>
       !groupCollapse.isCollapsed(
-        store.sites.some((site) => site.id === identity.siteId) ? identity.siteId : "__orphan__",
+        store.sites.some((site) => site.id === identity.siteId)
+          ? (identity.siteId as string)
+          : "__orphan__",
       ),
   ),
 );
@@ -111,6 +116,49 @@ function createViewFromSelection() {
   const ids = [...selected.value];
   if (ids.length === 0) return;
   emit("createView", ids);
+  endSelecting();
+}
+
+/** Site choices for the batch re-link dialog. */
+const siteOptions = computed(() =>
+  store.sites.map((site) => ({
+    value: site.id,
+    label: site.name,
+    hint: site.baseUrl,
+  })),
+);
+
+/** The site picked in the link dialog, before it is confirmed. */
+const linkSiteId = ref<string | undefined>(undefined);
+const linkOpen = ref(false);
+
+function openLinkSite() {
+  if (selected.value.size === 0) return;
+  // Default to the site most of the selection already belongs to, so the common
+  // case (fixing one or two strays) needs no choice at all.
+  const counts = new Map<string, number>();
+  for (const identity of store.identities) {
+    if (!selected.value.has(identity.id) || !identity.siteId) continue;
+    counts.set(identity.siteId, (counts.get(identity.siteId) ?? 0) + 1);
+  }
+  const majority = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  linkSiteId.value = majority ?? store.defaultSite?.id;
+  linkOpen.value = true;
+}
+
+/**
+ * Points every selected account at the confirmed site.
+ *
+ * Confirmation is the point of the dialog: this write moves credentials' home
+ * site for a whole batch, and an accidental click on a dropdown row was one
+ * stray pointer away from doing it silently.
+ */
+async function confirmLinkSite() {
+  const siteId = linkSiteId.value;
+  if (!siteId || selected.value.size === 0) return;
+  const result = await store.linkIdentitiesToSite([...selected.value], siteId);
+  if (!result) return;
+  linkOpen.value = false;
   endSelecting();
 }
 
@@ -316,8 +364,6 @@ function passwordLabel(identity: Identity): string {
   if (!store.identityPasswordSet(identity)) return t("app.passwordNotSet");
   return identity.passwordMode === "custom" ? t("app.passwordCustom") : t("app.passwordInherit");
 }
-
-import AppButton from "./ui/AppButton.vue";
 </script>
 
 <template>
@@ -443,7 +489,14 @@ import AppButton from "./ui/AppButton.vue";
         {{ $t("app.batchSelected", { count: selected.size }) }}
       </span>
       <span class="sel-note">{{ $t("app.batchLaunchNote") }}</span>
-      <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
+      <!-- Re-linking belongs with the other bulk actions: fixing a lost site one
+           card at a time is the chore that leaves accounts unlinked. A button
+           rather than a dropdown — this opens a dialog where the site is chosen
+           and confirmed, so a stray click cannot move a whole batch. -->
+      <AppButton :disabled="selected.size === 0" data-batch-link-site @click="openLinkSite">
+        <Link2 :size="12" />
+        {{ $t("app.batchLinkSite") }}
+      </AppButton>
       <!-- Saving the selection as a view is the durable version of the batch
            launch: same picking gesture, but the group gets a name, a layout and
            a row on the views page instead of a scratch container. -->
@@ -458,12 +511,45 @@ import AppButton from "./ui/AppButton.vue";
         <Download :size="12" />
         {{ $t("app.accountsExport") }}
       </AppButton>
+      <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
       <AppButton variant="primary" :disabled="!notRunningSelected.length || store.busy === 'launch'"
         @click="launchSelected">
         <Play :size="12" />
         {{ $t("app.batchLaunch", { count: notRunningSelected.length }) }}
       </AppButton>
     </div>
+
+    <!-- Choosing the target site is a dialog, not a dropdown in the bar: the
+         write moves a whole batch's home site, so it gets an explicit confirm. -->
+    <Modal
+      :open="linkOpen"
+      :title="$t('app.batchLinkSiteTitle')"
+      :description="$t('app.batchLinkSiteDesc', { count: selected.size })"
+      width="440px"
+      @close="linkOpen = false"
+    >
+      <label class="link-field">
+        <span class="label">{{ $t("app.identitySite") }}</span>
+        <SelectField
+          v-model="linkSiteId"
+          :options="siteOptions"
+          :placeholder="$t('app.identitySitePick')"
+          :aria-label="$t('app.identitySite')"
+        />
+      </label>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="linkOpen = false">{{ $t("app.cancel") }}</AppButton>
+        <AppButton
+          variant="primary"
+          data-confirm-link-site
+          :disabled="!linkSiteId || store.busy === 'identity'"
+          @click="confirmLinkSite"
+        >
+          {{ $t("app.batchLinkSiteConfirm") }}
+        </AppButton>
+      </template>
+    </Modal>
 
     <div v-if="exportOpen" class="export-bar">
       <div class="export-copy">
@@ -561,19 +647,30 @@ import AppButton from "./ui/AppButton.vue";
                   live: Boolean(store.instanceFor(identity.id)),
                   warn: identity.status === 'expired',
                 }"
+                :title="statusLabel(identity)"
               >
                 <span class="dot"></span>{{ statusLabel(identity) }}
               </span>
             </div>
 
+            <!--
+              One line, three facts, all of them things a user actually asks
+              about a card: which role it is, whether a password is stored, and
+              (only when it differs from the default) which browser it opens in.
+              The old layout spent three rows on a password-dots decoration and a
+              role/engine chip pair, with the same information to say.
+            -->
             <div class="meta-row">
               <span class="tag">{{ identity.role }}</span>
-              <span class="tag plain">{{ store.engineFor(identity)?.brand ?? "—" }}</span>
-            </div>
-
-            <div class="pw-row">
-              <span class="dots mono">{{ store.identityPasswordSet(identity) ? "••••••••" : "— — — —" }}</span>
-              <span class="inherit mono">{{ passwordLabel(identity) }}</span>
+              <span class="tag plain" :class="{ missing: !store.identityPasswordSet(identity) }">
+                {{ passwordLabel(identity) }}
+              </span>
+              <span v-if="identity.engineId" class="tag plain">
+                {{ store.engineFor(identity)?.brand ?? "—" }}
+              </span>
+              <span v-if="identity.extraFields?.length" class="tag plain">
+                {{ $t("app.identityFieldCount", { count: identity.extraFields.length }) }}
+              </span>
             </div>
 
             <div v-if="!selecting" class="card-actions">
@@ -857,13 +954,17 @@ h1 {
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Column count follows the window: the whole point of this page is comparing
+     many accounts at once, so a fixed two columns wasted half the width on a
+     desktop screen. 264px is the narrowest a card reads at without truncating
+     the name and the status into each other. */
+  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
   /* An explicit row floor: as an auto-sized grid item inside a scrolling flex
      column, rows were compressed to the container's leftover height, and the
      card's own `overflow: hidden` then clipped its action row. Rows must size to
      their content — the grid scrolls, it does not shrink its cells. */
   grid-auto-rows: min-content;
-  gap: 10px;
+  gap: 7px;
   align-content: start;
   padding: 1px 2px 2px 1px;
 }
@@ -997,10 +1098,14 @@ h1 {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   background: linear-gradient(180deg, var(--surface), var(--bg-elevated));
-  padding: 11px 11px 9px 13px;
+  /* Dense on purpose: the page's job is comparing many accounts at once, and a
+     card that spends three rows on a password-dots decoration costs a visible
+     slice of screen per account. One identity line plus one fact line is the
+     whole card; the action row appears on hover so it costs no height. */
+  padding: 8px 10px 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 5px;
   overflow: hidden;
   min-width: 0;
   transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
@@ -1064,51 +1169,54 @@ h1 {
   font-size: 10.5px;
   color: var(--faint);
   border-top: 1px solid var(--line-soft);
-  padding-top: 8px;
+  padding-top: 5px;
 }
 
 .card-top {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   min-width: 0;
 }
 
 .avatar {
-  width: 29px;
-  height: 29px;
-  flex: 0 0 29px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--role) 15%, var(--surface));
   color: color-mix(in srgb, var(--role) 82%, var(--text));
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 500;
 }
 
 .who {
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: baseline;
+  gap: 7px;
 }
 
 .name {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.005em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
 .acct {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .state {
@@ -1116,9 +1224,10 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .state .dot {
@@ -1148,18 +1257,23 @@ h1 {
 .meta-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
+  min-height: 0;
 }
 
 .tag {
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.03em;
   border: 1px solid color-mix(in srgb, var(--role) 30%, var(--line));
   border-radius: 3px;
-  padding: 3px 5px;
+  padding: 2px 5px;
   color: color-mix(in srgb, var(--role) 72%, var(--text-secondary));
   background: color-mix(in srgb, var(--role) 7%, transparent);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tag.plain {
@@ -1168,31 +1282,26 @@ h1 {
   background: transparent;
 }
 
-.pw-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 8px;
+/* "No password" is the one fact on this line that needs attention, so it is the
+   one that gets a colour. Everything else is neutral by design. */
+.tag.plain.missing {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line-soft));
 }
 
-.dots {
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  color: var(--muted);
-}
-
-.inherit {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
+/*
+ * Always visible, three rows in total: identity, facts, actions.
+ *
+ * Folding this row until hover was a mistake: the card changed height whenever
+ * the pointer crossed it, so a grid of cards reflowed as the mouse moved. A
+ * stable card is worth more than the ~18px it saves, and three rows is the size
+ * the page was designed around anyway.
+ */
 .card-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 11.5px;
+  gap: 3px 11px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -1214,6 +1323,25 @@ h1 {
   margin-left: auto;
 }
 
+/* Dialog footer layout. Scoped styles do not reach Modal's own slots, so the
+   spacer has to be defined here rather than reused from another component. */
+.spacer {
+  flex: 1;
+}
+
+.link-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.link-field .label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
 .empty {
   grid-column: 1 / -1;
   border: 1px dashed var(--line);
@@ -1232,7 +1360,7 @@ h1 {
   margin: 0;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 820px) {
   .cards {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
 import { setCoreLocale } from "@core/i18n/translate";
 import { nextActiveInstanceId } from "@core/launch/active-instance";
+import { resolveLoginFields } from "@core/login-fields";
 import {
   disposeWindowFocus,
   foregroundWindowPid,
@@ -17,6 +18,7 @@ import { buildWindowsInstallScript, updateFileName } from "@core/update/install"
 import { parseAccountBundle } from "@shared/accounts-transfer";
 import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
 import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
+import { localeTag, resolveLocale } from "@shared/locale";
 import {
   type AccountsExportOutcome,
   type AccountsImportPickOutcome,
@@ -104,16 +106,20 @@ const headless = process.env["ENSEMBLE_HEADLESS"] === "1";
 const userDataOverride = process.env["ENSEMBLE_USER_DATA"]?.trim();
 if (userDataOverride) app.setPath("userData", userDataOverride);
 
-// Chromium's UI language follows the app's. This is what keeps `navigator.language`
-// inside a DevTools front-end consistent with the app's setting, so the prompt
-// answerer (see the embedded browser) picks the same language the user chose.
-// The DevTools front-end's own language cannot be fixed here — it only follows
-// its per-run preference — which is why the answerer exists at all. Must be set
-// before app ready; reading settings.json here is fine because userData was
-// resolved just above.
+// Chromium's UI language follows the app's. This is the tag that reaches
+// `navigator.language` inside every embedded page, so a site that localizes by
+// browser language sees the same language the user reads the app in.
+//
+// `locale: "system"` resolves to the OS language here — the same resolver the
+// renderer uses, so the two can never disagree. Must be set before app ready;
+// reading settings.json here is fine because userData was resolved just above.
 try {
   const settings = JSON.parse(readFileSync(join(app.getPath("userData"), "settings.json"), "utf8"));
-  app.commandLine.appendSwitch("lang", settings.locale === "en" ? "en-US" : "zh-CN");
+  const locale = resolveLocale(
+    settings.locale === "zh" || settings.locale === "en" ? settings.locale : "system",
+    app.getPreferredSystemLanguages?.()[0] ?? process.env["LANG"],
+  );
+  app.commandLine.appendSwitch("lang", localeTag(locale));
 } catch {
   // No settings yet (first run): Chromium picks the system language.
 }
@@ -232,6 +238,20 @@ function profileRoot(): string {
 }
 
 /**
+ * The OS language tag, e.g. "zh-CN".
+ *
+ * `app.getPreferredSystemLanguages()` reports the OS setting; `--lang` (which
+ * this app sets from its own preference) does not affect it. That distinction is
+ * the whole point: resolving `locale: "system"` against `navigator.language`
+ * would just read back the app's own choice.
+ */
+function systemLocaleTag(): string {
+  const preferred = app.getPreferredSystemLanguages?.();
+  const first = Array.isArray(preferred) && preferred.length > 0 ? preferred[0] : undefined;
+  return first ?? process.env["LANG"] ?? process.env["LC_ALL"] ?? "";
+}
+
+/**
  * Creates the in-app browser surface on first use.
  *
  * Lazily constructed because a user who never opens it pays nothing at startup.
@@ -250,10 +270,6 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // The detached DevTools window is created by the browser manager, so it
     // needs the icon too rather than falling back to electron.exe's.
     ...(appIconPath() ? { appIcon: appIconPath() } : {}),
-    // The DevTools language prompt is answered with the app's language, which
-    // the user can change at runtime — hence a getter, not a snapshot. The
-    // Chromium-side `--lang` switch reads the same setting at startup.
-    locale: () => service?.settingsSnapshot().locale ?? "zh",
     resolveLogin: async (identityId) => {
       if (!service) return undefined;
       const identity = service.findIdentity(identityId);
@@ -263,18 +279,13 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       // The resolver mirrors the external launch path, including references.
       const resolved = service.resolvedPassword(identityId);
       if (!resolved) return undefined;
-      const siteFields = site.extraFields ?? [];
-      const identityFields = identity.extraFields ?? [];
-      const merged = new Map<string, string>();
-      for (const field of siteFields) merged.set(field.label, field.value);
-      for (const field of identityFields) merged.set(field.label, field.value);
       return {
         username: identity.username,
         password: resolved,
         // One resolver for the global default and the per-site override, so the
         // built-in surface and the external launcher cannot answer differently.
-        submit: service ? service.effectiveAutoSubmit(site) : site.autoSubmit !== false,
-        extraFields: [...merged.entries()].map(([label, value]) => ({ label, value })),
+        submit: service.effectiveAutoSubmit(site),
+        extraFields: resolveLoginFields(identity),
         baseUrl: site.baseUrl,
       };
     },
@@ -1456,7 +1467,11 @@ async function createWindow(): Promise<void> {
   // dock, an address bar). When the focus is inside a page, that page's
   // `before-input-event` handles the toggle and this listener never fires; from
   // the chrome, no page sees the key at all — which read as "F12 does nothing".
+  //
+  // keyDown only: the keyUp of the same press arrives after DevTools have opened
+  // and taken focus, and toggling on it would shut the panel immediately.
   mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || input.isAutoRepeat) return;
     const key = input.key.toLowerCase();
     if (key !== "f12" && !(input.control && input.shift && key === "i")) return;
     event.preventDefault();
@@ -1801,6 +1816,15 @@ function registerIpc(workspace: WorkspaceService): void {
     broadcastWorkspace();
     return workspace.snapshot();
   });
+  handle(IPC.identityLinkSite, (identityIds: unknown, siteId: unknown) => {
+    const ids = Array.isArray(identityIds)
+      ? identityIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+      : [];
+    if (ids.length === 0) throw new Error("请先选择账号");
+    workspace.linkIdentitiesToSite(ids, String(siteId));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
 
   handle(IPC.identityRebuildProfile, async (id: string) => {
     await workspace.rebuildIdentityProfile(String(id));
@@ -2078,7 +2102,9 @@ function registerIpc(workspace: WorkspaceService): void {
     const settings = workspace.saveSettings(parsed);
     settingsCache = settings;
     if (parsed.theme) applyTheme(parsed.theme);
-    if (parsed.locale) setCoreLocale(parsed.locale);
+    // "system" is resolved, not stored: the core layer needs a concrete language,
+    // and it has to get the same one the renderer will pick.
+    setCoreLocale(resolveLocale(settings.locale, systemLocaleTag()));
     // The zoom setting reaches open pages only through this call: untouched
     // pages follow it, pages the user zoomed by hand keep their factor.
     if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
@@ -2712,6 +2738,7 @@ if (!gotLock) {
       platform: process.platform as "win32" | "darwin" | "linux",
       secretBox: new SafeStorageBox(),
       appVersion: app.getVersion(),
+      systemLocale: systemLocaleTag(),
       workArea: workAreaRect,
       onChange: broadcastWorkspace,
       onAutoFill: (report) => {
@@ -2722,7 +2749,7 @@ if (!gotLock) {
     });
 
     settingsCache = service.settingsSnapshot();
-    setCoreLocale(settingsCache.locale);
+    setCoreLocale(resolveLocale(settingsCache.locale, systemLocaleTag()));
     applyTheme(settingsCache.theme);
 
     // Follow OS appearance changes while the setting is "system": the renderer

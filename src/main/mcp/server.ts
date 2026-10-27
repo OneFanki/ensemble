@@ -928,7 +928,6 @@ export class McpServer {
       // The origin the password was last used with; a different current origin
       // means filling will ask for confirmation first.
       lastOrigin: site.lastOrigin ?? null,
-      extraFields: site.extraFields ?? [],
       identityCount: service.snapshot().identities.filter((identity) => identity.siteId === site.id)
         .length,
       viewCount: service.snapshot().views.filter((view) => view.siteId === site.id).length,
@@ -1469,7 +1468,7 @@ export class McpServer {
       {
         name: "create_site",
         description:
-          "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。可在 extraFields 里声明租户名等额外登录字段；带 password 时会同时写入站点默认密码，省掉一次 set_password。",
+          "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。带 password 时会同时写入站点默认密码，省掉一次 set_password。额外登录字段（如租户名）属于账号，请用 create_identity 的 extraFields 传。",
         kind: "write",
         inputSchema: object(
           {
@@ -1479,14 +1478,6 @@ export class McpServer {
             authCheckPath: string("登录态检测地址，可省略"),
             password: string("站点默认密码，写入加密凭据库后不回显"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
-            extraFields: {
-              type: "array",
-              description: "额外登录字段，例如租户名",
-              items: object({ label: string("字段名"), value: string("字段值") }, [
-                "label",
-                "value",
-              ]),
-            },
             tagIds: {
               type: "array",
               description: "站点标签 id 列表，只用于归类展示",
@@ -1502,7 +1493,6 @@ export class McpServer {
             loginPath: args["loginPath"] ?? "/login",
             autoSubmit: args["autoSubmit"] === true,
             ...(args["authCheckPath"] ? { authCheckPath: args["authCheckPath"] } : {}),
-            ...(Array.isArray(args["extraFields"]) ? { extraFields: args["extraFields"] } : {}),
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
           });
           const site = service.saveSite(draft);
@@ -1540,7 +1530,6 @@ export class McpServer {
                 : existing.authCheckPath,
             autoSubmit:
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
-            extraFields: existing.extraFields,
             tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,
           };
           return siteSummary(service.saveSite(siteDraftSchema.parse(draft)));
@@ -1653,12 +1642,46 @@ export class McpServer {
         },
       },
       {
+        name: "link_identities_to_site",
+        description:
+          "把一批账号关联到一个站点。用于给丢失站点归属的账号重新关联，也可用于整体改挂站点。不会改动密码与额外登录字段。",
+        kind: "write",
+        inputSchema: object(
+          {
+            siteId: string("目标站点 id"),
+            identityIds: {
+              type: "array",
+              minItems: 1,
+              description: "要关联的账号 id 列表",
+              items: { type: "string" },
+            },
+          },
+          ["siteId", "identityIds"],
+        ),
+        run: (args) => {
+          const site = findSite(args["siteId"]);
+          const ids = Array.isArray(args["identityIds"])
+            ? (args["identityIds"] as unknown[]).filter(
+                (id): id is string => typeof id === "string" && id.length > 0,
+              )
+            : [];
+          if (ids.length === 0) throw new Error("identityIds 不能为空");
+          const known = new Set(service.snapshot().identities.map((identity) => identity.id));
+          const missing = ids.filter((id) => !known.has(id));
+          if (missing.length > 0) throw new Error(`身份不存在：${missing.join(", ")}`);
+          const { linked } = service.linkIdentitiesToSite(ids, site.id);
+          return { siteId: site.id, linked, requested: ids.length };
+        },
+      },
+      {
         name: "update_identity",
-        description: "修改身份资料。password 只写入凭据库，不回显。",
+        description:
+          "修改身份资料。password 只写入凭据库，不回显。siteId 可以把账号改挂到另一个站点，也用于给丢失站点归属的账号重新关联。",
         kind: "write",
         inputSchema: object(
           {
             id: string("身份 id"),
+            siteId: string("改挂到这个站点 id，可省略"),
             name: string("显示名称"),
             username: string("账号"),
             password: string("新密码"),
@@ -1675,9 +1698,15 @@ export class McpServer {
         ),
         run: (args) => {
           const existing = findIdentity(args["id"]);
+          const siteId =
+            typeof args["siteId"] === "string" && args["siteId"]
+              ? args["siteId"]
+              : existing.siteId;
+          if (!siteId) throw new Error("这个账号还没有所属站点，请传 siteId");
+          findSite(siteId);
           const draft: IdentityDraft = {
             id: existing.id,
-            siteId: existing.siteId,
+            siteId,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
             username: typeof args["username"] === "string" ? args["username"] : existing.username,
             role: typeof args["role"] === "string" ? args["role"] : existing.role,

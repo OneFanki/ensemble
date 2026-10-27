@@ -47,7 +47,6 @@ function seed(service: WorkspaceService): { siteId: string; identityId: string }
     name: "排序检查",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/login",
-    extraFields: [],
   });
   const identity = service.saveIdentity({
     siteId: site.id,
@@ -57,7 +56,6 @@ function seed(service: WorkspaceService): { siteId: string; identityId: string }
     color: "amber",
     passwordMode: "inherit",
     startPath: "/",
-    extraFields: [],
   });
   return { siteId: site.id, identityId: identity.id };
 }

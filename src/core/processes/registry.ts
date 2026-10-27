@@ -16,6 +16,7 @@ import type {
   Engine,
   Identity,
   LayoutPreset,
+  LoginField,
   Site,
   SlotRect,
   Tag,
@@ -260,7 +261,13 @@ function sanitizeLayoutPresets(input: unknown): LayoutPreset[] {
   return presets;
 }
 
-/** Strips fields from older schema versions so they cannot leak back into storage. */
+/**
+ * Strips fields from older schema versions so they cannot leak back into storage.
+ *
+ * `extraFields` is deliberately still read here: {@link inheritSiteFields} needs
+ * it to move those values onto the accounts that were relying on them. It is
+ * removed again once that has run.
+ */
 function sanitizeSites(input: unknown): Site[] {
   if (!Array.isArray(input)) return [];
   return (input as Array<Site & { kind?: string }>).map((site) => {
@@ -271,6 +278,14 @@ function sanitizeSites(input: unknown): Site[] {
       ? rest.tagIds.filter((id): id is string => typeof id === "string" && id.length > 0)
       : undefined;
     return { ...rest, ...(tagIds && tagIds.length > 0 ? { tagIds } : { tagIds: undefined }) };
+  });
+}
+
+/** Drops site-level login fields; they live on accounts only. */
+function withoutSiteFields(sites: Site[]): Site[] {
+  return sites.map((site) => {
+    const { extraFields: _fields, ...rest } = site as Site & { extraFields?: LoginField[] };
+    return rest;
   });
 }
 
@@ -337,18 +352,38 @@ function pruneDanglingTags(
  * credentials and profile directories all keep working. This exists so an
  * existing workspace opens instead of appearing empty — not as a long-term
  * compatibility layer, which the project does not carry before 1.0.
+ *
+ * A file can carry **both** keys: one build wrote `sites: []` next to the still
+ * populated `environments`. Sites are therefore merged instead of read from one
+ * key, and an identity keeps a `siteId` it already has while falling back to
+ * `environmentId`. Reading it the other way round is not recoverable — a single
+ * empty `sites` array made the migration look unnecessary, and every account
+ * came back with no site while the site list came back empty.
  */
 function upgradeV1(raw: Record<string, unknown>): Partial<WorkspaceData> {
   const rename = (list: unknown, key: string): unknown => {
     if (!Array.isArray(list)) return list;
     return list.map((item) => {
       if (!item || typeof item !== "object") return item;
-      const { environmentId, ...rest } = item as Record<string, unknown>;
-      return { ...rest, [key]: environmentId };
+      const record = item as Record<string, unknown>;
+      const { environmentId, ...rest } = record;
+      const current = record[key];
+      const value = typeof current === "string" && current ? current : environmentId;
+      return { ...rest, [key]: value };
     });
   };
+  const sites: Site[] = [];
+  const seen = new Set<string>();
+  for (const list of [raw["sites"], raw["environments"]]) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list as Site[]) {
+      if (!item || typeof item.id !== "string" || seen.has(item.id)) continue;
+      seen.add(item.id);
+      sites.push(item);
+    }
+  }
   return {
-    sites: raw["environments"] as Site[] | undefined,
+    sites,
     identities: rename(raw["identities"], "siteId") as Identity[] | undefined,
     views: rename(raw["scenes"], "siteId") as View[] | undefined,
     instances: raw["instances"] as StoredInstance[] | undefined,
@@ -432,16 +467,22 @@ function sanitizeFlows(input: unknown, siteIds: Set<string>): Flow[] {
 export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData {
   const base = emptyWorkspace();
   const raw = input as Partial<WorkspaceData> & Record<string, unknown>;
-  // A v1 file has no `sites` key but does have `environments`; treat anything
-  // without the current shape as the previous schema.
-  const source = Array.isArray(raw.sites) || !("environments" in raw) ? raw : upgradeV1(raw);
+  /*
+   * A v1 file has no `sites` key and does have `environments`. The check is on
+   * `environments` alone rather than "no sites yet": one build wrote an empty
+   * `sites` array next to the populated `environments`, and reading that as
+   * current is what emptied the site list and unlinked every account.
+   */
+  const source = Array.isArray(raw.environments) ? upgradeV1(raw) : raw;
   // The tag namespace used to be site-only (`siteTags`). Same ids and colours,
   // so the rename is a straight read; identities and views simply start with no
   // tags of their own.
   const tags = sanitizeTags(source.tags ?? raw["siteTags"]);
+  const sites = sanitizeSites(source.sites);
+  const identities = Array.isArray(source.identities) ? source.identities : base.identities;
   const pruned = pruneDanglingTags(
-    sanitizeSites(source.sites),
-    Array.isArray(source.identities) ? source.identities : base.identities,
+    withoutSiteFields(sites),
+    inheritSiteFields(sites, identities),
     sanitizeViews(source.views),
     tags,
   );
@@ -457,6 +498,40 @@ export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData 
     layoutPresets: sanitizeLayoutPresets(source.layoutPresets),
     bookmarks: sanitizeBookmarks(source.bookmarks),
   };
+}
+
+/**
+ * Moves site-level login fields onto the accounts that inherited them.
+ *
+ * Sites used to own "extra login fields" and hand them to every account. That
+ * made a site look like it carried credentials, and it was the only reason the
+ * site form had a field list at all — a site has no account of its own, so the
+ * values always belonged to whoever signed in. The feature is gone; this keeps
+ * the data: each field is copied into every account of that site that does not
+ * already set the same label, which is exactly what the old merge produced.
+ *
+ * A site field also had the power to be removed per account by clearing the
+ * value; that case is already stored as an empty account row and is left alone.
+ */
+function inheritSiteFields(sites: Site[], identities: Identity[]): Identity[] {
+  const fieldsOf = new Map<string, LoginField[]>();
+  for (const site of sites as Array<Site & { extraFields?: LoginField[] }>) {
+    if (Array.isArray(site.extraFields) && site.extraFields.length > 0) {
+      fieldsOf.set(site.id, site.extraFields);
+    }
+  }
+  if (fieldsOf.size === 0) return identities;
+  return identities.map((identity) => {
+    const inherited = identity.siteId ? fieldsOf.get(identity.siteId) : undefined;
+    if (!inherited) return identity;
+    const own = identity.extraFields ?? [];
+    const labels = new Set(own.map((field) => field.label.trim().toLowerCase()));
+    const merged = [
+      ...own,
+      ...inherited.filter((field) => !labels.has(field.label.trim().toLowerCase())),
+    ];
+    return { ...identity, extraFields: merged };
+  });
 }
 
 /**

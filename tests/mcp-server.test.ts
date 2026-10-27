@@ -107,6 +107,53 @@ describe("MCP handshake", () => {
     expect(json.result.serverInfo.name).toBe("ensemble");
   });
 
+  it("tells the client what the product is, in one short paragraph", async () => {
+    // An MCP client hands the model the endpoint config and nothing else, so
+    // `instructions` is the only place the product can introduce itself. Without
+    // it the model sees a list of verbs and has to guess what they drive.
+    const { json } = await rpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18" },
+    });
+    const instructions: string = json.result.instructions ?? "";
+    expect(instructions).toContain("Ensemble");
+    // The workflow that names the core model, not just the product name.
+    expect(instructions).toMatch(/site/i);
+    expect(instructions).toMatch(/identit/i);
+    expect(instructions).toMatch(/view/i);
+    // The one rule a model would otherwise learn by being refused.
+    expect(instructions).toMatch(/origin/i);
+    // And a hard budget: this text is prepended to every session, so it has to
+    // stay a summary rather than a manual. 2000 characters is already generous.
+    expect(instructions.length).toBeLessThan(2000);
+  });
+
+  it("advertises the renamed tag tools once, not the old aliases too", async () => {
+    // The old names stay callable so an already-configured client keeps working,
+    // but repeating them in the list costs every session context for no gain:
+    // the model cannot usefully prefer one of two identical verbs.
+    const { json } = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const names = json.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toContain("save_tag");
+    expect(names).toContain("delete_tag");
+    expect(names).not.toContain("save_site_tag");
+    expect(names).not.toContain("delete_site_tag");
+  });
+
+  it("lets an old alias still be called even though it is not advertised", async () => {
+    const { json } = await rpc({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "save_site_tag", arguments: { name: "旧名字", color: "teal" } },
+    });
+    expect(json.result?.isError ?? false).toBe(false);
+    const tags = JSON.parse(json.result.content[0].text);
+    expect(tags).toMatchObject({ name: "旧名字", color: "teal" });
+  });
+
   it("exposes insertion tools but no read-back tool for secrets", async () => {
     const { json } = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const names = json.result.tools.map((tool: { name: string }) => tool.name);
@@ -358,9 +405,11 @@ describe("MCP tools", () => {
     }
     // Names that were already released stay resolvable: a client configured
     // against them must not break because the UI moved tags out of Settings.
+    // "Resolvable" is asserted by the calls below, not by the list: the aliases
+    // are deliberately not advertised, because two identical verbs in the list
+    // cost every session context while the model gains nothing from the choice.
     for (const alias of ["save_site_tag", "delete_site_tag"]) {
-      const tool = tools.find((item) => item.name === alias);
-      expect(tool?.description).toContain("旧名称");
+      expect(tools.some((tool) => tool.name === alias)).toBe(false);
     }
 
     const created = await rpc(toolCall("save_tag", { name: "客户环境", color: "amber" }));

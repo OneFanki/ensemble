@@ -239,6 +239,40 @@ export function parkedViewBounds(content: { width: number; height: number }): St
   return { x: width, y: 0, width, height };
 }
 
+/**
+ * Whether a view is painting on screen, i.e. whether the compositor has frames
+ * for it.
+ *
+ * This decides which screenshot path to take, because the two available paths
+ * have opposite blind spots (measured on Electron 44 / Chromium 152):
+ *
+ * | state               | Page.captureScreenshot | capturePage |
+ * | ------------------- | ---------------------- | ----------- |
+ * | on screen           | works, ~40ms           | works       |
+ * | parked off-window   | **never returns**      | works       |
+ * | window minimised    | **never returns**      | works       |
+ * | window fully hidden | fails                  | fails       |
+ *
+ * "Never returns" is the dangerous one: it is not an error, so a caller that
+ * tries the compositor first pays its full timeout every single time. A page the
+ * user switched away from is parked past the window edge, so this returns false
+ * and the screenshot goes straight to the renderer.
+ *
+ * Pure on purpose: the three inputs are all the caller needs to read, and a
+ * wrong answer only costs a slower path, never a wrong pixel.
+ */
+export function viewIsOnScreen(
+  rect: { x: number; y: number; width: number; height: number },
+  content: { width: number; height: number },
+  host: { visible: boolean; minimized: boolean },
+): boolean {
+  if (!host.visible || host.minimized) return false;
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  // A parked view starts exactly at the window's right edge, so the comparison
+  // is strict: touching the edge is not on screen.
+  return rect.x < content.width && rect.y < content.height;
+}
+
 export function embeddedSlotRects(
   layoutId: LayoutId,
   stage: StageRect,

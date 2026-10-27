@@ -41,6 +41,7 @@ import {
   planTabClick,
   resolveSlotTabs,
   type StageRect,
+  viewIsOnScreen,
   ZOOM_STEPS,
 } from "@shared/embedded";
 import {
@@ -2187,13 +2188,36 @@ export class EmbeddedBrowser {
     options: { format?: "png" | "jpeg"; quality?: number } = {},
   ): Promise<{ path: string; bytes: number }> {
     const tab = this.requireTab(tabId);
-    const buffer = await tab.cdp.screenshot(options);
+    const buffer = await tab.cdp.screenshot({
+      ...options,
+      // A page the user switched away from (or a minimised window) has no
+      // compositor frames, so the CDP path would stall until its timeout. The
+      // renderer still paints, so read from there directly.
+      preferRenderer: !this.isOnScreen(tab),
+    });
     mkdirSync(this.options.shotDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const extension = options.format === "jpeg" ? "jpg" : "png";
     const file = join(this.options.shotDir, `${tab.id.slice(0, 8)}-${stamp}.${extension}`);
     writeFileSync(file, buffer);
     return { path: file, bytes: buffer.length };
+  }
+
+  /**
+   * Whether this page is currently painting on screen.
+   *
+   * Reads the three inputs `viewIsOnScreen` needs. The result only decides which
+   * screenshot path to take, so a wrong answer costs a fallback, never
+   * correctness.
+   */
+  private isOnScreen(tab: TabRecord): boolean {
+    const host = this.host;
+    if (!host || host.isDestroyed()) return false;
+    if (tab.view.webContents.isDestroyed()) return false;
+    return viewIsOnScreen(tab.view.getBounds(), this.hostContentSize(), {
+      visible: host.isVisible(),
+      minimized: host.isMinimized(),
+    });
   }
 
   /**

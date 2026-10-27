@@ -16,6 +16,7 @@ import {
   neighborZoomStep,
   normalizeEmbeddedUrl,
   parkedViewBounds,
+  viewIsOnScreen,
   resolveSlotTabs,
 } from "@shared/embedded";
 
@@ -232,6 +233,44 @@ describe("parked pages", () => {
       width: 1,
       height: 1,
     });
+  });
+});
+
+describe("on-screen detection (which screenshot path can work)", () => {
+  // Both screenshot paths have blind spots, and the compositor one does not
+  // fail off-screen — it never returns, so guessing wrong costs a full timeout
+  // on every call. These cases pin the decision itself.
+  const window = { width: 1280, height: 800 };
+  const onScreen = { visible: true, minimized: false };
+  const onStage = { x: 52, y: 113, width: 1000, height: 600 };
+
+  it("treats a laid-out view in a visible window as on screen", () => {
+    expect(viewIsOnScreen(onStage, window, onScreen)).toBe(true);
+  });
+
+  it("treats a view parked past the window edge as off screen", () => {
+    // This is exactly what `parkAll` produces: x = content width.
+    const parked = parkedViewBounds(window);
+    expect(viewIsOnScreen(parked, window, onScreen)).toBe(false);
+  });
+
+  it("treats a minimised window as off screen even for a laid-out view", () => {
+    expect(viewIsOnScreen(onStage, window, { visible: true, minimized: true })).toBe(false);
+  });
+
+  it("treats a hidden window as off screen", () => {
+    expect(viewIsOnScreen(onStage, window, { visible: false, minimized: false })).toBe(false);
+  });
+
+  it("treats a zero-sized view as off screen", () => {
+    expect(viewIsOnScreen({ x: 0, y: 0, width: 0, height: 0 }, window, onScreen)).toBe(false);
+  });
+
+  it("does not count touching the window edge as on screen", () => {
+    // A view whose left edge sits exactly on the right edge paints nothing.
+    expect(viewIsOnScreen({ x: window.width, y: 0, width: 400, height: 300 }, window, onScreen)).toBe(
+      false,
+    );
   });
 });
 

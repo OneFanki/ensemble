@@ -263,6 +263,27 @@ try {
   const bytes = shot.bytes ?? 0;
   check("screenshot written", bytes > 1000, shot);
 
+  // A page the user switched away from must still screenshot promptly.
+  //
+  // The compositor stops producing frames for a view that is not on screen, and
+  // `Page.captureScreenshot` does not fail there — it never returns, so the old
+  // code waited out its full 4s timeout on every screenshot of a backgrounded
+  // page. Reading pixels from the renderer directly avoids that. The bound is
+  // deliberately loose (1.5s) so a slow machine is not a false failure, while
+  // still failing on the 4s timeout this guards against.
+  await call("set_tab_page", { pageId: memberTab.id });
+  await new Promise((r) => setTimeout(r, 900));
+  const parkedStart = Date.now();
+  const parkedShot = await call("screenshot_browser_tab", { tabId: adminTab.id });
+  const parkedMs = Date.now() - parkedStart;
+  check(
+    "a backgrounded page screenshots without waiting out the CDP timeout",
+    (parkedShot.bytes ?? 0) > 1000 && parkedMs < 1500,
+    { bytes: parkedShot.bytes, ms: parkedMs },
+  );
+  await call("set_tab_page", { pageId: adminTab.id });
+  await new Promise((r) => setTimeout(r, 500));
+
   // Grid layout. Asking for one while every tab is loose groups them into a
   // view, which is the same result as dragging the tabs together by hand.
   const layout = await call("set_browser_layout", { layoutId: "2x1" });

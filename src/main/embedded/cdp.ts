@@ -101,16 +101,39 @@ export class EmbeddedCdp {
   }
 
   /**
-   * Screenshot with a fallback for minimised windows.
+   * Screenshot, choosing the path that can actually work right now.
    *
-   * `Page.captureScreenshot` goes through the compositor and stalls while the
-   * window is minimised; `capturePage` reads the renderer directly and still
-   * works there. Measured behaviour: visible and unfocused both work either way,
-   * minimised works only through `capturePage`, and a fully hidden window
-   * supports neither.
+   * Two ways to read pixels, with different blind spots (measured on Electron 44
+   * / Chromium 152):
+   *
+   * | state                | Page.captureScreenshot | capturePage |
+   * | -------------------- | ---------------------- | ----------- |
+   * | on stage             | works, ~40ms           | works       |
+   * | parked off-window    | **stalls**             | works       |
+   * | window minimised     | **stalls**             | works       |
+   * | window fully hidden  | fails                  | fails       |
+   *
+   * `Page.captureScreenshot` goes through the compositor, which stops producing
+   * frames for a view that is not on screen — so the call does not fail, it
+   * never returns. Trying it first is what made a screenshot of a page the user
+   * had switched away from cost a full 4-second timeout before falling back,
+   * every single time.
+   *
+   * `preferRenderer` lets the caller say "this view is not on screen", so the
+   * compositor path is skipped entirely instead of being timed out on. The
+   * fallback stays for the states this cannot predict.
    */
-  async screenshot(options: { format?: "png" | "jpeg"; quality?: number } = {}): Promise<Buffer> {
+  async screenshot(
+    options: { format?: "png" | "jpeg"; quality?: number; preferRenderer?: boolean } = {},
+  ): Promise<Buffer> {
     const format = options.format ?? "png";
+    const fromRenderer = async (): Promise<Buffer> => {
+      if (this.contents.isDestroyed()) throw new Error("页面已关闭");
+      const image = await this.contents.capturePage();
+      if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
+      return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
+    };
+    if (options.preferRenderer) return fromRenderer();
     try {
       const result = await Promise.race([
         this.send<{ data: string }>("Page.captureScreenshot", {
@@ -123,10 +146,7 @@ export class EmbeddedCdp {
       ]);
       return Buffer.from(result.data, "base64");
     } catch {
-      if (this.contents.isDestroyed()) throw new Error("页面已关闭");
-      const image = await this.contents.capturePage();
-      if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
-      return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
+      return fromRenderer();
     }
   }
 

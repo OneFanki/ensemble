@@ -32,6 +32,38 @@
 
 #### Full changes
 
+
+## [1.1.3] - 2026-10-27
+
+### 中文
+
+- **修复切走的页面截图要等 4 秒**：AI 操作的那页被你切到后台、或窗口最小化时，截图会先等满 4 秒超时才回退；现在直接走渲染器，同样的图 40ms 出来
+- README 新增「AI 操作时，你可以继续做你的事」一节：页面没有独立窗口可弹、切走不打断 AI、AI 不抢前台、测试全静默
+
+#### 完整变更
+
+- **截图路径按页面是否在屏幕上选择**：合成分器对被移出窗口的视图不产帧，`Page.captureScreenshot` 在那里不会报错、而是永不返回，于是离台页面的每次截图都先付满 4 秒超时。实测：在台上 CDP 约 40ms，离台 4023ms，最小化 4023ms；改后离台 37ms、最小化 40ms，图像字节数一致
+- 判定抽成 `shared/embedded.ts` 的纯函数 `viewIsOnScreen(rect, content, host)`，三个输入都是调用方直接可读的；判定错只会让截图走较慢的路，不影响像素结果
+- `CdpClient.screenshot` 新增 `preferRenderer` 参数，`EmbeddedBrowser.screenshot` 依据 `viewIsOnScreen` 传入；`capturePage` 回退保留，覆盖无法预判的状态
+- `tests/embedded.test.ts` 新增 6 条覆盖判定本身（在台上、已停放、最小化、隐藏、零尺寸、恰好贴边），已用「恒为真」验证会失败
+- `e2e-embedded` 新增一条：后台页面截图必须在 1.5s 内返回且有内容。注意无头模式下所有页面都离台，这条在无头里没有鉴别力，真正守住逻辑的是上面的单元测试
+- README 中英双版新增「AI 操作时，你可以继续做你的事」：说明页面没有独立窗口、切走不打断、AI 不抢前台、20 套测试全部离屏运行
+
+### English
+
+- **Fixed screenshots of a switched-away page taking 4 seconds**: when the page the AI was driving moved to the background or the window was minimised, a screenshot waited out a full 4s timeout before falling back; it now reads from the renderer directly and returns the same image in ~40ms
+- README gains "The AI works; you keep working": pages have no separate window to pop up, switching away does not interrupt the AI, the AI never raises your window, and the test suites run silently
+
+#### Full changes
+
+- **The screenshot path now follows whether the page is on screen**: the compositor produces no frames for a view moved off-window, and `Page.captureScreenshot` there does not fail — it never returns, so every screenshot of a parked page paid the full 4s timeout first. Measured: on stage ~40ms via CDP, parked 4023ms, minimised 4023ms; after the change 37ms and 40ms with identical bytes
+- The decision is a pure function, `viewIsOnScreen(rect, content, host)` in `shared/embedded.ts`; a wrong answer only routes the screenshot down the slower path, never a wrong pixel
+- `CdpClient.screenshot` gains a `preferRenderer` flag that `EmbeddedBrowser.screenshot` sets from `viewIsOnScreen`; the `capturePage` fallback stays for states this cannot predict
+- `tests/embedded.test.ts` gains 6 cases covering the decision itself (on stage, parked, minimised, hidden, zero-sized, exactly at the edge), verified to fail when the predicate is forced to true
+- `e2e-embedded` gains one check: a backgrounded page must screenshot within 1.5s with real content. Note it has no discriminating power headless — every page is parked there — so the unit tests are what actually pin the logic
+- README (both languages) gains "The AI works; you keep working": no separate window, switching away is safe, the AI never steals focus, and all 20 test suites run off-screen
+
+
 ## [1.1.2] - 2026-10-27
 
 ### 中文

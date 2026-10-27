@@ -1,6 +1,6 @@
 {
   "name": "ensemble",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "Every account of one system, signed in at once. A local multi-account browser workbench for permission and collaboration testing.",
   "license": "MIT",

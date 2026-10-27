@@ -51,6 +51,29 @@ Permissions are only the easiest example. Any case with one system, several iden
 
 What these have in common: **they can only be verified with the identities present at the same time**. Logging out and back in is slow and hides anything that only appears once you switch.
 
+## The AI works; you keep working
+
+Letting an AI drive a browser usually means it either takes over a window or spawns a pile of them.
+In Ensemble neither has to happen.
+
+**Pages live in the app's own window, so there is no separate window to pop up.** What the AI opens is
+a region of the main interface — visible the whole time, ready for you to take over. No browser process
+is started and nothing lands in the taskbar.
+
+**Switching away does not interrupt it.** Change tabs, visit the accounts page, edit settings, or
+minimise to the tray: the page the AI is driving keeps working — scripts, clicks, typing and DOM reads
+all continue. It works the other way too: the AI's actions never raise your window in front of you.
+
+**Tests do not pop up either.** The 20 end-to-end suites shipped with the app move the window off every
+display and run there, leaving the desktop quiet. Your own automation can do the same (see "AI access"):
+
+```bash
+ENSEMBLE_HEADLESS=1
+```
+
+Only when you need "it behaves the same in a real person's environment" do you switch to an external
+real browser — a separate path, triggered explicitly.
+
 ## Concepts
 
 | Concept | Meaning | Isolated |

@@ -132,13 +132,6 @@ export interface EmbeddedBrowserOptions {
   shotDir: string;
   /** Icon for app-owned windows (the DevTools window), so none shows Electron's. */
   appIcon?: string;
-  /**
-   * The app's UI language, re-read on every DevTools open.
-   *
-   * The DevTools language prompt is answered on the user's behalf with this
-   * language; see `answerDevToolsLocale` for why that has to happen every time.
-   */
-  locale?: () => string;
   resolveLogin?: (identityId: string) => Promise<EmbeddedLoginPayload | undefined>;
   onStateChange?: (state: EmbeddedState) => void;
   /** Asks the renderer to switch to the browser page. */
@@ -214,6 +207,14 @@ export class EmbeddedBrowser {
   private lastStage: StageRect | null = null;
   private pendingState = false;
   private viewSeq = 0;
+  /**
+   * Rebuilds in flight, one per page at most.
+   *
+   * The ticket lets a close cancel a rebuild that is already waiting for the
+   * old front-end to die: without it, closing the panel during that wait let the
+   * rebuild bring it back a moment later.
+   */
+  private devtoolsRebuilds = new Map<string, { cancelled: boolean }>();
   /** Default zoom for pages that have not been adjusted by hand. */
   private defaultZoom = 100;
   /**
@@ -1239,6 +1240,10 @@ export class EmbeddedBrowser {
       if (/^https?:/i.test(url) || /^mailto:/i.test(url)) void shell.openExternal(url);
     });
     contents.on("before-input-event", (event, input) => {
+      // One physical press arrives twice: `before-input-event` fires for the
+      // keyDown and again for the keyUp. Shortcuts act on the way down only —
+      // they are commands, not states.
+      if (input.type !== "keyDown") return;
       const key = input.key.toLowerCase();
       const modifier = process.platform === "darwin" ? input.meta : input.control;
       if (modifier && key === "f") {
@@ -1252,7 +1257,9 @@ export class EmbeddedBrowser {
       // The same toggle Chrome offers: F12, and Ctrl+Shift+I for laptops whose
       // F12 shares a row with volume. The DevTools' own webContents gets the
       // same handler below — with focus inside the panel, this one never fires.
-      if (key === "f12" || (modifier && input.shift && key === "i")) {
+      // Auto-repeat is ignored: holding the key would otherwise flip the panel
+      // open and shut until the user lets go.
+      if (!input.isAutoRepeat && (key === "f12" || (modifier && input.shift && key === "i"))) {
         event.preventDefault();
         if (this.devtoolsOpen(tab)) this.closeDevTools(tab.id);
         else this.openDevTools(tab.id, "docked");
@@ -2449,30 +2456,8 @@ export class EmbeddedBrowser {
     const tab = this.requireTab(tabId);
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
-    if (!tab.devtools) {
-      // DevTools needs the devtools:// scheme and their own preload; the page's
-      // identity partition would block both, so this view gets its own default
-      // session and no preload of ours. Background throttling is off because
-      // the panel's content area is one large tiled layer: when throttling
-      // kicks in the tiles stop rasterizing while the chrome keeps its last
-      // frame, which reads as a panel with a black middle — exactly what a
-      // headed window produced and a headless one (throttling off there
-      // already) never did.
-      const view = new WebContentsView({
-        webPreferences: {
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          backgroundThrottling: false,
-        },
-      });
-      view.setBackgroundColor("#101317");
-      contents.setDevToolsWebContents(view.webContents);
-      tab.devtools = { view, mode, width: 0.42 };
-      this.watchDevToolsKeys(tab);
-      this.answerDevToolsLocale(tab);
-    }
-    tab.devtools.mode = mode;
+    const devtools = tab.devtools ?? this.mountDevTools(tab, mode, 0.42);
+    devtools.mode = mode;
     this.placeDevTools(tab);
     contents.openDevTools({ mode: "detach" });
     this.applyLayout();
@@ -2480,90 +2465,223 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * F12 / Ctrl+Shift+I while focus is inside the panel.
+   * Creates the front-end view, binds it to the inspected page, and installs
+   * every listener it needs.
    *
-   * The page's handler never sees those keys then, and without this the panel
-   * would be a one-way door from the keyboard.
+   * `openDevTools` and the reload recovery both go through here: a rebuilt
+   * front-end must be indistinguishable from a first one, including the
+   * keyboard handler, the language-bar dismissal, and the reload guard.
+   */
+  private mountDevTools(
+    tab: TabRecord,
+    mode: "docked" | "window",
+    width: number,
+  ): NonNullable<TabRecord["devtools"]> {
+    // DevTools needs the devtools:// scheme and their own preload; the page's
+    // identity partition would block both, so this view gets its own default
+    // session and no preload of ours.
+    //
+    // `backgroundThrottling: false` is kept from the earlier black-panel
+    // investigation. It was not the cause (see `silenceDevToolsLocaleBar`), but
+    // a panel that keeps painting while the app is in the background costs one
+    // idle compositor and avoids a stale first frame on re-focus.
+    const view = new WebContentsView({
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        backgroundThrottling: false,
+      },
+    });
+    view.setBackgroundColor("#101317");
+    tab.view.webContents.setDevToolsWebContents(view.webContents);
+    const devtools = { view, mode, width };
+    tab.devtools = devtools;
+    this.watchDevToolsKeys(tab);
+    this.silenceDevToolsLocaleBar(tab);
+    this.guardDevToolsFrontend(tab);
+    return devtools;
+  }
+
+  /**
+   * Keeps the panel usable across the front-end's own reloads.
+   *
+   * DevTools reloads itself for some settings changes — "restore defaults and
+   * reload" is the one users hit. That reload used to leave every panel empty
+   * for good: afterwards `InspectorFrontendHost` comes back as a stub whose
+   * `sendMessageToBackend` is a no-op, so the panels keep their chrome and never
+   * receive data. Measured signature — healthy:
+   * `sendMessageToBackend(message) { DevToolsAPI.sendMessage...`; broken:
+   * `sendMessageToBackend(r){}`. The Elements tree tells the same story: the
+   * inspected page's DOM is there before the reload and gone after.
+   *
+   * Electron never re-binds the host for the lifetime of the inspected
+   * `WebContents`, which is why closing and reopening the *same* front-end does
+   * not help. Discarding the whole front-end and building a new one does: the
+   * fresh document handshakes with the inspected page again. That was verified
+   * from both states (healthy and already broken, 2/2 each), so this handler
+   * rebuilds rather than forbidding the gesture — which is what makes the
+   * settings dialog work instead of hanging on a blank panel.
+   *
+   * `will-navigate` is the fast path: cancelling the navigation leaves the panel
+   * alive (nothing has been thrown away yet), and the rebuild applies the
+   * setting the user just changed by booting a front-end that reads it. The
+   * `did-finish-load` half catches reloads that never asked — anything that went
+   * straight to `webContents.reload()` would otherwise land in the broken state
+   * silently.
+   */
+  private guardDevToolsFrontend(tab: TabRecord): void {
+    const contents = tab.devtools?.view.webContents;
+    if (!contents) return;
+    // The first load is the front-end booting; only a later one is a reload.
+    let loaded = false;
+    contents.on("will-navigate", (event, url) => {
+      if (url !== contents.getURL()) return;
+      event.preventDefault();
+      void this.rebuildDevTools(tab);
+    });
+    contents.on("did-finish-load", () => {
+      if (!loaded) {
+        loaded = true;
+        return;
+      }
+      void this.rebuildDevTools(tab);
+    });
+  }
+
+  /**
+   * Replaces the DevTools front-end with a freshly mounted one.
+   *
+   * The wait is not cosmetic: closing the view does not finish destroying its
+   * renderer synchronously, and mounting a new front-end while the old one is
+   * still attached leaves the new one bound to nothing (measured: empty Elements
+   * tree, stub host). 350ms proved enough on this Electron; the retry covers a
+   * slower machine by checking the panel instead of trusting the clock.
+   */
+  private async rebuildDevTools(tab: TabRecord): Promise<void> {
+    const pending = tab.devtools;
+    if (!pending || this.devtoolsRebuilds.has(tab.id)) return;
+    const { mode, width } = pending;
+    const ticket = { cancelled: false };
+    this.devtoolsRebuilds.set(tab.id, ticket);
+    try {
+      this.discardDevTools(tab);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      // The user may have closed the panel during the wait; their intent wins.
+      if (ticket.cancelled) return;
+      const live = this.findTab(tab.id);
+      if (!live || live.view.webContents.isDestroyed()) return;
+      this.openDevTools(live.id, mode);
+      const rebuilt = live.devtools;
+      if (rebuilt) {
+        rebuilt.width = width;
+        this.placeDevTools(live);
+        this.applyLayout();
+        this.emitState();
+      }
+    } finally {
+      this.devtoolsRebuilds.delete(tab.id);
+    }
+  }
+
+  /**
+   * Tears the front-end down without deciding what happens next.
+   *
+   * Separate from `closeDevTools` because a rebuild must not look like a user
+   * closing the panel — and because a close arriving mid-rebuild has to cancel
+   * it rather than race it.
+   */
+  private discardDevTools(tab: TabRecord): void {
+    if (tab.view.webContents.isDestroyed()) return;
+    tab.view.webContents.closeDevTools();
+    this.dropDevTools(tab);
+    this.applyLayout();
+    this.emitState();
+  }
+
+  /**
+   * Keys the panel owns while focus is inside it.
+   *
+   * The page's handler never sees these then, and without the first half the
+   * panel would be a one-way door from the keyboard.
+   *
+   * F5 / Ctrl+R reload the *inspected page*, which is what Chrome does with the
+   * focus inside DevTools — this is the real behaviour, not a workaround. It is
+   * also the safer choice: a reload of the front-end has to be rebuilt (see
+   * `guardDevToolsFrontend`), and spending that on a keystroke the user meant
+   * for the page would be a regression dressed up as fidelity.
    */
   private watchDevToolsKeys(tab: TabRecord): void {
     const contents = tab.devtools?.view.webContents;
     if (!contents) return;
     contents.on("before-input-event", (event, input) => {
+      // Only the keyDown half of a press counts.
+      //
+      // This is not tidiness: the panel is opened by a keyDown handled on the
+      // page, it takes focus immediately, and the *keyUp of that same press* is
+      // then delivered here. Treating it as a toggle closed the panel in the
+      // same instant it opened — F12 looked broken while the toolbar button,
+      // which has no keystroke to finish, worked. The page-side handler never
+      // shows this symptom because it calls `preventDefault()` on its keyDown,
+      // which stops the matching keyUp from being reported at all.
+      if (input.type !== "keyDown") return;
       const key = input.key.toLowerCase();
       const modifier = process.platform === "darwin" ? input.meta : input.control;
-      if (key === "f12" || (modifier && input.shift && key === "i")) {
+      if (!input.isAutoRepeat && (key === "f12" || (modifier && input.shift && key === "i"))) {
         event.preventDefault();
         this.closeDevTools(tab.id);
+        return;
+      }
+      if (key === "f5" || (modifier && key === "r")) {
+        event.preventDefault();
+        const page = tab.view.webContents;
+        if (!page.isDestroyed()) page.reload();
       }
     });
   }
 
   /**
-   * Brings a reloaded panel's content layer back.
+   * Dismisses the DevTools "now available in Chinese" bar without reloading.
    *
-   * Any reload of the docked DevTools front-end — the language switch does one,
-   * and so does F5 inside the panel — has been observed to come back with its
-   * content tiles never rasterizing: the chrome keeps its frame, the middle of
-   * the panel reads as a black rectangle, and it happens only on a headed,
-   * composited window, which is why the headless checks never saw it. Nudging
-   * the view by a pixel and back forces the compositor to re-allocate the
-   * layer, which restores the content. Nothing else — throttling, occlusion,
-   * invalidation — was sufficient.
-   */
-  private reviveDevToolsCompositing(tab: TabRecord): void {
-    const devtools = tab.devtools;
-    if (!devtools || devtools.mode !== "docked") return;
-    const bounds = devtools.view.getBounds();
-    devtools.view.setBounds({ ...bounds, width: Math.max(1, bounds.width - 1) });
-    devtools.view.setBounds(bounds);
-  }
-
-  /**
-   * Switches the DevTools front-end to the app's language, once, after it has
-   * settled.
+   * Two hard facts drive this, both measured on Electron 44.9 with a self-hosted
+   * DevTools view:
    *
-   * The prompt's choice lives in host preferences Electron never persists, so
-   * it reappears on every open no matter how often it is answered — the app
-   * answers it instead. Switching reloads the front-end; `reviveDevToolsCompositing`
-   * (wired on `did-finish-load`) brings the content layer back afterwards.
+   * 1. The bar cannot be honoured. Clicking "Switch DevTools to Chinese" makes
+   *    the front-end fetch its zh-CN language pack through the host's
+   *    `loadNetworkResource`; that call is unimplemented for a front-end we host
+   *    ourselves, the fetch fails, and the front-end falls back to en-US. The
+   *    button buys a reload and delivers nothing.
+   * 2. Once the front-end has loaded, its `InspectorFrontendHost` is bound to
+   *    the inspected page; after a reload it comes back as a stub whose
+   *    `sendMessageToBackend` does nothing, so Elements/Console/Network keep
+   *    their chrome and stay empty. A rebuild recovers it (see
+   *    `guardDevToolsFrontend`), but there is no reason to pay a rebuild here.
+   *
+   * So the bar gets its other button, "Don't show again", which dismisses the
+   * block without a navigation. The cost is that the DevTools UI stays English.
+   *
+   * The bar shows up some time after `did-finish-load`, hence polling. It is
+   * answered once per panel: the click leaves `disable-locale-info-bar` in the
+   * host's preferences, so it does not come back for the rest of the run.
    */
-  private answerDevToolsLocale(tab: TabRecord): void {
+  private silenceDevToolsLocaleBar(tab: TabRecord): void {
     const contents = tab.devtools?.view.webContents;
     if (!contents) return;
-    // Exactly once per panel: clicking the switch reloads the front-end, and
-    // answering on every load would reload it forever. One click lands the
-    // choice in the host's in-memory preferences, so after that reload the
-    // prompt stays gone for the rest of the run.
     let answered = false;
     contents.on("did-finish-load", () => {
-      // Reloads of the front-end also land here; nudge the layer back to life.
-      // One pass right away is not enough — the recovery only sticks once the
-      // reload's first commit has actually landed, so a few delayed passes
-      // cover the window.
-      for (const delay of [400, 1500, 3000]) {
-        const timer = setTimeout(() => {
-          clearTimeout(timer);
-          this.reviveDevToolsCompositing(tab);
-        }, delay);
-      }
       if (answered) return;
       answered = true;
-      // The prompt renders some time after the load event, so a fixed early
-      // click lands on nothing. Poll slowly, click only when the button is
-      // really there, and stop at the first hit.
       let attempts = 0;
       const poll = () => {
         if (contents.isDestroyed()) return;
         attempts += 1;
-        // The app's language decides the answer, not the system's: the person
-        // running Ensemble already picked a UI language. A zh app gets the
-        // Chinese front-end; anything else just silences the prompt for this
-        // session.
-        const wanted = this.options.locale?.() === "en" ? "Don\u2019t show again" : "Switch DevTools to Chinese";
+        // The click target is a `devtools-button` inside the front-end's shadow
+        // DOM, so a document-level query never finds it. The apostrophe in the
+        // label is U+2019, not ASCII.
         void contents
           .executeJavaScript(
             `(() => {
-              const wanted = ${JSON.stringify(wanted)};
+              const wanted = "Don\u2019t show again";
               const found = { el: null };
               const walk = (root) => {
                 for (const el of root.querySelectorAll('*')) {
@@ -2572,8 +2690,8 @@ export class EmbeddedBrowser {
                 }
               };
               walk(document);
-              if (found.el) { found.el.click(); return wanted; }
-              return null;
+              if (found.el) { found.el.click(); return true; }
+              return false;
             })()`,
             true,
           )
@@ -2687,6 +2805,10 @@ export class EmbeddedBrowser {
 
   closeDevTools(tabId: string): void {
     const tab = this.requireTab(tabId);
+    // A rebuild that is mid-wait would otherwise reopen the panel right after
+    // the user closed it.
+    const inFlight = this.devtoolsRebuilds.get(tabId);
+    if (inFlight) inFlight.cancelled = true;
     tab.view.webContents.closeDevTools();
     this.dropDevTools(tab);
     this.applyLayout();
@@ -2709,6 +2831,14 @@ export class EmbeddedBrowser {
     else this.openDevTools(tab.id, "docked");
   }
 
+  /**
+   * Releases a closed panel's resources.
+   *
+   * Electron does not destroy a `devToolsWebContents` when the DevTools close —
+   * the caller owns it. Without an explicit close every toggle leaks a renderer,
+   * so a session that opens the panel on a dozen pages ends up holding a dozen
+   * idle DevTools processes
+   */
   private dropDevTools(tab: TabRecord): void {
     if (!tab.devtools) return;
     const { view, window: win } = tab.devtools;
@@ -2717,6 +2847,7 @@ export class EmbeddedBrowser {
       win.destroy();
     }
     this.host?.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
     delete tab.devtools;
   }
 

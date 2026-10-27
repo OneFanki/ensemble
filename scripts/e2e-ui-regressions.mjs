@@ -355,10 +355,13 @@ try {
     filtered,
   );
 
-  // --- Identity cards are not vertically compressed ------------------------
-  // As an auto-sized grid inside a scrolling column, rows used to be squeezed
-  // to the leftover height; the card's own `overflow: hidden` then cut off its
-  // action row. Every card must be at least as tall as its content.
+  // --- Identity cards are dense, stable, and not clipped --------------------
+  // Three contracts. Historic: as an auto-sized grid inside a scrolling column,
+  // rows used to be squeezed to the leftover height and the card's own
+  // `overflow: hidden` cut off its action row — content must still fit. New: the
+  // card is exactly three rows (identity, facts, actions), and the action row is
+  // ALWAYS visible — folding it until hover made the card change height as the
+  // pointer crossed the grid, reflowing every card below it.
   const cards = await client.evaluate(`(() =>
     [...document.querySelectorAll('.id-card')].map((card) => {
       const actions = card.querySelector('.card-actions');
@@ -367,17 +370,35 @@ try {
       return {
         clientHeight: card.clientHeight,
         scrollHeight: card.scrollHeight,
+        height: Math.round(cardRect.height),
         actionsInside:
           Boolean(actionRect) && actionRect.bottom <= cardRect.bottom + 1 && actionRect.top >= cardRect.top,
+        actionsVisible: Boolean(actionRect) && actionRect.height > 0,
+        hasPasswordRow: Boolean(card.querySelector('.pw-row')),
       };
     })
   )()`);
   check(
-    "identity cards show their whole content",
+    "identity cards fit their content without clipping",
     Array.isArray(cards) &&
       cards.length > 0 &&
       cards.every((card) => card.scrollHeight <= card.clientHeight + 1 && card.actionsInside),
     cards,
+  );
+  check(
+    "identity card actions are always visible, so hovering never reflows the grid",
+    Array.isArray(cards) && cards.length > 0 && cards.every((card) => card.actionsVisible),
+    cards,
+  );
+  check(
+    "identity cards dropped the password-dots row",
+    Array.isArray(cards) && cards.length > 0 && cards.every((card) => !card.hasPasswordRow),
+    cards,
+  );
+  check(
+    "identity cards stay under 110px so a screen holds many accounts",
+    Array.isArray(cards) && cards.length > 0 && cards.every((card) => card.height <= 110),
+    cards.map((card) => card.height),
   );
 
   await client.evaluate(`(() => {
@@ -2033,6 +2054,94 @@ try {
     accountsFold,
   );
 
+  // --- Linking accounts in bulk -------------------------------------------
+  // The account form's site picker needs one card at a time, and the failure it
+  // guards against is invisible: an account with no site looks like every other
+  // card until you try to launch it. Select several, pick a site, all attached.
+  const bulkLink = await client.evaluate(`(async () => {
+    const snapBefore = await window.ensemble.getWorkspace();
+    const site = snapBefore.sites[0];
+    if (!site) return { error: "no site to link to" };
+    const victims = snapBefore.identities.slice(0, 2);
+    const wanted = victims.map((item) => item.name);
+
+    document.querySelector('.identities [data-batch-select]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const cards = [...document.querySelectorAll('.identities .id-card')];
+    // Pick by name so the two cards really are the workspace's first two: the
+    // grid order follows the group order, not the workspace array.
+    const picks = cards.filter((card) =>
+      wanted.includes(card.querySelector('.name')?.textContent.trim()),
+    );
+    picks.forEach((card) => card.click());
+    await new Promise((r) => setTimeout(r, 300));
+    const selectedCount = document.querySelectorAll('.identities .id-card.picked').length;
+
+    // The link control is a button opening a dialog: a stray click must not be
+    // able to re-home a whole batch, so the site is chosen and confirmed.
+    const beforeDialog = (await window.ensemble.getWorkspace()).identities
+      .filter((item) => wanted.includes(item.name))
+      .map((item) => ({ name: item.name, siteId: item.siteId }));
+
+    const linkButton = document.querySelector('.identities .select-bar [data-batch-link-site]');
+    const buttonFound = Boolean(linkButton);
+    linkButton?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const dialog = [...document.querySelectorAll('[role="dialog"]')].find((el) =>
+      el.querySelector('.link-field'),
+    );
+    const dialogOpen = Boolean(dialog);
+    // Ask for a site explicitly, even if the dialog pre-selected one, so this
+    // also proves the picker inside the dialog works.
+    dialog?.querySelector('.link-field .select-trigger')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    const option = [...document.querySelectorAll('.select-panel .option')].find((el) =>
+      (el.textContent ?? '').includes(site.name),
+    );
+    option?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+    const confirm = dialog?.querySelector('[data-confirm-link-site]');
+    const confirmFound = Boolean(confirm);
+    // Choosing a site in the dialog must not write anything yet: compare against
+    // what the workspace looked like before the dialog opened (these accounts may
+    // legitimately already be on the target site).
+    const afterPick = (await window.ensemble.getWorkspace()).identities
+      .filter((item) => wanted.includes(item.name))
+      .map((item) => ({ name: item.name, siteId: item.siteId }));
+    const untouchedBeforeConfirm =
+      JSON.stringify(afterPick) === JSON.stringify(beforeDialog);
+    confirm?.click();
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const snapAfter = await window.ensemble.getWorkspace();
+    return {
+      siteId: site.id,
+      selectedCount,
+      buttonFound,
+      dialogOpen,
+      confirmFound,
+      untouchedBeforeConfirm,
+      stillSelecting: Boolean(document.querySelector('.identities .select-bar')),
+      linked: snapAfter.identities
+        .filter((item) => wanted.includes(item.name))
+        .map((item) => ({ name: item.name, siteId: item.siteId })),
+    };
+  })()`);
+  check(
+    "selecting accounts and confirming a site in the dialog links them all",
+    bulkLink?.buttonFound === true &&
+      bulkLink?.dialogOpen === true &&
+      bulkLink?.confirmFound === true &&
+      bulkLink?.untouchedBeforeConfirm === true &&
+      bulkLink?.selectedCount === 2 &&
+      bulkLink?.linked?.length === 2 &&
+      bulkLink?.linked?.every((item) => item.siteId === bulkLink?.siteId) &&
+      bulkLink?.stillSelecting === false,
+    bulkLink,
+  );
+
   // --- Views reorder by dragging -------------------------------------------
   // Real HTML5 drags, not direct calls to the move API: the drop handler is what
   // is on trial here. A list that looks reorderable but never persists the order
@@ -2210,7 +2319,8 @@ try {
 
   // --- AI entry in the status bar ------------------------------------------
   // The endpoint is off in this profile's settings, so the entry must still be
-  // there and must say so; the point of it is to be findable on any screen.
+  // there and must say what it is: the button opens AI access, and an unlabelled
+  // robot icon made that a guess.
   const mcpEntry = await client.evaluate(`(() => {
     const button = document.querySelector('.status-mcp');
     if (!button) return null;
@@ -2228,11 +2338,11 @@ try {
     Boolean(mcpEntry?.inFooter && mcpEntry?.hasIcon && mcpEntry?.hasLed),
     mcpEntry,
   );
-  // The status light already says "off"; spelling it out spent footer width on
-  // information the dot carries.
+  // The label is the point: "AI 接入" says what the entry leads to, and it stays
+  // put whether the endpoint is on or off so the footer does not reflow.
   check(
-    "the AI entry shows no text while the endpoint is off",
-    mcpEntry?.text === "",
+    "the AI entry is labelled whether or not the endpoint is running",
+    typeof mcpEntry?.text === "string" && mcpEntry.text.includes("AI"),
     { text: mcpEntry?.text },
   );
   // The footer is one 30px row; an entry that overflows it would clip the version.
@@ -2267,6 +2377,40 @@ try {
     "clicking the AI entry opens the AI access tab with the endpoint block",
     landedOnMcp && settingsState?.hasEndpointBlock === true,
     settingsState,
+  );
+
+  // The connection facts are laid out in the open with one primary copy action.
+  // The token itself must never be printed: "copy config" is how it travels.
+  const connBlock = await client.evaluate(`(() => {
+    const block = document.querySelector('.mcp-endpoint');
+    if (!block) return null;
+    const copy = block.querySelector('[data-copy-config]');
+    const text = block.textContent.replace(/\\s+/g, ' ');
+    const snapshot = document.querySelector('.mcp-endpoint')?.innerHTML ?? '';
+    return {
+      hasCopyConfig: Boolean(copy),
+      inDetails: Boolean(block.closest('details')),
+      readOnlyToken: !/[A-Za-z0-9_-]{24,}/.test(text.replace(/Bullet|•/g, '')),
+      hidesToken: text.includes('•'),
+      urlShown: text.includes('127.0.0.1') || text.includes('http'),
+      // The URL is in the DOM; the token must not be.
+      tokenLeaked: /token["']?\\s*[:=]\\s*["'][A-Za-z0-9_-]{20,}/.test(snapshot),
+    };
+  })()`);
+  check(
+    "the AI access block shows its config in the open, not behind a disclosure",
+    Boolean(connBlock) && connBlock.inDetails === false && connBlock.urlShown === true,
+    connBlock,
+  );
+  check(
+    "the copy-config button is the primary action and sits outside any disclosure",
+    connBlock?.hasCopyConfig === true,
+    connBlock,
+  );
+  check(
+    "the token is masked in the UI and never rendered as plain text",
+    Boolean(connBlock) && connBlock.hidesToken === true && connBlock.tokenLeaked === false,
+    connBlock,
   );
 
   // Settings stays mounted, so a manual tab change must not stick to the page.

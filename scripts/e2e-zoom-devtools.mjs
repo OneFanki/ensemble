@@ -401,6 +401,41 @@ try {
     f12?.openBefore === false && afterF12?.open === true && afterF12?.width !== null,
     { f12, afterF12 },
   );
+
+  // The half of the keystroke that lands after the panel exists.
+  //
+  // A physical press is keyDown + keyUp. The keyDown opens the panel, and the
+  // panel takes focus before the keyUp is delivered — so on a real keyboard that
+  // keyUp reaches the *panel's* before-input-event, not the page's. Sending both
+  // events to the page target (what pressF12 above does) hides this: once the
+  // panel is attached the page stops seeing the keyUp at all, so the test passed
+  // while a real F12 opened and instantly closed the panel. This dispatches the
+  // keyUp where the OS would put it.
+  async function releaseF12IntoDevTools() {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const devtools = list.find((item) => item.url.startsWith("devtools"));
+    if (!devtools) return false;
+    const c = await connect(devtools.webSocketDebuggerUrl);
+    try {
+      await c.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "F12", code: "F12", windowsVirtualKeyCode: 123, nativeVirtualKeyCode: 123,
+      });
+      return true;
+    } finally {
+      c.close();
+    }
+  }
+  const released = await releaseF12IntoDevTools();
+  await new Promise((r) => setTimeout(r, 900));
+  const afterKeyUp = await client.evaluate(
+    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}')?.devtoolsOpen === true)()`,
+  );
+  check(
+    "the keyUp that follows the opening keyDown does not close the panel",
+    released === true && afterKeyUp === true,
+    { released, afterKeyUp },
+  );
+
   await pressF12("a");
   await new Promise((r) => setTimeout(r, 900));
   const f12Closed = await client.evaluate(
@@ -456,13 +491,21 @@ try {
     drag,
   );
 
-  // --- The language prompt answers itself ----------------------------------
-  // The prompt's choice is never persisted (Electron keeps DevTools prefs in
-  // memory only) and clicking "switch" reloads the front-end, so what the app
-  // really owes the user is the switched UI. Assert on that: Chinese tab
-  // titles inside the DevTools front-end, after the answer and its reload.
-  // The prompt itself may legitimately reappear after the reload — the choice
-  // cannot be persisted — so it is not what this check is about.
+  // --- The language bar is dismissed without reloading the panel -----------
+  //
+  // Two facts make this the only correct assertion (both measured on Electron 44.9):
+  //
+  //  - Clicking "Switch DevTools to Chinese" makes the front-end fetch its
+  //    language pack through the host's `loadNetworkResource`, which is not
+  //    implemented for a self-hosted DevTools; the fetch fails and the UI falls
+  //    back to English. The button costs a reload and delivers nothing.
+  //  - Any reload of this front-end is terminal: its `InspectorFrontendHost`
+  //    comes back as a stub whose `sendMessageToBackend` is a no-op, so every
+  //    panel keeps its chrome and stays empty. Rebuilding the view does not
+  //    recover it.
+  //
+  // So what the app owes the user is: the bar goes away, and the Elements panel
+  // still holds the inspected page's DOM afterwards.
   await client.evaluate(`(async () => {
     await window.ensemble.closeEmbeddedDevTools('${opened.a}');
     await new Promise((r) => setTimeout(r, 600));
@@ -475,26 +518,31 @@ try {
     if (!dev) return { error: "no devtools target" };
     const c = await connect(dev.webSocketDebuggerUrl);
     try {
-      await new Promise((r) => setTimeout(r, 6000));
-      return await c.evaluate(`(() => {
-        const texts = [];
-        const walk = (root) => {
-          for (const el of root.querySelectorAll('*')) {
-            if (el.shadowRoot) walk(el.shadowRoot);
-          }
+      await new Promise((r) => setTimeout(r, 7000));
+      return await c.evaluate(`(async () => {
+        const findDeep = (selector) => {
+          const walk = (root) => {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.matches && el.matches(selector)) return el;
+              if (el.shadowRoot) {
+                const hit = walk(el.shadowRoot);
+                if (hit) return hit;
+              }
+            }
+            return null;
+          };
+          return walk(document);
         };
-        walk(document);
-        // Tab titles live in the front-end's own strings; the switched UI says
-        // 元素/控制台 where the unswitched one says Elements/Console.
-        const ui = document.body.textContent || '';
-        for (const el of document.querySelectorAll('*')) {
-          if (el.shadowRoot) texts.push(el.shadowRoot.textContent ?? '');
-        }
-        const all = (ui + texts.join(''));
+        const outline = findDeep('.elements-tree-outline');
+        const bar = findDeep('.infobar');
+        const barText = bar ? (bar.textContent || '') : '';
         return {
-          chinese: all.includes('元素') && (all.includes('控制台') || all.includes('网络')),
-          english: all.includes('Elements') && all.includes('Console'),
-          navLang: navigator.language,
+          barGone: !bar,
+          barText: barText.slice(0, 80),
+          // The tree must hold real nodes: that is the difference between a
+          // connected panel and the empty shell a reload leaves behind.
+          treeNodes: outline ? outline.childElementCount : -1,
+          treeLen: outline ? outline.outerHTML.length : -1,
         };
       })()`);
     } finally {
@@ -502,9 +550,160 @@ try {
     }
   })();
   check(
-    "the DevTools front-end answers the language prompt and switches to Chinese",
-    locale?.chinese === true,
+    "the DevTools language bar is dismissed without reloading the panel",
+    locale?.barGone === true,
     locale,
+  );
+  check(
+    "the Elements panel still holds the inspected page after answering the bar",
+    typeof locale?.treeNodes === "number" && locale.treeNodes > 0 && locale.treeLen > 500,
+    locale,
+  );
+
+  // --- F5 inside the panel reloads the page, not the front-end -------------
+  // The gesture has to keep working (Chrome reloads the inspected page when the
+  // focus is in DevTools), but it must never navigate the front-end itself: any
+  // front-end reload costs every panel its content for good. A marker on the
+  // inspected page distinguishes "nothing happened" from "the page reloaded",
+  // and the tree node count distinguishes "front-end survived" from "it did not".
+  const reloadKey = await (async () => {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const dev = list.find((item) => item.url.startsWith("devtools"));
+    if (!dev) return { error: "no devtools target" };
+    const c = await connect(dev.webSocketDebuggerUrl);
+    try {
+      // Put a marker on the inspected page first.
+      await client.evaluate(`(async () => {
+        const state = await window.ensemble.getEmbeddedState();
+        const tab = state.tabs.find((item) => item.id === '${opened.a}');
+        window.__f5Probe = tab?.url ?? null;
+        return window.__f5Probe;
+      })()`);
+      const before = await c.evaluate(`(() => {
+        const findDeep = (selector) => {
+          const walk = (root) => {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.matches && el.matches(selector)) return el;
+              if (el.shadowRoot) { const hit = walk(el.shadowRoot); if (hit) return hit; }
+            }
+            return null;
+          };
+          return walk(document);
+        };
+        const outline = findDeep('.elements-tree-outline');
+        return { treeNodes: outline ? outline.childElementCount : -1 };
+      })()`);
+      await c.send("Input.dispatchKeyEvent", {
+        type: "keyDown",
+        key: "F5",
+        code: "F5",
+        windowsVirtualKeyCode: 116,
+        nativeVirtualKeyCode: 116,
+      });
+      await c.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: "F5",
+        code: "F5",
+        windowsVirtualKeyCode: 116,
+        nativeVirtualKeyCode: 116,
+      });
+      await new Promise((r) => setTimeout(r, 3500));
+      const after = await c.evaluate(`(() => {
+        const findDeep = (selector) => {
+          const walk = (root) => {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.matches && el.matches(selector)) return el;
+              if (el.shadowRoot) { const hit = walk(el.shadowRoot); if (hit) return hit; }
+            }
+            return null;
+          };
+          return walk(document);
+        };
+        const outline = findDeep('.elements-tree-outline');
+        return { treeNodes: outline ? outline.childElementCount : -1 };
+      })()`);
+      return { before, after };
+    } finally {
+      c.close();
+    }
+  })();
+  check(
+    "F5 pressed inside the panel leaves the front-end alive",
+    typeof reloadKey?.after?.treeNodes === "number" &&
+      reloadKey.after.treeNodes > 0 &&
+      reloadKey.after.treeNodes >= (reloadKey?.before?.treeNodes ?? 1),
+    reloadKey,
+  );
+
+  // --- A front-end reload the panel asks for recovers on its own ----------
+  //
+  // DevTools reloads itself for some settings changes, and used to stay blank
+  // for the rest of the session afterwards: the reloaded front-end gets a stub
+  // `InspectorFrontendHost` whose `sendMessageToBackend` is a no-op. The app now
+  // intercepts that navigation and rebuilds the front-end, so the contract is
+  // "the panel is usable again", not "the panel refuses to reload".
+  //
+  // The probe reloads the front-end the way the settings dialog does and then
+  // checks that the panel is *connected*, not merely present: a rebuilt shell
+  // with an empty Elements tree is the exact failure being guarded against.
+  const recovered = await (async () => {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const dev = list.find((item) => item.url.startsWith("devtools"));
+    if (!dev) return { error: "no devtools target" };
+    const c = await connect(dev.webSocketDebuggerUrl);
+    try {
+      await c.evaluate("setTimeout(() => location.reload(), 10); true").catch(() => true);
+    } finally {
+      c.close();
+    }
+    // The rebuild tears the view down and mounts a new one, so the old target
+    // is gone; poll for a fresh devtools target and judge it.
+    let last = { error: "no devtools target after reload" };
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      const now = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const fresh = now.find((item) => item.url.startsWith("devtools"));
+      if (!fresh || fresh.webSocketDebuggerUrl === dev.webSocketDebuggerUrl) continue;
+      const fc = await connect(fresh.webSocketDebuggerUrl);
+      try {
+        last = await fc.evaluate(`(() => {
+          const findDeep = (selector) => {
+            const walk = (root) => {
+              for (const el of root.querySelectorAll('*')) {
+                if (el.matches && el.matches(selector)) return el;
+                if (el.shadowRoot) { const hit = walk(el.shadowRoot); if (hit) return hit; }
+              }
+              return null;
+            };
+            return walk(document);
+          };
+          const outline = findDeep('.elements-tree-outline');
+          const host = window.InspectorFrontendHost;
+          let send = null;
+          try { send = typeof host?.sendMessageToBackend === 'function' ? host.sendMessageToBackend.toString().replace(/\\s+/g, ' ') : 'missing'; } catch (e) { send = 'error'; }
+          return {
+            treeNodes: outline ? outline.childElementCount : -1,
+            // The stub is the fingerprint of the broken state: a bare
+            // sendMessageToBackend(r){} with no forwarding call inside. A real
+            // binding calls into DevToolsAPI.
+            hostBound: typeof send === 'string' && send.includes('DevToolsAPI'),
+            sendHead: typeof send === 'string' ? send.slice(0, 60) : null,
+          };
+        })()`);
+      } finally {
+        fc.close();
+      }
+      if (last?.treeNodes > 0) break;
+    }
+    const state = await client.evaluate(
+      `(async () => (await window.ensemble.getEmbeddedState()).tabs.find(t => t.id === '${opened.a}')?.devtoolsOpen === true)()`,
+    );
+    return { ...last, stillOpen: state === true };
+  })();
+  check(
+    "a front-end reload is rebuilt into a connected panel",
+    recovered?.treeNodes > 0 && recovered?.hostBound === true && recovered?.stillOpen === true,
+    recovered,
   );
 
 

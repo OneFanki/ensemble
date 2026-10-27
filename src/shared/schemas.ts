@@ -192,6 +192,21 @@ export const settingsPatchSchema = z.object({
   onboardingVersion: z.number().int().min(0).max(999).optional(),
   autoCheckUpdates: z.boolean().optional(),
   dismissedUpdateVersion: z.string().max(32).optional(),
+  proxyMode: z.enum(["system", "off", "manual"]).optional(),
+  /**
+   * Validated when saved, while the user is still looking at the field, rather
+   * than at startup where an unusable value would silently do nothing. A
+   * trailing slash is accepted because that is what people paste.
+   */
+  proxyUrl: z
+    .string()
+    .trim()
+    .max(256)
+    .refine((value) => value === "" || /^(https?|socks[45]?):\/\/[^\s/]+\/?$/i.test(value), {
+      message: "代理地址形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+    })
+    .optional(),
+  proxyBypass: z.string().max(512).optional(),
 });
 
 export const passwordOwnerSchema = z.object({

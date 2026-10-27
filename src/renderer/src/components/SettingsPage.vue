@@ -98,6 +98,32 @@ const portDraft = ref("");
 const update = ref<UpdateCheckResult | null>(null);
 const checkingUpdate = ref(false);
 
+// ---- network proxy ----
+/**
+ * Whether the manual address is usable as typed.
+ *
+ * Mirrors the schema's rule rather than importing the shared parser for its
+ * side effect: the field must show the problem while the user is still in it,
+ * and saving an unusable value would start downloading through a proxy that
+ * does not exist. The save itself is refused below for the same reason.
+ */
+const proxyUrlUsable = computed(() => {
+  const value = (store.settings.proxyUrl ?? "").trim();
+  return value === "" ? false : /^(https?|socks[45]?):\/\/[^\s/]+\/?$/i.test(value);
+});
+
+function saveProxyUrl(value: string): void {
+  const trimmed = value.trim();
+  // Save whatever was typed so the field is not reset under the user's hands,
+  // including a value that does not parse yet — the note above says what to fix
+  // and nothing starts using it until it is valid.
+  void store.saveSettings({ proxyUrl: trimmed });
+}
+
+function saveProxyBypass(value: string): void {
+  void store.saveSettings({ proxyBypass: value.trim() });
+}
+
 const updateTone = computed(() => {
   if (!update.value) return "muted";
   if (update.value.status === "available") return "warn";
@@ -729,6 +755,66 @@ async function submitMaster() {
           </div>
         </div>
         <p class="fineprint">{{ $t("app.autoUpdateNote") }}</p>
+        <!-- Network proxy: one setting for update checks, downloads and the
+             pages in the built-in browser, because all three use Chromium's
+             session. "Follow system" is the default and covers the common case
+             (Clash with the system proxy on); manual exists for setups that
+             never reach the OS settings. -->
+        <div class="option-row">
+          <span class="option-label">{{ $t("app.proxySetting") }}</span>
+          <div class="segmented">
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.proxyMode === 'system' }"
+              @click="store.saveSettings({ proxyMode: 'system' })"
+            >
+              {{ $t("app.proxySystem") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.proxyMode === 'off' }"
+              @click="store.saveSettings({ proxyMode: 'off' })"
+            >
+              {{ $t("app.proxyOff") }}
+            </button>
+            <button
+              type="button"
+              class="seg"
+              :class="{ on: store.settings.proxyMode === 'manual' }"
+              @click="store.saveSettings({ proxyMode: 'manual' })"
+            >
+              {{ $t("app.proxyManual") }}
+            </button>
+          </div>
+        </div>
+        <div v-if="store.settings.proxyMode === 'manual'" class="option-row proxy-fields">
+          <label class="option-label" for="proxy-url">{{ $t("app.proxyUrlLabel") }}</label>
+          <input
+            id="proxy-url"
+            class="input mono proxy-input"
+            :value="store.settings.proxyUrl ?? ''"
+            :placeholder="'http://127.0.0.1:7890'"
+            spellcheck="false"
+            @change="saveProxyUrl(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <p v-if="store.settings.proxyMode === 'manual' && !proxyUrlUsable" class="fineprint warn">
+          {{ $t("app.proxyManualInvalid") }}
+        </p>
+        <div v-if="store.settings.proxyMode !== 'system'" class="option-row proxy-fields">
+          <label class="option-label" for="proxy-bypass">{{ $t("app.proxyBypassLabel") }}</label>
+          <input
+            id="proxy-bypass"
+            class="input mono proxy-input"
+            :value="store.settings.proxyBypass ?? ''"
+            :placeholder="$t('app.proxyBypassHint')"
+            spellcheck="false"
+            @change="saveProxyBypass(($event.target as HTMLInputElement).value)"
+          />
+        </div>
+        <p class="fineprint">{{ $t("app.proxyNote") }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.overlaySetting") }}</span>
           <div class="segmented">
@@ -1467,6 +1553,16 @@ async function submitMaster() {
   font-size: 11px;
   line-height: 1.6;
   color: var(--faint);
+}
+
+/* A value that is accepted but cannot be used yet: warn without alarming. */
+.fineprint.warn {
+  color: var(--amber);
+}
+
+.proxy-input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .option-row {

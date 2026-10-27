@@ -79,7 +79,6 @@ async function openClean(): Promise<void> {
     <div class="brand no-drag" data-tour="brand">
       <Logo :size="22" />
       <span class="name">Ensemble</span>
-      <span class="version mono">{{ store.snapshot?.appVersion ?? "0.1" }}</span>
     </div>
 
     <div class="right no-drag">
@@ -169,16 +168,6 @@ async function openClean(): Promise<void> {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.02em;
-}
-
-.version {
-  font-size: 10px;
-  color: var(--dim);
-  letter-spacing: 0.06em;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 2px 4px;
-  line-height: 1.2;
 }
 
 .menu-item .dot {

@@ -456,7 +456,33 @@ export interface AppSettings {
    * on every launch.
    */
   dismissedUpdateVersion?: string;
+  /**
+   * How the app reaches the network: update checks, update downloads, and the
+   * pages in the built-in browser.
+   *
+   * "system" is the default and means "whatever the OS says", which is what a
+   * real browser does and what a Clash/TUN setup expects — the user turns on a
+   * proxy once, at the system level, and every app that follows it works.
+   * "off" forces a direct connection for users whose system proxy would break
+   * local test addresses. "manual" is for proxies that never reach the OS
+   * settings (a container, a remote proxy, or a rule set the user keeps apart).
+   */
+  proxyMode: ProxyMode;
+  /**
+   * `http://host:port` or `socks5://host:port`; only read when
+   * {@link proxyMode} is "manual".
+   */
+  proxyUrl?: string;
+  /**
+   * Hosts that skip the proxy, comma-separated (Chromium's `proxyBypassRules`
+   * syntax). Localhost is always bypassed: every test environment this app
+   * exists to drive lives there.
+   */
+  proxyBypass?: string;
 }
+
+/** See {@link AppSettings.proxyMode}. */
+export type ProxyMode = "system" | "off" | "manual";
 
 export interface CredentialPresence {
   secure: boolean;
@@ -618,6 +644,9 @@ export type SettingsPatch = Partial<
     | "onboardingVersion"
     | "autoCheckUpdates"
     | "dismissedUpdateVersion"
+    | "proxyMode"
+    | "proxyUrl"
+    | "proxyBypass"
   >
 >;
 

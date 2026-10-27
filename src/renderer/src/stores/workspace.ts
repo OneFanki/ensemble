@@ -1,4 +1,5 @@
 import type { EnsembleApi } from "@shared/ipc";
+import { DEFAULT_SETTINGS } from "@shared/defaults";
 import type { Flow, FlowDraft } from "@shared/flows";
 import { BUILTIN_LAYOUTS, FREE_LAYOUT_ID, findLayout, isFreeLayout } from "@shared/layouts";
 import {
@@ -230,31 +231,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const bookmarks = computed<Bookmark[]>(() => snapshot.value?.bookmarks ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
   const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
-  const settings = computed<AppSettings>(
-    () =>
-      snapshot.value?.settings ?? {
-        theme: "dark",
-        locale: "zh",
-        lastView: "identities",
-        restoreLastView: false,
-        overlayEnabled: true,
-        headlessCheckUa: "desktop",
-        focusLabelEnabled: true,
-        launchIntervalMs: 0,
-        layout: "2x2",
-        launchTarget: "embedded",
-        autoFillOnLaunch: true,
-        autoSubmitLogin: true,
-        browserZoom: 100,
-        searchEngineId: DEFAULT_SEARCH_ENGINE_ID,
-        customSearchEngines: [],
-        newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
-        newTabBookmarks: true,
-        closeToTray: true,
-        onboardingVersion: 0,
-        autoCheckUpdates: true,
-      },
-  );
+  /**
+   * The snapshot's settings, or the shared defaults before it arrives.
+   *
+   * The fallback is `DEFAULT_SETTINGS` rather than a literal copy: every new
+   * setting would otherwise need to be added in two places, and the one that
+   * gets forgotten is this one — which only shows up as a type error, or worse,
+   * as a field that is `undefined` for the first paint.
+   */
+  const settings = computed<AppSettings>(() => snapshot.value?.settings ?? DEFAULT_SETTINGS);
   const instances = computed(() => snapshot.value?.instances ?? []);
   const credentials = computed(() => snapshot.value?.credentials);
 

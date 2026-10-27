@@ -660,6 +660,16 @@ export const messages = {
       autoUpdateSetting: "自动检查更新",
       autoUpdateNote:
         "开启后，启动几秒后会在后台检查一次，之后每 6 小时一次；发现新版本会弹窗，但下载和安装都要你点确认。对某个版本点「稍后」，在下一个版本发布前不会再打扰你。",
+      proxySetting: "网络代理",
+      proxySystem: "跟随系统",
+      proxyOff: "直连",
+      proxyManual: "手动",
+      proxyNote:
+        "「跟随系统」就是普通浏览器的行为：在系统里或 Clash 里打开代理，这里不用再配一遍。下载卡住、进度条不动，通常是系统代理没被应用读到，可改用「手动」填地址，例如 http://127.0.0.1:7890。",
+      proxyUrlLabel: "代理地址",
+      proxyBypassLabel: "跳过代理的主机",
+      proxyBypassHint: "逗号分隔；本地地址始终直连",
+      proxyManualInvalid: "地址形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
 
       // Update dialog
       updateDialogTitle: "发现新版本 {version}",
@@ -1533,6 +1543,16 @@ export const messages = {
       autoUpdateSetting: "Check for updates automatically",
       autoUpdateNote:
         'When on, the app checks in the background a few seconds after launch and then every 6 hours. A new version opens a dialog, but downloading and installing always wait for your click. Choosing "Later" for a version keeps it quiet until the next one is published.',
+      proxySetting: "Network proxy",
+      proxySystem: "Follow system",
+      proxyOff: "Direct",
+      proxyManual: "Manual",
+      proxyNote:
+        'Follow system is what a normal browser does: turn the proxy on at the OS level or in Clash and nothing more is needed here. A download that stalls with a progress bar that never moves usually means the app did not read the system proxy — switch to Manual and enter the address, e.g. http://127.0.0.1:7890.',
+      proxyUrlLabel: "Proxy address",
+      proxyBypassLabel: "Hosts that skip the proxy",
+      proxyBypassHint: "Comma separated; local addresses always connect directly",
+      proxyManualInvalid: "Use a form like http://127.0.0.1:7890 or socks5://127.0.0.1:1080",
 
       // Update dialog
       updateDialogTitle: "Version {version} is available",

@@ -50,10 +50,11 @@ import {
   type FlowStepResult,
   interpolateStep,
 } from "@shared/flows";
-import type { LayoutId, RoleColor, SlotRect } from "@shared/types";
+import type { AppSettings, LayoutId, RoleColor, SlotRect } from "@shared/types";
 import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type WebContents } from "electron";
 import { EmbeddedCdp } from "./cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
+import { applyProxyToSession } from "../proxy";
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -161,6 +162,16 @@ export interface EmbeddedBrowserOptions {
     origin: string;
     path: string;
   }) => void;
+  /**
+   * Proxy settings for the partitions this browser creates.
+   *
+   * Each identity and each clean session has its own partition, and Chromium
+   * keeps proxy rules per partition — so the same settings have to be pushed to
+   * every one of them, and again whenever they change. A page loaded before the
+   * change keeps the proxy it started with; a reload picks up the new one, which
+   * is how a normal browser behaves.
+   */
+  proxy?: () => Pick<AppSettings, "proxyMode" | "proxyUrl" | "proxyBypass">;
 }
 
 /** Scheme + host of a URL, or "" for anything that does not parse. */
@@ -1004,6 +1015,10 @@ export class EmbeddedBrowser {
     // remote pages, so the only bridge is the main process.
     const userAgent = desktopUserAgent(target.getUserAgent());
     if (userAgent && !userAgent.includes("Electron/")) target.setUserAgent(userAgent);
+    // Chromium keeps proxy rules per session, so every identity partition needs
+    // them applied — the default session's rules do not reach these.
+    const proxy = this.options.proxy?.();
+    if (proxy) void applyProxyToSession(target, proxy);
     target.setPermissionRequestHandler((_contents, permission, callback) => {
       // Remote pages get no camera, microphone, geolocation or notifications by
       // default. Anything a test needs must be added here deliberately.

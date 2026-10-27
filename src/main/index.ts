@@ -16,6 +16,7 @@ import { WorkspaceService } from "@core/service";
 import { downloadUpdateAsset } from "@core/update/download";
 import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
 import { parseAccountBundle } from "@shared/accounts-transfer";
+import { DEFAULT_SETTINGS } from "@shared/defaults";
 import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
 import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
 import { localeTag, resolveLocale } from "@shared/locale";
@@ -73,6 +74,7 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  net,
   type OpenDialogOptions,
   type SaveDialogOptions,
   safeStorage,
@@ -81,6 +83,7 @@ import {
   Tray,
 } from "electron";
 import { EmbeddedBrowser } from "./embedded/browser";
+import { applyProxyToDefaultSession } from "./proxy";
 import { LoginCaptureStore } from "./embedded/login-capture";
 import { McpServer } from "./mcp/server";
 
@@ -295,6 +298,10 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       }
     },
     ...(headless ? { headless: true } : {}),
+    // Read lazily: pages are opened long after the browser is constructed, and
+    // the settings may have changed since. Tabs already open keep the proxy they
+    // loaded with until they reload, which is how a browser behaves.
+    proxy: () => settingsCache ?? (service?.settingsSnapshot() ?? DEFAULT_SETTINGS),
     // Dragging a layout picker in the sidebar edits the open container only for
     // hand-made views; saved views persist the choice back to the definition.
     onViewLayoutChange: (viewDefinitionId, layoutId) => {
@@ -1529,7 +1536,12 @@ async function checkForUpdate(): Promise<UpdateCheckResult> {
   // match an asset, verify) runs without publishing anything.
   const endpoint = process.env["ENSEMBLE_UPDATE_API"] ?? LATEST_RELEASE_API;
   try {
-    const response = await fetch(endpoint, {
+    // `net.fetch`, not the global one: both are Chromium's network stack, but
+    // only this one uses `session.defaultSession`, where `applyProxyToDefaultSession`
+    // put the user's proxy. The global fetch runs on a session the app never
+    // configures, so behind Clash the request hung until it timed out and the
+    // download bar never moved.
+    const response = await net.fetch(endpoint, {
       headers: { accept: "application/vnd.github+json", "user-agent": "ensemble-update-check" },
       signal: controller.signal,
     });
@@ -1583,6 +1595,11 @@ async function downloadPendingUpdate(result: UpdateCheckResult): Promise<UpdateC
     let lastEmit = 0;
     await downloadUpdateAsset(asset.url, destination, {
       expectedSha256: asset.sha256,
+      // Same reason as the update check: this fetch has to ride the configured
+      // proxy, and only `net.fetch` uses the session that carries it. The cast
+      // narrows `net.fetch`'s `string | Request` input to the global `fetch`
+      // signature, which the downloader accepts; every call passes a string.
+      fetchImpl: net.fetch as typeof fetch,
       onProgress: (received, total) => {
         // The renderer only needs a few updates per second; emitting per chunk
         // would flood IPC on a fast connection.
@@ -2108,6 +2125,19 @@ function registerIpc(workspace: WorkspaceService): void {
     // The zoom setting reaches open pages only through this call: untouched
     // pages follow it, pages the user zoomed by hand keep their factor.
     if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
+    // Proxy changes apply live: a download already failing behind Clash should
+    // recover when the user fixes the setting, not on the next launch. Only the
+    // default session is touched here; open pages keep the proxy they loaded
+    // with until they reload, which is how a browser behaves.
+    if (
+      parsed.proxyMode !== undefined ||
+      parsed.proxyUrl !== undefined ||
+      parsed.proxyBypass !== undefined
+    ) {
+      void applyProxyToDefaultSession(settings).then((state) => {
+        console.info(`[proxy] ${state.description}`);
+      });
+    }
     broadcastWorkspace();
     return settings;
   });
@@ -2751,6 +2781,10 @@ if (!gotLock) {
     settingsCache = service.settingsSnapshot();
     setCoreLocale(resolveLocale(settingsCache.locale, systemLocaleTag()));
     applyTheme(settingsCache.theme);
+    // Before anything reaches the network — the startup update check included.
+    // Awaited so the proxy is in force for that first request rather than racing
+    // it; `setProxy` only touches in-memory Chromium state, so this is fast.
+    await applyProxyToDefaultSession(settingsCache);
 
     // Follow OS appearance changes while the setting is "system": the renderer
     // gets prefers-color-scheme updates itself, but the native window background

@@ -42,6 +42,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // only a newer version with published notes produces a prompt, and postponing
   // one version silences it until the next.
   autoCheckUpdates: true,
+  // Follow the OS. A browser does, and so does everything else on the machine —
+  // a user who turned on Clash expects the app to be covered by it without
+  // configuring the proxy twice.
+  proxyMode: "system",
+  proxyBypass: "localhost, 127.0.0.1, ::1",
 };
 
 export const ROLE_COLORS = ["amber", "teal", "violet", "rose", "blue", "slate"] as const;

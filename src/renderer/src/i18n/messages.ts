@@ -109,6 +109,7 @@ export const messages = {
       flowRunDone: "流程跑完了，共 {count} 步",
       flowRunFailed: "第 {index} 步失败：{reason}",
       flowRunFailedShort: "流程在第 {index} 步停下",
+      toastRequestFailed: "请求没有完成，请稍后再试",
       flowDeleteConfirm: "删除流程「{name}」？它只是一串步骤，删除不影响站点和账号。",
       flowStepsCount: "{count} 步",
       flowParamsCount: "{count} 参数",
@@ -629,6 +630,7 @@ export const messages = {
       mcpAiOriginRevoke: "撤销这个来源的 AI 操作权限",
       mcpPermissionNote: "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉站点、身份或视图。",
       mcpEndpoint: "客户端连接信息",
+      mcpConnTitle: "客户端连接信息",
       mcpFieldUrl: "地址",
       mcpFieldAuth: "鉴权",
       mcpFieldAuthValue: "请求头 Authorization: Bearer <Token>",
@@ -941,6 +943,7 @@ export const messages = {
       flowRunDone: "Flow finished, {count} steps",
       flowRunFailed: "Step {index} failed: {reason}",
       flowRunFailedShort: "Flow stopped at step {index}",
+      toastRequestFailed: "The request did not complete. Try again.",
       flowDeleteConfirm:
         "Delete the flow 「{name}」? It is only a list of steps; sites and accounts are untouched.",
       flowStepsCount: "{count} steps",
@@ -1498,6 +1501,7 @@ export const messages = {
       mcpPermissionNote:
         "Delete is off by default; once enabled, a single confirm flag lets the AI remove sites, identities or views.",
       mcpEndpoint: "Client connection",
+      mcpConnTitle: "Client connection",
       mcpFieldUrl: "URL",
       mcpFieldAuth: "Auth",
       mcpFieldAuthValue: "Authorization: Bearer <token> header",

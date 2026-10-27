@@ -93,7 +93,6 @@ const transferError = ref<string | null>(null);
 // control kept rendering the old state.
 const { mcp } = storeToRefs(store);
 const portDraft = ref("");
-const showToken = ref(false);
 
 // ---- update check ----
 const update = ref<UpdateCheckResult | null>(null);
@@ -1140,37 +1139,36 @@ async function submitMaster() {
         <p class="fineprint">{{ $t("app.mcpAiOriginsNote") }}</p>
 
         <div v-if="mcp" class="mcp-endpoint">
-          <p class="fineprint">{{ $t("app.mcpEndpoint") }}</p>
-          <div class="copy-row">
-            <code class="mono">{{ mcp.url }}</code>
-            <AppButton @click="copyText(mcp.url)">
+          <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
+          <dl class="conn">
+            <div>
+              <dt>{{ $t("app.mcpFieldUrl") }}</dt>
+              <dd class="mono url-cell">{{ mcp.url }}</dd>
+            </div>
+            <div>
+              <dt>{{ $t("app.mcpFieldAuth") }}</dt>
+              <dd class="mono">{{ $t("app.mcpFieldAuthValue") }}</dd>
+            </div>
+            <div>
+              <dt>{{ $t("app.mcpFieldToken") }}</dt>
+              <dd class="mono token-hidden">{{ "•".repeat(24) }}</dd>
+            </div>
+          </dl>
+          <p class="conn-note">{{ $t("app.mcpTokenHidden") }}</p>
+          <div class="conn-actions">
+            <AppButton variant="primary" data-copy-config @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
+              <Copy :size="11" />
+              {{ $t("app.mcpCopyConfig") }}
+            </AppButton>
+            <AppButton @click="copyText(mcp.url, 'app.toastUrlCopied')">
               <Copy :size="11" />
               {{ $t("app.copyUrl") }}
-            </AppButton>
-          </div>
-          <div class="copy-row">
-            <code class="mono token">{{ showToken ? mcp.token : "•".repeat(28) }}</code>
-            <AppButton @click="showToken = !showToken">
-              {{ showToken ? $t("app.hide") : $t("app.show") }}
-            </AppButton>
-            <AppButton @click="copyText(mcp.token, 'app.toastTokenCopied')">
-              <Copy :size="11" />
-              {{ $t("app.copyToken") }}
             </AppButton>
             <AppButton variant="danger" @click="refreshMcp({ rotateToken: true })">
               {{ $t("app.mcpRotate") }}
             </AppButton>
           </div>
           <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
-
-          <details class="snippet">
-            <summary>{{ $t("app.mcpConfigTitle") }}</summary>
-            <pre class="mono">{{ mcpSnippet }}</pre>
-            <AppButton @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
-              <Bot :size="11" />
-              {{ $t("app.mcpCopyConfig") }}
-            </AppButton>
-          </details>
         </div>
         <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
       </section>
@@ -1843,53 +1841,62 @@ async function submitMaster() {
   gap: 8px;
 }
 
-.copy-row {
+.conn {
+  margin: 2px 0 0;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.copy-row code {
-  flex: 0 1 auto;
-  max-width: 100%;
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  background: var(--bg-elevated);
-  padding: 4px 8px;
+.conn > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.conn dt {
+  flex: 0 0 62px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.conn dd {
+  margin: 0;
   font-size: 10.5px;
   color: var(--text-secondary);
+  user-select: text;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.copy-row code.token {
-  min-width: 200px;
-  letter-spacing: 0.04em;
-}
-
-.snippet {
-  margin-top: 4px;
-}
-
-.snippet summary {
-  font-size: 10.5px;
+/* The token is never rendered in full; this only says "there is one". */
+.conn dd.token-hidden {
+  letter-spacing: 0.08em;
   color: var(--faint);
-  cursor: pointer;
+  user-select: none;
 }
 
-.snippet pre {
-  margin: 7px 0;
+/* The URL is the one value worth reading character by character. */
+.conn dd.url-cell {
+  padding: 1px 6px;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  border-radius: 4px;
   background: var(--bg-elevated);
-  padding: 9px 10px;
-  font-size: 10.5px;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  overflow-x: auto;
-  user-select: text;
+}
+
+.conn-note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .about {

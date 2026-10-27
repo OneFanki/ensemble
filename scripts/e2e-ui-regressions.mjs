@@ -2413,6 +2413,28 @@ try {
     connBlock,
   );
 
+  // A missing message renders as the key itself, which is how 1.1.0 shipped a
+  // button labelled `app.copyToken` and a summary labelled `app.mcpConfigTitle`.
+  // The unit guard covers every literal key in the source; this one covers what
+  // actually reached the screen.
+  const rawKeys = await client.evaluate(`(() => {
+    const text = document.body.textContent || '';
+    return {
+      keys: (text.match(/\\bapp\\.[a-zA-Z][a-zA-Z0-9_.]{2,}/g) || []),
+      hasDisclosure: Boolean(document.querySelector('.mcp-endpoint details')),
+    };
+  })()`);
+  check(
+    "the settings page renders no raw i18n keys",
+    Array.isArray(rawKeys?.keys) && rawKeys.keys.length === 0,
+    rawKeys,
+  );
+  check(
+    "the AI access block has no leftover collapsible section",
+    rawKeys?.hasDisclosure === false,
+    rawKeys,
+  );
+
   // Settings stays mounted, so a manual tab change must not stick to the page.
   await client.evaluate(
     `(() => { document.querySelector('[role="tab"]:nth-child(1)')?.click(); return true; })()`,

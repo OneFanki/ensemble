@@ -22,10 +22,25 @@
 
 ### 中文
 
-- **修复开了代理却下载不动更新**：以前更新检查和下载不走系统代理，开了 Clash 之类的工具只会看到进度条一动不动；现在默认跟随系统代理，也可以手动填地址
-- AI 客户端只拿到 MCP 配置也能知道这个应用是干什么的：连接时会收到一段简短说明，说明站点、身份、视图这套模型和几个容易踩的规则
-- 运行栏里「AI 操作次数」徽标悬停时的说明改成应用自己画的提示：立刻出现、跟着主题走，不再是一秒后才冒出来的系统原生提示框
-- 标题栏左上角不再显示版本号，右下角状态栏那一处保留
+<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+
+#### 完整变更
+
+### English
+
+<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+
+#### Full changes
+
+
+## [1.2.0] - 2026-10-27
+
+### 中文
+
+- **开了代理终于能正常下载更新**：以前更新检查和下载不跟随系统代理，开着 Clash 之类的工具只会看到进度条一动不动；现在默认跟随系统代理，读不到时也可以在设置页手填地址
+- **AI 客户端连上就知道这是什么**：只给一个 MCP 端点，它也能读到站点 / 身份 / 视图这套模型和几个容易踩的规则，不用你再解释一遍
+- **新增「网络代理」设置**：跟随系统、直连、手动三档，内置浏览器和自动更新共用同一套规则，本地地址始终直连
+- 运行栏「AI 操作次数」徽标的说明改成应用内即时提示，不再是等一秒才冒出来的系统原生提示框
 
 #### 完整变更
 
@@ -41,7 +56,7 @@
 - `create_identity` 与 `create_identities` 的字段定义合并成一处，`tabId` 的说明也统一，避免同一句话在列表里重复十遍
 - 新增 `scripts/measure-mcp-context.mjs`：量 `initialize` 与 `tools/list` 的实际字节数与字符数，用于以后判断注入量是否又长回去了
 - 新增契约测试：`instructions` 必须提到 Ensemble、站点/身份/视图、来源规则，且长度必须小于 2000 字符（它会加到每个会话里）；别名必须可调用但不出现在列表里
-- 标题栏去掉重复的版本号；渲染层的设置兜底值改为直接复用 `DEFAULT_SETTINGS`，避免新增字段时漏掉一处
+- 标题栏左上角不再重复显示版本号，右下角状态栏那一处保留；渲染层的设置兜底值改为直接复用 `DEFAULT_SETTINGS`，避免新增字段时漏掉一处
 - **AI 次数徽标的提示由原生 `title` 改为自绘**：原生提示不能改样式、要等一秒、还会以系统窗口的形式盖在应用之上；自绘的提示挂在徽标内部向左展开，始终留在停靠栏内。原因是停靠栏和各视图块都裁切溢出，而停在舞台上的被测页面是原生视图、永远画在应用 HTML 之上，所以提示不能往右或往舞台方向溢出
 - 提示文案为「本次会话在本站的操作次数」：数字已经在徽标上，再抄一遍既啰嗦又会让计数涨到三位数后撑破停靠栏；含中文的句子改用正文字体栈，不走等宽（等宽栈会让中文回退成宋体）
 - 行上的原生 URL 提示移到标题文字上：徽标在行尾，若整行仍挂着原生 `title`，悬停徽标会同时冒出系统提示与自绘提示两种
@@ -50,10 +65,10 @@
 
 ### English
 
-- **Fixed updates that never downloaded behind a proxy**: the update check and download did not follow the system proxy, so with Clash running the progress bar simply stayed at zero. They now follow the system proxy by default, with a manual address available
-- An AI client given only the MCP config now learns what this app is: connecting returns a short description of the site / identity / view model and the few rules that are easy to get wrong
-- The hover hint on the dock's AI action count is now drawn by the app: it appears at once and follows the theme, instead of a native OS tooltip that waits a second
-- The title bar no longer repeats the version number; the one in the status bar stays
+- **Updates download again when a proxy is running**: the update check and download ignored the system proxy, so with Clash on the progress bar simply never moved. They now follow the system proxy by default, with a manual address for setups it does not reach
+- **An AI client knows what this is from the endpoint alone**: given only the MCP config it now reads the site / identity / view model and the rules that are easy to get wrong, instead of needing you to explain them
+- **New "Network proxy" setting**: follow system, direct, or manual — one rule set for both the built-in browser and automatic updates, with local addresses always connected directly
+- The hover hint on the dock's AI action count is now drawn in-app and appears at once, instead of a native OS tooltip that waits a second
 
 #### Full changes
 

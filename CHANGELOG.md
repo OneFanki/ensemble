@@ -38,7 +38,8 @@
 ### 中文
 
 - **修复切走的页面截图要等 4 秒**：AI 操作的那页被你切到后台、或窗口最小化时，截图会先等满 4 秒超时才回退；现在直接走渲染器，同样的图 40ms 出来
-- README 新增「AI 操作时，你可以继续做你的事」一节：页面没有独立窗口可弹、切走不打断 AI、AI 不抢前台、测试全静默
+- 运行栏里「AI 操作次数」徽标的说明改成应用自己画的提示：悬停即可看到完整说法，跟着主题走，不再是一秒后才冒出来的系统原生提示框
+- README 新增「AI 操作时，你可以继续做你的事」一节：页面没有独立窗口可弹、切走不打断 AI、AI 不抢前台、测试全静默、AI 干了多少一眼能看到
 
 #### 完整变更
 
@@ -47,12 +48,16 @@
 - `CdpClient.screenshot` 新增 `preferRenderer` 参数，`EmbeddedBrowser.screenshot` 依据 `viewIsOnScreen` 传入；`capturePage` 回退保留，覆盖无法预判的状态
 - `tests/embedded.test.ts` 新增 6 条覆盖判定本身（在台上、已停放、最小化、隐藏、零尺寸、恰好贴边），已用「恒为真」验证会失败
 - `e2e-embedded` 新增一条：后台页面截图必须在 1.5s 内返回且有内容。注意无头模式下所有页面都离台，这条在无头里没有鉴别力，真正守住逻辑的是上面的单元测试
-- README 中英双版新增「AI 操作时，你可以继续做你的事」：说明页面没有独立窗口、切走不打断、AI 不抢前台、20 套测试全部离屏运行
+- **AI 次数徽标的提示由原生 `title` 改为自绘**：原生提示不能改样式、要等一秒、还会以系统窗口的形式盖在应用之上；自绘的提示挂在徽标内部向左展开，始终留在停靠栏内。原因是停靠栏和各视图块都裁切溢出，而停在舞台上的被测页面是原生视图、永远画在应用 HTML 之上，所以提示不能往右或往舞台方向溢出
+- `e2e-ai-policy` 的徽标断言重写：除了次数正确，还断言徽标没有原生 `title`、悬停后出现自绘提示、移开后消失，并把停靠栏拖到最窄（240px）后量出提示相对每一层裁切祖先的位置，要求完全在内。已把提示改成向右展开验证会失败（`.dock` 等四层都报出界），确认这条断言有鉴别力
+- 提示文案收敛为「本次会话 AI 操作 {count} 次」：徽标已经在那一行里，站点由所在行给出，不必在提示里重复一遍；界面字体改用正文字体栈，含中文的句子不走等宽（等宽栈会让中文回退成宋体）
+- README 中英双版新增「AI 操作时，你可以继续做你的事」：说明页面没有独立窗口、切走不打断、AI 不抢前台、20 套测试全部离屏运行；并写明 AI 操作次数徽标按**来源**计数，同一站点的两个标签显示同一个数字是设计如此
 
 ### English
 
 - **Fixed screenshots of a switched-away page taking 4 seconds**: when the page the AI was driving moved to the background or the window was minimised, a screenshot waited out a full 4s timeout before falling back; it now reads from the renderer directly and returns the same image in ~40ms
-- README gains "The AI works; you keep working": pages have no separate window to pop up, switching away does not interrupt the AI, the AI never raises your window, and the test suites run silently
+- The tooltip on the dock's AI action count is now drawn by the app: it appears at once, follows the theme, and no longer waits a second for the OS to show its own hint
+- README gains "The AI works; you keep working": pages have no separate window to pop up, switching away does not interrupt the AI, the AI never raises your window, the test suites run silently, and the AI's work is visible at a glance
 
 #### Full changes
 
@@ -61,7 +66,9 @@
 - `CdpClient.screenshot` gains a `preferRenderer` flag that `EmbeddedBrowser.screenshot` sets from `viewIsOnScreen`; the `capturePage` fallback stays for states this cannot predict
 - `tests/embedded.test.ts` gains 6 cases covering the decision itself (on stage, parked, minimised, hidden, zero-sized, exactly at the edge), verified to fail when the predicate is forced to true
 - `e2e-embedded` gains one check: a backgrounded page must screenshot within 1.5s with real content. Note it has no discriminating power headless — every page is parked there — so the unit tests are what actually pin the logic
-- README (both languages) gains "The AI works; you keep working": no separate window, switching away is safe, the AI never steals focus, and all 20 test suites run off-screen
+- **The AI-count tooltip is drawn by the app instead of a native `title`**: a native hint cannot be styled, waits a second, and paints as an OS window above the app; the drawn one sits inside the badge and opens leftwards, staying within the dock. It has to: the dock and every view block clip their overflow, and the pages parked on the stage are native views that always paint above app HTML, so the hint cannot spill rightwards or towards the stage
+- `e2e-ai-policy`'s badge check is rewritten: besides the count, it asserts there is no native `title`, that hovering opens a drawn hint and leaving closes it, and — after dragging the dock to its narrowest (240px) — that the hint sits inside every clipping ancestor. Verified to fail when the hint is flipped to open rightwards (`.dock` and three other ancestors reported it out of bounds)
+- README (both languages) gains "The AI works; you keep working": no separate window, switching away is safe, the AI never steals focus, all 20 test suites run off-screen, and the AI-count badge is documented as counting **per origin** — two tabs of the same site showing one number is by design
 
 
 ## [1.1.2] - 2026-10-27

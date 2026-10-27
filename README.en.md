@@ -71,6 +71,11 @@ display and run there, leaving the desktop quiet. Your own automation can do the
 ENSEMBLE_HEADLESS=1
 ```
 
+**You can see how much the AI has done.** Each site's row in the run dock carries a small badge with the
+number of AI operations on that site this session; hover it for the full sentence. The count is per
+**origin**, not per tab — permission is granted per origin, so two tabs of one site legitimately show
+the same number rather than double-counting.
+
 Only when you need "it behaves the same in a real person's environment" do you switch to an external
 real browser — a separate path, triggered explicitly.
 

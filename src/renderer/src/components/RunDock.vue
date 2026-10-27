@@ -147,6 +147,35 @@ function aiCountOf(root: EmbeddedTab): number {
   }
 }
 
+/**
+ * The explanation for the AI-count badge, drawn on hover.
+ *
+ * A native `title` cannot be styled, waits a second before opening, and renders
+ * as browser chrome on top of the app. Drawing it needs care in one place: the
+ * panel clips its own overflow and each view block clips too, while the pages on
+ * the stage are native views that always paint over app HTML — so the hint has
+ * to stay inside the dock, and it opens leftwards for that reason.
+ *
+ * One line, no wrapping: a wrapped hint is taller than the row it belongs to and
+ * gets cut off vertically by the view block instead. That makes the width budget
+ * real — it must fit in the space between the badge and the dock's inner edge,
+ * in both languages — and `e2e-ai-policy` measures exactly that.
+ *
+ * Held in state rather than driven by `:hover` so a test can open it with a
+ * synthetic mouse event.
+ */
+const aiTip = ref<string | null>(null);
+
+function showAiTip(root: EmbeddedTab): void {
+  // Keyed by row, not by count: two rows of the same site share a number, and
+  // matching on it would open the hint on both of them at once.
+  aiTip.value = root.id;
+}
+
+function hideAiTip(): void {
+  aiTip.value = null;
+}
+
 function onDragStart(root: EmbeddedTab, event: DragEvent): void {
   draggedTabId.value = root.id;
   // Tells the browser page a drag is in flight, so it can park its native pages
@@ -583,7 +612,6 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 role="button"
                 tabindex="0"
                 :data-tab-id="activePageOf(root).id"
-                :title="activePageOf(root).url"
                 @dragstart="onDragStart(root, $event)"
                 @dragend="onDragEnd"
                 @dragover.stop="onRowDragOver(root, $event)"
@@ -599,17 +627,25 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 <!-- Same mark as the page tabs on the stage: a row is a tab,
                      and a tab starts with its site's icon. -->
                 <TabIcon :src="faviconOf(root)" :size="12" />
-                <span class="tab-label">{{ titleOf(root) }}</span>
+                <!-- The full URL lives on the label rather than the row: the
+                     badge at the row's end answers to its own drawn hint, and a
+                     native title on an ancestor would pop up over it anyway. -->
+                <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
                 <!-- How many AI operations this site has seen in this session.
                      A count per origin, not per page: the permission is granted
-                     per origin, so the origin is the honest unit. -->
+                     per origin, so the origin is the honest unit — two tabs of
+                     the same site legitimately show the same number. -->
                 <span
                   v-if="aiCountOf(root)"
                   class="ai-badge mono"
-                  :title="t('app.aiActionCount', { count: aiCountOf(root) })"
+                  @mouseenter="showAiTip(root)"
+                  @mouseleave="hideAiTip"
                 >
                   {{ aiCountOf(root) }}
+                  <span v-if="aiTip === root.id" class="ai-tip" role="tooltip">
+                    {{ t("app.aiActionCount", { count: aiCountOf(root) }) }}
+                  </span>
                 </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
@@ -703,7 +739,6 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 role="button"
                 tabindex="0"
                 :data-tab-id="activePageOf(root).id"
-                :title="activePageOf(root).url"
                 @dragstart="onDragStart(root, $event)"
                 @dragend="onDragEnd"
                 @dragover.stop="onRowDragOver(root, $event)"
@@ -717,17 +752,22 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                   :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
                 ></span>
                 <TabIcon :src="faviconOf(root)" :size="12" />
-                <span class="tab-label">{{ titleOf(root) }}</span>
+                <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
                 <!-- How many AI operations this site has seen in this session.
                      A count per origin, not per page: the permission is granted
-                     per origin, so the origin is the honest unit. -->
+                     per origin, so the origin is the honest unit — two tabs of
+                     the same site legitimately show the same number. -->
                 <span
                   v-if="aiCountOf(root)"
                   class="ai-badge mono"
-                  :title="t('app.aiActionCount', { count: aiCountOf(root) })"
+                  @mouseenter="showAiTip(root)"
+                  @mouseleave="hideAiTip"
                 >
                   {{ aiCountOf(root) }}
+                  <span v-if="aiTip === root.id" class="ai-tip" role="tooltip">
+                    {{ t("app.aiActionCount", { count: aiCountOf(root) }) }}
+                  </span>
                 </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
                   {{ pagesOf(root).length }}
@@ -1365,11 +1405,43 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
    place in the dock that reports what the AI did. */
 .ai-badge {
   flex: none;
+  position: relative;
   font-size: 8.5px;
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--line) 55%, var(--accent));
   border-radius: 3px;
   padding: 0 3px;
+  cursor: help;
+}
+
+/*
+ * Tooltip for the AI action count.
+ *
+ * Drawn, not a native `title`: native hints cannot be styled and paint as
+ * browser chrome over the app. It has to stay inside the dock — the panel clips
+ * its overflow, and the pages on the stage are native views that always paint
+ * over app HTML — so it opens leftwards from the badge, which is the one
+ * direction with room to spare at the end of a row.
+ */
+.ai-tip {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-secondary);
+  /* The badge is mono because it holds a number; this sentence is not, and the
+     mono stack would fall back to a serif for the Chinese characters. */
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  box-shadow: var(--shadow-menu);
+  pointer-events: none;
+  z-index: 60;
 }
 
 .row-close {

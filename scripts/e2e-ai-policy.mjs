@@ -436,19 +436,122 @@ try {
   );
 
   // --- The dock reports the count, so the user sees it without the log ---
+  //
+  // Two claims, not one: the number is there, and its explanation is drawn by
+  // the app rather than being a native `title`. The second claim has a hard
+  // constraint behind it — the dock and each view block clip their overflow,
+  // while native page views paint over everything on the stage — so the hint
+  // must stay on one line *inside the dock*, at its narrowest, in both
+  // languages. A translation that outgrows the panel would silently lose its
+  // beginning, which is exactly the sort of bug a "the tooltip renders" check
+  // would wave through.
+  const messageSource = readFileSync(
+    resolve("src/renderer/src/i18n/messages.ts"),
+    "utf8",
+  );
+  const englishHint = [...messageSource.matchAll(/aiActionCount: "([^"]+)"/g)]
+    .map((match) => match[1])
+    .pop();
   const badge = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const el = document.querySelector('.dock .ai-badge');
-      if (el) return { found: true, text: el.textContent.trim(), title: el.getAttribute('title') };
-      await wait(300);
+    let el = null;
+    for (let attempt = 0; attempt < 8 && !el; attempt += 1) {
+      el = document.querySelector('.dock .ai-badge');
+      if (!el) await wait(300);
     }
-    return { found: false };
+    if (!el) return { found: false };
+
+    const number = el.textContent.trim();
+
+    // Worst case first: drag the dock to its minimum width.
+    const handle = document.querySelector('.dock-resize');
+    if (handle) {
+      const grip = handle.getBoundingClientRect();
+      const at = { bubbles: true, pointerId: 1, isPrimary: true };
+      handle.dispatchEvent(new PointerEvent('pointerdown', { ...at, clientX: grip.left }));
+      window.dispatchEvent(new PointerEvent('pointermove', { ...at, clientX: grip.left + 400 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { ...at, clientX: grip.left + 400 }));
+      await wait(400);
+    }
+
+    el.dispatchEvent(new MouseEvent('mouseenter'));
+    await wait(150);
+    const tip = el.querySelector('.ai-tip');
+    const tipBox = tip?.getBoundingClientRect();
+    const box = el.getBoundingClientRect();
+
+    // Every ancestor that clips would cut a hint anchored inside the panel.
+    const clippedBy = [];
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+      const r = node.getBoundingClientRect();
+      const inside = Boolean(tipBox)
+        && tipBox.left >= r.left - 0.5 && tipBox.right <= r.right + 0.5
+        && tipBox.top >= r.top - 0.5 && tipBox.bottom <= r.bottom + 0.5;
+      if (!inside) clippedBy.push(node.className || node.tagName);
+    }
+
+    // The other language, measured on the same element so the font, padding and
+    // border are exactly what ships: swap the text, read the width, put it back.
+    const shown = tip?.textContent ?? '';
+    let otherWidth = 0;
+    if (tip) {
+      tip.textContent = ${JSON.stringify(englishHint ?? "")}.replace('{count}', number);
+      otherWidth = Math.round(tip.getBoundingClientRect().width);
+      tip.textContent = shown;
+    }
+
+    const rect = {
+      number,
+      nativeTitle: el.getAttribute('title'),
+      hasTip: Boolean(tip),
+      tipText: tip?.textContent.trim() ?? null,
+      dockWidth: Math.round(document.querySelector('.dock')?.getBoundingClientRect().width ?? 0),
+      tipWidth: Math.round(tipBox?.width ?? 0),
+      otherLanguageWidth: otherWidth,
+      roomToTheLeft: Math.round(box.left - (document.querySelector('.dock')?.getBoundingClientRect().left ?? 0)),
+      clippedBy,
+    };
+
+    el.dispatchEvent(new MouseEvent('mouseleave'));
+    await wait(200);
+    return { found: true, ...rect, closedOnLeave: !el.querySelector('.ai-tip') };
   })()`);
   check(
     "the dock shows how many AI actions this site has seen",
-    badge?.found === true && Number(badge?.text) >= 3,
-    badge,
+    badge?.found === true && Number.parseInt(badge?.number ?? "", 10) >= 3,
+    { found: badge?.found, number: badge?.number },
+  );
+  check(
+    "the count explains itself with a drawn tooltip, not a native title",
+    badge?.nativeTitle === null && badge?.hasTip === true
+      && Boolean(badge?.tipText) && badge?.closedOnLeave === true,
+    {
+      nativeTitle: badge?.nativeTitle,
+      hasTip: badge?.hasTip,
+      tipText: badge?.tipText,
+      closedOnLeave: badge?.closedOnLeave,
+    },
+  );
+  // The hint is anchored inside a scrolling, clipping panel, so "it renders" is
+  // only half the claim: at the dock's narrowest it must still fit, the whole
+  // panel must have it, and the longer language must fit too. A tooltip cut off
+  // at either end is not a tooltip — it is a truncated sentence the user cannot
+  // read.
+  check(
+    "the tooltip fits inside the dock even at its narrowest, in both languages",
+    badge?.dockWidth === 240
+      && Array.isArray(badge?.clippedBy) && badge.clippedBy.length === 0
+      && badge.tipWidth > 0 && badge.tipWidth <= badge.roomToTheLeft
+      && badge.otherLanguageWidth > 0 && badge.otherLanguageWidth <= badge.roomToTheLeft,
+    {
+      dockWidth: badge?.dockWidth,
+      tipWidth: badge?.tipWidth,
+      otherLanguageWidth: badge?.otherLanguageWidth,
+      roomToTheLeft: badge?.roomToTheLeft,
+      clippedBy: badge?.clippedBy,
+    },
   );
 
   client?.close();

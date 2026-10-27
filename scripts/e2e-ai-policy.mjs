@@ -523,6 +523,17 @@ try {
     badge?.found === true && Number.parseInt(badge?.number ?? "", 10) >= 3,
     { found: badge?.found, number: badge?.number },
   );
+  // The badge and the audit log must agree. This is the check that answers the
+  // question the badge exists for — "is this number real?" — and it is also what
+  // proves the count is per origin rather than per tool call or per tab: every
+  // page-targeting tool that names this origin is in the log, and refusals count
+  // too, so the two totals have to match exactly.
+  const loggedForOrigin = audit.filter((line) => line.origin === ORIGIN).length;
+  check(
+    "the badge equals the number of audited actions on that origin",
+    Number.parseInt(badge?.number ?? "", 10) === loggedForOrigin,
+    { badge: badge?.number, loggedForOrigin },
+  );
   check(
     "the count explains itself with a drawn tooltip, not a native title",
     badge?.nativeTitle === null && badge?.hasTip === true

@@ -205,6 +205,15 @@ export class EmbeddedBrowser {
   private stage: StageRect | null = null;
   /** Last stage size, kept so off-screen pages keep a realistic viewport. */
   private lastStage: StageRect | null = null;
+  /**
+   * Last window content size that was actually readable.
+   *
+   * Parking coordinates must clear the *window* edge, never the stage edge, and
+   * the window can be briefly unmeasurable (hidden to the tray). Keeping the
+   * last good value is what lets `hostContentSize` honour that invariant instead
+   * of falling back to a number that puts pages on top of the dock.
+   */
+  private lastContentSize: { width: number; height: number } | null = null;
   private pendingState = false;
   private viewSeq = 0;
   /**
@@ -1621,20 +1630,32 @@ export class EmbeddedBrowser {
     }
   }
 
-  /** Size of the window content area, which is what child view bounds use. */
+  /**
+   * Size of the window content area, which is what child view bounds use.
+   *
+   * The fallback must never be the stage: parking past `stage.width` puts a
+   * page's left edge exactly where the dock starts, so the page paints over the
+   * dock instead of off-screen. That is not theoretical — with the window hidden
+   * to the tray, `getContentBounds()` is not always usable, the fallback kicked
+   * in, and pages were parked at `x = stage.width` (1222 with the dock
+   * collapsed). Reopening the window showed a ~98px band of the parked page
+   * along the right edge, which read as page content spilling over the dock.
+   * Remembering the last real window size keeps the invariant the parking
+   * coordinates depend on.
+   */
   private hostContentSize(): { width: number; height: number } {
     const host = this.host;
     if (host && !host.isDestroyed()) {
       const bounds = host.getContentBounds();
       if (bounds.width > 0 && bounds.height > 0) {
-        return { width: bounds.width, height: bounds.height };
+        this.lastContentSize = { width: bounds.width, height: bounds.height };
+        return this.lastContentSize;
       }
     }
-    const stage = this.stage ?? this.lastStage;
-    return {
-      width: Math.max(1, Math.round(stage?.width ?? 1280)),
-      height: Math.max(1, Math.round(stage?.height ?? 800)),
-    };
+    if (this.lastContentSize) return this.lastContentSize;
+    // Nothing has been measured yet (no window, no prior layout). A deliberately
+    // generous default keeps a parked view off-screen even in that case.
+    return { width: 1920, height: 1080 };
   }
 
   private emitState(): void {

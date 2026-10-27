@@ -1592,6 +1592,58 @@ try {
     menu,
   );
 
+  // A frozen frame is a picture placed at the rect the main process reported
+  // when it captured, so it must never paint outside the stage. The reported
+  // symptom was a band of the page spilling over the collapsed run dock: the
+  // frame was captured while the stage was wider, the stage then got narrower,
+  // and the picture kept its old — wider — rect (it also uses `object-fit:
+  // fill`, so the spill looked magnified instead of merely clipped).
+  //
+  // Resizing the dock while the menu is open reproduces exactly that: collapse
+  // widens the stage by 246px, expanding narrows it again by the same amount.
+  const spill = await client.evaluate(`(async () => {
+    const read = () => {
+      const stage = document.querySelector('.stage');
+      if (!stage) return null;
+      const stageBox = stage.getBoundingClientRect();
+      const style = getComputedStyle(stage);
+      const frames = [...document.querySelectorAll('.stage .frozen')];
+      return {
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        frozen: frames.length,
+        stageWidth: Math.round(stageBox.width),
+        spilled: frames
+          .map((img) => img.getBoundingClientRect())
+          .filter((box) => box.right > stageBox.right + 1 || box.bottom > stageBox.bottom + 1).length,
+      };
+    };
+    const before = read();
+    const collapse = document.querySelector('.collapse-btn');
+    collapse?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const afterCollapse = read();
+    const expand = document.querySelector('.expand');
+    expand?.click();
+    await new Promise((r) => setTimeout(r, 900));
+    const afterExpand = read();
+    return { before, afterCollapse, afterExpand };
+  })()`);
+  check(
+    "the stage clips its children so a frozen frame cannot spill over the dock",
+    spill?.before?.overflowX === "hidden" &&
+      spill?.before?.overflowY === "hidden" &&
+      spill?.before?.spilled === 0 &&
+      spill?.afterCollapse?.spilled === 0 &&
+      spill?.afterExpand?.spilled === 0,
+    spill,
+  );
+  check(
+    "a frozen frame follows a dock resize instead of keeping its old rect",
+    spill?.afterExpand?.frozen === 0 || spill?.afterExpand?.stageWidth === spill?.before?.stageWidth,
+    spill,
+  );
+
   const duplicated = await client.evaluate(`(async () => {
     const before = await window.ensemble.getEmbeddedState();
     // The group key is the instance id of the page in the cell, not the slot's

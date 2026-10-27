@@ -825,6 +825,12 @@ watch(
       store.draggingTabId,
       store.stageMenuOpen,
       suggestionsOpen.value && siteSuggestions.value.length > 0,
+      // The stage size participates because a frozen frame is a picture placed
+      // at the rect the main process reported when it captured. Collapsing the
+      // run dock mid-overlay shrinks the stage by 46px; without re-capturing,
+      // the picture keeps its old — wider — rect and spills past the stage edge.
+      stageBox.value.width,
+      stageBox.value.height,
     ] as const,
   syncStageCover,
 );
@@ -1697,6 +1703,18 @@ function fillMessage(reason?: string): string {
   position: relative;
   flex: 1;
   min-height: 0;
+  /*
+   * Clip everything to the stage.
+   *
+   * The frozen snapshot that stands in for a page while a menu is open is an
+   * absolutely positioned <img> sized from the rect the main process reported
+   * *at capture time*. If the stage shrinks afterwards — collapsing the run dock
+   * is a 46px change — that rect is wider than the stage, and because the image
+   * uses `object-fit: fill` it does not just overflow: it is stretched, so the
+   * spill reads as a magnified band of the page sitting over the dock. Clipping
+   * here bounds every such child at once instead of trusting each one's rect.
+   */
+  overflow: hidden;
   background: var(--bg);
 }
 

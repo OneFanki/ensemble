@@ -18,6 +18,36 @@
 2. **`#### 完整变更`**（可选）：详细的逐条变更，给 Release 页面和需要追溯的人看。
    更新弹窗会在这一行截断，永远不会显示它。
 
+## [1.1.1] - 2026-10-27
+
+### 中文
+
+- **修复 AI 接入设置页显示英文键名**：「复制配置」按钮和配置区标题曾直接显示成 `app.copyToken`、`app.mcpConfigTitle`，现在都是正常文案
+- **修复 AI 接入配置项被折叠**：客户端连接信息完整展示（地址、鉴权、Token 状态），不需要点开；Token 仍然只显示掩码，「复制配置」按钮一次带走全部内容
+- **修复流程页运行失败无提示**：请求异常时弹出的是一串英文键名，现在是正常文案
+- 新增文案护栏：代码里引用的每条文案 key 必须真实存在，缺一条测试直接失败（这类问题此前整套测试都发现不了）
+
+#### 完整变更
+
+- **AI 接入面板**：按钮上的 `app.copyToken` 与展开标题 `app.mcpConfigTitle` 是缺失文案被 vue-i18n 原样渲染的结果；面板重写为配置项常驻展示（地址 / 鉴权 / Token 掩码），「复制配置」作为主按钮，一并移除残留的详情折叠与「显示 Token」开关
+- 缺失文案补齐：`app.copyToken`、`app.mcpConfigTitle`（随旧控件一起移除）、`app.mcpConnTitle`（新标题），以及流程页历史遗留的 `app.toastRequestFailed`
+- `tests/i18n.test.ts` 新增「代码引用的 key 必须已定义」：扫描渲染层所有 `.vue` / `.ts` 里的字面量 key 与文案表比对。原有断言全部以文案表为起点，只能发现「已定义但写坏了」，发现不了「代码要的 key 不存在」
+- `e2e-ui-regressions` 新增两条实机断言：设置页正文不得出现裸 `app.*` 键名、AI 接入区不得残留折叠容器
+
+### English
+
+- **Fixed English key names on the AI access panel**: the "Copy config" button and the block title used to render as `app.copyToken` and `app.mcpConfigTitle`; both now read as normal text
+- **Fixed the folding of the AI access settings**: the client connection facts (URL, auth scheme, token state) are fully visible without opening anything, while the token stays masked and "Copy config" carries the real value
+- **Fixed a missing message on the flow page**: a failed run used to show a raw English key instead of a message
+- New copy guard: every message key the code references must exist in the table, so a missing one fails the test suite (this class of bug was invisible to every existing check)
+
+#### Full changes
+
+- **AI access panel**: the `app.copyToken` label on a button and the `app.mcpConfigTitle` disclosure title were missing messages rendered verbatim by vue-i18n. The panel now lists the connection facts inline (URL / auth / masked token) with "Copy config" as the primary action; the leftover disclosure and the "Show token" toggle are gone
+- Missing messages added: `app.copyToken` and `app.mcpConfigTitle` (removed together with the old controls), `app.mcpConnTitle` (the new heading), and the long-standing `app.toastRequestFailed` on the flow page
+- `tests/i18n.test.ts` gains "defines every key the renderer asks for": it scans every literal key in the renderer's `.vue` / `.ts` files and compares against the message table. All previous assertions started from the table, so they could only catch a defined-but-broken message, never a key the code asks for that no longer exists
+- `e2e-ui-regressions` gains two runtime assertions: the settings page must show no raw `app.*` key names, and the AI access block must contain no leftover disclosure
+
 ## [未发布]
 
 ### 中文

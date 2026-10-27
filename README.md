@@ -276,8 +276,8 @@ AI 依次做的事：
 
 | 步骤 | 工具 |
 | --- | --- |
-| 存站点、超管的租户名与站点默认密码 | `create_site`（`extraFields` + `password`） |
-| 存超管账号 | `create_identity` |
+| 存站点与站点默认密码 | `create_site`（`password`） |
+| 存超管账号，连同租户名 | `create_identity`（`extraFields`） |
 | 以超管身份打开页面并登录 | `open_browser_tab` → `fill_browser_login` → `click_browser_element`（按按钮文字） |
 | 等后台跳转完成 | `wait_browser`（页面内轮询，一次调用等到底） |
 | 读懂后台的租户表单 | `read_browser_page`（每个输入框旁边那行标签也一并给出） |

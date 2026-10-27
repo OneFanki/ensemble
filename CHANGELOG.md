@@ -22,11 +22,72 @@
 
 ### 中文
 
+<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+
 #### 完整变更
 
 ### English
 
+<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+
 #### Full changes
+
+## [1.1.0] - 2026-10-27
+
+### 中文
+
+- **账号能重新关联到站点了**：1.0.0 迁移曾把站点列表读空、让账号全部丢失归属，现在可以把选中的账号一次关联到同一个站点，选完确认才生效
+- **站点不再带多余的登录字段**：租户名这类值只属于账号，旧数据自动搬到各账号，账号页可以一次看到更多账号
+- **界面语言跟随系统**：新增「跟随系统」并作为默认，也可以显式指定中文或英文
+- **AI 接入更好用**：设置页直接列出地址与鉴权方式，点「复制配置」一次带走全部（含 Token，但不显示明文）
+- **开发者工具修好了**：F12 能正常开关；在里面改设置要求重新加载时，面板会自己恢复，不再变成空白
+
+#### 完整变更
+
+- **账号与站点重新关联**：修复 1.0.0 迁移把站点列表读空、账号全部丢失站点归属的问题；账号页可以用「关联到站点」一次把选中的账号挂到同一站点，选完还要确认才生效
+- **站点不再带额外登录字段**：租户名这类值只属于账号，站点对话框里那一块已移除，旧数据自动搬到各账号
+- **账号卡片固定三行**：身份 / 事实 / 操作常驻显示，悬停不再改变高度、不会让整片网格跳动
+- **界面语言跟随系统**：语言设置新增「跟随系统」并作为默认，不再写死中文；也可显式选中文或英文
+- **AI 接入重排**：底栏入口常驻「AI 接入」标签；设置页把地址、鉴权、Token 状态直接列出来，「复制配置」是主按钮，Token 本身不显示、只随复制带出
+- **修复改站点无效**：编辑已有账号时选另一个站点保存，现在会真的迁移过去
+- **修复 DevTools 面板全空**：定位到「前端 reload 后 Electron 不会重新绑定 `InspectorFrontendHost`」，退化成空转 stub；提示条只点不触发的「不再显示」，面板里的 F5 改为刷新被测页。DevTools 界面保持英文（中文语言包取不到，要中文得另做一套）
+- **修复 F12 打开 DevTools 后瞬间自关**：`before-input-event` 对一次按键触发两次，keyDown 开面板后焦点转到面板，同一按键的 keyUp 落到面板 handler 上又被当成切换；现在所有快捷键只认 keyDown，切换类忽略自动重复。工具栏按钮没有配对的 keyUp，所以此前只有 F12 出问题
+- **DevTools 改设置要求 reload 后面板不再变空壳**：reload 后 Electron 不会重新绑定 `InspectorFrontendHost`（退化成空转 stub），现在改为拦下前端 reload 并整套重建前端视图，面板闪一下后继续可用；顺带把「reload 即永久损坏、只能禁止」的旧结论纠正为「换掉前端视图即可恢复」（实测 4/4）
+- 工作区迁移：同时存在空的 `sites` 与有内容的 `environments` 时按旧格式合并升级；账号 `siteId` 缺失不再被当成 `{}` 重新写入
+- 站点额外字段移除：`Site.extraFields` 从类型、schema、服务、MCP、账号包中移除；读取旧工作区时把站点字段下沉到其下每个账号（同名不覆盖），账号包导入同样处理
+- 账号 `siteId` 改为可选：孤儿账号在账号页有独立分组，`profileDirFor` 返回 `undefined` 而不是拼出假目录
+- 新增 `linkIdentitiesToSite`（core + IPC + MCP `link_identities_to_site`），账号页选择模式里加「关联到站点」按钮 + 确认弹窗（弹窗只预选站点，不写入，按「确认关联」才生效）
+- `update_identity` 支持传 `siteId` 改挂站点
+- 账号卡片：合并角色/密码/引擎/额外字段为一行标签，去掉密码圆点装饰行；操作行常驻（悬停不再改变卡片高度）；列宽自适应窗口
+- 界面语言：`AppSettings.locale` 扩展为 `"system" | "zh" | "en"`，默认 `"system"`；新增 `shared/locale.ts`（`resolveLocale` / `localeTag`）与 `WorkspaceSnapshot.systemLocale`；系统语言由 `app.getPreferredSystemLanguages()` 取，不用 `navigator.language`（后者跟随 `--lang`）；设置页语言段加「跟随系统」；`--lang` 与 core 文案都走同一解析结果
+- AI 接入：底栏入口常驻「AI 接入」标签（不再只在运行时才显示文字）；设置页改成常驻连接信息（地址 / 鉴权 / Token 掩码）+ 主按钮「复制配置」，移除 `<details>` 折叠与 Token 明文显示/复制按钮
+
+### English
+
+- **Accounts can be linked to sites again**: the 1.0.0 migration emptied the site list and left every account without one; a whole selection can now be linked to a site in one go, with an explicit confirm
+- **Sites no longer carry stray login fields**: values such as a tenant name belong to the account, existing data moves onto the accounts, and the accounts page fits more cards per screen
+- **UI language follows the system**: a new System option is the default; Chinese or English can still be pinned explicitly
+- **AI access is easier to wire up**: settings list the URL and auth scheme in the open, and Copy config takes everything including the token without ever showing it
+- **DevTools is fixed**: F12 toggles it properly, and a settings change that reloads it now rebuilds the panel instead of leaving it blank
+
+#### Full changes
+
+- **Accounts and sites can be re-linked**: fixed the 1.0.0 migration that emptied the site list and left every account with no site; the accounts page can now link a whole selection to one site, with the target chosen and confirmed in a dialog
+- **Sites no longer carry extra login fields**: values such as a tenant name belong to the account; that block is gone from the site dialog, and existing data moves onto the accounts
+- **Account cards keep a fixed three rows**: identity, facts and actions are always visible, so hovering no longer changes the card height or reflows the grid
+- **UI language follows the system**: a new "System" option is the default instead of a hardcoded Chinese; Chinese or English can still be pinned explicitly
+- **AI access panel reworked**: the status-bar entry is labelled at all times, and settings now show the URL, the auth header and the token state in the open, with "Copy config" as the primary action — the token itself is never printed, only copied
+- **Changing an account's site now works**: picking another site for an existing account really moves it
+- **DevTools panels are no longer empty**: the cause was that a single front-end reload permanently loses the host binding, so the app now intercepts a front-end reload and rebuilds the whole front-end view — the panel blinks and carries on instead of sitting there empty. It also corrects the earlier "a reload is permanent, so forbid it" conclusion: discarding and re-mounting the front-end does recover it (measured 4/4)
+- **F12 no longer opens DevTools only to have them close instantly**: `before-input-event` fires twice per physical press, so the keyDown opened the panel, the panel took focus, and the keyUp of that same press reached the panel's own handler and toggled it shut; every shortcut now acts on keyDown only, and toggles ignore auto-repeat. The toolbar button has no paired keyUp, which is why only F12 was affected
+- Workspace migration: a file carrying an empty `sites` array next to a populated `environments` key is merged as the old schema; a missing identity `siteId` is no longer rewritten as `{}`
+- Site extra fields removed from the type, schema, service, MCP tools and account bundles; reading an old workspace copies each site field onto that site's accounts (an account's own label wins), and bundle import does the same
+- `Identity.siteId` is optional: unlinked accounts get their own group on the accounts page, and `profileDirFor` returns `undefined` instead of inventing a directory
+- New `linkIdentitiesToSite` (core + IPC + MCP `link_identities_to_site`), plus a "link to site" button and confirm dialog in the accounts page selection bar (the dialog preselects a site but writes nothing until "Link accounts" is pressed)
+- `update_identity` accepts `siteId` to move an account
+- Account cards merge role/password/engine/extra-field into one tag row, drop the password-dots row, and keep their action row visible (no height change on hover); column count follows the window width
+- UI language: `AppSettings.locale` widened to `"system" | "zh" | "en"`, default `"system"`; new `shared/locale.ts` (`resolveLocale` / `localeTag`) and `WorkspaceSnapshot.systemLocale`; the system tag comes from `app.getPreferredSystemLanguages()` rather than `navigator.language` (which follows `--lang`); the language segment gains a "System" option; both `--lang` and the core-layer strings use the same resolution
+- AI access: the status-bar entry is permanently labelled; settings shows the connection facts inline (URL / auth / masked token) with "Copy config" as the primary action, replacing the `<details>` disclosure and the token reveal/copy controls
 
 ## [1.0.0] - 2026-10-26
 

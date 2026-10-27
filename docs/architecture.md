@@ -308,6 +308,13 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
   **标签**页（`TagsPage.vue`），因为标签不属于站点作用域，也不是一年改一次的设置项。
 - 凭据：身份存自定义密码，站点存默认密码，身份还可以引用另一个身份。
   解析顺序是引用目标 → 身份自定义 → 站点默认 → 报错；引用只允许一层。
+- **账号密码之外的登录字段只存在身份上。** 租户名、公司码这类值是「谁登录谁提供」，
+  所以站点不再带 `extraFields`；站点是登录配方，没有自己的账号。旧文件在
+  `sanitizeWorkspace` 里把站点字段复制到其下每个账号。
+- **`Identity.siteId` 可以为空**，表示账号的站点归属丢了（1.0 迁移曾把 v1/v2 混写文件
+  读成已当前格式，导致站点列表变空、账号全部失联）。账号页把它们放在「未关联站点」
+  分组下，批量选择后可一次关联到站点；`profileDirFor` 对这种账号返回 `undefined`，
+  不会拼出 `<root>/undefined/<id>` 这种假目录。
 - 站点记录 `lastOrigin`：填充前发现当前页面 origin 与它不同就暂停，要求用户显式确认，
   确认后更新（SSH `known_hosts` 的做法）。
 - Profile 目录用 UUID，显示名可随时改；引擎绑定在身份上，换引擎是复制身份
@@ -367,7 +374,7 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 | 文件 | 内容 | 位置 |
 | --- | --- | --- |
 | `workspace.json` | 站点、标签、身份、视图、布局预设、书签、手动引擎路径 | Electron `userData` |
-| `settings.json` | 主题、语言、布局、上次视图 | Electron `userData` |
+| `settings.json` | 主题、语言（含「跟随系统」）、布局、上次视图 | Electron `userData` |
 | `vault.json` | 加密后的凭据 | Electron `userData` |
 | `mcp.json` | AI 接入开关、端口、Token、权限开关 | Electron `userData` |
 | `mcp-audit.log` | MCP 调用审计（参数已脱敏） | Electron `userData` |
@@ -379,6 +386,28 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 只在内存里，不产生目录。
 
 所有写入使用「临时文件 + rename」保证原子性，`vault.json`、`mcp.json`、导出文件以 0600 权限写入。
+
+## 界面语言
+
+`settings.locale` 是三值：`"system"`（默认）/ `"zh"` / `"en"`。**默认值不写死任何一种语言**——
+硬编码的默认语言等于替用户做决定，而应用没有依据判断用户读哪种语言。
+
+解析规则在 `shared/locale.ts`（纯函数，不依赖 Electron）：
+
+- `resolveLocale(setting, systemLocale)`：显式值优先，`"system"` 回落到系统语言。
+- 系统语言 tag 由主进程通过 `app.getPreferredSystemLanguages()[0]` 取，随
+  `WorkspaceSnapshot.systemLocale` 下发。**不能用 `navigator.language`**：它跟着应用自己设的
+  `--lang` 走，问它只会读回应用的选择。
+- `--lang` 启动开关用同一个解析结果，所以被测页里的 `navigator.language` 与应用语言一致
+  （站点若按浏览器语言本地化，看到的就是用户读的那一种）。
+- core 层拿到的是**解析后的** `"zh" | "en"`，不是三值。三值只在设置与渲染层存在。
+
+**DevTools 前端不受这条链路控制**：它的 UI 语言要加载语言包，而语言包在自建 DevTools 视图里
+取不到（详见 `docs/design/browser-surface.md`）。它固定英文，这是已知边界，不是遗漏。
+
+DevTools 内部的设置项触发前端 reload 时，主进程会整套重建前端以保住面板（Electron 从不
+重新绑定 `InspectorFrontendHost`，只有换掉前端视图才能恢复）。用户可见的效果是面板闪一下
+然后继续可用，而不是留下一个空壳。
 
 ## 进程生命周期
 

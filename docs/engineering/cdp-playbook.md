@@ -71,8 +71,10 @@
 
 SaaS 登录常见「租户名 / 公司码 + 用户名 + 密码」三段式表单。这类字段按**标签匹配**处理：
 
-- 站点级 `extraFields` 下发给所有身份，身份级 `extraFields` 同名字段覆盖、空值移除；
-  合并逻辑在 `src/core/login-fields.ts`，比较时忽略大小写与空白。
+- 字段只存在账号上（`identity.extraFields`），合并逻辑在 `src/core/login-fields.ts`。
+  站点曾经也带一份并下发给所有账号，已移除：站点是登录配方、没有自己的账号，那些值本来
+  就属于「谁登录谁提供」。旧文件由 `sanitizeWorkspace` 把站点字段复制到其下每个账号。
+- 同一个标签只取第一行；值留空表示不填这一项，不会向页面写空字符串。
 - 填充时先处理额外字段，并把命中的元素记入 `used`，之后选用户名输入框时跳过它们，
   否则租户名输入框会被误当成用户名。
 - 匹配线索：`name`、`id`、`autocomplete`、`placeholder`、`aria-label`、`<label>` 文本、

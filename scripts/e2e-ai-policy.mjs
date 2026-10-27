@@ -497,7 +497,7 @@ try {
     const shown = tip?.textContent ?? '';
     let otherWidth = 0;
     if (tip) {
-      tip.textContent = ${JSON.stringify(englishHint ?? "")}.replace('{count}', number);
+      tip.textContent = ${JSON.stringify(englishHint ?? "")};
       otherWidth = Math.round(tip.getBoundingClientRect().width);
       tip.textContent = shown;
     }

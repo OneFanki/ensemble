@@ -644,7 +644,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 >
                   {{ aiCountOf(root) }}
                   <span v-if="aiTip === root.id" class="ai-tip" role="tooltip">
-                    {{ t("app.aiActionCount", { count: aiCountOf(root) }) }}
+                    {{ t("app.aiActionCount") }}
                   </span>
                 </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
@@ -766,7 +766,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 >
                   {{ aiCountOf(root) }}
                   <span v-if="aiTip === root.id" class="ai-tip" role="tooltip">
-                    {{ t("app.aiActionCount", { count: aiCountOf(root) }) }}
+                    {{ t("app.aiActionCount") }}
                   </span>
                 </span>
                 <span v-if="pagesOf(root).length > 1" class="pages-badge mono">

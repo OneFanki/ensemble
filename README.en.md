@@ -159,7 +159,7 @@ The identities page is where most of the day is spent: one card per identity wit
   logins, so they can be imported elsewhere and skip re-registering. Separate from the
   whole-workspace migration export — your views and layouts stay local
 - **Tray mode**: closing the window keeps browsers and the AI endpoint running; only an explicit quit stops them
-- **Automatic updates**: the app checks for a new version in the background, shows a short summary when one exists, and downloads, verifies and installs it in one click — then restarts itself. No manual GitHub download, and no browser download warning to get past
+- **Automatic updates**: the app checks for a new version in the background, shows a short summary when one exists, and downloads, verifies and installs it in one click — then restarts itself. No manual GitHub download, and no browser download warning to get past. Updates follow the system proxy like a normal browser, so a Clash-style setup just works; if the system proxy is not picked up, the settings page accepts a manual address
 
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />

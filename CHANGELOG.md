@@ -22,11 +22,26 @@
 
 ### 中文
 
+- **修复开了代理却下载不动更新**：以前更新检查和下载不走系统代理，开了 Clash 之类的工具只会看到进度条一动不动；现在默认跟随系统代理，也可以手动填地址
+- AI 客户端只拿到 MCP 配置也能知道这个应用是干什么的：连接时会收到一段简短说明，说明站点、身份、视图这套模型和几个容易踩的规则
 - 运行栏里「AI 操作次数」徽标悬停时的说明改成应用自己画的提示：立刻出现、跟着主题走，不再是一秒后才冒出来的系统原生提示框
-- README 补充这个数字的口径：它按**来源**计数，同一站点的两个标签显示同一个数字是设计如此，不是重复计数
+- 标题栏左上角不再显示版本号，右下角状态栏那一处保留
 
 #### 完整变更
 
+- **更新检查与下载改走 Chromium 的网络栈**：`net.fetch` 使用 `session.defaultSession`，代理设置才能生效；全局 `fetch` 跑在应用从未配置过的 session 上，这正是「进度条不涨」的原因——请求根本没发出去，而是挂在 DNS 上直到超时
+- 新增「网络代理」设置，三档：跟随系统（默认，等同普通浏览器）、直连、手动填地址（`http://127.0.0.1:7890` 或 `socks5://…`）。本地地址始终跳过代理——测试环境都在 127.0.0.1，被代理出去就加载不出来
+- 手动地址在保存时就校验格式，不合法会就地提示，而不是等到下载时才无声失败；不合法的地址也不会回退成直连，否则用户会以为设置被忽略
+- 内置浏览器的每个身份分区都要单独应用代理规则（Chromium 按 session 保存），打开新页面时读取当前设置；已打开的页面保留它加载时的代理，刷新后跟随新设置
+- 设置页的代理改动实时生效，不用重启；主进程会打一行日志说明当前生效的是什么
+- 新增 `scripts/e2e-proxy.mjs`：起一个桩代理，把更新地址指向一个只在代理里能解析的域名，断言请求确实经过代理且响应被解析成版本。已验证把 `net.fetch` 改回全局 `fetch` 时这条会失败（`fetch failed`，代理侧看不到请求）
+- `tests/proxy.test.ts` 覆盖代理规则的四种情形（跟随系统、直连、可用地址、不可用地址）与跳过列表；顺带发现并修掉一个真 bug：`URL.hostname` 对 IPv6 已经带方括号，代码又包了一层，会得到 `[[::1]]`
+- **MCP 连接时返回 `instructions`**：这是协议里唯一能介绍「这个端点是什么」的字段，此前完全没有，模型只看到 60 个动词。现在有一段 1.3KB 的说明，交代工作区 → 站点 → 身份 → 视图这条主线、日常档案页默认只读、先用 `read_browser_page` 再用 label 定位、用 `wait_browser` 而不是 sleep
+- 两个标签工具的旧别名（`save_site_tag` / `delete_site_tag`）从 `tools/list` 隐藏：仍然可以调用，但不再占每个会话的上下文——同义动词让模型二选一毫无收益
+- `create_identity` 与 `create_identities` 的字段定义合并成一处，`tabId` 的说明也统一，避免同一句话在列表里重复十遍
+- 新增 `scripts/measure-mcp-context.mjs`：量 `initialize` 与 `tools/list` 的实际字节数与字符数，用于以后判断注入量是否又长回去了
+- 新增契约测试：`instructions` 必须提到 Ensemble、站点/身份/视图、来源规则，且长度必须小于 2000 字符（它会加到每个会话里）；别名必须可调用但不出现在列表里
+- 标题栏去掉重复的版本号；渲染层的设置兜底值改为直接复用 `DEFAULT_SETTINGS`，避免新增字段时漏掉一处
 - **AI 次数徽标的提示由原生 `title` 改为自绘**：原生提示不能改样式、要等一秒、还会以系统窗口的形式盖在应用之上；自绘的提示挂在徽标内部向左展开，始终留在停靠栏内。原因是停靠栏和各视图块都裁切溢出，而停在舞台上的被测页面是原生视图、永远画在应用 HTML 之上，所以提示不能往右或往舞台方向溢出
 - 提示文案为「本次会话在本站的操作次数」：数字已经在徽标上，再抄一遍既啰嗦又会让计数涨到三位数后撑破停靠栏；含中文的句子改用正文字体栈，不走等宽（等宽栈会让中文回退成宋体）
 - 行上的原生 URL 提示移到标题文字上：徽标在行尾，若整行仍挂着原生 `title`，悬停徽标会同时冒出系统提示与自绘提示两种
@@ -35,8 +50,26 @@
 
 ### English
 
+- **Fixed updates that never downloaded behind a proxy**: the update check and download did not follow the system proxy, so with Clash running the progress bar simply stayed at zero. They now follow the system proxy by default, with a manual address available
+- An AI client given only the MCP config now learns what this app is: connecting returns a short description of the site / identity / view model and the few rules that are easy to get wrong
 - The hover hint on the dock's AI action count is now drawn by the app: it appears at once and follows the theme, instead of a native OS tooltip that waits a second
-- README now states the badge's unit: it counts per **origin**, so two tabs of one site showing the same number is by design, not double counting
+- The title bar no longer repeats the version number; the one in the status bar stays
+
+#### Full changes
+
+- **Update check and download now run on Chromium's network stack**: `net.fetch` uses `session.defaultSession`, which is the only session the proxy settings reach. The global `fetch` runs on a session the app never configured — that is exactly "the progress bar never moves": the request never left, it sat in DNS until it timed out
+- New "Network proxy" setting with three modes: follow system (default, what a normal browser does), direct, and a manual address (`http://127.0.0.1:7890` or `socks5://…`). Local addresses always skip the proxy — every test environment lives on 127.0.0.1, and proxying it would stop the page loading
+- A manual address is validated when saved, so a typo is reported in place instead of failing silently at download time; an unusable address never falls back to direct, which would look like the setting was ignored
+- Every identity partition in the built-in browser gets the rules applied separately (Chromium keeps them per session) and reads the current settings when a page opens; pages already open keep the proxy they loaded with and follow the new one after a reload
+- Proxy changes apply live from the settings page without a restart, and the main process logs what is in force
+- New `scripts/e2e-proxy.mjs`: a stub proxy plus an update endpoint on a host that only resolves through it, asserting the request really went through the proxy and the response parsed as a release. Verified to fail when `net.fetch` is swapped back for the global `fetch` (`fetch failed`, nothing reaches the proxy)
+- `tests/proxy.test.ts` covers the four proxy rule cases (system, direct, usable address, unusable address) and the bypass list; it also caught a real bug: `URL.hostname` already returns an IPv6 literal in brackets, so wrapping it again produced `[[::1]]`
+- **MCP now returns `instructions` on connect**: it is the one field in the protocol for "what is this endpoint", and it was empty — the model saw 60 verbs and no sentence joining them. A 1.3KB paragraph now covers the workspace → site → identity → view model, that daily-profile pages are read-only until the origin is allowed, to call `read_browser_page` before reaching for a selector, and to use `wait_browser` instead of sleeping
+- The two tag-tool aliases (`save_site_tag` / `delete_site_tag`) are hidden from `tools/list`: still callable, but no longer costing every session context for a choice the model cannot gain from
+- `create_identity` and `create_identities` share one field definition, and the `tabId` description is defined once instead of being repeated ten times
+- New `scripts/measure-mcp-context.mjs` measures the real bytes and characters of `initialize` and `tools/list`, so a future change can be checked against this baseline
+- New contract tests: `instructions` must mention Ensemble, the site/identity/view model and the origin rule, and must stay under 2000 characters (it is prepended to every session); the aliases must be callable while staying out of the list
+- The duplicated version number leaves the title bar; the renderer's settings fallback now reuses `DEFAULT_SETTINGS` instead of a literal copy that a new field can miss
 
 #### Full changes
 

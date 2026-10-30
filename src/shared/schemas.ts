@@ -35,6 +35,8 @@ export const siteDraftSchema = z.object({
   baseUrl: httpUrl,
   loginPath: localPath,
   authCheckPath: pathValue.optional(),
+  /** Body substring that reads as "signed out" on a 200 response. */
+  authCheckSignedOut: z.string().trim().min(1).max(200).optional(),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean().optional(),
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),

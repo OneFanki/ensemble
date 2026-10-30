@@ -56,7 +56,12 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import { evaluate, navigateAndWait, setWindowBounds } from "./cdp/browser";
-import { buildAuthCheckExpression, buildFillExpression, type FillOutcome } from "./cdp/login";
+import {
+  bodyMarksSignedOut,
+  buildAuthCheckExpression,
+  buildFillExpression,
+  type FillOutcome,
+} from "./cdp/login";
 import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import {
   CredentialVault,
@@ -349,6 +354,7 @@ export class WorkspaceService {
         baseUrl: trimTrailingSlash(draft.baseUrl),
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
+        authCheckSignedOut: draft.authCheckSignedOut,
         autoSubmit: draft.autoSubmit,
         tagIds,
         updatedAt: now,
@@ -363,6 +369,7 @@ export class WorkspaceService {
       baseUrl: trimTrailingSlash(draft.baseUrl),
       loginPath: draft.loginPath,
       authCheckPath: draft.authCheckPath,
+      authCheckSignedOut: draft.authCheckSignedOut,
       autoSubmit: draft.autoSubmit,
       tagIds,
       createdAt: now,
@@ -2467,12 +2474,17 @@ export class WorkspaceService {
     try {
       const location = await evaluate<string>(page, "location.href");
       if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
-      const result = await evaluate<{ status: number; ok: boolean; url: string }>(
+      const result = await evaluate<{ status: number; ok: boolean; url: string; body?: string }>(
         page,
         buildAuthCheckExpression(checkPath),
         { awaitPromise: true },
       );
-      return this.recordStatus(identity, checkedAt, result.status);
+      return this.recordStatus(
+        identity,
+        checkedAt,
+        result.status,
+        bodyMarksSignedOut(result.body, site.authCheckSignedOut),
+      );
     } catch (error) {
       return unknown((error as Error).message);
     }
@@ -2516,12 +2528,17 @@ export class WorkspaceService {
       await navigateAndWait(session.page, startUrl, 15_000);
       const location = await evaluate<string>(session.page, "location.href");
       if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
-      const result = await evaluate<{ status: number; ok: boolean; url: string }>(
+      const result = await evaluate<{ status: number; ok: boolean; url: string; body?: string }>(
         session.page,
         buildAuthCheckExpression(checkPath),
         { awaitPromise: true },
       );
-      return this.recordStatus(identity, checkedAt, result.status);
+      return this.recordStatus(
+        identity,
+        checkedAt,
+        result.status,
+        bodyMarksSignedOut(result.body, site.authCheckSignedOut),
+      );
     } catch (error) {
       return unknown((error as Error).message);
     } finally {
@@ -2534,14 +2551,20 @@ export class WorkspaceService {
     identity: Identity,
     checkedAt: string,
     httpStatus: number,
+    envelopeSignedOut = false,
   ): { result: AuthCheckResult; changed: boolean } {
-    const signedIn = httpStatus >= 200 && httpStatus < 300;
+    const signedIn = httpStatus >= 200 && httpStatus < 300 && !envelopeSignedOut;
     const status = signedIn ? "signed-in" : "expired";
     identity.status = status;
     identity.lastCheckedAt = checkedAt;
     identity.updatedAt = checkedAt;
     return {
-      result: { identityId: identity.id, status, checkedAt, detail: `HTTP ${httpStatus}` },
+      result: {
+        identityId: identity.id,
+        status,
+        checkedAt,
+        detail: `HTTP ${httpStatus}${envelopeSignedOut ? " + signed-out marker" : ""}`,
+      },
       changed: true,
     };
   }

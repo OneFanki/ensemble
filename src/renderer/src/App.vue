@@ -229,6 +229,7 @@ function openNewSite(seed?: Partial<SiteDraft>) {
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     authCheckPath: "",
+    authCheckSignedOut: "",
     // No opinion: follow the global setting until someone decides otherwise.
     autoSubmit: undefined,
     tagIds: [],
@@ -261,6 +262,7 @@ function openEditSite(siteId?: string) {
     baseUrl: env.baseUrl,
     loginPath: env.loginPath,
     authCheckPath: env.authCheckPath ?? "",
+    authCheckSignedOut: env.authCheckSignedOut ?? "",
     autoSubmit: env.autoSubmit,
     tagIds: env.tagIds ? [...env.tagIds] : [],
   };

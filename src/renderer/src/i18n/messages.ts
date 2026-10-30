@@ -177,6 +177,10 @@ export const messages = {
       baseUrl: "站点地址",
       authCheckPath: "登录检测地址",
       authCheckPlaceholder: "留空则不检测登录态",
+      loginMarkerOptional: "未登录标记（可选）",
+      loginMarkerPlaceholder: "例如：请先登录",
+      loginMarkerHint:
+        "检测地址返回 200 也可能未登录时（接口信封式应答），填未登录响应 body 里的字样，命中即按未登录处理。",
       autoSubmit: "填充后自动提交",
       layout: "窗口布局",
       members: "成员",
@@ -1028,6 +1032,10 @@ export const messages = {
       baseUrl: "Base URL",
       authCheckPath: "Auth check path",
       authCheckPlaceholder: "Leave empty to skip the session check",
+      loginMarkerOptional: "Signed-out marker (optional)",
+      loginMarkerPlaceholder: 'e.g. "signed_out"',
+      loginMarkerHint:
+        "If the check endpoint answers 200 even when signed out (envelope-style API), enter a body substring from the signed-out reply; a hit reads as signed out.",
       autoSubmit: "Submit after fill",
       layout: "Window layout",
       members: "Members",

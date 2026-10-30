@@ -234,9 +234,31 @@ export function buildAuthCheckExpression(checkPath: string): string {
         redirect: "follow",
         headers: { accept: "application/json" }
       });
-      return { status: response.status, ok: response.ok, url: response.url };
+      let body;
+      try {
+        body = (await response.text()).slice(0, 4096);
+      } catch {
+        body = undefined;
+      }
+      return { status: response.status, ok: response.ok, url: response.url, body };
     } catch (error) {
       return { status: 0, ok: false, error: String(error) };
     }
   })()`;
+}
+
+/**
+ * True when the check response carries the site's signed-out marker.
+ *
+ * Some backends wrap every answer in a 200 envelope (`{"status":2014,...}`), so
+ * the HTTP status alone reads a signed-out session as signed in. The site can
+ * declare a body marker (`authCheckSignedOut`); a hit overrides the status —
+ * but only a hit: a body that says nothing either way keeps the status verdict.
+ */
+export function bodyMarksSignedOut(
+  body: string | undefined,
+  pattern: string | undefined,
+): boolean {
+  if (!body || !pattern) return false;
+  return body.slice(0, 4096).includes(pattern);
 }

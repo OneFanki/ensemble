@@ -81,6 +81,7 @@ function submit() {
     name: form.name.trim(),
     baseUrl: form.baseUrl.trim(),
     authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
+    authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
   });
 }
 
@@ -145,6 +146,17 @@ function normalizePath(event: Event) {
           />
         </label>
       </div>
+
+      <label class="field">
+        <span class="label">{{ $t("app.loginMarkerOptional") }}</span>
+        <input
+          v-model="form.authCheckSignedOut"
+          class="input mono"
+          data-field="authCheckSignedOut"
+          :placeholder="$t('app.loginMarkerPlaceholder')"
+        />
+        <span class="hint">{{ $t("app.loginMarkerHint") }}</span>
+      </label>
 
       <section class="group">
         <div class="group-head">

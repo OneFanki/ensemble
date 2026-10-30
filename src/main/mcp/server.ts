@@ -1012,6 +1012,7 @@ export class McpServer {
       baseUrl: site.baseUrl,
       loginPath: site.loginPath,
       ...(site.authCheckPath ? { authCheckPath: site.authCheckPath } : {}),
+      ...(site.authCheckSignedOut ? { authCheckSignedOut: site.authCheckSignedOut } : {}),
       // Both the explicit override and what it resolves to: a client asking
       // "will this site submit after filling" needs the answer, while one that
       // wants to change it needs to know whether a site-level value exists.
@@ -1572,6 +1573,9 @@ export class McpServer {
             baseUrl: string("站点地址，例如 http://localhost:3000"),
             loginPath: string("登录入口，默认 /login"),
             authCheckPath: string("登录态检测地址，可省略"),
+            authCheckSignedOut: string(
+              "未登录标记：200 响应 body 里出现该子串即视为未登录（API 信封式后端用），可省略",
+            ),
             password: string("站点默认密码，写入加密凭据库后不回显"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
             tagIds: {
@@ -1589,6 +1593,9 @@ export class McpServer {
             loginPath: args["loginPath"] ?? "/login",
             autoSubmit: args["autoSubmit"] === true,
             ...(args["authCheckPath"] ? { authCheckPath: args["authCheckPath"] } : {}),
+            ...(typeof args["authCheckSignedOut"] === "string" && args["authCheckSignedOut"].trim()
+              ? { authCheckSignedOut: args["authCheckSignedOut"] }
+              : {}),
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
           });
           const site = service.saveSite(draft);
@@ -1608,12 +1615,14 @@ export class McpServer {
             baseUrl: string("新站点地址"),
             loginPath: string("新登录入口"),
             authCheckPath: string("新检测地址"),
+            authCheckSignedOut: string("新未登录标记（200 body 子串）；传空串清除"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
           },
           ["id"],
         ),
         run: (args) => {
           const existing = findSite(args["id"]);
+          const marker = args["authCheckSignedOut"];
           const draft: SiteDraft = {
             id: existing.id,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
@@ -1624,6 +1633,10 @@ export class McpServer {
               typeof args["authCheckPath"] === "string"
                 ? args["authCheckPath"]
                 : existing.authCheckPath,
+            authCheckSignedOut:
+              typeof marker === "string"
+                ? marker.trim() || undefined
+                : existing.authCheckSignedOut,
             autoSubmit:
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
             tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,

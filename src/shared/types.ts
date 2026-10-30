@@ -88,6 +88,16 @@ export interface Site {
   loginPath: string;
   authCheckPath?: string;
   /**
+   * Body marker that means "signed out" even when the check endpoint answers
+   * 200.
+   *
+   * Some backends wrap every answer in a 200 envelope (`{"status":2014,...}`),
+   * so a plain HTTP-status probe reads a signed-out session as signed in and
+   * never fills. When set, the probe also matches this string against the
+   * response body (first 4 KiB) and treats a hit as signed out.
+   */
+  authCheckSignedOut?: string;
+  /**
    * Whether to press the login button after filling.
    *
    * Absent means "follow `settings.autoSubmitLogin`", which is the shape a
@@ -535,6 +545,8 @@ export interface SiteDraft {
   baseUrl: string;
   loginPath: string;
   authCheckPath?: string;
+  /** Body marker that reads as "signed out" on a 200 response; see {@link Site}. */
+  authCheckSignedOut?: string;
   /** Absent = follow the global default. */
   autoSubmit?: boolean;
   tagIds?: string[];

@@ -84,7 +84,9 @@
 
 内置侧的落点固定：账号页点一张卡片就是在默认（扁平）标签组新建一个页面，单账号已经在跑
 也是这样，不会切进已有视图或占用视图空位；批量启动则新建一个视图，把选中的账号按默认
-布局铺开。要把页面放进视图，路径是拖拽或在视图里用「+」。`openEmbeddedView` 给每个新建的
+布局铺开——整个批量（建页、落格、回收）由主进程一个 IPC 承担（`IPC.embeddedLaunchBatch`），
+页内并发建页（并发度 3）、落格时实时读槽数，任一失败整批连同容器一起回收。要把页面放进
+视图，路径是拖拽或在视图里用「+」。`openEmbeddedView` 给每个新建的
 页面排一次自动填充，所以「启动视图」与「点账号」在填写凭据上表现一致。
 
 缩放走 `webContents.setZoomFactor`，因此天然是**每页一份**：页面各有自己的 `WebContentsView`，
@@ -200,6 +202,15 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
   渲染层 CSP 是 `img-src 'self' data:`，不加载远程图片；更重要的是图标要用页面自己的会话去取
   （登录态、区域、Cookie 都跟着走），只有主进程做得到。`inlineFavicon` 把类型与大小规则抽成
   纯函数，避免为了测它而启动 Electron。
+- **停放页空闲后降速（`aiIdleFreeze`，headless 关闭）。** 页面挪出窗口只是看不见，Chromium
+  仍视其为「可见」，原生后台节流永不触发——每个停放页（包括 3D 首页）都会满速渲染；实测
+  `Page.setWebLifecycleState` 与 `setVisible(false)` 都改变不了这一点（前者对可见页只做浅冻
+  结、rAF 照跑，后者连 `visibilityState` 都不变，均以同 partition 读者页实测）。真正生效的杠杆
+  是 CDP CPU 节流：停放页闲置 60 秒（窗口期内无任何 CDP 流量）后由 10 秒一轮的扫描压到 8×，
+  rAF 回调变慢、3D 帧率按比例回落；AI 的每条命令经 `EmbeddedCdp.send` 前都会 **await** 一次
+  恢复满速，所以截图、点击永远全速执行。扫描刻意保守：台上、加载中、崩溃、空白、有声、开着
+  DevTools 的页面一律不动；恢复失败只损失速度不损正确性。另注意窗口级遮挡：整个应用被盖住
+  或最小化时，Chromium 原生节流本就会把所有页压到 1–2 FPS，无需任何额外机制。
 
 ### 流程：把走通的操作存成资产
 
@@ -248,7 +259,8 @@ Playwright 只通过显式开启的调试端口接管内置表面（`connectOver
 
 批量登录态检测（`checkAllAuth`）对每个身份执行同一段检测，最多 3 个并发——不同身份
 是独立浏览器与独立 CDP 连接，唯一共享的是被测站点本身——并在整批结束后只写一次
-`workspace.json`、广播一次快照。
+`workspace.json`、广播一次快照。判定与启动自动登录共用同一段探测逻辑：HTTP 状态之外，
+站点的 `authCheckSignedOut` 标记命中响应 body 时按未登录计。
 
 对话框、下载、上传、扩展、原生密码管理器、Google SSO 全部保持浏览器原生行为。
 
@@ -527,7 +539,9 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   fetch 检查路径判定登录态（结果只留在主进程），未登录则导航到 `site.loginPath` 填充凭据；
   是否替用户点提交由 `site.autoSubmit ?? settings.autoSubmitLogin` 决定（站点可选覆盖，全局
   默认开启），这个开关的语义就是「授权自动提交」，提交动作是点登录按钮本身而不是提交表单。
-  登录确认后页面回到账号 `startPath`。凭据的读取与填充全程在主进程，渲染层只收到不含
+  登录确认后页面回到账号 `startPath`。**接口信封式后端**（200 也表示未登录、结果在 body 里）
+  会在站点上配 `authCheckSignedOut`：探测对响应 body（前 4 KiB）做子串匹配，命中即按未登录
+  处理，HTTP 状态不再单独定案。凭据的读取与填充全程在主进程，渲染层只收到不含
   密码的 `AutoFillReport`。没配检查路径的站点维持旧行为（等密码框出现就填，仅此而已）。
 - MCP 端点只绑回环、必须带 Token、校验 Host/Origin；工具永远不返回明文密码。
 

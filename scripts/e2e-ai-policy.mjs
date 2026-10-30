@@ -454,9 +454,14 @@ try {
     .pop();
   const badge = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    // The badge of the daily tab specifically, not just the first one in the
+    // dock: the count is per tab now, so the assertion has to name its tab.
+    // The daily tab is the busiest one (denied and granted clicks, a read, a
+    // screenshot), so it is the one whose tooltip and width budget matter.
+    const scope = ${JSON.stringify(dailyTabId)};
     let el = null;
     for (let attempt = 0; attempt < 8 && !el; attempt += 1) {
-      el = document.querySelector('.dock .ai-badge');
+      el = document.querySelector('[data-tab-id="' + scope + '"] .ai-badge');
       if (!el) await wait(300);
     }
     if (!el) return { found: false };
@@ -519,20 +524,42 @@ try {
     return { found: true, ...rect, closedOnLeave: !el.querySelector('.ai-tip') };
   })()`);
   check(
-    "the dock shows how many AI actions this site has seen",
+    "the dock shows how many AI actions this page has seen",
     badge?.found === true && Number.parseInt(badge?.number ?? "", 10) >= 3,
     { found: badge?.found, number: badge?.number },
   );
   // The badge and the audit log must agree. This is the check that answers the
   // question the badge exists for — "is this number real?" — and it is also what
-  // proves the count is per origin rather than per tool call or per tab: every
-  // page-targeting tool that names this origin is in the log, and refusals count
-  // too, so the two totals have to match exactly.
-  const loggedForOrigin = audit.filter((line) => line.origin === ORIGIN).length;
+  // proves the count is per tab rather than per origin: the audit lines carry
+  // the tab id, and only the actions aimed at *this* tab may show up on its row.
+  // Refusals count too, so the two totals have to match exactly. The badge
+  // under test is the daily tab's row, which took four page actions (two
+  // refused clicks, a granted click, a refused type).
+  const loggedForDaily = audit.filter((line) => line.tabId === dailyTabId).length;
   check(
-    "the badge equals the number of audited actions on that origin",
-    Number.parseInt(badge?.number ?? "", 10) === loggedForOrigin,
-    { badge: badge?.number, loggedForOrigin },
+    "the badge equals the number of audited actions on that tab",
+    Number.parseInt(badge?.number ?? "", 10) === loggedForDaily,
+    { badge: badge?.number, loggedForDaily },
+  );
+  // The reason the key changed: two tabs of one site used to show the same
+  // number, which read as if the AI had worked on both. The identity tab took
+  // exactly one (granted) click, so its own badge must show exactly that —
+  // neither the daily tab's history nor anyone else's.
+  const dailyBadge = Number.parseInt(badge?.number ?? "", 10);
+  const identityBadge = await client.evaluate(
+    `(async () => {
+      const scope = ${JSON.stringify(identityTabId)};
+      const row = document.querySelector('[data-tab-id="' + scope + '"] .ai-badge');
+      return row ? Number.parseInt(row.textContent.trim(), 10) : 0;
+    })()`,
+  );
+  const loggedForIdentity = audit.filter((line) => line.tabId === identityTabId).length;
+  check(
+    "two tabs of one site count separately",
+    Number(dailyBadge) === loggedForDaily
+      && Number(identityBadge) === loggedForIdentity
+      && Number(identityBadge) !== Number(dailyBadge),
+    { dailyBadge, loggedForDaily, identityBadge, loggedForIdentity },
   );
   check(
     "the count explains itself with a drawn tooltip, not a native title",

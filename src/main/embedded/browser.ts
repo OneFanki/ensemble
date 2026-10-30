@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildDomSnapshotExpression,
+  buildClickHitExpression,
   buildElementPointExpression,
   buildFocusExpression,
   buildReadExpression,
@@ -17,6 +18,7 @@ import {
   type WaitResult,
 } from "@core/cdp/inspect";
 import { bodyMarksSignedOut, buildAuthCheckExpression, buildFillExpression } from "@core/cdp/login";
+import type { MissingCredentialReason } from "@core/credentials/vault";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -40,8 +42,10 @@ import {
   parkedViewBounds,
   planTabClick,
   resolveSlotTabs,
+  type EmbeddedViewport,
   type StageRect,
   viewIsOnScreen,
+  viewportFitRect,
   ZOOM_STEPS,
 } from "@shared/embedded";
 import {
@@ -75,6 +79,17 @@ export interface EmbeddedLoginPayload {
   baseUrl: string;
 }
 
+/**
+ * What the credential resolver found.
+ *
+ * `missing` is passed straight through to the toast that explains why nothing
+ * was typed, so the user is told "this site has no default password" instead of
+ * "this account has no password" when the account is merely inheriting one.
+ */
+export type ResolveLoginResult =
+  | { ok: true; payload: EmbeddedLoginPayload }
+  | { ok: false; missing: MissingCredentialReason | "no-identity" | "no-site-record" };
+
 interface TabRecord {
   id: string;
   identityId?: string;
@@ -93,6 +108,17 @@ interface TabRecord {
    * that no longer exist.
    */
   zoomOverride?: number;
+  /**
+   * Fixed CSS viewport this page renders at, when set.
+   *
+   * While set, the page lays out at exactly this size (media queries and
+   * scripts see it) and the view shows a scaled-down preview fitted to its
+   * cell. `zoomOverride` is untouched so leaving viewport mode restores the
+   * zoom the page had before. Absent means adaptive: fill the cell.
+   */
+  viewport?: EmbeddedViewport;
+  /** Zoom factor the current viewport fit resolved to; drives `applyZoom`. */
+  viewportScale?: number;
   /**
    * The browser instance (window) this page belongs to.
    *
@@ -144,7 +170,15 @@ export interface EmbeddedBrowserOptions {
   shotDir: string;
   /** Icon for app-owned windows (the DevTools window), so none shows Electron's. */
   appIcon?: string;
-  resolveLogin?: (identityId: string) => Promise<EmbeddedLoginPayload | undefined>;
+  /**
+   * Credentials for one identity, or the specific reason they are unavailable.
+   *
+   * The reason is part of the contract rather than "undefined means missing":
+   * an account that inherits a site default and a site that never got one used
+   * to produce the same "no password" toast, which points at the wrong dialog
+   * half the time. Whatever this reports is shown to the user verbatim.
+   */
+  resolveLogin?: (identityId: string) => Promise<ResolveLoginResult>;
   onStateChange?: (state: EmbeddedState) => void;
   /** Asks the renderer to switch to the browser page. */
   onShowPage?: () => void;
@@ -377,7 +411,13 @@ export class EmbeddedBrowser {
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
       ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
-      zoom: tab.zoomOverride ?? this.defaultZoom,
+      // In viewport mode the fit scale *is* the effective zoom; reporting the
+      // untouched override here would make the chrome claim 100% while the
+      // page actually renders at the fit factor.
+      zoom: tab.viewport
+        ? Math.round((tab.viewportScale ?? 1) * 100)
+        : (tab.zoomOverride ?? this.defaultZoom),
+      ...(tab.viewport ? { viewport: tab.viewport } : {}),
       devtoolsOpen: this.devtoolsOpen(tab),
       ...(tab.devtools?.mode === "docked" ? { devtoolsWidth: tab.devtools.width } : {}),
       ...(contents.isDestroyed()
@@ -1721,11 +1761,30 @@ export class EmbeddedBrowser {
     }
   }
 
+  /**
+   * The rect a page's view takes inside its cell, and the zoom to go with it.
+   *
+   * Adaptive pages fill the cell at their usual zoom. Fixed-viewport pages are
+   * scaled to fit and centred, with the zoom factor set to the fit scale so the
+   * page lays out at exactly the requested CSS size — the same trade devtools
+   * responsive mode makes. Remembering the resolved scale on the tab keeps
+   * `applyZoom` honest from wherever layout next touches the page.
+   */
+  private placePageSurface(tab: TabRecord, cell: StageRect): StageRect {
+    if (!tab.viewport) {
+      delete tab.viewportScale;
+      return cell;
+    }
+    const { rect, scale } = viewportFitRect(cell, tab.viewport);
+    tab.viewportScale = scale;
+    tab.view.webContents.setZoomFactor(scale);
+    return rect;
+  }
+
   private applyLayout(): void {
     const host = this.host;
     if (!host || host.isDestroyed()) return;
-    this.parkAll();
-    /**
+    this.parkAll();    /**
      * Slot tables are layout *state*, not geometry, so they are normalized even
      * when no stage has been reported.
      *
@@ -1752,7 +1811,7 @@ export class EmbeddedBrowser {
       // native view behind it.
       if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
         void this.wakeTab(page.id);
-        page.view.setBounds(embeddedViewRect(this.stage));
+        page.view.setBounds(this.placePageSurface(page, embeddedViewRect(this.stage)));
         this.stagedTabs.add(page.id);
       }
       if (tab?.devtools?.mode === "docked") this.placeDevTools(tab);
@@ -1775,7 +1834,7 @@ export class EmbeddedBrowser {
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
       void this.wakeTab(page.id);
-      page.view.setBounds(embeddedViewRect(slot));
+      page.view.setBounds(this.placePageSurface(page, embeddedViewRect(slot)));
       this.stagedTabs.add(page.id);
     });
     // Docked DevTools follow the cell they were opened in, so a layout change or
@@ -2083,18 +2142,36 @@ export class EmbeddedBrowser {
   async click(
     tabId: string,
     target: TargetInput,
-  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string }> {
+  ): Promise<{
+    ok: true;
+    tag?: string;
+    text?: string;
+    selector?: string;
+    /** Where the events actually landed; `onTarget: false` means they missed. */
+    hit?: { onTarget: boolean; tag?: string; text?: string };
+  }> {
     const tab = this.requireTab(tabId);
     const point = await tab.cdp.elementPoint(buildElementPointExpression(target));
     if (!point.ok || point.x === undefined || point.y === undefined) {
       throw new Error(`无法点击 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
     }
     await tab.cdp.clickAt(point.x, point.y);
+    // An overlay, a late scroll or a re-render can redirect the events. Reading
+    // the hit back turns "the site ignored my click" from a guess into a fact
+    // the caller can act on.
+    let hit: { onTarget: boolean; tag?: string; text?: string } | undefined;
+    try {
+      hit = await tab.cdp.evaluate(buildClickHitExpression(point.x, point.y));
+    } catch {
+      // Navigation right after the click destroys the context; the click still
+      // happened, so the result is reported without hit facts.
+    }
     return {
       ok: true,
       ...(point.tag ? { tag: point.tag } : {}),
       ...(point.text ? { text: point.text } : {}),
       ...(point.selector ? { selector: point.selector } : {}),
+      ...(hit ? { hit } : {}),
     };
   }
 
@@ -2319,6 +2396,9 @@ export class EmbeddedBrowser {
               throw new Error(`无法点击：${point.reason ?? "unknown"}`);
             }
             await tab.cdp.clickAt(point.x, point.y);
+            // Same read-back as `click`; it also clears the marker the point
+            // lookup left on the element.
+            await tab.cdp.evaluate(buildClickHitExpression(point.x, point.y)).catch(() => {});
             detail = point.text;
             break;
           }
@@ -2524,8 +2604,12 @@ export class EmbeddedBrowser {
   }> {
     const tab = this.requireTab(tabId);
     if (!tab.identityId) return { ok: false, reason: "no-identity" };
-    const payload = await this.options.resolveLogin?.(tab.identityId);
-    if (!payload) return { ok: false, reason: "no-password" };
+    const resolved = await this.options.resolveLogin?.(tab.identityId);
+    if (!resolved) return { ok: false, reason: "no-password" };
+    // The resolver's own words, not a generic "no password": it is the only
+    // place that knows whether the account or its site is the one missing it.
+    if (!resolved.ok) return { ok: false, reason: resolved.missing };
+    const payload = resolved.payload;
     const origin = await tab.cdp.evaluate<string>("location.origin");
     // A tab created with a URL is still on about:blank for a moment, where
     // `location.origin` is the string "null". That is "not there yet", not a
@@ -2650,12 +2734,22 @@ export class EmbeddedBrowser {
      * narrower than the slot. Scaling it to the full slot would stretch the page;
      * reporting the real page box leaves the tools area unpainted instead.
      */
-    const capture = async (tab: TabRecord, rect: StageRect) => {
+    const capture = async (tab: TabRecord) => {
       const contents = tab.view.webContents;
       if (contents.isDestroyed()) return;
       try {
         const png = await tab.cdp.screenshot();
-        const page = await this.pageBoxDip(tab, rect);
+        // The view's own bounds, not the cell: docked DevTools shrink the page
+        // inside the same view, and a fixed-viewport page is fitted and centred
+        // rather than filling — either way the real bounds are where its pixels
+        // are, while the cell would stretch or misplace the frozen image.
+        const b = tab.view.getBounds();
+        const page = await this.pageBoxDip(tab, {
+          x: b.x,
+          y: b.y,
+          width: b.width,
+          height: b.height,
+        });
         shots.push({
           tabId: tab.id,
           rect: page,
@@ -2679,19 +2773,20 @@ export class EmbeddedBrowser {
         // surface in that cell. Capturing it would return an empty image and
         // paint over the search box the user is typing into.
         if (isBlankTab(page)) continue;
-        await capture(page, embeddedViewRect(slot));
+        await capture(page);
       }
       return shots;
     }
 
     const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
     const page = tab ? this.activePageOf(tab.instanceId) : undefined;
-    // Flat mode must freeze through `embeddedViewRect`, same as the live
+    // Flat mode must freeze at the page's real bounds, same as the live
     // placement in `applyLayout`: the stage does have a header band (the
     // instance tab strip, 26px, since flat stages grew one), and freezing at
-    // the raw stage origin painted the picture one band too high — the page
-    // visibly jumped up whenever an overlay opened.
-    if (page && stage && !isBlankTab(page)) await capture(page, embeddedViewRect(stage));
+    // the raw stage origin painted the picture one band too high. The view's
+    // real bounds carry that offset — plus docked DevTools shrinking and the
+    // fixed-viewport fit — so `capture` reading them covers every case.
+    if (page && stage && !isBlankTab(page)) await capture(page);
     return shots;
   }
 
@@ -2725,6 +2820,16 @@ export class EmbeddedBrowser {
    */
   zoomBy(tabId: string, direction: "in" | "out" | "reset"): number {
     const tab = this.requireTab(tabId);
+    // Ctrl +/- does nothing while a fixed viewport is active: the zoom factor is
+    // the fit scale there, and stepping it would silently change the CSS
+    // viewport size the mode promised. Reset exits viewport mode too, which is
+    // the natural way back from the keyboard.
+    if (tab.viewport && direction !== "reset") {
+      return Math.round((tab.viewportScale ?? 1) * 100);
+    }
+    if (tab.viewport) {
+      this.setViewport(tabId, null);
+    }
     const current = tab.zoomOverride ?? this.defaultZoom;
     const next =
       direction === "reset"
@@ -2738,9 +2843,38 @@ export class EmbeddedBrowser {
     return next;
   }
 
+  /**
+   * Pins a page to a fixed CSS viewport, or returns it to adaptive fill.
+   *
+   * The zoom override survives the trip: while the viewport is active the fit
+   * scale owns the zoom factor, and clearing the viewport re-applies whatever
+   * the page was zoomed to before, so the mode feels like a lens you put on and
+   * take off rather than a setting that resets your zoom.
+   */
+  setViewport(tabId: string, size: EmbeddedViewport | null): EmbeddedViewport | null {
+    const tab = this.requireTab(tabId);
+    if (size) {
+      tab.viewport = size;
+    } else {
+      delete tab.viewport;
+      delete tab.viewportScale;
+      this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
+    }
+    this.applyLayout();
+    this.emitState();
+    return tab.viewport ?? null;
+  }
+
   private applyZoom(tab: TabRecord, percent: number): void {
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
+    // A fixed viewport owns the zoom factor: it *is* the fit scale that keeps
+    // the CSS viewport at the requested size. The percent is remembered on the
+    // tab (`zoomOverride`) so leaving viewport mode restores it.
+    if (tab.viewport) {
+      contents.setZoomFactor(tab.viewportScale ?? 1);
+      return;
+    }
     // `setZoomFactor` is per webContents and survives navigations within the
     // page, which is what a browser tab does. It does not leak to other pages:
     // each page is its own WebContentsView.
@@ -3228,8 +3362,11 @@ export class EmbeddedBrowser {
     const left = Math.max(1, split - Math.round(DEVTOOLS_GRIP_WIDTH / 2));
     // The page gives up the right-hand part of its cell; the tools take it.
     // `applyLayout` resets the page to the full cell first, and this runs right
-    // after it, so the two agree on the same rect.
-    tab.view.setBounds({ ...rect, width: left });
+    // after it, so the two agree on the same rect. A fixed-viewport page fits
+    // into the reduced cell, not the full one.
+    tab.view.setBounds(
+      this.placePageSurface(tab, { x: rect.x, y: rect.y, width: left, height: rect.height }),
+    );
     devtools.view.setBounds({
       x: rect.x + left + DEVTOOLS_GRIP_WIDTH,
       y: rect.y,

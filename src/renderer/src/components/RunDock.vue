@@ -131,20 +131,16 @@ function accountOf(root: EmbeddedTab): string {
 }
 
 /**
- * AI operations this row's site has seen in this session, or 0.
+ * AI operations on the page this row is showing, or 0.
  *
- * Keyed by origin, derived from the tab's current URL: a tab that navigated away
- * from a site stops claiming that site's count, which is what a user reading the
- * row would expect.
+ * Keyed by tab, not by origin. The badge sits on a row and a row is one page, so
+ * the number has to answer "how much did the AI do here" — keying it by origin
+ * made two rows of the same site show the same number, which reads as if the AI
+ * had worked on both. A row that switched pages shows the new page's count, which
+ * is what a user watching that row would expect.
  */
 function aiCountOf(root: EmbeddedTab): number {
-  const page = activePageOf(root);
-  try {
-    const origin = new URL(page.url).origin;
-    return workspace.aiActions[origin] ?? 0;
-  } catch {
-    return 0;
-  }
+  return workspace.aiActions[activePageOf(root).id] ?? 0;
 }
 
 /**
@@ -632,10 +628,9 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                      native title on an ancestor would pop up over it anyway. -->
                 <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
-                <!-- How many AI operations this site has seen in this session.
-                     A count per origin, not per page: the permission is granted
-                     per origin, so the origin is the honest unit — two tabs of
-                     the same site legitimately show the same number. -->
+                <!-- How many AI operations this page has seen in this session.
+                     Per page, because a row is a page: keying it by site made
+                     two rows of one site show the same number. -->
                 <span
                   v-if="aiCountOf(root)"
                   class="ai-badge mono"
@@ -754,10 +749,9 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 <TabIcon :src="faviconOf(root)" :size="12" />
                 <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
-                <!-- How many AI operations this site has seen in this session.
-                     A count per origin, not per page: the permission is granted
-                     per origin, so the origin is the honest unit — two tabs of
-                     the same site legitimately show the same number. -->
+                <!-- How many AI operations this page has seen in this session.
+                     Per page, because a row is a page: keying it by site made
+                     two rows of one site show the same number. -->
                 <span
                   v-if="aiCountOf(root)"
                   class="ai-badge mono"

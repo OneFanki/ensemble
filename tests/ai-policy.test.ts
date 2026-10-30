@@ -95,6 +95,7 @@ function surfaceFor(tab: { identityId?: string; clean?: boolean; url: string }) 
     screenshot: async () => ({ path: "x.png", bytes: 1 }),
     visibility: async () => ({ exists: true, visible: true }),
     wait: async () => ({ ok: true, waitedMs: 1 }),
+    setViewport: (tabId: string, size: { width: number; height: number } | null) => size,
     setLayout: () => ({}),
     pinTab: () => ({}),
     moveTab: () => ({}),

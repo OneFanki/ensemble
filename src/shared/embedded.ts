@@ -65,6 +65,11 @@ export interface EmbeddedTab {
   active: boolean;
   /** Effective zoom in percent; `100` means the page renders at its natural size. */
   zoom: number;
+  /**
+   * Fixed CSS viewport this page renders at, when set. The view shows a
+   * scaled-down preview; `bounds` holds the fitted rect it actually occupies.
+   */
+  viewport?: EmbeddedViewport;
   /** True while this page's DevTools are open (docked by default). */
   devtoolsOpen: boolean;
   /**
@@ -403,6 +408,81 @@ export function embeddedViewRect(slot: StageRect): StageRect {
     y: slot.y + header,
     width: slot.width,
     height: Math.max(1, slot.height - header),
+  };
+}
+
+/**
+ * A page rendered at a fixed CSS viewport instead of filling its cell.
+ *
+ * The page lays out at exactly `width × height` — `innerWidth` and every media
+ * query see the target — while the view is scaled down to fit the cell, like
+ * devtools responsive mode. `undefined` (no override) means adaptive: fill the
+ * cell, which is the default.
+ */
+export interface EmbeddedViewport {
+  width: number;
+  height: number;
+}
+
+/** The narrowest real device width; below 320 nothing renders meaningfully. */
+export const VIEWPORT_MIN = 320;
+/** 4K is the widest screen worth simulating. */
+export const VIEWPORT_MAX_WIDTH = 3840;
+export const VIEWPORT_MAX_HEIGHT = 2160;
+
+/**
+ * Common devices and desktop sizes, ordered small → large. These are the menu's
+ * one-tap answers; anything else goes through the custom input.
+ */
+export const VIEWPORT_PRESETS: Array<EmbeddedViewport & { name: string }> = [
+  { name: "320 × 640", width: 320, height: 640 },
+  { name: "390 × 844", width: 390, height: 844 },
+  { name: "768 × 1024", width: 768, height: 1024 },
+  { name: "1024 × 768", width: 1024, height: 768 },
+  { name: "1280 × 720", width: 1280, height: 720 },
+  { name: "1366 × 768", width: 1366, height: 768 },
+  { name: "1920 × 1080", width: 1920, height: 1080 },
+];
+
+/**
+ * Rejects anything that is not a whole number inside the supported range.
+ * Silent clamping would hide a fat-fingered width, so callers get `undefined`
+ * and report the usable range instead.
+ */
+export function normalizeViewportSize(
+  width: unknown,
+  height: unknown,
+): EmbeddedViewport | undefined {
+  const ok = (value: unknown, max: number): value is number =>
+    typeof value === "number" && Number.isInteger(value) && value >= VIEWPORT_MIN && value <= max;
+  if (!ok(width, VIEWPORT_MAX_WIDTH) || !ok(height, VIEWPORT_MAX_HEIGHT)) return undefined;
+  return { width, height };
+}
+
+/**
+ * The rect a fixed-viewport page occupies inside its cell: scaled down to fit
+ * (never up), centred, plus the scale to apply as the page's zoom factor so the
+ * CSS viewport stays exactly the requested size.
+ *
+ * With bounds `w·f × h·f` and zoom `f`, the page lays out at
+ * `bounds / zoom = w × h` — the scripts and stylesheets see the real target,
+ * the user sees a proportionally scaled preview of it.
+ */
+export function viewportFitRect(
+  cell: StageRect,
+  size: EmbeddedViewport,
+): { rect: StageRect; scale: number } {
+  const scale = Math.min(1, cell.width / size.width, cell.height / size.height);
+  const width = Math.max(1, Math.round(size.width * scale));
+  const height = Math.max(1, Math.round(size.height * scale));
+  return {
+    rect: {
+      x: cell.x + Math.round((cell.width - width) / 2),
+      y: cell.y + Math.round((cell.height - height) / 2),
+      width,
+      height,
+    },
+    scale,
   };
 }
 

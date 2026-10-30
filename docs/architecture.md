@@ -386,7 +386,7 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 
 | 文件 | 内容 | 位置 |
 | --- | --- | --- |
-| `workspace.json` | 站点、标签、身份、视图、布局预设、书签、手动引擎路径 | Electron `userData` |
+| `workspace.json` | 站点、标签、身份、视图、布局预设、书签与文件夹树、手动引擎路径 | Electron `userData` |
 | `settings.json` | 主题、语言（含「跟随系统」）、布局、上次视图 | Electron `userData` |
 | `vault.json` | 加密后的凭据 | Electron `userData` |
 | `mcp.json` | AI 接入开关、端口、Token、权限开关 | Electron `userData` |

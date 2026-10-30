@@ -22,16 +22,60 @@
 
 ### 中文
 
-<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+- **新增使用指南**：右上角书签图标打开，首屏一张三步流程图讲清最小路径（箭头穿插在块与块之间，子页不再重复导航）；其余功能在左侧分类里按需看，没读过时图标有红点——按钮本身这次也补上了样式，此前按原生渲染图标不居中；引导走完自动打开一次并回到浏览器页
+- **分屏更好用**：空单元格直接挑身份开页，不用先建空白页；页面还能钉到固定分辨率（内置手机/桌面预设、可手输宽高），按目标尺寸排版并等比缩小到格位，查响应式不用开第二个窗口；AI 侧同步拿到 set_browser_viewport / reset_browser_viewport
+- **书签支持多层文件夹，像文件管理器一样操作**：新建/编辑走一个弹窗；管理页左侧是目录树，「全部」列出顶层文件夹和未分类书签；行可拖拽——拖到文件夹归档或移动、拖到行排序，磁贴拖到文件夹条归档；删除文件夹时内容上提一级；支持直接从本机的 Edge / Chrome / Firefox 导入书签（只读、自动去重）；旧数据自动迁移
+- **AI 驱动更可靠**：语义定位与点击穿透 shadow DOM 和同源 iframe；点击结果带实际落点（hit），被遮挡不再靠猜；自动填充失败会说清缺的是哪一个密码；运行栏 AI 次数徽标按页面计数，审计日志补记页面 id
+- **站点默认密码可以在站点上设置**：以前只能进账号对话框配，站点下一堆账号都继承时反而没人找得到；现在建站点、改站点时就能填，列表上直接标出「已设置 / 未设置」
 
 #### 完整变更
 
+- 使用指南做成独立弹窗（`GuideDialog.vue`）而不是继续加引导步骤：引导要在真实界面上逐个指控件，所以只能走一次；指南是一页可反复查看的内容，首屏一张图讲清最小路径，AI 那一块单独强调，其余按需展开
+- 指南版本号（`guideVersion`）与引导版本号（`onboardingVersion`）分开：两者是不同东西，一个计数器答不了两个问题——跳过引导的人仍该看到指南红点
+- 分屏槽位的身份选择器只列该视图所属站点的账号：视图定义里有 `siteId`；手工拼的容器没有定义，则从容器里已有的页面推断。两者都没有时不显示选择器
+- `openEmbeddedTabInSlot` 新增可选 `identityId`：带上时用该身份的会话分区打开，标签页按身份命名与着色
+- 书签文件夹升级为 id + parentId 的记录树（可多层嵌套）：按名字存在多层下意味着改一个中层名要重写全部后代路径，树拥有名字后改名与移动子树都是一次写。删除文件夹把子文件夹和书签上提一级，孤儿规则从「不可能有」变成「删除时重挂」；把文件夹移进它自己的子树会被拒绝
+- 站点默认密码跟着站点草稿一起写，不拆成「先存站点、再 setPassword」：新站点在保存前还没有 id，拆开就得存两遍，而且密码写失败时会留下一个静默没密码的站点。草稿里带密码时先验密钥库是否解锁，锁着就整体失败
+- 密码输入框永远不回填，界面只知道「有没有」；清空输入框不等于删除，删除要单独勾选——空输入是最常见的误触，不能让它悄悄抹掉一个别人依赖的密码
+- 书签的新建与编辑合并成一个弹窗（名称、地址、文件夹树选择器），管理页改为左树右列表加面包屑：树负责在层级里导航，列表只显示当前文件夹自己的书签；地址栏星标收藏也从静默直存改为先弹窗确认再保存。行内的 window.prompt 重命名按钮随就地编辑移除（Electron 不实现 prompt()，原按钮一点击就抛异常，从未可用过），改名进弹窗。行内移动保留统一下拉，选项按完整路径标注；MCP 的 save_bookmark 增加 folderId，list_bookmarks 连文件夹一起返回
+- 管理页按文件管理器语义工作：「全部」是根目录（顶层文件夹 + 未分类），列表先子文件夹后书签；拖拽一套手势——行拖到文件夹行或树节点 = 归档/移动，拖到书签行 = 排序，新标签页磁贴拖到文件夹条 = 归档；把文件夹拖进它自己的子树被服务层拒绝
+- 从浏览器导入书签：主进程只读解析 Edge / Chrome 的 Bookmarks JSON 和 Firefox 的 places.sqlite（连同 -wal/-shm 复制到临时副本再打开，不碰原浏览器），按浏览器原有分组导成「<浏览器> 书签」顶层文件夹；地址去重与工作区同一 URL 规范化比对，被去重清空的分支自动剪枝，重复导入幂等；渲染层只见来源 id，不接触文件路径
+- 标题栏 `guide-button` / `guide-dot` 此前没有任何样式规则，按钮按浏览器默认渲染，图标自然不居中；补齐后与旁边 launch-switch 同一套视觉词汇。教程窗口同步瘦身：删掉子页返回链接、回到开始按钮与底部快捷标签（左侧导航承担全部切换且永不滚走），流程箭头改为独立元素穿插在块与块之间，导航首项去掉装饰图标让列表左缘对齐
+- 修复 `sanitizeBookmarks` 漏掉新字段导致文件夹在重启后消失：该函数逐字段重建记录，新增字段必须同时加进去。已加两条回归测试（含一条走「保存 → 重新加载」全链路），并验证删掉该行会让它们变红
+- 修复书签网格被压成单列：新增的文件夹容器让网格宽度变成 `fit-content`，而 `auto-fill` 需要确定宽度才能算列数
+- MCP 新增 `update_settings`：只接受白名单内的显示与启动偏好；凭据、密钥库、MCP 端点自身的开关/端口/令牌/权限一律拒绝，理由写在错误信息里——改权限等于自己给自己提权。白名单检查在 schema 之前，被拒的 key 能得到可用清单
+- 徽标计数键从 origin 改为 tab id：徽标挂在行上，行就是页面，按站点计数答的是另一个问题。审计日志的页面动作行同时记录 `origin`（权限单位）与 `tabId`（页面单位），`e2e-ai-policy` 的「徽标 = 审计数」断言改为按 tab 比对，并新增「同站点两个标签各自独立计数」检查
+- 固定分辨率的实现是「bounds 等比缩放 + zoomFactor 设为缩放比」：bounds `w·f × h·f` 配 zoom `f`，页面排版正好是 `w × h`（媒体查询、innerWidth 精确命中目标），不需要 CDP 的 deviceMetricsOverride。视口模式下 Ctrl+/- 无效（缩放比归拟合管），Ctrl+0 退出该模式；拟合在 DevTools 分割后的剩余格位里继续成立，冻结遮罩改用视图真实 bounds 定位以保持居中对齐
+- `tests/embedded-viewport.test.ts` 钉住「bounds/scale = 目标尺寸」这条恒等式与校验边界；MCP 侧两条测试覆盖预设应用与越界拒绝（拒绝发生在到达 surface 之前，不会留下半套状态）
+- MCP 新增 `compose_view`：把已打开的若干标签页组合成一个视图并分配格位。先全量校验再动手，中途失败按逆序把页面送回原位
+- `update_settings` 拒绝带用户名密码的代理地址：审计日志是明文文件，脱敏按字段名匹配，藏在 URL 里的凭据会被原样写盘。同一处理也覆盖了导航工具里的 URL
+
 ### English
 
-<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+- **New in-app guide**: opens from the book icon in the title bar. The first screen is one three-step diagram — arrows between the boxes now, and subpages no longer repeat the navigation; everything else sits in the left list. A dot marks it unread (and the button itself finally has its styles — it rendered native with an off-center icon); finishing the tour opens it once and lands on the browser page
+- **Split-screen is nicer**: fill an empty cell with an account directly instead of stacking a blank page; and a page can be pinned to a fixed CSS resolution (phone/desktop presets or custom size), laid out at the target and scaled to fit its cell — responsive checks without a second window. The AI side gains set_browser_viewport / reset_browser_viewport
+- **Bookmarks nest, and the page works like a file manager**: creating and editing happens in one dialog; the management page has a folder tree, All lists top-level folders plus unfiled bookmarks, and rows drag — onto a folder to file it, onto a row to reorder, tiles onto the start-page strip to file them; deleting a folder moves its contents up one level. Bookmarks import straight from Edge / Chrome / Firefox installed on this machine (read-only, duplicates skipped); legacy name labels load as real folders
+- **AI driving is more reliable**: snapshots and clicks pierce shadow DOM and same-origin iframes; click results carry where the events actually landed (hit); a failed autofill says which password is missing; the dock's AI badge counts per page and the audit log records the page id
+- **A site can carry its own default password**: it was only settable from an account dialog, so when every account on a site inherited it, nobody could find it. It now lives on the site dialog itself, and the site list shows Set / Not set
 
 #### Full changes
 
+- The guide is its own dialog rather than more tour steps: the tour points at live controls and can only run once, while a guide is a page you can return to at any time
+- `guideVersion` is separate from `onboardingVersion`: one counter cannot answer both "have they been walked through the app" and "have they read the summary"
+- The slot picker lists only accounts of that view's site, read from the view definition; a hand-assembled container falls back to the pages already in it, and an empty container with neither shows no picker
+- `openEmbeddedTabInSlot` takes an optional `identityId` and opens the page in that identity's own partition, named and coloured after it
+- Bookmark folders are records now (id + parentId, arbitrarily deep): name labels would mean rewriting every descendant's path on a middle-node rename, while the tree owning names makes rename and subtree moves single writes. Deleting a folder re-parents its contents one level up, and moving a folder under its own subtree is refused. Legacy name labels migrate into real top-level folders on load; exports carry the tree, and a bookmark's folderId survives an import only when the file carries that folder
+- The site's default password rides on the site draft instead of a follow-up `setPassword`: a new site has no id to address until it is saved, so splitting it would mean two writes and would leave a site whose password silently did not land when the vault was locked. A draft carrying a password checks the vault first, so a locked vault fails the whole save
+- Fixed `sanitizeBookmarks` dropping the new field, which made folders vanish after a restart: the function rebuilds records field by field, so a new field has to be added there too. Two regression tests cover it, one of them through a save-and-reload cycle, both verified to fail without the fix
+- Fixed the bookmark grid collapsing to one column: the folder strip made its width `fit-content`, and `auto-fill` needs a definite width to count tracks
+- MCP gains `update_settings`: a closed whitelist of display and launch preferences. Credentials, the vault and the MCP endpoint's own enable/port/token/permissions are refused, with the reason stated — changing those over MCP is escalating itself. The whitelist runs before the schema so a rejected key learns what is allowed
+- MCP gains `compose_view`: it groups already-open tabs into a view and assigns slots. It validates everything before touching anything and rolls back in reverse order on failure
+- `update_settings` refuses a proxy URL carrying credentials: the audit log is plain text and redacts by field name, so a credential inside a URL would be written verbatim. The same treatment covers URLs passed to navigation tools
+- The password input is never prefilled and the UI only knows whether one exists; emptying the field is not a delete, which needs its own checkbox — a blank input is a common accident and must not quietly wipe a password others depend on
+- Bookmark create and edit share one dialog (name, address, folder picked from a tree), and the management page is a tree on the left with a breadcrumb and one folder's bookmarks on the right; the address-bar star opens the dialog instead of saving silently. The window.prompt rename button is gone with it (Electron does not implement prompt() — the button threw on click and never worked); renaming lives in the dialog now. Row moves keep the shared dropdown, labelled by full path; MCP's save_bookmark takes a folderId and list_bookmarks returns folders too
+- The management page works like a file manager: All is the root (top-level folders plus unfiled bookmarks) and subfolders list before bookmarks; one drag vocabulary covers everything — a row dropped on a folder row or tree node files it, a row dropped on another row reorders, a start-page tile dropped on a folder chip files it; dropping a folder into its own subtree is refused by the service
+- Browser import: the main process read-only parses Edge / Chrome's Bookmarks JSON and Firefox's places.sqlite (copied to a temp staging dir with its -wal/-shm sidecars and opened read-only; the browser is never touched), maps each browser group to a "<browser> bookmarks" top-level folder, dedupes with the same URL canonicalization the workspace stores, prunes branches the dedupe emptied, and is idempotent on re-import; the renderer only ever sees opaque source ids, never file paths
+- The title bar's `guide-button` / `guide-dot` had no style rules at all, so the button rendered native with an off-center icon; it now shares the visual vocabulary of the launch switch beside it. The guide window is slimmed down: the per-section back link, the back-to-start button and the cross-link chips are gone (the left list owns navigation and never scrolls away), the flow arrows sit between the boxes instead of inside them, and the nav's first entry drops its decorative icon so the list's left edge aligns
 
 ## [1.3.1] - 2026-10-31
 
@@ -145,9 +189,6 @@
 - New `scripts/measure-mcp-context.mjs` measures the real bytes and characters of `initialize` and `tools/list`, so a future change can be checked against this baseline
 - New contract tests: `instructions` must mention Ensemble, the site/identity/view model and the origin rule, and must stay under 2000 characters (it is prepended to every session); the aliases must be callable while staying out of the list
 - The duplicated version number leaves the title bar; the renderer's settings fallback now reuses `DEFAULT_SETTINGS` instead of a literal copy that a new field can miss
-
-#### Full changes
-
 - **The AI-count tooltip is drawn by the app instead of a native `title`**: a native hint cannot be styled, waits a second, and paints as an OS window above the app; the drawn one sits inside the badge and opens leftwards, staying within the dock. It has to: the dock and every view block clip their overflow, and the pages parked on the stage are native views that always paint above app HTML, so the hint cannot spill rightwards or towards the stage
 - The hint reads "AI operations on this site so far": the number already sits in the badge, and repeating it made the sentence grow with the count until it no longer fit at three digits. The sentence also uses the body font stack — the badge is mono because it holds a number, and a mono stack falls back to a serif for Chinese
 - The row's native URL hint moves onto the title text: with it still on the whole row, hovering the badge would raise the OS tooltip alongside the drawn one

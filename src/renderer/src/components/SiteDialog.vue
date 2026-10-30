@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SiteDraft, Tag } from "@shared/types";
 import { Trash2 } from "lucide-vue-next";
-import { computed, reactive, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
@@ -25,6 +25,29 @@ const { t } = useI18n();
 const store = useWorkspaceStore();
 const error = reactive<{ message: string | null }>({ message: null });
 const tags = computed(() => props.tags ?? []);
+
+/**
+ * The password field is local state, not part of `form`.
+ *
+ * `form` mirrors the draft and the draft is what `saveSite` receives, so a
+ * password living in it from the start would be written on every save — an
+ * untouched dialog would overwrite the saved one with an empty value. It is
+ * added at submit time instead, and only when the user actually typed something.
+ */
+const passwordDraft = ref("");
+const clearPassword = ref(false);
+
+/**
+ * Whether this site already has a default password.
+ *
+ * Read from `credentials.site`, which is a map of *existence* only — the
+ * renderer never holds a password. A new site has no id yet, so it starts false.
+ */
+const hasSitePassword = computed(() => {
+  const id = props.draft.id;
+  if (!id) return false;
+  return Boolean(store.credentials?.site[id]);
+});
 
 /**
  * The auto-submit choice as three options instead of a boolean.
@@ -55,7 +78,14 @@ function setSubmitMode(value: string | undefined): void {
 
 watch(
   () => props.draft,
-  (next) => Object.assign(form, next),
+  (next) => {
+    Object.assign(form, next);
+    // The password field is local state, so it does not follow the draft. If the
+    // dialog is retargeted at another site without being unmounted, a typed
+    // password would otherwise be submitted against the new site.
+    passwordDraft.value = "";
+    clearPassword.value = false;
+  },
 );
 
 function submit() {
@@ -82,6 +112,10 @@ function submit() {
     baseUrl: form.baseUrl.trim(),
     authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
     authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
+    // Only what the user actually did. An empty input and an unfelt checkbox
+    // both mean "leave the stored password alone".
+    ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
+    ...(clearPassword.value && !passwordDraft.value ? { clearSitePassword: true } : {}),
   });
 }
 
@@ -194,6 +228,52 @@ function normalizePath(event: Event) {
         </label>
       </section>
 
+      <!--
+        The site's default password, which every account on this site inherits
+        unless it sets its own.
+
+        It belongs on this dialog because it is a property of the site, and
+        because the alternative was worse: the only way to set it was inside an
+        account dialog, so a site whose accounts all inherited had a password
+        nobody could find — and the fill failure said "this account has no
+        password", pointing at the wrong dialog.
+
+        Never prefilled, and never shown once saved: the renderer never receives
+        a password back, only whether one exists.
+      -->
+      <section class="group">
+        <div class="group-head">
+          <span class="group-title">{{ $t("app.siteDefaultPassword") }}</span>
+          <span class="group-note">{{ $t("app.siteDefaultPasswordNote") }}</span>
+        </div>
+
+        <label class="field">
+          <input
+            v-model="passwordDraft"
+            type="password"
+            class="input mono"
+            autocomplete="new-password"
+            :placeholder="
+              hasSitePassword ? $t('app.siteDefaultPasswordReplace') : $t('app.siteDefaultPasswordEmpty')
+            "
+          />
+          <span class="hint">
+            <template v-if="hasSitePassword">
+              {{ $t("app.siteDefaultPasswordSet") }}
+            </template>
+            <template v-else>{{ $t("app.siteDefaultPasswordUnset") }}</template>
+          </span>
+        </label>
+
+        <!-- Removing a password is a separate, deliberate act: an emptied input
+             must not silently delete a secret the user did not mean to touch. -->
+        <label v-if="hasSitePassword && !clearPassword" class="check-row">
+          <input v-model="clearPassword" type="checkbox" />
+          <span>{{ $t("app.siteDefaultPasswordClear") }}</span>
+        </label>
+        <p v-if="clearPassword" class="hint warn">{{ $t("app.siteDefaultPasswordClearNote") }}</p>
+      </section>
+
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
     </div>
 
@@ -242,6 +322,20 @@ function normalizePath(event: Event) {
 .hint {
   font-size: 10.5px;
   color: var(--faint);
+}
+
+/* Removing a saved password is a deliberate act, so its note is not faint. */
+.hint.warn {
+  color: var(--amber);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .input {

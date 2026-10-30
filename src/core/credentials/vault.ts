@@ -363,6 +363,24 @@ export function isMasterPayload(payload: string): boolean {
  * and `inherit` then has no site default to fall back on. Resolving that as
  * missing is what keeps the fill path from reporting a login it never had.
  */
+/**
+ * Why a credential could not be resolved.
+ *
+ * "Missing" alone was not actionable: an account that inherits the site default
+ * and a site that never got one produced the same message, and it said the
+ * account had no password — which is true but points at the wrong place to fix
+ * it. Whoever reads this cannot know which of the two dialogs to open.
+ */
+export type MissingCredentialReason =
+  /** `custom`, but this account's own password was never saved. */
+  | "identity-empty"
+  /** `inherit`, and the site's default password was never saved. */
+  | "site-empty"
+  /** `inherit`, but the account has no site at all (the link was lost). */
+  | "no-site"
+  /** `reference`, but the source account is gone or is itself a reference. */
+  | "reference-broken";
+
 export function resolvePassword(
   vault: CredentialVault,
   identity: {
@@ -372,22 +390,28 @@ export function resolvePassword(
   },
   siteId: string | undefined,
   identities?: Array<{ id: string; passwordMode: "inherit" | "custom" | "reference" }>,
-): { password?: string; source: "identity" | "site" | "missing" } {
+): {
+  password?: string;
+  source: "identity" | "site" | "missing";
+  missing?: MissingCredentialReason;
+} {
   if (identity.passwordMode === "custom") {
     const password = vault.get({ kind: "identity", id: identity.id });
-    return password ? { password, source: "identity" } : { source: "missing" };
+    return password ? { password, source: "identity" } : { source: "missing", missing: "identity-empty" };
   }
   if (identity.passwordMode === "reference") {
     const sourceId = identity.credentialFrom;
-    if (!sourceId) return { source: "missing" };
+    if (!sourceId) return { source: "missing", missing: "reference-broken" };
     const source = identities?.find((item) => item.id === sourceId);
     // A source that is itself a reference is invalid by construction; treat it as
     // missing instead of walking an arbitrary depth.
-    if (!source || source.passwordMode === "reference") return { source: "missing" };
+    if (!source || source.passwordMode === "reference") {
+      return { source: "missing", missing: "reference-broken" };
+    }
     const password = vault.get({ kind: "identity", id: sourceId });
-    return password ? { password, source: "identity" } : { source: "missing" };
+    return password ? { password, source: "identity" } : { source: "missing", missing: "identity-empty" };
   }
-  if (!siteId) return { source: "missing" };
+  if (!siteId) return { source: "missing", missing: "no-site" };
   const password = vault.get({ kind: "site", id: siteId });
-  return password ? { password, source: "site" } : { source: "missing" };
+  return password ? { password, source: "site" } : { source: "missing", missing: "site-empty" };
 }

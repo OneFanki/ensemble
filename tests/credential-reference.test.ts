@@ -460,3 +460,129 @@ describe("reference consistency", () => {
     expect(service.findIdentity(reference.id)?.startPath).toBe("/dashboard");
   });
 });
+
+/**
+ * The site's default password, edited from the site dialog.
+ *
+ * These four cases exist because the password used to be settable only from
+ * inside an account dialog, which meant a site whose accounts all inherited a
+ * default had a password with no obvious home. Moving it onto the site draft
+ * introduces the one risk that matters here: a save that does not mention the
+ * password must not touch it.
+ */
+
+/**
+ * Reads a site default through the one path that is allowed to expose it: an
+ * account on that site that inherits it.
+ *
+ * There is deliberately no public "read the site password" method — the renderer
+ * must never receive a credential — so the test goes through the same resolver
+ * the fill path uses.
+ */
+function siteDefault(siteId: string): string | undefined {
+  const probe = service.saveIdentity({
+    siteId,
+    name: "探针",
+    username: `probe-${siteId}`,
+    role: "member",
+    color: "amber",
+    passwordMode: "inherit",
+    startPath: "/",
+  });
+  return service.resolvePasswordDetail(probe.id).password;
+}
+
+describe("site default password", () => {
+  it("saves a password together with a new site, in one call", () => {
+    const site = service.saveSite({
+      name: "带密码",
+      baseUrl: "http://localhost:3100",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "shared-secret",
+    });
+    expect(siteDefault(site.id)).toBe("shared-secret");
+  });
+
+  it("leaves the stored password alone when the draft does not carry one", () => {
+    const site = service.saveSite({
+      name: "保留",
+      baseUrl: "http://localhost:3101",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "shared-secret",
+    });
+    // The dialog sends no `password` for an untouched field; that must mean
+    // "keep it", never "blank it".
+    service.saveSite({
+      id: site.id,
+      name: "改名之后",
+      baseUrl: "http://localhost:3101",
+      loginPath: "/login",
+      autoSubmit: false,
+    });
+    expect(siteDefault(site.id)).toBe("shared-secret");
+  });
+
+  it("replaces the password when a new one is given", () => {
+    const site = service.saveSite({
+      name: "替换",
+      baseUrl: "http://localhost:3102",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "old-secret",
+    });
+    service.saveSite({
+      id: site.id,
+      name: "替换",
+      baseUrl: "http://localhost:3102",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "new-secret",
+    });
+    expect(siteDefault(site.id)).toBe("new-secret");
+  });
+
+  it("removes the password only when asked explicitly", () => {
+    const site = service.saveSite({
+      name: "删除",
+      baseUrl: "http://localhost:3103",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "shared-secret",
+    });
+    service.saveSite({
+      id: site.id,
+      name: "删除",
+      baseUrl: "http://localhost:3103",
+      loginPath: "/login",
+      autoSubmit: false,
+      clearSitePassword: true,
+    });
+    expect(siteDefault(site.id)).toBeUndefined();
+  });
+
+  it("makes every inheriting account resolve the site default", () => {
+    // The whole point of the feature: one write, every account on the site.
+    const site = service.saveSite({
+      name: "共享",
+      baseUrl: "http://localhost:3104",
+      loginPath: "/login",
+      autoSubmit: false,
+      password: "shared-secret",
+    });
+    const identity = service.saveIdentity({
+      siteId: site.id,
+      name: "甲",
+      username: "a",
+      role: "member",
+      color: "amber",
+      passwordMode: "inherit",
+      startPath: "/",
+    });
+    expect(service.resolvePasswordDetail(identity.id)).toMatchObject({
+      password: "shared-secret",
+      source: "site",
+    });
+  });
+});

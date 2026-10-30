@@ -65,7 +65,69 @@ describe("CredentialVault", () => {
     expect(custom).toEqual({ password: "id-pass", source: "identity" });
 
     const missing = resolvePassword(vault, { id: "other", passwordMode: "custom" }, "env");
-    expect(missing).toEqual({ source: "missing" });
+    expect(missing).toEqual({ source: "missing", missing: "identity-empty" });
+  });
+
+  /**
+   * "Missing" has to name which credential is absent.
+   *
+   * These four cases used to collapse into one message, and the fill path then
+   * told the user their account had no password — while the account was simply
+   * inheriting a site default nobody had set. Each one points at a different
+   * dialog, so each one is a separate assertion.
+   */
+  it("says which credential is missing, not just that one is", () => {
+    const { vault } = makeVault();
+    const inherit = { id: "id", passwordMode: "inherit" as const };
+
+    // The site exists but has no default saved.
+    expect(resolvePassword(vault, inherit, "env")).toEqual({
+      source: "missing",
+      missing: "site-empty",
+    });
+
+    // An account with no site at all cannot inherit anything.
+    expect(resolvePassword(vault, inherit, undefined)).toEqual({
+      source: "missing",
+      missing: "no-site",
+    });
+
+    // A reference to an account that is gone.
+    vault.set({ kind: "identity", id: "id" }, "id-pass");
+    expect(
+      resolvePassword(
+        vault,
+        { id: "id", passwordMode: "reference", credentialFrom: "gone" },
+        "env",
+        [{ id: "id", passwordMode: "reference" }],
+      ),
+    ).toEqual({ source: "missing", missing: "reference-broken" });
+
+    // A reference to a reference would be a chain, which is not supported.
+    expect(
+      resolvePassword(
+        vault,
+        { id: "id", passwordMode: "reference", credentialFrom: "second-hand" },
+        "env",
+        [
+          { id: "id", passwordMode: "reference" },
+          { id: "second-hand", passwordMode: "reference" },
+        ],
+      ),
+    ).toEqual({ source: "missing", missing: "reference-broken" });
+
+    // The source exists but has no password of its own.
+    expect(
+      resolvePassword(
+        vault,
+        { id: "borrower", passwordMode: "reference", credentialFrom: "id" },
+        "env",
+        [
+          { id: "id", passwordMode: "custom" },
+          { id: "borrower", passwordMode: "reference" },
+        ],
+      ),
+    ).toEqual({ password: "id-pass", source: "identity" });
   });
 });
 

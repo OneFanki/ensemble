@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Bookmark } from "@shared/types";
-import { Pencil, Trash2 } from "lucide-vue-next";
+import type { Bookmark, BookmarkFolder } from "@shared/types";
+import { Folder, Pencil, Trash2 } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -17,6 +17,7 @@ import { useI18n } from "vue-i18n";
  */
 const props = defineProps<{
   bookmarks: Bookmark[];
+  folders: BookmarkFolder[];
 }>();
 
 const emit = defineEmits<{
@@ -24,6 +25,8 @@ const emit = defineEmits<{
   rename: [bookmark: Bookmark, name: string];
   remove: [bookmark: Bookmark];
   move: [bookmark: Bookmark, toIndex: number];
+  /** Dropping a tile on a folder chip files it into that folder. */
+  file: [bookmark: Bookmark, folderId: string];
 }>();
 
 const { t } = useI18n();
@@ -183,44 +186,175 @@ function onDragEnd(): void {
   draggingId.value = null;
   dropIndex.value = null;
 }
+
+/**
+ * The strip shows the top level of the folder tree, one chip per folder that
+ * has anything in it anywhere below. The tree itself stays on the management
+ * page: a start page shows folders to filter by, and a nested outline there
+ * would turn the grid into a file manager.
+ */
+const childrenMap = computed(() => {
+  const map = new Map<string, string[]>();
+  for (const folder of props.folders) {
+    if (!folder.parentId) continue;
+    const list = map.get(folder.parentId) ?? [];
+    list.push(folder.id);
+    map.set(folder.parentId, list);
+  }
+  return map;
+});
+
+/** A folder and every folder under it — a chip counts and filters the subtree. */
+function subtreeIds(rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  const stack = [rootId];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const child of childrenMap.value.get(current ?? "") ?? []) {
+      if (!ids.has(child)) {
+        ids.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return ids;
+}
+
+const chips = computed(() => {
+  const out: Array<{ id: string; name: string; count: number }> = [];
+  for (const folder of props.folders) {
+    if (folder.parentId) continue;
+    const ids = subtreeIds(folder.id);
+    const count = props.bookmarks.filter(
+      (bookmark) => bookmark.folderId && ids.has(bookmark.folderId),
+    ).length;
+    // An empty folder exists by choice now that folders are records, but the
+    // strip answers "which folder has anything in it" — so it stays hidden.
+    if (count === 0) continue;
+    out.push({ id: folder.id, name: folder.name, count });
+  }
+  return out;
+});
+
+/** `null` means "all", which is what an untouched start page should show. */
+const activeFolder = ref<string | null>(null);
+
+// A filter pointing at a folder that no longer exists would silently show an
+// empty grid, so it falls back to "all".
+watch(
+  () => props.folders,
+  (list) => {
+    if (activeFolder.value && !list.some((folder) => folder.id === activeFolder.value)) {
+      activeFolder.value = null;
+    }
+  },
+);
+
+const shown = computed(() => {
+  if (activeFolder.value === null) return props.bookmarks;
+  const ids = subtreeIds(activeFolder.value);
+  return props.bookmarks.filter((bookmark) => bookmark.folderId && ids.has(bookmark.folderId));
+});
+
+/**
+ * Clicking the folder that is already open returns to "all".
+ *
+ * A filter with no way out except a separate "all" chip doubles the row for one
+ * word, and people press the same chip twice before looking for it.
+ */
+function pickFolder(id: string | null): void {
+  activeFolder.value = activeFolder.value === id ? null : id;
+}
+
+/** Chip the pointer is over while a tile is dragged, for the drop highlight. */
+const dropChip = ref<string | null>(null);
+
+function onDragOverChip(id: string, event: DragEvent): void {
+  if (!draggingId.value) return;
+  event.preventDefault();
+  dropChip.value = id;
+}
+
+function onDropChip(id: string): void {
+  const dragged = props.bookmarks.find((item) => item.id === draggingId.value);
+  draggingId.value = null;
+  dropChip.value = null;
+  if (dragged) emit('file', dragged, id);
+}
 </script>
 
 <template>
-  <div v-if="count" ref="root" class="bookmarks" :aria-label="t('app.bookmarks')">
-    <button
-      v-for="(bookmark, index) in bookmarks"
-      :key="bookmark.id"
-      type="button"
-      class="tile"
-      :class="{ dragging: draggingId === bookmark.id, drop: dropIndex === index }"
-      :title="`${bookmark.name}\n${bookmark.url}`"
-      draggable="true"
-      @click="openTile(bookmark)"
-      @dblclick.prevent="startRename(bookmark)"
-      @contextmenu.prevent.stop="openMenu(bookmark, $event)"
-      @dragstart="onDragStart(bookmark, $event)"
-      @dragover="onDragOver(index, $event)"
-      @dragleave="onDragLeave(index)"
-      @drop="onDrop(bookmark, index, $event)"
-      @dragend="onDragEnd"
-    >
-      <span class="tile-icon" :style="bookmark.favicon ? {} : fallbackStyle(bookmark.url)">
-        <img v-if="bookmark.favicon" :src="bookmark.favicon" alt="" draggable="false" />
-        <span v-else class="tile-initial">{{ initial(bookmark) }}</span>
-      </span>
-      <input
-        v-if="editingId === bookmark.id"
-        v-model="draftName"
-        class="tile-rename"
-        type="text"
-        maxlength="120"
-        @click.stop
-        @keydown.enter.prevent="commitRename(bookmark)"
-        @keydown.esc.prevent="editingId = null"
-        @blur="commitRename(bookmark)"
-      />
-      <span v-else class="tile-name">{{ bookmark.name }}</span>
-    </button>
+  <div v-if="count" ref="root" class="bookmark-area">
+    <!-- Folder strip: the whole bar, or one top-level folder at a time. The
+         count is part of the label because "which folder has anything in it"
+         is the question this row exists to answer. -->
+    <div v-if="chips.length" class="folder-strip" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class="folder-chip"
+        :class="{ active: activeFolder === null }"
+        :aria-selected="activeFolder === null"
+        @click="pickFolder(null)"
+      >
+        {{ t("app.bookmarkAllFolders") }}
+        <span class="folder-count mono">{{ count }}</span>
+      </button>
+      <button
+        v-for="chip in chips"
+        :key="chip.id"
+        type="button"
+        role="tab"
+        class="folder-chip"
+        :class="{ active: activeFolder === chip.id, drop: dropChip === chip.id }"
+        :aria-selected="activeFolder === chip.id"
+        @click="pickFolder(chip.id)"
+        @dragover="onDragOverChip(chip.id, $event)"
+        @dragleave="dropChip === chip.id ? dropChip = null : null"
+        @drop.prevent="onDropChip(chip.id)"
+      >
+        <Folder :size="11" />
+        {{ chip.name }}
+        <span class="folder-count mono">{{ chip.count }}</span>
+      </button>
+    </div>
+
+    <div class="bookmarks" :aria-label="t('app.bookmarks')">
+      <button
+        v-for="(bookmark, index) in shown"
+        :key="bookmark.id"
+        type="button"
+        class="tile"
+        :class="{ dragging: draggingId === bookmark.id, drop: dropIndex === index }"
+        :title="`${bookmark.name}\n${bookmark.url}`"
+        draggable="true"
+        @click="openTile(bookmark)"
+        @dblclick.prevent="startRename(bookmark)"
+        @contextmenu.prevent.stop="openMenu(bookmark, $event)"
+        @dragstart="onDragStart(bookmark, $event)"
+        @dragover="onDragOver(index, $event)"
+        @dragleave="onDragLeave(index)"
+        @drop="onDrop(bookmark, index, $event)"
+        @dragend="onDragEnd"
+      >
+        <span class="tile-icon" :style="bookmark.favicon ? {} : fallbackStyle(bookmark.url)">
+          <img v-if="bookmark.favicon" :src="bookmark.favicon" alt="" draggable="false" />
+          <span v-else class="tile-initial">{{ initial(bookmark) }}</span>
+        </span>
+        <input
+          v-if="editingId === bookmark.id"
+          v-model="draftName"
+          class="tile-rename"
+          type="text"
+          maxlength="120"
+          @click.stop
+          @keydown.enter.prevent="commitRename(bookmark)"
+          @keydown.esc.prevent="editingId = null"
+          @blur="commitRename(bookmark)"
+        />
+        <span v-else class="tile-name">{{ bookmark.name }}</span>
+      </button>
+    </div>
   </div>
 
   <Teleport to="body">
@@ -238,7 +372,66 @@ function onDragEnd(): void {
 </template>
 
 <style scoped>
+/* Folder strip + grid, as one block under the search box. */
+.bookmark-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.folder-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 14px;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.folder-chip:hover {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.folder-chip.active {
+  color: var(--text);
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.folder-chip.drop {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.folder-count {
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
 .bookmarks {
+  /*
+   * Full width, and that is load-bearing.
+   *
+   * The parent centres its children, which makes this element's width
+   * `fit-content`. `repeat(auto-fill, …)` needs a definite width to compute how
+   * many tracks fit, so with `fit-content` it resolves to a single column and the
+   * whole grid stacks vertically under the search box. The tracks are centred by
+   * `justify-content` below instead.
+   */
+  width: 100%;
   /*
    * Fixed-width columns, not `auto-fit`.
    *
@@ -251,9 +444,9 @@ function onDragEnd(): void {
   grid-template-columns: repeat(auto-fill, 92px);
   justify-content: center;
   gap: 2px;
-  /* The box already sits above; a grid flush against it reads as part of the
-     input rather than as its own block. */
-  margin-top: 14px;
+  /* The box (or the folder strip) already sits above; a grid flush against it
+     reads as part of that block rather than as its own. */
+  margin-top: 10px;
 }
 
 .tile {

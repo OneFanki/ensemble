@@ -29,6 +29,8 @@ import type {
   AutoFillReport,
   Bookmark,
   BookmarkDraft,
+  BookmarkFolder,
+  BookmarkFolderDraft,
   CredentialPresence,
   Engine,
   Identity,
@@ -65,6 +67,7 @@ import {
 import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import {
   CredentialVault,
+  type MissingCredentialReason,
   resolvePassword,
   type SecretBox,
   type VaultFile,
@@ -107,6 +110,12 @@ import {
   sanitizeWorkspace,
   type WorkspaceData,
 } from "./processes/registry";
+import {
+  parseChromiumBookmarks,
+  parseFirefoxBookmarks,
+  type BookmarkImportNode,
+  type BookmarkSourceKind,
+} from "./bookmarks-import";
 import { JsonStore } from "./storage/json-store";
 import { joinUrl, safeExternalUrl, sameOrigin } from "./util/url";
 
@@ -294,6 +303,7 @@ export class WorkspaceService {
       sites: this.data.sites,
       tags: this.data.tags,
       bookmarks: [...this.data.bookmarks].sort((a, b) => a.order - b.order),
+      bookmarkFolders: [...this.data.bookmarkFolders].sort((a, b) => a.order - b.order),
       identities: this.data.identities,
       views: this.data.views,
       flows: this.data.flows,
@@ -343,9 +353,29 @@ export class WorkspaceService {
 
   // ---------- sites ----------
 
+  /**
+   * Adds or updates a site, optionally with its default password.
+   *
+   * The password rides on the draft instead of a follow-up `setPassword` call
+   * because a new site has no id to address until it is saved: the dialog would
+   * have to save, read the new id back, and save again. One write, and a locked
+   * vault fails before anything is stored rather than leaving a site whose
+   * password silently did not land.
+   *
+   * `password` empty means "leave whatever is there"; `clearSitePassword` is the
+   * explicit removal. Two separate signals because a blank input field is a
+   * common accident, and treating it as "delete the saved password" would lose
+   * a secret the user never asked to lose.
+   */
   saveSite(draft: SiteDraft): Site {
     const now = new Date().toISOString();
     const tagIds = this.resolveTagIds(draft.tagIds);
+    const password = typeof draft.password === "string" ? draft.password : "";
+    // Checked up front: writing the site and then failing on the vault would
+    // leave the dialog reporting an error for a site that now exists.
+    if (password || draft.clearSitePassword) this.guardVaultUnlocked();
+
+    let site: Site;
     if (draft.id) {
       const existing = this.data.sites.find((item) => item.id === draft.id);
       if (!existing) throw new Error(t("error.siteMissing"));
@@ -359,23 +389,27 @@ export class WorkspaceService {
         tagIds,
         updatedAt: now,
       });
-      this.persist();
-      return existing;
+      site = existing;
+    } else {
+      site = {
+        id: randomUUID(),
+        name: draft.name,
+        baseUrl: trimTrailingSlash(draft.baseUrl),
+        loginPath: draft.loginPath,
+        authCheckPath: draft.authCheckPath,
+        authCheckSignedOut: draft.authCheckSignedOut,
+        autoSubmit: draft.autoSubmit,
+        tagIds,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.data.sites.push(site);
     }
+    // Only what the user actually did. An empty input and an unfelt checkbox
+    // both mean "leave the stored password alone".
+    if (password) this.vault.set({ kind: "site", id: site.id }, password);
+    else if (draft.clearSitePassword) this.vault.clear({ kind: "site", id: site.id });
 
-    const site: Site = {
-      id: randomUUID(),
-      name: draft.name,
-      baseUrl: trimTrailingSlash(draft.baseUrl),
-      loginPath: draft.loginPath,
-      authCheckPath: draft.authCheckPath,
-      authCheckSignedOut: draft.authCheckSignedOut,
-      autoSubmit: draft.autoSubmit,
-      tagIds,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.data.sites.push(site);
     this.persist();
     return site;
   }
@@ -970,6 +1004,14 @@ export class WorkspaceService {
     const normalized = safeExternalUrl(hasScheme ? raw : `https://${raw}`);
     if (!normalized) throw new Error("书签地址必须是 http(s) 链接");
     const name = draft.name.trim().slice(0, 120) || new URL(normalized).host;
+    // Empty means "unfiled", so a cleared folder field is not a folder id of "".
+    // A known id is required here rather than silently kept or dropped: saving a
+    // bookmark into a folder that does not exist is a bug in the caller, and
+    // filing it to unfiled instead would hide that bug behind a moved bookmark.
+    const folderId = draft.folderId?.trim() || undefined;
+    if (folderId && !this.data.bookmarkFolders.some((item) => item.id === folderId)) {
+      throw new Error("文件夹不存在");
+    }
     const now = new Date().toISOString();
 
     if (draft.id) {
@@ -977,6 +1019,8 @@ export class WorkspaceService {
       if (!existing) throw new Error("书签不存在");
       existing.name = name;
       existing.url = normalized;
+      if (folderId) existing.folderId = folderId;
+      else delete existing.folderId;
       existing.updatedAt = now;
       this.persist();
       return existing;
@@ -988,6 +1032,7 @@ export class WorkspaceService {
       id: randomUUID(),
       name,
       url: normalized,
+      ...(folderId ? { folderId } : {}),
       order,
       createdAt: now,
       updatedAt: now,
@@ -995,6 +1040,212 @@ export class WorkspaceService {
     this.data.bookmarks.push(bookmark);
     this.persist();
     return bookmark;
+  }
+
+  /**
+   * Adds a folder, or renames and moves an existing one.
+   *
+   * One call covers all three because they are the same write: the tree owns
+   * names and parents, so renaming never touches the bookmarks inside and
+   * moving a subtree is a single `parentId` change. Moving under a descendant
+   * of the folder itself is refused — that closes a cycle and would detach the
+   * subtree from the root.
+   */
+  saveBookmarkFolder(draft: BookmarkFolderDraft): BookmarkFolder {
+    const name = draft.name.trim().slice(0, 60);
+    if (!name) throw new Error("文件夹名称不能为空");
+    const parentId = draft.parentId?.trim() || undefined;
+    if (parentId && !this.data.bookmarkFolders.some((item) => item.id === parentId)) {
+      throw new Error("文件夹不存在");
+    }
+    const now = new Date().toISOString();
+
+    if (draft.id) {
+      const existing = this.data.bookmarkFolders.find((item) => item.id === draft.id);
+      if (!existing) throw new Error("文件夹不存在");
+      if (parentId && this.isBookmarkFolderDescendant(parentId, existing.id)) {
+        throw new Error("不能把文件夹移动到它自己的子文件夹里");
+      }
+      existing.name = name;
+      if (parentId) existing.parentId = parentId;
+      else delete existing.parentId;
+      existing.updatedAt = now;
+      this.persist();
+      return existing;
+    }
+    // Append among the new siblings, mirroring how bookmarks are ordered.
+    const siblings = this.data.bookmarkFolders.filter(
+      (item) => (item.parentId ?? undefined) === parentId,
+    );
+    const order = siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    const folder: BookmarkFolder = {
+      id: randomUUID(),
+      name,
+      ...(parentId ? { parentId } : {}),
+      order,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.data.bookmarkFolders.push(folder);
+    this.persist();
+    return folder;
+  }
+
+  /** True when `maybeAncestorId` is `folderId` itself or one of its ancestors. */
+  private isBookmarkFolderDescendant(maybeAncestorId: string, folderId: string): boolean {
+    let cursor = this.data.bookmarkFolders.find((item) => item.id === maybeAncestorId);
+    while (cursor) {
+      if (cursor.id === folderId) return true;
+      cursor = cursor.parentId
+        ? this.data.bookmarkFolders.find((item) => item.id === cursor?.parentId)
+        : undefined;
+    }
+    return false;
+  }
+
+  /**
+   * Merges one browser profile's bookmarks under a top-level folder named
+   * after the browser.
+   *
+   * Import is deliberately structure-faithful and idempotent: the browser's own
+   * group folders (书签栏, 书签工具栏…) come over as folders, urls already in
+   * the workspace are skipped, and folders whose subtree lost every bookmark
+   * to that dedupe are pruned — so importing the same profile twice leaves the
+   * tree as if it had been imported once. A repeated import merges into the
+   * existing browser folder rather than stacking a second copy of it.
+   */
+  async importBookmarksFromSource(source: {
+    kind: BookmarkSourceKind;
+    browser: string;
+    profile: string;
+    file: string;
+  }): Promise<{ bookmarks: number; folders: number; skipped: number }> {
+    const tree =
+      source.kind === "firefox"
+        ? await parseFirefoxBookmarks(source.file)
+        : parseChromiumBookmarks(source.file);
+    if (!tree.length) throw new Error("这个配置里没有可导入的书签");
+    const now = new Date().toISOString();
+    const browserLabel = `${source.browser} 书签`;
+
+    const existingRoot = this.data.bookmarkFolders.find(
+      (folder) => !folder.parentId && folder.name === browserLabel,
+    );
+    const rootWasNew = !existingRoot;
+    let root = existingRoot;
+    if (!root) {
+      const siblings = this.data.bookmarkFolders.filter((folder) => !folder.parentId);
+      root = {
+        id: randomUUID(),
+        name: browserLabel,
+        order: siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.data.bookmarkFolders.push(root);
+    }
+
+    const seen = new Set(this.data.bookmarks.map((bookmark) => canonicalBookmarkUrl(bookmark.url)));
+    const created: BookmarkFolder[] = [];
+    let bookmarksAdded = 0;
+    let skipped = 0;
+    let nextOrder = this.data.bookmarks.reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    const walk = (nodes: BookmarkImportNode[], parentId: string): void => {
+      for (const node of nodes) {
+        if (node.url) {
+          // Both sides go through the same canonical form: a stored URL carries
+          // safeExternalUrl's normalization (trailing slash, host case), and a
+          // raw comparison would import the same address twice.
+          const key = canonicalBookmarkUrl(node.url);
+          if (seen.has(key)) {
+            skipped += 1;
+            continue;
+          }
+          seen.add(key);
+          this.data.bookmarks.push({
+            id: randomUUID(),
+            name: node.name || new URL(node.url).host,
+            url: safeExternalUrl(node.url) ?? node.url,
+            folderId: parentId,
+            order: nextOrder++,
+            createdAt: now,
+            updatedAt: now,
+          });
+          bookmarksAdded += 1;
+          continue;
+        }
+        if (!node.children?.length) continue;
+        const siblings = this.data.bookmarkFolders.filter(
+          (folder) => folder.parentId === parentId,
+        );
+        const folder: BookmarkFolder = {
+          id: randomUUID(),
+          name: node.name.slice(0, 60) || "未命名文件夹",
+          parentId,
+          order: siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.data.bookmarkFolders.push(folder);
+        created.push(folder);
+        walk(node.children, folder.id);
+      }
+    };
+    walk(tree, root.id);
+
+    // A folder is only worth keeping if something landed in its subtree; the
+    // dedupe above can empty whole branches of an already-imported profile.
+    const hasContent = (folderId: string): boolean =>
+      this.data.bookmarks.some((bookmark) => bookmark.folderId === folderId) ||
+      this.data.bookmarkFolders.some(
+        (folder) => folder.parentId === folderId && hasContent(folder.id),
+      );
+    const empty = created.filter((folder) => !hasContent(folder.id));
+    if (empty.length) {
+      const emptyIds = new Set(empty.map((folder) => folder.id));
+      this.data.bookmarkFolders = this.data.bookmarkFolders.filter(
+        (folder) => !emptyIds.has(folder.id),
+      );
+    }
+    if (rootWasNew && !hasContent(root.id)) {
+      this.data.bookmarkFolders = this.data.bookmarkFolders.filter((folder) => folder.id !== root?.id);
+    }
+
+    this.persist();
+    return { bookmarks: bookmarksAdded, folders: created.length - empty.length, skipped };
+  }
+
+  /**
+   * Deletes one folder and re-parents its contents one level up.
+   *
+   * Nothing is destroyed and nothing is orphaned: subfolders stay folders, the
+   * bookmarks inside follow to the same parent (or to unfiled at the top), so
+   * the delete is always a pure reorganisation the user can undo by hand.
+   */
+  deleteBookmarkFolder(id: string): { folders: number; bookmarks: number } {
+    const folder = this.data.bookmarkFolders.find((item) => item.id === id);
+    if (!folder) throw new Error("文件夹不存在");
+    const parentId = folder.parentId;
+    const now = new Date().toISOString();
+    let folders = 0;
+    for (const child of this.data.bookmarkFolders) {
+      if (child.parentId !== id) continue;
+      if (parentId) child.parentId = parentId;
+      else delete child.parentId;
+      child.updatedAt = now;
+      folders += 1;
+    }
+    let bookmarks = 0;
+    for (const bookmark of this.data.bookmarks) {
+      if (bookmark.folderId !== id) continue;
+      if (parentId) bookmark.folderId = parentId;
+      else delete bookmark.folderId;
+      bookmark.updatedAt = now;
+      bookmarks += 1;
+    }
+    this.data.bookmarkFolders = this.data.bookmarkFolders.filter((item) => item.id !== id);
+    this.persist();
+    return { folders, bookmarks };
   }
 
   /** Stores the icon a tab has, so the grid can draw it without a fetch. */
@@ -1175,6 +1426,7 @@ export class WorkspaceService {
         slots: item.slots.map((slot) => ({ ...slot })),
       })),
       bookmarks: this.data.bookmarks.map((item) => ({ ...item })),
+      bookmarkFolders: this.data.bookmarkFolders.map((item) => ({ ...item })),
     };
 
     if (passphrase) {
@@ -1326,11 +1578,23 @@ export class WorkspaceService {
     }
 
     /*
-     * Bookmarks have no site to belong to, so nothing is skipped for them. Their
-     * `order` is reassigned from the end rather than trusted: the incoming file
-     * knows only its own ordering, and letting it write absolute keys would drop
-     * imported bookmarks in between the ones already here.
+     * Folders merge before the bookmarks that point at them, so every imported
+     * `folderId` resolves in one pass. Bookmarks have no site to belong to, so
+     * nothing is skipped for them. Their `order` is reassigned from the end
+     * rather than trusted: the incoming file knows only its own ordering, and
+     * letting it write absolute keys would drop imported bookmarks in between
+     * the ones already here.
      */
+    for (const folder of file.bookmarkFolders ?? []) {
+      const existing = this.data.bookmarkFolders.find((item) => item.id === folder.id);
+      if (existing) {
+        Object.assign(existing, folder, { updatedAt: new Date().toISOString() });
+        updated += 1;
+      } else {
+        this.data.bookmarkFolders.push({ ...folder });
+        added += 1;
+      }
+    }
     let nextOrder = this.data.bookmarks.reduce((max, item) => Math.max(max, item.order), -1) + 1;
     const importedBookmarks = [...(file.bookmarks ?? [])].sort((a, b) => a.order - b.order);
     for (const bookmark of importedBookmarks) {
@@ -1340,6 +1604,11 @@ export class WorkspaceService {
           order: existing.order,
           updatedAt: new Date().toISOString(),
         });
+        // Object.assign cannot express "the import says unfiled": a missing key
+        // would leave the local folder in place, so the field is set or cleared
+        // explicitly like `saveBookmark` does.
+        if (bookmark.folderId) existing.folderId = bookmark.folderId;
+        else delete existing.folderId;
         updated += 1;
       } else {
         this.data.bookmarks.push({ ...bookmark, order: nextOrder });
@@ -1638,6 +1907,23 @@ export class WorkspaceService {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) return undefined;
     return resolvePassword(this.vault, identity, identity.siteId, this.data.identities).password;
+  }
+
+  /**
+   * The same lookup as {@link resolvedPassword}, plus why it failed.
+   *
+   * Used by the fill path: "no password" alone sends the user to the wrong
+   * dialog when the account merely inherits a site default that was never set.
+   */
+  resolvePasswordDetail(identityId: string): {
+    password?: string;
+    source: "identity" | "site" | "missing";
+    missing?: MissingCredentialReason;
+  } {
+    this.guardVaultUnlocked();
+    const identity = this.data.identities.find((item) => item.id === identityId);
+    if (!identity) return { source: "missing", missing: "identity-empty" };
+    return resolvePassword(this.vault, identity, identity.siteId, this.data.identities);
   }
 
   unlockVault(password: string): boolean {
@@ -2787,8 +3073,13 @@ export class WorkspaceService {
     };
     const entry = cdpRegistry.get(instance.id);
     if (!entry) return { ...base, skipped: "external" };
-    if (!resolvePassword(this.vault, identity, site.id, this.data.identities).password) {
-      return { ...base, skipped: "no-password" };
+    const resolution = resolvePassword(this.vault, identity, site.id, this.data.identities);
+    if (!resolution.password) {
+      return {
+        ...base,
+        skipped: "no-password",
+        ...(resolution.missing ? { missingCredential: resolution.missing } : {}),
+      };
     }
 
     // A window that is still painting a client-rendered login page can take a
@@ -3005,6 +3296,15 @@ export class WorkspaceService {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+/** Canonical comparison key for a bookmark URL; unreadable input compares as itself. */
+function canonicalBookmarkUrl(url: string): string {
+  try {
+    return new URL(url).toString();
+  } catch {
+    return url;
+  }
 }
 
 /** Three decimals is plenty for a 4K screen and keeps stored presets readable. */

@@ -270,6 +270,27 @@ a {
   color: var(--faint);
 }
 
+/*
+ * The canonical single-line text input. Components extend rather than redefine
+ * it: a scoped `.input` used to exist per dialog, and the one component that
+ * used the class without copying the block (bookmarks page) shipped native
+ * inputs — the divergence this global exists to prevent.
+ */
+.input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 7px 9px;
+  font-size: 11.5px;
+  color: var(--text);
+  outline: 0;
+}
+
+.input:focus {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

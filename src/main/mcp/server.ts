@@ -6,12 +6,20 @@ import type { ElementTarget, WaitResult } from "@core/cdp/inspect";
 import type { WorkspaceService } from "@core/service";
 import { JsonStore } from "@core/storage/json-store";
 import { aiNavigationAllowed, aiWriteDenial, aiWriteDenialMessage } from "@shared/ai-policy";
+import {
+  embeddedSlotCount,
+  isEmbeddedLayout,
+  normalizeViewportSize,
+  VIEWPORT_MAX_HEIGHT,
+  VIEWPORT_MAX_WIDTH,
+} from "@shared/embedded";
 import type { Flow, FlowRunResult, FlowStep } from "@shared/flows";
 import { resolveParams } from "@shared/flows";
 import {
   flowDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
+  settingsPatchSchema,
   siteDraftSchema,
   tagDraftSchema,
   viewDraftSchema,
@@ -21,6 +29,7 @@ import type {
   IdentityDraft,
   McpSettings,
   McpStatus,
+  SettingsPatch,
   Site,
   SiteDraft,
   View,
@@ -109,9 +118,25 @@ export interface EmbeddedSurface {
       url: string;
       title: string;
       identityId?: string;
+      /** Site the tab was opened for; a view's home site is inferred from these. */
+      siteId?: string;
+      /**
+       * Browser instance the page belongs to. A popup shares its opener's
+       * instance, and a slot always shows the instance's root page, so a
+       * secondary page cannot be pinned on its own.
+       */
+      instanceId?: string;
+      /** Container the tab currently sits in; used to undo a failed compose. */
+      viewId?: string;
       clean?: boolean;
     }>;
-    views?: Array<{ id: string; name: string; layoutId: string }>;
+    views?: Array<{
+      id: string;
+      name: string;
+      layoutId: string;
+      /** Page id per cell; `compose_view` reads this to know where a tab sat. */
+      slotTabs?: Array<string | null>;
+    }>;
     activeTabId?: string;
     activeViewId?: string;
   };
@@ -182,6 +207,8 @@ export interface EmbeddedSurface {
   ): Promise<WaitResult>;
   /** `viewId` omitted means the view currently on stage. */
   setLayout(layoutId: string, viewId?: string): unknown;
+  /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
+  setViewport(tabId: string, size: { width: number; height: number } | null): unknown;
   pinTab(slotIndex: number, tabId: string | null, viewId?: string): unknown;
   /** Reorders the dock, or moves a tab in/out of a view. */
   moveTab(
@@ -199,6 +226,15 @@ export interface EmbeddedSurface {
   layoutTargetView(layoutId?: string): string | undefined;
   /** Opens a saved view definition as a container on the built-in surface. */
   openView(viewId: string): Promise<unknown>;
+  /**
+   * Creates (or finds) the container for a saved view **without** opening its
+   * member tabs, and returns the container id.
+   *
+   * `openView` is the wrong primitive for `compose_view`: the tabs being
+   * combined are already open, and `openView` opens one tab per saved member by
+   * definition — the originals would stay loose next to fresh duplicates.
+   */
+  openViewContainer?(viewId: string): string | Promise<string>;
 }
 
 const string = (description: string) => ({ type: "string", description });
@@ -268,6 +304,88 @@ const targetProps = (extra: Record<string, unknown> = {}): Record<string, unknow
   },
   exact: { type: "boolean", description: "要求文字完全相等，默认按前缀/包含匹配" },
   ...extra,
+});
+
+/**
+ * Settings an MCP client may change.
+ *
+ * A closed whitelist rather than a blacklist: a setting added to `AppSettings`
+ * later must be opted in here, so it can never become AI-writable by accident.
+ *
+ * Deliberately absent, and not accidentally:
+ * - every key of `McpSettings` (`enabled`, `port`, `token`, `allowWrite`,
+ *   `allowRun`, `allowDelete`, `aiOrigins`). Letting a tool edit the endpoint's
+ *   own permissions is self-elevation: one call turns `allowDelete` on, the next
+ *   call deletes the workspace. The person decides those in Settings.
+ * - credentials and vault state. MCP is write-only for secrets and has no
+ *   read-back; a settings tool that could touch them would be that hole by
+ *   another name.
+ * - UI bookkeeping (`onboardingVersion`, `lastView` / `lastSiteId` /
+ *   `dismissedUpdateVersion`). Harmless, but not a stable contract an AI should
+ *   depend on.
+ */
+const WRITABLE_SETTINGS = [
+  "theme",
+  "locale",
+  "layout",
+  "launchTarget",
+  "defaultEngineId",
+  "autoFillOnLaunch",
+  "autoSubmitLogin",
+  "browserZoom",
+  "searchEngineId",
+  "newTabBackground",
+  "newTabBookmarks",
+  "restoreLastView",
+  "overlayEnabled",
+  "focusLabelEnabled",
+  "launchIntervalMs",
+  "headlessCheckUa",
+  "closeToTray",
+  "autoCheckUpdates",
+  "proxyMode",
+  "proxyUrl",
+  "proxyBypass",
+] as const;
+
+/**
+ * Schema properties for `update_settings`.
+ *
+ * Spelled out rather than derived from `settingsPatchSchema`: the wire schema is
+ * what a model reads, and `additionalProperties: true` is what lets a
+ * non-whitelisted key reach the tool so it can answer "not allowed, here is the
+ * list" instead of a client-side schema error.
+ */
+const writableSettingsProps = (): Record<string, unknown> => ({
+  theme: { type: "string", enum: ["dark", "light", "system"], description: "界面主题" },
+  locale: { type: "string", enum: ["zh", "en"], description: "界面语言" },
+  layout: string("单独启动身份时使用的窗口布局 id，例如 2x2 / free"),
+  launchTarget: {
+    type: "string",
+    enum: ["embedded", "external"],
+    description: "启动视图或身份时用内置浏览器还是系统浏览器",
+  },
+  defaultEngineId: string("外部启动时默认使用的浏览器引擎 id"),
+  autoFillOnLaunch: { type: "boolean", description: "启动后自动填充已保存的账号密码" },
+  autoSubmitLogin: { type: "boolean", description: "填充后自动提交登录表单（站点可覆盖）" },
+  browserZoom: integer("内置浏览器默认缩放百分比，50–200"),
+  searchEngineId: string("新标签页搜索与地址栏兜底使用的搜索引擎 id"),
+  newTabBackground: string("新标签页背景预设 id"),
+  newTabBookmarks: { type: "boolean", description: "新标签页是否显示书签网格" },
+  restoreLastView: { type: "boolean", description: "启动时恢复上次启动的视图" },
+  overlayEnabled: { type: "boolean", description: "是否显示置顶的实例切换浮层" },
+  focusLabelEnabled: { type: "boolean", description: "切换窗口后短暂显示账号名" },
+  launchIntervalMs: integer("同一视图内两次启动之间的等待毫秒数，0–5000"),
+  headlessCheckUa: {
+    type: "string",
+    enum: ["desktop", "headless"],
+    description: "无头登录态检测使用的 UA",
+  },
+  closeToTray: { type: "boolean", description: "关闭窗口时最小化到托盘而不是退出" },
+  autoCheckUpdates: { type: "boolean", description: "自动检查更新" },
+  proxyMode: { type: "string", enum: ["system", "off", "manual"], description: "代理模式" },
+  proxyUrl: string("代理地址，例如 http://127.0.0.1:7890；仅 manual 模式生效"),
+  proxyBypass: string("跳过代理的主机列表（逗号分隔）"),
 });
 
 /** Builds the element target from tool arguments, rejecting an empty one. */
@@ -373,9 +491,22 @@ export function saveMcpSettings(path: string, settings: McpSettings): void {
   store.write(settings);
 }
 
+/**
+ * Replaces the userinfo of a URL with a marker, keeping the rest readable.
+ *
+ * A credential can hide inside a perfectly ordinary-looking argument — a proxy
+ * address (`http://user:pass@host`) is the obvious one, and any `url` parameter
+ * can carry basic auth. Redaction by field name alone would write those to a
+ * plain-text log, so every string is checked for it.
+ */
+function redactUrlUserinfo(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, "$1[redacted]@");
+}
+
 /** Strips secrets before anything is written to the audit log. */
 export function redactMcpArgs(args: unknown): unknown {
   if (Array.isArray(args)) return args.map(redactMcpArgs);
+  if (typeof args === "string") return redactUrlUserinfo(args);
   if (typeof args !== "object" || args === null) return args;
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
@@ -444,6 +575,20 @@ export class McpServer {
         flow: Flow,
         identityId?: string,
       ) => Promise<{ tabId: string; identityId?: string }>;
+      /**
+       * Applies a settings patch the way the settings page does.
+       *
+       * Writing settings is not just a store update: theme, locale, page zoom
+       * and the proxy all have live side effects in the main process, plus the
+       * workspace broadcast that repaints the UI. A tool that called
+       * `service.saveSettings` directly would persist the value and leave the
+       * running app on the old theme/proxy, which reads as "the change did
+       * nothing". Injected so both entry points share one implementation.
+       *
+       * Optional: a plain-Node caller (tests, a future CLI) has no Electron side
+       * effects to run, and then only the persisted value changes.
+       */
+      updateSettings?: (patch: SettingsPatch) => SettingsPatch | Promise<SettingsPatch>;
       onChange?: () => void;
       /**
        * One AI action was aimed at a page, whether it succeeded or was refused.
@@ -758,8 +903,8 @@ export class McpServer {
           // input tool cannot forget it: it only has to declare `inputTarget`.
           const denied = this.originDenial(tool, params.arguments ?? {});
           if (denied) {
-            const origin = this.notePageAction(tool, params.arguments ?? {}, false, false);
-            this.audit(tool.name, params.arguments, false, denied, origin);
+            const page = this.notePageAction(tool, params.arguments ?? {}, false, false);
+            this.audit(tool.name, params.arguments, false, denied, page);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -769,13 +914,13 @@ export class McpServer {
           }
           try {
             const output = await tool.run(params.arguments ?? {});
-            const origin = this.notePageAction(tool, params.arguments ?? {}, true, true);
+            const page = this.notePageAction(tool, params.arguments ?? {}, true, true);
             this.audit(
               tool.name,
               this.auditArgs(params.arguments, output),
               true,
               undefined,
-              origin,
+              page,
             );
             send(200, {
               jsonrpc: "2.0",
@@ -786,8 +931,8 @@ export class McpServer {
             });
           } catch (error) {
             const messageText = (error as Error).message || "tool failed";
-            const origin = this.notePageAction(tool, params.arguments ?? {}, false, true);
-            this.audit(tool.name, params.arguments, false, messageText, origin);
+            const page = this.notePageAction(tool, params.arguments ?? {}, false, true);
+            this.audit(tool.name, params.arguments, false, messageText, page);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -929,7 +1074,13 @@ export class McpServer {
     return masked;
   }
 
-  private audit(tool: string, args: unknown, ok: boolean, error?: string, origin?: string): void {
+  private audit(
+    tool: string,
+    args: unknown,
+    ok: boolean,
+    error?: string,
+    page?: { origin: string; tabId: string },
+  ): void {
     try {
       mkdirSync(dirname(this.options.auditPath), { recursive: true });
       appendFileSync(
@@ -939,10 +1090,11 @@ export class McpServer {
           tool,
           args: redactMcpArgs(args),
           ok,
-          // Which site the call touched, not just which tool ran. Reading the log
-          // to answer "what did the AI do on this site" is the point of having
-          // one; without this the answer needs a join against time windows.
-          ...(origin ? { origin } : {}),
+          // Which site and which page the call touched, not just which tool ran.
+          // Reading the log to answer "what did the AI do on this site / in this
+          // window" is the point of having one; without the tab id the answer
+          // needs a join against time windows as soon as two windows are open.
+          ...(page ? { origin: page.origin, tabId: page.tabId } : {}),
           ...(error ? { error } : {}),
         })}\n`,
         { encoding: "utf8", mode: 0o600 },
@@ -953,17 +1105,22 @@ export class McpServer {
   }
 
   /**
-   * The origin of the page a tool is about to act on, if it names one.
+   * The page a tool is about to act on, if it names one.
    *
    * Reported to the live listener as well, so the dock can show that an AI is
    * working in a page while it happens rather than only in the log afterwards.
+   *
+   * Both the origin and the tab id come back: the origin answers "which site did
+   * the AI touch" (the permission unit), the tab answers "which page" (the unit
+   * the dock's badge counts and the unit a reader of the log actually wants when
+   * two windows of one site are open).
    */
   private notePageAction(
     tool: ToolDefinition,
     args: Record<string, unknown>,
     ok: boolean,
     originAuthorized: boolean,
-  ): string | undefined {
+  ): { origin: string; tabId: string } | undefined {
     if (!tool.inputTarget || !this.options.embedded?.aiPageContext) return undefined;
     let tabId: string | undefined;
     let origin = "";
@@ -986,7 +1143,7 @@ export class McpServer {
     } catch {
       // A listener that throws must not turn a successful action into a failure.
     }
-    return origin;
+    return { origin, tabId };
   }
 
   private toolList(): Array<{
@@ -1021,6 +1178,11 @@ export class McpServer {
       // The origin the password was last used with; a different current origin
       // means filling will ask for confirmation first.
       lastOrigin: site.lastOrigin ?? null,
+      // Existence only, the counterpart of `hasPassword` on an identity. Without
+      // it a client sees `passwordMode: "inherit"` and cannot tell whether the
+      // site actually holds a default — the dead end where autofill fails and
+      // every visible field looks fine.
+      defaultPasswordSet: Boolean(service.snapshot().credentials.site[site.id]),
       identityCount: service.snapshot().identities.filter((identity) => identity.siteId === site.id)
         .length,
       viewCount: service.snapshot().views.filter((view) => view.siteId === site.id).length,
@@ -1126,6 +1288,69 @@ export class McpServer {
               ...snapshot.layoutPresets.map((preset) => ({ id: preset.id, name: preset.name })),
               { id: "2x2", name: "2 × 2" },
             ],
+          };
+        },
+      },
+      {
+        name: "update_settings",
+        description:
+          "修改应用的设置项。只接受不敏感的显示与启动偏好（主题、语言、布局、缩放、代理等）；凭据、密钥库和 MCP 端点自身的开关/端口/令牌/权限都不在可改范围内。参数就是设置项本身，只传要改的键；返回被改动的键及其新值。",
+        kind: "write",
+        inputSchema: {
+          type: "object",
+          description: `可改的项：${WRITABLE_SETTINGS.join(" / ")}`,
+          properties: writableSettingsProps(),
+          required: [],
+          // Open on purpose: a key outside the whitelist must reach the tool so
+          // the refusal can name what is allowed, instead of being rejected by
+          // the client with a generic schema error.
+          additionalProperties: true,
+        },
+        run: async (args) => {
+          const keys = Object.keys(args);
+          const allowed = WRITABLE_SETTINGS as readonly string[];
+          // Whitelist before schema on purpose: a rejected key must learn *why*
+          // and what is allowed. `settingsPatchSchema` would strip an unknown
+          // key silently, or complain without either answer.
+          const rejected = keys.filter((key) => !allowed.includes(key));
+          if (rejected.length > 0) {
+            throw new Error(
+              `不允许通过 MCP 修改：${rejected.join(", ")}。可改的项：${WRITABLE_SETTINGS.join(", ")}。` +
+                "凭据、密钥库和 MCP 端点自身的开关、端口、令牌与权限都不能由 AI 改——改权限等于给自己提权。",
+            );
+          }
+          if (keys.length === 0) {
+            throw new Error(`没有要修改的设置项。可改的项：${WRITABLE_SETTINGS.join(", ")}`);
+          }
+          const parsed = settingsPatchSchema.parse(args);
+          // A proxy URL may legally carry `user:pass@host`, and the audit log is
+          // a plain-text file whose redaction is keyed on field *names*. A
+          // credential hidden inside `proxyUrl` would be written verbatim, so it
+          // is refused here rather than logged: authentication for a proxy is a
+          // person's job in Settings.
+          if (typeof parsed.proxyUrl === "string" && parsed.proxyUrl) {
+            let url: URL | undefined;
+            try {
+              url = new URL(parsed.proxyUrl);
+            } catch {
+              throw new Error(
+                `代理地址无法解析：${parsed.proxyUrl}。形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080`,
+              );
+            }
+            if (url.username || url.password) {
+              throw new Error(
+                "代理地址不能包含用户名或密码：这类凭据不能经由 MCP 传递，请在设置页填写。",
+              );
+            }
+          }
+          const applied = this.options.updateSettings
+            ? await this.options.updateSettings(parsed)
+            : service.saveSettings(parsed);
+          // Echo only the keys the caller touched. The full settings object is
+          // not a secret store, but it is also not this call's business.
+          const changed = applied as Record<string, unknown>;
+          return {
+            updated: Object.fromEntries(keys.map((key) => [key, changed[key] ?? args[key]])),
           };
         },
       },
@@ -1431,21 +1656,25 @@ export class McpServer {
       {
         name: "list_bookmarks",
         description:
-          "列出新标签页上的书签。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是日常档案里已有的登录。",
+          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是日常档案里已有的登录。",
         kind: "read",
         inputSchema: object({}),
-        run: () => service.snapshot().bookmarks,
+        run: () => {
+          const snapshot = service.snapshot();
+          return { bookmarks: snapshot.bookmarks, folders: snapshot.bookmarkFolders };
+        },
       },
       {
         name: "save_bookmark",
         description:
-          "收藏一个地址，或给已有书签改名。地址只接受 http(s)，省略协议时按 https 处理。书签与站点无关，不需要先建站点。",
+          "收藏一个地址，或给已有书签改名。地址只接受 http(s)，省略协议时按 https 处理。书签与站点无关，不需要先建站点。folderId 从 list_bookmarks 的 folders 里取，省略则不分类。",
         kind: "write",
         inputSchema: object(
           {
             id: string("书签 id；省略表示新建，传已有 id 表示改名或改地址"),
             name: string("显示名称；省略时用域名"),
             url: string("要打开的地址"),
+            folderId: string("目标文件夹 id；省略表示不分类"),
           },
           ["url"],
         ),
@@ -1454,6 +1683,9 @@ export class McpServer {
             ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
             name: typeof args["name"] === "string" ? args["name"] : "",
             url: String(args["url"] ?? ""),
+            ...(typeof args["folderId"] === "string" && args["folderId"]
+              ? { folderId: args["folderId"] }
+              : {}),
           }),
       },
       {
@@ -1587,6 +1819,10 @@ export class McpServer {
           ["name", "baseUrl"],
         ),
         run: (args) => {
+          const password = typeof args["password"] === "string" ? args["password"] : "";
+          // The password rides on the draft rather than a follow-up
+          // `setPassword`: same write, and a locked vault fails before the site
+          // is stored instead of leaving one whose password silently did not land.
           const draft = siteDraftSchema.parse({
             name: args["name"],
             baseUrl: args["baseUrl"],
@@ -1597,11 +1833,9 @@ export class McpServer {
               ? { authCheckSignedOut: args["authCheckSignedOut"] }
               : {}),
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
+            ...(password ? { password } : {}),
           });
-          const site = service.saveSite(draft);
-          const password = typeof args["password"] === "string" ? args["password"] : "";
-          if (password) service.setPassword({ kind: "site", id: site.id }, password);
-          return siteSummary(site);
+          return siteSummary(service.saveSite(draft));
         },
       },
       {
@@ -2084,6 +2318,9 @@ export class McpServer {
    * returns only a summary.
    */
   private browserTools(): ToolDefinition[] {
+    // `compose_view` writes a view definition, so it needs the workspace as
+    // well as the surface; the other browser tools reach it through `surface()`.
+    const service = this.options.service;
     const surface = () => {
       const embedded = this.options.embedded;
       if (!embedded) {
@@ -2211,7 +2448,7 @@ export class McpServer {
       {
         name: "click_browser_element",
         description:
-          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。",
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -2406,6 +2643,39 @@ export class McpServer {
         },
       },
       {
+        name: "set_browser_viewport",
+        description:
+          "把一个标签页固定到指定 CSS 分辨率（如 390×844 测移动端布局）：页面按这个尺寸排版并等比缩小到格位里，innerWidth 和媒体查询看到的都是目标尺寸。width 范围 320–3840，height 320–2160，整数。重置用 reset_browser_viewport。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            width: integer("目标宽度，320–3840"),
+            height: integer("目标高度，320–2160"),
+          },
+          ["width", "height"],
+        ),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          const size = normalizeViewportSize(Number(args["width"]), Number(args["height"]));
+          if (!size) {
+            throw new Error(
+              `分辨率必须是整数：width 320–${VIEWPORT_MAX_WIDTH}，height 320–${VIEWPORT_MAX_HEIGHT}`,
+            );
+          }
+          return surface().setViewport(tabId(args), size);
+        },
+      },
+      {
+        name: "reset_browser_viewport",
+        description:
+          "撤销某个标签页的固定分辨率，恢复为铺满格位的自适应尺寸。没有固定分辨率时调用无害。",
+        kind: "run",
+        inputSchema: object({ tabId: tabIdProp() }, []),
+        inputTarget: (args) => tabId(args),
+        run: (args) => surface().setViewport(tabId(args), null),
+      },
+      {
         name: "pin_browser_tab",
         description:
           "把某个标签页固定到视图的指定格位，或清空格位（tabId 传空）。省略 viewId 表示当前在台上的视图。",
@@ -2428,6 +2698,264 @@ export class McpServer {
           if (!viewId) throw new Error("当前没有打开的视图");
           const id = typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : null;
           return surface().pinTab(index, id, viewId);
+        },
+      },
+      {
+        name: "compose_view",
+        description:
+          "把当前已经打开的若干标签页直接组合成一个视图（自由组合）：新建视图定义，并把这些页面按给定顺序摆进布局格位。标签页必须都已绑定身份；省略 siteId 时从标签页推断归属站点。组合后这些页面从原来所在的视图或游离栏移动到新视图。",
+        kind: "write",
+        inputSchema: object(
+          {
+            name: string("视图名称"),
+            tabIds: {
+              type: "array",
+              minItems: 2,
+              maxItems: 8,
+              items: { type: "string" },
+              description: "要组合的标签页 id，按希望的格位顺序排列",
+            },
+            layoutId: string("布局 id：2x1 / 1x2 / 2x2 / 3x1 / 1x1 / free；省略时按数量选"),
+            siteId: string("视图归属站点 id；省略时从标签页的 siteId 推断"),
+          },
+          ["name", "tabIds"],
+        ),
+        run: async (args) => {
+          const browser = surface();
+          const requestedIds = Array.isArray(args["tabIds"])
+            ? (args["tabIds"] as unknown[])
+            : [];
+          const tabIds = requestedIds.map((id) => String(id ?? "").trim());
+          if (tabIds.some((id) => !id)) throw new Error("tabIds 里不能有空 id");
+          if (tabIds.length < 2) throw new Error("至少需要 2 个标签页才能组合成视图");
+          if (tabIds.length > 8) throw new Error("一个视图最多 8 个成员，请减少 tabIds");
+          if (new Set(tabIds).size !== tabIds.length) {
+            throw new Error("tabIds 里有重复的标签页 id");
+          }
+
+          const state = browser.state();
+          const byId = new Map(state.tabs.map((tab) => [tab.id, tab] as const));
+          const missing = tabIds.filter((id) => !byId.has(id));
+          if (missing.length > 0) {
+            throw new Error(
+              `标签页不存在：${missing.join(", ")}。先用 list_browser_tabs 确认当前打开的标签页。`,
+            );
+          }
+          const picked = tabIds.map((id) => byId.get(id)!);
+
+          // Everything below is checked before the first mutation. A view
+          // definition is identity-based, so a page with no identity has nothing
+          // to record; the container shows an instance's root page, so a popup
+          // cannot own a cell; and one identity cannot hold two cells because
+          // `slotAssignments` is keyed by identity.
+          const identityless = picked.filter((tab) => !tab.identityId).map((tab) => tab.id);
+          if (identityless.length > 0) {
+            throw new Error(
+              `这些标签页没有绑定身份，无法保存为视图定义（视图按身份记录成员）：${identityless.join(", ")}。` +
+                "请用 open_browser_tab 带 identityId 重新打开。",
+            );
+          }
+          const secondary = picked
+            .filter((tab) => tab.instanceId && tab.instanceId !== tab.id)
+            .map((tab) => tab.id);
+          if (secondary.length > 0) {
+            throw new Error(
+              `这些标签页是某个实例里的次要页面（弹窗），格位显示的是该实例的根页面：${secondary.join(", ")}。` +
+                "请改用根页面 id。",
+            );
+          }
+          const identityIds = picked.map((tab) => tab.identityId!);
+          if (new Set(identityIds).size !== identityIds.length) {
+            throw new Error(
+              "同一个身份有两个标签页，无法同时成为视图成员：视图定义按身份记录成员。请只保留一个。",
+            );
+          }
+          // A page keeps its identity id in its tab record even after that
+          // identity is deleted. `saveView` would silently drop the unknown
+          // member, leaving a definition with fewer cells than the caller asked
+          // for, so the mismatch is reported before anything is written.
+          const knownIdentities = new Set(
+            service.snapshot().identities.map((identity) => identity.id),
+          );
+          const gone = picked
+            .filter((tab) => !knownIdentities.has(tab.identityId!))
+            .map((tab) => tab.id);
+          if (gone.length > 0) {
+            throw new Error(
+              `这些标签页所属的身份已被删除，无法保存为视图成员：${gone.join(", ")}。请先重新创建身份并打开页面。`,
+            );
+          }
+
+          const sites = service.snapshot().sites;
+          const explicitSiteId =
+            typeof args["siteId"] === "string" && args["siteId"].trim()
+              ? args["siteId"].trim()
+              : undefined;
+          let siteId: string;
+          if (explicitSiteId) {
+            if (!sites.some((site) => site.id === explicitSiteId)) {
+              throw new Error(`站点不存在：${explicitSiteId}`);
+            }
+            siteId = explicitSiteId;
+          } else {
+            // Tabs carry the site they were opened for. A view has one home site,
+            // so a mixed set has no honest answer — say so rather than pick one.
+            const inferred = [
+              ...new Set(
+                picked
+                  .map((tab) => tab.siteId)
+                  .filter((id): id is string => typeof id === "string" && Boolean(id)),
+              ),
+            ];
+            if (inferred.length === 0) {
+              throw new Error("无法从这些标签页推断所属站点（都没有 siteId）。请显式传 siteId。");
+            }
+            if (inferred.length > 1) {
+              throw new Error(
+                `这些标签页来自多个站点：${inferred.join(", ")}。一个视图只能归属一个站点，请显式传 siteId。`,
+              );
+            }
+            siteId = inferred[0]!;
+            if (!sites.some((site) => site.id === siteId)) {
+              throw new Error(`标签页所属站点不存在：${siteId}`);
+            }
+          }
+
+          const requestedLayout =
+            typeof args["layoutId"] === "string" && args["layoutId"].trim()
+              ? args["layoutId"].trim()
+              : undefined;
+          // Two pages side by side is what "put these two together" means; three
+          // or four fill a 2x2. Five or more cannot fit one grid — 2x2 is still
+          // the best default, and the surplus pages are reported as off-stage
+          // instead of being dropped silently.
+          const layoutId = requestedLayout ?? (tabIds.length === 2 ? "2x1" : "2x2");
+          if (!isEmbeddedLayout(layoutId)) {
+            throw new Error(
+              `不支持的布局：${layoutId}。可用：free / 1x1 / 2x1 / 1x2 / 2x2 / 3x1`,
+            );
+          }
+          const slotCount = embeddedSlotCount(layoutId);
+
+          const slotAssignments: Record<string, number> = {};
+          picked.forEach((tab, index) => {
+            if (index < slotCount) slotAssignments[tab.identityId!] = index;
+          });
+          if (!browser.openViewContainer) {
+            throw new Error("这个版本的内置浏览器不支持把已经打开的标签页组合成视图。");
+          }
+          // Parsed before anything is written: a bad name or a conflicting
+          // assignment fails here with the schema's message and no side effect.
+          const view = service.saveView(
+            viewDraftSchema.parse({
+              siteId,
+              name: String(args["name"] ?? ""),
+              identityIds,
+              layoutId,
+              slotAssignments,
+              paths: {},
+            }),
+          );
+
+          let containerId: string;
+          try {
+            // A container, not `openView`: `openView` opens one tab per saved
+            // member, and these pages are already open.
+            containerId = await browser.openViewContainer(view.id);
+          } catch (error) {
+            // Nothing on the surface has moved yet; only the definition exists.
+            service.deleteView(view.id);
+            throw error;
+          }
+
+          // The definition is authoritative for the layout: if the service
+          // normalized the id, the cells are sized from what it stored, not
+          // from what was asked for.
+          const placedLayoutId = view.layoutId;
+          const placedSlotCount = embeddedSlotCount(placedLayoutId);
+
+          // Where each page came from, so a failure halfway can put it back. The
+          // saved slot of the old container is recorded too: moving a page back
+          // would otherwise restore the view but lose the cell it sat in.
+          const originalSlot = new Map<string, number>();
+          for (const container of state.views ?? []) {
+            container.slotTabs?.forEach((id, index) => {
+              if (id) originalSlot.set(id, index);
+            });
+          }
+          const placed: Array<{
+            tabId: string;
+            identityId: string;
+            slotIndex: number | null;
+          }> = [];
+          const touched: Array<{ tabId: string; viewId?: string; slotIndex?: number }> = [];
+          try {
+            for (const [index, tab] of picked.entries()) {
+              const rootId = tab.instanceId ?? tab.id;
+              const priorSlot = tab.viewId ? originalSlot.get(rootId) : undefined;
+              touched.push({
+                tabId: tab.id,
+                ...(tab.viewId ? { viewId: tab.viewId } : {}),
+                ...(priorSlot === undefined ? {} : { slotIndex: priorSlot }),
+              });
+              if (index < placedSlotCount) {
+                browser.pinTab(index, tab.id, containerId);
+                placed.push({ tabId: tab.id, identityId: tab.identityId!, slotIndex: index });
+              } else {
+                browser.moveTab(tab.id, { kind: "view", viewId: containerId });
+                placed.push({ tabId: tab.id, identityId: tab.identityId!, slotIndex: null });
+              }
+            }
+          } catch (error) {
+            // Best-effort rollback, in reverse order: put each page back in its
+            // old container (and cell), then remove the definition. The empty
+            // container may survive — there is no "remove container" primitive
+            // that cannot also close pages — and an empty container holds
+            // nothing. What must never survive is a definition that disagrees
+            // with what is on screen.
+            let restoreFailed = false;
+            for (const item of [...touched].reverse()) {
+              try {
+                if (item.viewId) {
+                  browser.moveTab(item.tabId, { kind: "view", viewId: item.viewId });
+                  if (item.slotIndex !== undefined) {
+                    browser.pinTab(item.slotIndex, item.tabId, item.viewId);
+                  }
+                } else {
+                  browser.moveTab(item.tabId, { kind: "loose" });
+                }
+              } catch {
+                restoreFailed = true;
+              }
+            }
+            try {
+              service.deleteView(view.id);
+            } catch {
+              restoreFailed = true;
+            }
+            const detail = (error as Error).message || "未知错误";
+            throw new Error(
+              `组合视图失败：${detail}。${
+                restoreFailed
+                  ? "部分标签页可能仍停在新视图里，请用 list_browser_tabs 检查位置。"
+                  : "已回滚，标签页回到原来的位置。"
+              }`,
+            );
+          }
+
+          const note =
+            picked.length > placedSlotCount
+              ? `布局 ${placedLayoutId} 只有 ${placedSlotCount} 个格位：前 ${placedSlotCount} 个标签页在台上，` +
+                `其余 ${picked.length - placedSlotCount} 个已加入视图但不上台。`
+              : undefined;
+          return {
+            viewId: view.id,
+            name: view.name,
+            siteId: view.siteId,
+            layoutId: placedLayoutId,
+            slots: placed,
+            ...(note ? { note } : {}),
+          };
         },
       },
       {

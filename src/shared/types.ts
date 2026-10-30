@@ -69,7 +69,33 @@ export interface Bookmark {
   url: string;
   /** Site icon, inlined by the main process exactly like a tab's. */
   favicon?: string;
+  /**
+   * Folder this bookmark sits in; absent means unfiled (the top level).
+   *
+   * Folders are real records ({@link BookmarkFolder}) because they nest: a
+   * single-level label can live on the bookmark itself, but once a folder can
+   * have children, renaming or moving a middle node must not rewrite every
+   * descendant — the tree owns the names, the bookmarks only point at a leaf.
+   * Deleting a folder keeps its contents by re-parenting them one level up.
+   */
+  folderId?: string;
   /** Sort key; lower first. New bookmarks append. */
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A folder in the bookmark tree. Nesting is the reason this is a record rather
+ * than a label on the bookmark (see {@link Bookmark.folderId}); ids keep
+ * renames and subtree moves O(1) writes instead of rewrites of every path.
+ */
+export interface BookmarkFolder {
+  id: string;
+  name: string;
+  /** Parent folder id; absent means the top level. */
+  parentId?: string;
+  /** Sort key among siblings; lower first. New folders append. */
   order: number;
   createdAt: string;
   updatedAt: string;
@@ -79,6 +105,37 @@ export interface BookmarkDraft {
   id?: string;
   name: string;
   url: string;
+  /** Absent or empty moves the bookmark to unfiled. */
+  folderId?: string;
+}
+
+export interface BookmarkFolderDraft {
+  id?: string;
+  name: string;
+  /** Absent or empty puts the folder at the top level; also how a folder moves. */
+  parentId?: string;
+}
+
+export type BookmarkSourceKind = "edge" | "chrome" | "firefox";
+
+/**
+ * A detected browser profile whose bookmarks can be imported, without its local
+ * path: the renderer addresses sources by opaque id, and the main process is
+ * the only side that knows where the files live.
+ */
+export interface BookmarkImportSourceInfo {
+  id: string;
+  kind: BookmarkSourceKind;
+  browser: string;
+  profile: string;
+  /** http(s) bookmarks in the profile; `-1` means not counted (Firefox). */
+  count: number;
+}
+
+export interface BookmarkImportOutcome {
+  bookmarks: number;
+  folders: number;
+  skipped: number;
 }
 
 export interface Site {
@@ -333,6 +390,15 @@ export interface AutoFillReport {
     | "external"
     | "failed"
     | "login-failed";
+  /**
+   * When `skipped` is "no-password", which credential was absent.
+   *
+   * The launch path used to stay silent here and the manual fill button said
+   * "this account has no password" either way — wrong half the time, because an
+   * inheriting account is only as good as its site's default. Naming the reason
+   * lets the toast point at the dialog that actually fixes it.
+   */
+  missingCredential?: "identity-empty" | "site-empty" | "no-site" | "reference-broken";
 }
 
 export interface AppSettings {
@@ -454,6 +520,14 @@ export interface AppSettings {
   /** Version of the onboarding tour the user has already seen. */
   onboardingVersion: number;
   /**
+   * Version of the in-app guide the user has already read.
+   *
+   * Separate from `onboardingVersion`: the guided tour walks the live UI, while
+   * the guide is a page. A user can skip the tour and still read the guide, or
+   * read the guide and never run the tour — one counter cannot answer both.
+   */
+  guideVersion: number;
+  /**
    * Check GitHub for a newer release shortly after launch and every few hours.
    * On by default: finding out about updates should not depend on remembering to
    * press a button. Only the check is automatic — downloading and installing
@@ -513,6 +587,8 @@ export interface WorkspaceSnapshot {
   tags: Tag[];
   /** Plain bookmarks on the new-tab surface; no credentials, no site. */
   bookmarks: Bookmark[];
+  /** Folders of the bookmark tree; bookmarks reference these by id. */
+  bookmarkFolders: BookmarkFolder[];
   identities: Identity[];
   views: View[];
   /** Reusable step sequences, one per repeatable job on a site. */
@@ -550,6 +626,20 @@ export interface SiteDraft {
   /** Absent = follow the global default. */
   autoSubmit?: boolean;
   tagIds?: string[];
+  /**
+   * Set or replace the site's default password as part of saving.
+   *
+   * Carried on the draft rather than written through `setPassword` afterwards
+   * because a new site has no id until it has been saved: the dialog would have
+   * to save twice and thread the id back. One write, one place.
+   *
+   * Never read back — the renderer only learns whether a password exists, via
+   * `credentials.site[siteId]`. An empty string means "leave it alone"; use
+   * {@link clearSitePassword} to remove one.
+   */
+  password?: string;
+  /** Removes the site's default password while saving (no value round-trip). */
+  clearSitePassword?: boolean;
 }
 
 export interface TagDraft {
@@ -654,6 +744,7 @@ export type SettingsPatch = Partial<
     | "newTabBookmarks"
     | "closeToTray"
     | "onboardingVersion"
+    | "guideVersion"
     | "autoCheckUpdates"
     | "dismissedUpdateVersion"
     | "proxyMode"

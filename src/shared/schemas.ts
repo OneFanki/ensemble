@@ -40,6 +40,10 @@ export const siteDraftSchema = z.object({
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean().optional(),
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
+  // Capped so a paste of the wrong thing cannot be stored as a "password"; no
+  // minimum, because a site may genuinely use a short one.
+  password: z.string().max(512).optional(),
+  clearSitePassword: z.boolean().optional(),
 });
 
 export const tagDraftSchema = z.object({
@@ -144,6 +148,15 @@ export const bookmarkDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().max(120),
   url: z.string().trim().min(1).max(2000),
+  // Empty string means "unfiled", which is the same as omitting it.
+  folderId: z.string().trim().max(80).optional(),
+});
+
+export const bookmarkFolderDraftSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().trim().min(1).max(60),
+  // Empty string means "top level", which is the same as omitting it.
+  parentId: z.string().trim().max(80).optional(),
 });
 
 export const settingsPatchSchema = z.object({
@@ -192,6 +205,7 @@ export const settingsPatchSchema = z.object({
   newTabBookmarks: z.boolean().optional(),
   closeToTray: z.boolean().optional(),
   onboardingVersion: z.number().int().min(0).max(999).optional(),
+  guideVersion: z.number().int().min(0).max(999).optional(),
   autoCheckUpdates: z.boolean().optional(),
   dismissedUpdateVersion: z.string().max(32).optional(),
   proxyMode: z.enum(["system", "off", "manual"]).optional(),

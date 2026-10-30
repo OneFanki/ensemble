@@ -15,6 +15,9 @@ import type {
   AuthCheckResult,
   AutoFillReport,
   BookmarkDraft,
+  BookmarkFolderDraft,
+  BookmarkImportOutcome,
+  BookmarkImportSourceInfo,
   Engine,
   FocusLabelPayload,
   IdentityDraft,
@@ -116,6 +119,14 @@ export const IPC = {
   bookmarkDelete: "bookmark:delete",
   /** Moves one bookmark to an explicit index and renumbers the rest. */
   bookmarkMove: "bookmark:move",
+  /** Adds a bookmark folder, or renames and moves an existing one. */
+  bookmarkFolderSave: "bookmark:folder-save",
+  /** Deletes one folder; its contents re-parent one level up. */
+  bookmarkFolderDelete: "bookmark:folder-delete",
+  /** Detects importable browser bookmark profiles on this machine. */
+  bookmarkImportSources: "bookmark:import-sources",
+  /** Imports one detected source by id. */
+  bookmarkImport: "bookmark:import",
   /** Accepts a changed site address so credential filling may proceed again. */
   siteAcceptOrigin: "site:accept-origin",
   /** Reads the address-change notice left by the last blocked fill. */
@@ -219,6 +230,7 @@ export const IPC = {
   embeddedDevToolsResizeStart: "embedded:devtools-resize-start",
   embeddedDevToolsResizeEnd: "embedded:devtools-resize-end",
   embeddedZoom: "embedded:zoom",
+  embeddedViewport: "embedded:viewport",
   embeddedFind: "embedded:find",
   embeddedStopFind: "embedded:stop-find",
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
@@ -292,6 +304,14 @@ export interface EnsembleApi {
   setBookmarkFavicon(id: string, favicon?: string): Promise<WorkspaceSnapshot>;
   deleteBookmark(id: string): Promise<WorkspaceSnapshot>;
   moveBookmark(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
+  /** Adds a bookmark folder, or renames and moves an existing one. */
+  saveBookmarkFolder(draft: BookmarkFolderDraft): Promise<WorkspaceSnapshot>;
+  /** Deletes one folder; its contents re-parent one level up. */
+  deleteBookmarkFolder(id: string): Promise<WorkspaceSnapshot>;
+  /** Detects importable browser bookmark profiles on this machine. */
+  bookmarkImportSources(): Promise<BookmarkImportSourceInfo[]>;
+  /** Imports one detected source by id; the snapshot already carries the tree. */
+  bookmarkImport(id: string): Promise<{ snapshot: WorkspaceSnapshot; imported: BookmarkImportOutcome }>
   /**
    * Runs a flow. Omitting `identityId` opens a fresh tab as the site's first
    * usable account; the result names the tab so the caller can watch it.
@@ -432,8 +452,19 @@ export interface EnsembleApi {
   }): Promise<EmbeddedTab>;
   /** Opens a blank tab into a specific view and returns the new state. */
   openEmbeddedTabInView(viewId: string): Promise<EmbeddedState>;
-  /** Opens a blank tab and pins it to `slotIndex`, then focuses it. */
-  openEmbeddedTabInSlot(viewId: string, slotIndex: number): Promise<EmbeddedState>;
+  /**
+   * Opens a blank tab and pins it to `slotIndex`, then focuses it.
+   *
+   * `identityId` is optional because an empty slot has two legitimate meanings:
+   * "just put a page here" (the daily profile, as the address bar would) and
+   * "this cell is this account". Without it, filling a grid meant adding a page
+   * and then going to find the account elsewhere.
+   */
+  openEmbeddedTabInSlot(
+    viewId: string,
+    slotIndex: number,
+    identityId?: string,
+  ): Promise<EmbeddedState>;
   /**
    * Opens a blank page in an existing instance and shows it.
    *
@@ -507,6 +538,8 @@ export interface EnsembleApi {
    * account that happens to share the site.
    */
   zoomEmbeddedTab(tabId: string, direction: "in" | "out" | "reset"): Promise<number>;
+  /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
+  setEmbeddedViewport(tabId: string, size: { width: number; height: number } | null): Promise<{ width: number; height: number } | null>;
   findInEmbeddedTab(
     tabId: string,
     text: string,

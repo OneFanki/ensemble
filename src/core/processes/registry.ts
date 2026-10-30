@@ -11,8 +11,12 @@ import {
   type WaitCondition,
 } from "@shared/flows";
 import { clampSlot } from "@shared/layouts";
+// The folder-tree validator lives with the transfer sanitizers so a workspace
+// file and an export file repair the same shape through the same rules.
+import { sanitizeBookmarkFolders } from "@shared/transfer";
 import type {
   Bookmark,
+  BookmarkFolder,
   Engine,
   Identity,
   LayoutPreset,
@@ -173,6 +177,8 @@ export interface WorkspaceData {
   layoutPresets: LayoutPreset[];
   /** Plain bookmarks; see {@link Bookmark}. Absent in files from before 0.5. */
   bookmarks: Bookmark[];
+  /** Folders of the bookmark tree. Absent in files from before 1.3; those kept a name label per bookmark instead. */
+  bookmarkFolders: BookmarkFolder[];
 }
 
 export interface EngineCache {
@@ -193,6 +199,7 @@ export function emptyWorkspace(): WorkspaceData {
     manualEngines: [],
     layoutPresets: [],
     bookmarks: [],
+    bookmarkFolders: [],
   };
 }
 
@@ -496,7 +503,7 @@ export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData 
     instances: Array.isArray(source.instances) ? source.instances : base.instances,
     manualEngines: Array.isArray(source.manualEngines) ? source.manualEngines : base.manualEngines,
     layoutPresets: sanitizeLayoutPresets(source.layoutPresets),
-    bookmarks: sanitizeBookmarks(source.bookmarks),
+    ...sanitizeBookmarksSection(source.bookmarks, source.bookmarkFolders),
   };
 }
 
@@ -535,14 +542,90 @@ function inheritSiteFields(sites: Site[], identities: Identity[]): Identity[] {
 }
 
 /**
+ * Reads the bookmark tree: folders first, then bookmarks against them.
+ *
+ * Folders became records when they started nesting — a name label on the
+ * bookmark cannot express a subtree, and rewriting every descendant's path on a
+ * rename is the kind of write a tree should not need. The section function
+ * exists so the two lists are repaired together: a bookmark pointing at a
+ * dropped folder falls back to unfiled, and files from before the tree read
+ * their per-bookmark name labels into real top-level folders, so an upgrade
+ * keeps every grouping the user had.
+ */
+export function sanitizeBookmarksSection(
+  bookmarksInput: unknown,
+  foldersInput: unknown,
+): { bookmarks: Bookmark[]; bookmarkFolders: BookmarkFolder[] } {
+  const folders = sanitizeBookmarkFolders(foldersInput);
+  const folderIds = new Set(folders.map((folder) => folder.id));
+
+  // Legacy labels: distinct `folder` names in first-appearance order, each
+  // becoming (or joining) a top-level folder of the same name.
+  const legacyNames: string[] = [];
+  const seenLegacy = new Set<string>();
+  if (Array.isArray(bookmarksInput)) {
+    for (const item of bookmarksInput) {
+      if (!item || typeof item !== "object") continue;
+      const name = (item as Record<string, unknown>)["folder"];
+      if (typeof name !== "string") continue;
+      const trimmed = name.trim().slice(0, 60);
+      if (!trimmed || seenLegacy.has(trimmed)) continue;
+      seenLegacy.add(trimmed);
+      legacyNames.push(trimmed);
+    }
+  }
+  const now = new Date().toISOString();
+  const legacyToId = new Map<string, string>();
+  let nextOrder = folders.reduce((max, folder) => Math.max(max, folder.order), -1) + 1;
+  for (const name of legacyNames) {
+    const existing = folders.find((folder) => !folder.parentId && folder.name === name);
+    if (existing) {
+      legacyToId.set(name, existing.id);
+      continue;
+    }
+    const folder: BookmarkFolder = {
+      id: unusedFolderId(folderIds),
+      name,
+      order: nextOrder,
+      createdAt: now,
+      updatedAt: now,
+    };
+    nextOrder += 1;
+    folders.push(folder);
+    folderIds.add(folder.id);
+    legacyToId.set(name, folder.id);
+  }
+
+  const bookmarks = sanitizeBookmarks(bookmarksInput, folderIds, legacyToId);
+  return { bookmarks, bookmarkFolders: folders.sort((a, b) => a.order - b.order) };
+}
+
+/** First id derived from `base` that no folder in the set is using yet. */
+function unusedFolderId(taken: Set<string>): string {
+  let index = 0;
+  let id = "folder-migrated";
+  while (taken.has(id)) id = `folder-migrated-${(index += 1)}`;
+  taken.add(id);
+  return id;
+}
+
+/**
  * Reads stored bookmarks, dropping anything that cannot be opened.
  *
  * A bookmark whose URL is not http(s) is not a bookmark the app can honour — the
  * embedded surface refuses every other scheme, so keeping the record would only
  * produce a row that fails when clicked. Unknown fields are ignored rather than
  * rejected: a file written by a newer build must still open here.
+ *
+ * `folderId` survives only when it names a folder the same file carries; the
+ * legacy name label translates through `legacyNames` instead, which is how a
+ * pre-tree file upgrades without losing its grouping.
  */
-export function sanitizeBookmarks(input: unknown): Bookmark[] {
+export function sanitizeBookmarks(
+  input: unknown,
+  validFolderIds?: Set<string>,
+  legacyNames?: Map<string, string>,
+): Bookmark[] {
   if (!Array.isArray(input)) return [];
   const out: Bookmark[] = [];
   const seen = new Set<string>();
@@ -557,6 +640,17 @@ export function sanitizeBookmarks(input: unknown): Bookmark[] {
     const name = typeof raw["name"] === "string" ? raw["name"].trim().slice(0, 120) : "";
     const now = new Date().toISOString();
     const favicon = typeof raw["favicon"] === "string" ? raw["favicon"] : "";
+    // Every field is rebuilt rather than spread, so a new field that is not
+    // listed here is dropped on the next load. That is the price of validating
+    // shape, and it is why `folderId` has to appear in this object to survive a
+    // restart — forgetting it made the folder strip vanish from the new-tab page
+    // while the bookmarks themselves stayed.
+    const folderId = typeof raw["folderId"] === "string" ? raw["folderId"].trim() : "";
+    const legacyName = typeof raw["folder"] === "string" ? raw["folder"].trim().slice(0, 60) : "";
+    const resolvedFolder =
+      folderId && (!validFolderIds || validFolderIds.has(folderId))
+        ? folderId
+        : (legacyName && legacyNames?.get(legacyName)) || "";
     out.push({
       id,
       // An unnamed bookmark is still usable: the host is the only thing the user
@@ -564,6 +658,7 @@ export function sanitizeBookmarks(input: unknown): Bookmark[] {
       name: name || hostOf(url) || url,
       url,
       ...(favicon.startsWith("data:image/") ? { favicon } : {}),
+      ...(resolvedFolder ? { folderId: resolvedFolder } : {}),
       order: typeof raw["order"] === "number" && Number.isFinite(raw["order"]) ? raw["order"] : index,
       createdAt: typeof raw["createdAt"] === "string" ? raw["createdAt"] : now,
       updatedAt: typeof raw["updatedAt"] === "string" ? raw["updatedAt"] : now,

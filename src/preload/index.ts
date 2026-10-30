@@ -50,6 +50,10 @@ const api: EnsembleApi = {
   setBookmarkFavicon: (id, favicon) => ipcRenderer.invoke(IPC.bookmarkFavicon, id, favicon),
   deleteBookmark: (id) => ipcRenderer.invoke(IPC.bookmarkDelete, id),
   moveBookmark: (id, toIndex) => ipcRenderer.invoke(IPC.bookmarkMove, id, toIndex),
+  saveBookmarkFolder: (draft) => ipcRenderer.invoke(IPC.bookmarkFolderSave, draft),
+  deleteBookmarkFolder: (id) => ipcRenderer.invoke(IPC.bookmarkFolderDelete, id),
+  bookmarkImportSources: () => ipcRenderer.invoke(IPC.bookmarkImportSources),
+  bookmarkImport: (id) => ipcRenderer.invoke(IPC.bookmarkImport, id),
   acceptSiteOrigin: (siteId) => ipcRenderer.invoke(IPC.siteAcceptOrigin, siteId),
   takeOriginNotice: () => ipcRenderer.invoke(IPC.siteOriginNotice),
   saveLayoutPreset: (draft) => ipcRenderer.invoke(IPC.layoutPresetSave, draft),
@@ -142,8 +146,8 @@ const api: EnsembleApi = {
   },
   openEmbeddedTab: (input) => ipcRenderer.invoke(IPC.embeddedOpen, input),
   openEmbeddedTabInView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenInView, viewId),
-  openEmbeddedTabInSlot: (viewId, slotIndex) =>
-    ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex),
+  openEmbeddedTabInSlot: (viewId, slotIndex, identityId) =>
+    ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex, identityId),
   openEmbeddedTabInInstance: (instanceId) =>
     ipcRenderer.invoke(IPC.embeddedOpenInInstance, instanceId),
   duplicateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedDuplicate, tabId),
@@ -187,6 +191,7 @@ const api: EnsembleApi = {
     ipcRenderer.invoke(IPC.embeddedDevToolsResizeStart, tabId),
   endEmbeddedDevToolsResize: () => ipcRenderer.invoke(IPC.embeddedDevToolsResizeEnd),
   zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
+  setEmbeddedViewport: (tabId, size) => ipcRenderer.invoke(IPC.embeddedViewport, tabId, size),
   findInEmbeddedTab: (tabId, text, options) =>
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
   stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),

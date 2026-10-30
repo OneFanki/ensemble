@@ -124,6 +124,16 @@ async function removeBookmark(bookmark: Bookmark): Promise<void> {
 async function moveBookmark(bookmark: Bookmark, toIndex: number): Promise<void> {
   await workspace.moveBookmark(bookmark.id, toIndex);
 }
+
+/** Dropping a tile on a folder chip files it into that folder. */
+async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void> {
+  await workspace.saveBookmark({
+    id: bookmark.id,
+    name: bookmark.name,
+    url: bookmark.url,
+    folderId,
+  });
+}
 </script>
 
 <template>
@@ -214,10 +224,12 @@ async function moveBookmark(bookmark: Bookmark, toIndex: number): Promise<void> 
       <BookmarkGrid
         v-if="bookmarks.length"
         :bookmarks="bookmarks"
+        :folders="workspace.bookmarkFolders"
         @open="openBookmark"
         @rename="renameBookmark"
         @remove="removeBookmark"
         @move="moveBookmark"
+        @file="fileBookmark"
       />
 
       <p v-if="error" class="nt-error">{{ error }}</p>

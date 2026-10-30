@@ -18,6 +18,12 @@ import { buildWindowsInstallScript, updateFileName } from "@core/update/install"
 import { parseAccountBundle } from "@shared/accounts-transfer";
 import { DEFAULT_SETTINGS } from "@shared/defaults";
 import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
+import {
+  normalizeViewportSize,
+  VIEWPORT_MAX_HEIGHT,
+  VIEWPORT_MAX_WIDTH,
+  VIEWPORT_MIN,
+} from "@shared/embedded";
 import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
 import { localeTag, resolveLocale } from "@shared/locale";
 import {
@@ -30,6 +36,7 @@ import {
 } from "@shared/ipc";
 import {
   bookmarkDraftSchema,
+  bookmarkFolderDraftSchema,
   flowDraftSchema,
   identityDraftSchema,
   layoutPresetDraftSchema,
@@ -39,10 +46,13 @@ import {
   tagDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
+import { detectBookmarkSources, type BookmarkImportSource as DetectSource } from "@core/bookmarks-import";
 import { parseExportFile } from "@shared/transfer";
 import type {
   AppSettings,
   BookmarkDraft,
+  BookmarkFolderDraft,
+  BookmarkImportSourceInfo,
   FocusLabelPayload,
   IdentityDraft,
   LayoutId,
@@ -177,13 +187,22 @@ let currentTheme: AppSettings["theme"] = "dark";
 let tray: Tray | null = null;
 let mcpServer: McpServer | null = null;
 /**
- * AI page actions per origin, for the session.
+ * AI page actions this session, keyed by tab.
+ *
+ * Keyed by tab rather than by origin because the badge sits on a row, and a row
+ * is a tab. Keying by origin made every tab of one site show the same number, so
+ * two rows of the same site looked like the AI had worked on both — the count
+ * answered a site-level question while claiming to answer a row-level one.
  *
  * Reset when the app restarts rather than persisted: "how many operations the AI
- * made on this site" is a session fact, and a number that kept growing across
- * launches would stop meaning anything.
+ * made here" is a session fact, and a number that kept growing across launches
+ * would stop meaning anything.
+ *
+ * A closed tab keeps its entry on purpose: reopening the same site in a new tab
+ * legitimately starts from zero, and the memory cost of a session's worth of
+ * UUID keys is negligible next to holding the pages themselves.
  */
-const aiActions = new Map<string, number>();
+const aiActionsByTab = new Map<string, number>();
 /** Kept in sync so the close handler does not need the service to be initialized. */
 let settingsCache: AppSettings | null = null;
 /** Logins seen in embedded pages, waiting for the user to accept or dismiss. */
@@ -274,23 +293,31 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // needs the icon too rather than falling back to electron.exe's.
     ...(appIconPath() ? { appIcon: appIconPath() } : {}),
     resolveLogin: async (identityId) => {
-      if (!service) return undefined;
+      if (!service) return { ok: false, missing: "no-identity" } as const;
       const identity = service.findIdentity(identityId);
-      if (!identity) return undefined;
+      if (!identity) return { ok: false, missing: "no-identity" } as const;
       const site = service.findSite(identity.siteId);
-      if (!site) return undefined;
+      if (!site) return { ok: false, missing: "no-site-record" } as const;
       // The resolver mirrors the external launch path, including references.
-      const resolved = service.resolvedPassword(identityId);
-      if (!resolved) return undefined;
+      // It also reports *which* password is missing, so the toast can say "this
+      // site has no default" instead of blaming an account that inherits one.
+      const resolution = service.resolvePasswordDetail(identityId);
+      if (!resolution.password) {
+        return { ok: false, missing: resolution.missing ?? "identity-empty" } as const;
+      }
       return {
-        username: identity.username,
-        password: resolved,
-        // One resolver for the global default and the per-site override, so the
-        // built-in surface and the external launcher cannot answer differently.
-        submit: service.effectiveAutoSubmit(site),
-        extraFields: resolveLoginFields(identity),
-        baseUrl: site.baseUrl,
-      };
+        ok: true,
+        payload: {
+          username: identity.username,
+          password: resolution.password,
+          // One resolver for the global default and the per-site override, so
+          // the built-in surface and the external launcher cannot answer
+          // differently.
+          submit: service.effectiveAutoSubmit(site),
+          extraFields: resolveLoginFields(identity),
+          baseUrl: site.baseUrl,
+        },
+      } as const;
     },
     onShowPage: () => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1760,6 +1787,51 @@ function applyTheme(theme: AppSettings["theme"]): void {
   }
 }
 
+/**
+ * Applies a settings patch and every live side effect that belongs to it.
+ *
+ * Shared by the settings page (IPC) and the MCP `update_settings` tool, so an
+ * AI change lands exactly like a person's: theme repainted, locale re-resolved,
+ * zoom applied to open pages, proxy re-applied to the default session, workspace
+ * rebroadcast. A second copy of this sequence would drift, and the resulting
+ * bug — the value is persisted but nothing on screen changes, so the setting
+ * looks ignored — is silent and confusing.
+ *
+ * Returns the parsed patch: the values that were actually written, which is all
+ * a caller needs to echo back.
+ */
+function applySettingsPatch(patch: SettingsPatch): SettingsPatch {
+  if (!service) throw new Error("工作区尚未就绪");
+  const parsed = settingsPatchSchema.parse(patch);
+  // Apply to the cache first: saveSettings emits synchronously, and the overlay
+  // visibility decision inside that broadcast must already see the new value.
+  if (settingsCache) settingsCache = { ...settingsCache, ...parsed };
+  const settings = service.saveSettings(parsed);
+  settingsCache = settings;
+  if (parsed.theme) applyTheme(parsed.theme);
+  // "system" is resolved, not stored: the core layer needs a concrete language,
+  // and it has to get the same one the renderer will pick.
+  setCoreLocale(resolveLocale(settings.locale, systemLocaleTag()));
+  // The zoom setting reaches open pages only through this call: untouched
+  // pages follow it, pages the user zoomed by hand keep their factor.
+  if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
+  // Proxy changes apply live: a download already failing behind Clash should
+  // recover when the user fixes the setting, not on the next launch. Only the
+  // default session is touched here; open pages keep the proxy they loaded
+  // with until they reload, which is how a browser behaves.
+  if (
+    parsed.proxyMode !== undefined ||
+    parsed.proxyUrl !== undefined ||
+    parsed.proxyBypass !== undefined
+  ) {
+    void applyProxyToDefaultSession(settings).then((state) => {
+      console.info(`[proxy] ${state.description}`);
+    });
+  }
+  broadcastWorkspace();
+  return parsed;
+}
+
 function registerIpc(workspace: WorkspaceService): void {
   const handle = <T>(channel: string, listener: (...args: any[]) => Promise<T> | T) => {
     ipcMain.handle(channel, async (_event, ...args) => listener(...args));
@@ -1946,6 +2018,41 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.bookmarkFolderSave, (draft: BookmarkFolderDraft) => {
+    workspace.saveBookmarkFolder(bookmarkFolderDraftSchema.parse(draft));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkFolderDelete, (id: string) => {
+    workspace.deleteBookmarkFolder(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  /*
+   * Import sources are detected per listing and kept here: the renderer
+   * addresses one by opaque id, so the file paths never cross the bridge and a
+   * stale id is answered with the readable "没有可导入的来源" rather than a
+   * wrong file being read.
+   */
+  let importSources: Array<DetectSource & { id: string }> = [];
+  handle(IPC.bookmarkImportSources, () => {
+    importSources = detectBookmarkSources(process.platform as Platform).map((source, index) => ({
+      ...source,
+      id: `src-${index}`,
+    }));
+    return importSources.map(({ file: _file, ...rest }) => rest) satisfies BookmarkImportSourceInfo[];
+  });
+
+  handle(IPC.bookmarkImport, async (id: string) => {
+    const source = importSources.find((item) => item.id === String(id));
+    if (!source) throw new Error("导入来源已过期，请重新打开导入窗口");
+    const imported = await workspace.importBookmarksFromSource(source);
+    broadcastWorkspace();
+    return { snapshot: workspace.snapshot(), imported };
+  });
+
   handle(
     IPC.flowRun,
     async (input: {
@@ -2120,34 +2227,9 @@ function registerIpc(workspace: WorkspaceService): void {
   });
 
   handle(IPC.settingsSave, (patch: SettingsPatch) => {
-    const parsed = settingsPatchSchema.parse(patch);
-    // Apply to the cache first: saveSettings emits synchronously, and the overlay
-    // visibility decision inside that broadcast must already see the new value.
-    if (settingsCache) settingsCache = { ...settingsCache, ...parsed };
-    const settings = workspace.saveSettings(parsed);
-    settingsCache = settings;
-    if (parsed.theme) applyTheme(parsed.theme);
-    // "system" is resolved, not stored: the core layer needs a concrete language,
-    // and it has to get the same one the renderer will pick.
-    setCoreLocale(resolveLocale(settings.locale, systemLocaleTag()));
-    // The zoom setting reaches open pages only through this call: untouched
-    // pages follow it, pages the user zoomed by hand keep their factor.
-    if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
-    // Proxy changes apply live: a download already failing behind Clash should
-    // recover when the user fixes the setting, not on the next launch. Only the
-    // default session is touched here; open pages keep the proxy they loaded
-    // with until they reload, which is how a browser behaves.
-    if (
-      parsed.proxyMode !== undefined ||
-      parsed.proxyUrl !== undefined ||
-      parsed.proxyBypass !== undefined
-    ) {
-      void applyProxyToDefaultSession(settings).then((state) => {
-        console.info(`[proxy] ${state.description}`);
-      });
-    }
-    broadcastWorkspace();
-    return settings;
+    applySettingsPatch(patch);
+    // The renderer expects the full settings object after a save.
+    return workspace.settingsSnapshot();
   });
 
   handle(IPC.dataExport, async (options: { includeSecrets: boolean; passphrase?: string }) => {
@@ -2511,13 +2593,29 @@ function registerIpc(workspace: WorkspaceService): void {
    * page belongs in, so the tab is pinned there rather than wherever the view's
    * focus happened to be.
    */
-  handle(IPC.embeddedOpenInSlot, async (viewId: string, slotIndex: number) => {
-    const browser = ensureEmbeddedBrowser();
-    const tab = await browser.createTab({ viewId: String(viewId), origin: "manual" });
-    const pinned = browser.pinTab(String(viewId), Number(slotIndex), tab.id);
-    browser.focusPage();
-    return pinned;
-  });
+  handle(
+    IPC.embeddedOpenInSlot,
+    async (viewId: string, slotIndex: number, identityId?: string) => {
+      const browser = ensureEmbeddedBrowser();
+      // An identity-born cell: the page opens in that account's own partition,
+      // so the slot's login state is the account the user picked, and the dock
+      // already shows its name. Naming it after the identity means a grid of
+      // six accounts reads as six accounts instead of six "新标签页".
+      const identity =
+        typeof identityId === "string" && identityId
+          ? service?.findIdentity(String(identityId))
+          : undefined;
+      const tab = await browser.createTab({
+        viewId: String(viewId),
+        origin: "manual",
+        ...(identity ? { identityId: identity.id, siteId: identity.siteId } : {}),
+        ...(identity ? { label: identity.name, color: identity.color } : {}),
+      });
+      const pinned = browser.pinTab(String(viewId), Number(slotIndex), tab.id);
+      browser.focusPage();
+      return pinned;
+    },
+  );
 
   /**
    * "+" in a slot's tab strip: one more page in the same instance.
@@ -2742,6 +2840,22 @@ function registerIpc(workspace: WorkspaceService): void {
     ),
   );
   handle(
+    IPC.embeddedViewport,
+    (tabId: string, size: { width: number; height: number } | null) => {
+      // Round-tripped through the renderer as plain data; re-validate here
+      // rather than trusting whatever shape arrived over IPC.
+      const viewport = size
+        ? normalizeViewportSize(Number(size.width), Number(size.height))
+        : null;
+      if (size && !viewport) {
+        throw new Error(
+          `分辨率必须在 ${VIEWPORT_MIN}–${VIEWPORT_MAX_WIDTH} × ${VIEWPORT_MIN}–${VIEWPORT_MAX_HEIGHT} 之间`,
+        );
+      }
+      return ensureEmbeddedBrowser().setViewport(String(tabId), viewport ?? null);
+    },
+  );
+  handle(
     IPC.embeddedFind,
     (tabId: string, text: string, options?: { forward?: boolean; findNext?: boolean }) =>
       ensureEmbeddedBrowser().findInTab(String(tabId), String(text ?? ""), options ?? {}),
@@ -2854,19 +2968,17 @@ if (!gotLock) {
       auditPath: join(userDataDir(), "mcp-audit.log"),
       service,
       appVersion: app.getVersion(),
-      // The log is the record; this is the live signal the dock shows. Counted
-      // per origin so "the AI is working in that site right now" is visible
-      // while it happens, not only afterwards.
+      // The log is the record; this is the live signal the dock shows.
       onPageAction: (event) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
-        aiActions.set(event.origin, (aiActions.get(event.origin) ?? 0) + 1);
+        aiActionsByTab.set(event.tabId, (aiActionsByTab.get(event.tabId) ?? 0) + 1);
         mainWindow.webContents.send(IPC.aiPageAction, {
           origin: event.origin,
           tabId: event.tabId,
           tool: event.tool,
           ok: event.ok,
           originAuthorized: event.originAuthorized,
-          count: aiActions.get(event.origin) ?? 0,
+          count: aiActionsByTab.get(event.tabId) ?? 0,
         });
       },
       embedded: {
@@ -2934,6 +3046,7 @@ if (!gotLock) {
             viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
             layoutId,
           ),
+        setViewport: (tabId, size) => ensureEmbeddedBrowser().setViewport(tabId, size),
         pinTab: (slotIndex, tabId, viewId) =>
           ensureEmbeddedBrowser().pinTab(
             viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
@@ -2949,6 +3062,23 @@ if (!gotLock) {
         // not take the window away from the user. Recording `lastViewId` still
         // happens, so "restore last scene" sees what the AI worked on.
         openView: (viewId) => openEmbeddedView(viewId, { reveal: false }),
+        /**
+         * A container for a saved view, without opening its members.
+         *
+         * `compose_view` combines tabs that are already open, so it needs the
+         * container only — `openView` would open a fresh tab per saved member
+         * and leave the originals loose beside the duplicates.
+         */
+        openViewContainer: (viewId) => {
+          if (!service) throw new Error("工作区尚未就绪");
+          const view = service.findView(viewId);
+          if (!view) throw new Error("视图不存在");
+          return ensureEmbeddedBrowser().ensureView({
+            viewDefinitionId: view.id,
+            name: view.name,
+            layoutId: view.layoutId,
+          });
+        },
       },
       /*
        * Account bundles for AI clients. No save/open dialog: an AI has nobody to
@@ -2984,6 +3114,10 @@ if (!gotLock) {
         return result;
       },
       createFlowTab: (flow, identityId) => openFlowTab(flow, identityId),
+      // One implementation for both entry points: this is the same path the
+      // settings page takes, so an AI changing the theme or proxy gets the live
+      // side effects rather than a value that is only written to disk.
+      updateSettings: (patch) => applySettingsPatch(patch),
       onChange: broadcastMcp,
     });
 

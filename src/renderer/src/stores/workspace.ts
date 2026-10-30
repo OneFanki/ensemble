@@ -15,6 +15,10 @@ import type {
   AutoFillReport,
   Bookmark,
   BookmarkDraft,
+  BookmarkFolderDraft,
+  BookmarkFolder,
+  BookmarkImportOutcome,
+  BookmarkImportSourceInfo,
   Engine,
   Identity,
   IdentityDraft,
@@ -73,10 +77,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
    * changed the port or switched the endpoint off.
    */
   const mcp = ref<McpStatus | null>(null);
-  /** AI page actions this session, keyed by origin. */
+  /** AI page actions this session, keyed by tab id: a row is a tab. */
   const aiActions = ref<Record<string, number>>({});
-  /** Origin of the most recent AI action, so the dock can pulse the right row. */
-  const lastAiOrigin = ref<string | null>(null);
+  /** Tab of the most recent AI action, so the dock can pulse the right row. */
+  const lastAiTabId = ref<string | null>(null);
   let toastSeq = 0;
 
   const api = computed(() => window.ensemble);
@@ -102,11 +106,11 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         mcp.value = status;
       });
       window.ensemble.onAiPageAction((event) => {
-        // Per-origin totals for this session; the dock shows them beside the
-        // account, so "the AI is working in this site" is answerable at a glance
-        // instead of by reading the audit log.
-        aiActions.value = { ...aiActions.value, [event.origin]: event.count };
-        lastAiOrigin.value = event.origin;
+        // Per-tab totals for this session; the dock shows them beside the
+        // account, so "how much has the AI done to *this* page" is answerable at
+        // a glance instead of by reading the audit log.
+        aiActions.value = { ...aiActions.value, [event.tabId]: event.count };
+        lastAiTabId.value = event.tabId;
       });
     } finally {
       loading.value = false;
@@ -134,6 +138,23 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
     if (report.skipped === "login-failed") {
       notify(tr("app.toastLoginFailed", { name: report.label }), "warning");
+      return;
+    }
+    // A missing password is a configuration problem, not a failed login: the
+    // window opened, the page is fine, and nothing was typed. Saying so once —
+    // and saying *which* password — is what stops "why is this account not
+    // logged in?" from turning into a bug report. Naming the specific case
+    // matters because an inheriting account is fixed at the site, not the account.
+    if (report.skipped === "no-password") {
+      const key =
+        report.missingCredential === "site-empty"
+          ? "app.toastAutoFillSiteEmpty"
+          : report.missingCredential === "no-site"
+            ? "app.toastAutoFillNoSite"
+            : report.missingCredential === "reference-broken"
+              ? "app.toastAutoFillReferenceBroken"
+              : "app.toastAutoFillNoPassword";
+      notify(tr(key, { name: report.label }), "info");
       return;
     }
     // A confirmed session with nothing to fill is the expected quiet outcome —
@@ -229,6 +250,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const flows = computed<Flow[]>(() => snapshot.value?.flows ?? []);
   /** Plain bookmarks in stored order; the main process already sorted them. */
   const bookmarks = computed<Bookmark[]>(() => snapshot.value?.bookmarks ?? []);
+  /** Folders of the bookmark tree, in stored order. */
+  const bookmarkFolders = computed<BookmarkFolder[]>(() => snapshot.value?.bookmarkFolders ?? []);
   const engines = computed<Engine[]>(() => snapshot.value?.engines ?? []);
   const enginesReady = computed(() => snapshot.value?.enginesReady ?? true);
   /**
@@ -508,6 +531,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
    * Bookmark mutations apply the returned snapshot instead of waiting for the
    * broadcast: the star reads `bookmarks` right after adding, and an event that
    * has not landed yet would make the follow-up icon write miss its target.
+   *
+   * Each returns `true` on success and `undefined` on failure — `run` swallows
+   * the error into a toast, so the boolean is the only way a caller can avoid
+   * celebrating a save that never landed.
    */
   async function saveBookmark(draft: BookmarkDraft) {
     return run("bookmark", async () => {
@@ -520,18 +547,54 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function setBookmarkFavicon(id: string, favicon?: string) {
     return run("bookmark", async () => {
       apply(await window.ensemble.setBookmarkFavicon(id, favicon));
+      return true;
     });
   }
 
   async function deleteBookmark(id: string) {
     return run("bookmark", async () => {
       apply(await window.ensemble.deleteBookmark(id));
+      return true;
     });
   }
 
   async function moveBookmark(id: string, toIndex: number) {
     return run("bookmark", async () => {
       apply(await window.ensemble.moveBookmark(id, toIndex));
+    });
+  }
+
+  /** Adds a bookmark folder, or renames and moves an existing one. */
+  async function saveBookmarkFolder(draft: BookmarkFolderDraft) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.saveBookmarkFolder(toPlain(draft)));
+      return true;
+    });
+  }
+
+  /** Deletes one folder; its contents re-parent one level up. */
+  async function deleteBookmarkFolder(id: string) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.deleteBookmarkFolder(id));
+      return true;
+    });
+  }
+
+  /** Detected browser profiles that can be imported, refreshed per dialog open. */
+  const bookmarkImportSources = ref<BookmarkImportSourceInfo[]>([]);
+  async function loadBookmarkImportSources() {
+    return run("bookmark", async () => {
+      bookmarkImportSources.value = await window.ensemble.bookmarkImportSources();
+      return true;
+    });
+  }
+
+  /** Imports one detected source by id; resolves undefined on failure. */
+  async function importBookmarks(id: string): Promise<BookmarkImportOutcome | undefined> {
+    return run("bookmark", async () => {
+      const result = await window.ensemble.bookmarkImport(id);
+      apply(result.snapshot);
+      return result.imported;
     });
   }
 
@@ -839,7 +902,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     clearLoginCapture,
     mcp,
     aiActions,
-    lastAiOrigin,
+    lastAiTabId,
     sites,
     identities,
     views,
@@ -893,6 +956,12 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     setBookmarkFavicon,
     deleteBookmark,
     moveBookmark,
+    saveBookmarkFolder,
+    bookmarkFolders,
+    bookmarkImportSources,
+    loadBookmarkImportSources,
+    importBookmarks,
+    deleteBookmarkFolder,
     runFlow,
     setViewLayout,
     setViewSlots,

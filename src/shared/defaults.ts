@@ -38,6 +38,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   newTabBookmarks: true,
   closeToTray: true,
   onboardingVersion: 0,
+  // Unread on a fresh install: the dot on the title bar is how the guide is
+  // discovered in the first place.
+  guideVersion: 0,
   // A quiet background check keeps users on current builds without nagging:
   // only a newer version with published notes produces a prompt, and postponing
   // one version silences it until the next.

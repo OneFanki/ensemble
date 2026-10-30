@@ -25,6 +25,8 @@ import SideRail from "./components/SideRail.vue";
 import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import SpotlightTour from "./components/SpotlightTour.vue";
+import BookmarksPage from "./components/BookmarksPage.vue";
+import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
 import TitleBar from "./components/TitleBar.vue";
 import ToastStack from "./components/ToastStack.vue";
@@ -33,6 +35,7 @@ import ViewDialog from "./components/ViewDialog.vue";
 import ViewsPage from "./components/ViewsPage.vue";
 import { type Locale, setLocale, tr } from "./i18n";
 import { type LocaleSetting, resolveLocale } from "@shared/locale";
+import { GUIDE_VERSION, guideIsUnread } from "./onboarding/guide";
 import {
   shouldAutoStartTour,
   TOUR_STEPS,
@@ -43,7 +46,15 @@ import { useConfirmStore } from "./stores/confirm";
 import { useEmbeddedStore } from "./stores/embedded";
 import { useWorkspaceStore } from "./stores/workspace";
 
-type View = "browser" | "sites" | "identities" | "views" | "flows" | "tags" | "settings";
+type View =
+  | "browser"
+  | "sites"
+  | "identities"
+  | "views"
+  | "flows"
+  | "tags"
+  | "bookmarks"
+  | "settings";
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
@@ -56,7 +67,8 @@ const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; viewId?: st
   null,
 );
 const tourOpen = ref(false);
-const tourOriginView = ref<View>("browser");
+/** The in-app guide: a page of its own, not the spotlight tour. */
+const guideOpen = ref(false);
 /** Remount the tour on replay so it cannot keep the previous step index. */
 const tourSession = ref(0);
 const healthOpen = ref(false);
@@ -100,7 +112,8 @@ const overlayOpen = computed(
         layoutEditor.value ||
         healthOpen.value ||
         updatePrompt.value ||
-        tourOpen.value,
+        tourOpen.value ||
+        guideOpen.value,
     ),
 );
 
@@ -131,7 +144,6 @@ onMounted(async () => {
     if (view.value !== "browser") switchView("browser");
   });
   if (shouldAutoStartTour(store.settings)) {
-    tourOriginView.value = view.value;
     window.setTimeout(() => {
       tourOpen.value = true;
     }, 350);
@@ -177,7 +189,11 @@ onUnmounted(() => systemTheme.removeEventListener("change", handleSystemThemeCha
 
 function switchView(next: View) {
   view.value = next;
-  if (next !== "settings") {
+  // "settings" and "bookmarks" are deliberately not persisted as the view to
+  // restore: settings is a place you go to change something, and bookmarks is a
+  // management page whose content is also on the start page. Restoring either on
+  // launch would look like the app opened on the wrong screen.
+  if (next !== "settings" && next !== "bookmarks") {
     void store.saveSettings({ lastView: next });
   }
 }
@@ -206,21 +222,55 @@ function openMcpSettings() {
   view.value = "settings";
 }
 function startTour() {
-  tourOriginView.value = view.value;
   tourSession.value += 1;
   tourOpen.value = true;
 }
 
-async function finishTour(completed: boolean) {
+async function finishTour(completed: boolean): Promise<void> {
   tourOpen.value = false;
-  if (!completed) view.value = tourOriginView.value;
+  // Both endings land on the browser page, whoever started the tour and
+  // wherever it stopped.
+  //
+  // The reason is the empty views page: the step before the last one is "create
+  // a view", so a tour that ended there — or a user who pressed skip while on
+  // it — left a newcomer staring at a page of nothing and reading it as "I must
+  // create a view before anything can happen". The browser page is where the
+  // work starts, and it is also where the run dock the last step explained is
+  // visible. Replaying the tour from Settings therefore also ends here rather
+  // than dropping the user back into Settings.
+  view.value = "browser";
   if ((store.settings.onboardingVersion ?? 0) < TOUR_VERSION) {
     await store.saveSettings({ onboardingVersion: TOUR_VERSION });
+  }
+  // A finished tour hands over to the guide; a skipped one does not.
+  //
+  // The tour shows a newcomer where things are, one control at a time, and ends
+  // without ever stating the point: three steps, and the AI can do all of them.
+  // Someone who clicked through it (or read it) gets that summary immediately,
+  // which is the one moment they are paying attention. Someone who pressed skip
+  // asked not to be walked through anything, so nothing is pushed at them — the
+  // unread dot on the title bar stays there instead.
+  if (completed && guideIsUnread(store.settings)) {
+    await openGuide();
   }
 }
 
 function handleTourNavigate(next: TourView) {
   view.value = next;
+}
+
+/**
+ * Opens the guide and marks it read.
+ *
+ * Marking on open rather than on close: a dot that survives a visit because the
+ * user clicked away mid-read is worse than one that disappears a little early.
+ * The guide is short enough that opening it is reading it.
+ */
+async function openGuide(): Promise<void> {
+  guideOpen.value = true;
+  if (guideIsUnread(store.settings)) {
+    await store.saveSettings({ guideVersion: GUIDE_VERSION });
+  }
 }
 
 function openNewSite(seed?: Partial<SiteDraft>) {
@@ -531,6 +581,7 @@ async function handleLocale(locale: LocaleSetting) {
     <TitleBar
       @manage-sites="switchView('sites')"
       @menu-open="(open) => (stageObscured = open)"
+      @open-guide="openGuide"
     />
 
     <div v-if="store.loading" class="boot">
@@ -568,6 +619,7 @@ async function handleLocale(locale: LocaleSetting) {
         />
         <FlowsPage v-else-if="view === 'flows'" />
         <TagsPage v-else-if="view === 'tags'" />
+        <BookmarksPage v-else-if="view === 'bookmarks'" />
         <SettingsPage
           v-else
           :tab="settingsTab"
@@ -686,6 +738,11 @@ async function handleLocale(locale: LocaleSetting) {
       @navigate="handleTourNavigate"
       @close="finishTour"
     />
+
+    <!-- Above the tour in the tree, below it in z-order only when both are open,
+         which cannot happen: the guide is opened from the title bar or the tour's
+         last step, never while the tour is still running. -->
+    <GuideDialog v-if="guideOpen" @close="guideOpen = false" />
   </div>
 </template>
 

@@ -94,6 +94,34 @@ export interface WaitResult {
  * it can be embedded in each expression without a build step.
  */
 const HELPERS = `
+  // Walks every root the page actually renders into: the document, each open
+  // shadow root (recursively), and each same-origin iframe's document. Admin
+  // consoles increasingly mount controls inside web components or editor
+  // iframes; a document-only query misses them, which reads to the caller as
+  // "the control does not exist". Cross-origin iframes are separate processes
+  // (OOPIF) and stay out of reach of page script — a known boundary, not a bug.
+  const eachRoot = (visit) => {
+    const walkDocument = (doc) => {
+      visit(doc);
+      doc.querySelectorAll("*").forEach((el) => {
+        if (el.shadowRoot) walkDocument(el.shadowRoot);
+        if (el.tagName === "IFRAME") {
+          try {
+            const inner = el.contentDocument;
+            if (inner && inner.body) walkDocument(inner);
+          } catch {}
+        }
+      });
+    };
+    walkDocument(document);
+  };
+  const deepQueryAll = (selector) => {
+    const out = [];
+    eachRoot((root) => {
+      try { root.querySelectorAll(selector).forEach((el) => out.push(el)); } catch {}
+    });
+    return out;
+  };
   const isVisible = (el) => {
     if (!el || el.nodeType !== 1) return false;
     const style = getComputedStyle(el);
@@ -241,7 +269,7 @@ const HELPERS = `
    * whole never steals the match.
    */
   const controlForLabel = (wanted, exact) => {
-    const anchors = Array.from(document.querySelectorAll(LABELISH)).filter(isVisible);
+    const anchors = deepQueryAll(LABELISH).filter(isVisible);
     const ranked = [];
     for (const el of anchors) {
       const score = scoreName(textOf(el), wanted, exact);
@@ -268,7 +296,7 @@ const HELPERS = `
     if (!target) return { reason: "no-target" };
     if (target.selector) {
       let el = null;
-      try { el = document.querySelector(target.selector); } catch { return { reason: "invalid-selector" }; }
+      try { el = deepQueryAll(target.selector)[0] ?? null; } catch { return { reason: "invalid-selector" }; }
       if (!el) return { reason: "not-found" };
       return { el, matchedBy: "selector" };
     }
@@ -277,7 +305,7 @@ const HELPERS = `
       if (found) return found;
     }
     if (target.text || target.role) {
-      const pool = Array.from(document.querySelectorAll(INTERACTIVE)).filter(isVisible);
+      const pool = deepQueryAll(INTERACTIVE).filter(isVisible);
       const ranked = [];
       for (const el of pool) {
         if (target.role && roleOf(el) !== target.role) continue;
@@ -306,7 +334,8 @@ const HELPERS = `
    * order number from resolving to the whole page, which also contains it.
    */
   const textElement = (wanted, exact) => {
-    const all = Array.from(document.body ? document.body.querySelectorAll("*") : []);
+    const all = [];
+    eachRoot((root) => { try { root.querySelectorAll("*").forEach((el) => all.push(el)); } catch {} });
     let best = null;
     let bestScore = 0;
     for (const el of all) {
@@ -382,7 +411,8 @@ export function buildDomSnapshotExpression(
     const seen = new Set();
     const nodes = [];
     let total = 0;
-    const all = Array.from(document.body ? document.body.querySelectorAll("*") : []);
+    const all = [];
+    eachRoot((root) => { try { root.querySelectorAll("*").forEach((el) => all.push(el)); } catch {} });
     for (const el of all) {
       if (!isVisible(el)) continue;
       const role = roleOf(el);
@@ -440,16 +470,62 @@ export function buildElementPointExpression(target: TargetInput): string {
     el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return { ok: false, reason: "no-area" };
+    // Coordinates are dispatched at the TOP page's viewport, but an element
+    // inside an iframe reports rects in its own viewport. Sum the iframe
+    // offsets up the ownership chain so the point lands where the element is.
+    let offsetX = 0;
+    let offsetY = 0;
+    let doc = el.ownerDocument;
+    while (doc && doc !== document) {
+      const frame = doc.defaultView ? doc.defaultView.frameElement : null;
+      if (!frame) break;
+      const fr = frame.getBoundingClientRect();
+      offsetX += fr.x;
+      offsetY += fr.y;
+      doc = frame.ownerDocument;
+    }
+    // Marked so the caller can ask, after dispatching the click, whether the
+    // events actually landed on this element: an overlay or a scroll shift can
+    // redirect them elsewhere, and without the marker that failure looks like
+    // "the site ignored the click".
+    el.setAttribute("data-ens-click", "1");
     return {
       ok: true,
-      x: rect.x + rect.width / 2,
-      y: rect.y + rect.height / 2,
+      x: rect.x + offsetX + rect.width / 2,
+      y: rect.y + offsetY + rect.height / 2,
       width: rect.width,
       height: rect.height,
       tag: el.tagName.toLowerCase(),
       text: nameOf(el).slice(0, 80),
       selector: scriptPath(el),
       matchedBy: found.matchedBy,
+    };
+  })()`;
+}
+
+/**
+ * Reads back where a click landed and clears the target marker.
+ *
+ * `onTarget` is false when something else received the events — an overlay, a
+ * late scroll, a re-render between resolve and dispatch. The caller reports the
+ * actually-hit element so the model can react to facts instead of guessing
+ * whether a silent page means a broken handler or a missed click.
+ */
+export function buildClickHitExpression(x: number, y: number): string {
+  return `(() => {
+    // elementFromPoint stops at a shadow host; descend through open roots so a
+    // click that reached a shadow-internal element reads as on-target.
+    let el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+    for (let depth = 0; el && el.shadowRoot && depth < 8; depth += 1) {
+      const inner = el.shadowRoot.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    const marked = el ? el.closest("[data-ens-click]") : null;
+    document.querySelectorAll("[data-ens-click]").forEach((n) => n.removeAttribute("data-ens-click"));
+    return {
+      onTarget: Boolean(marked),
+      ...(el ? { tag: el.tagName.toLowerCase(), text: (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80) } : {}),
     };
   })()`;
 }

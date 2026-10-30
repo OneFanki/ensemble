@@ -164,6 +164,8 @@ const api: EnsembleApi = {
   reloadEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedReload, tabId),
   activateEmbeddedView: (viewId) => ipcRenderer.invoke(IPC.embeddedViewActivate, viewId),
   createEmbeddedView: (input) => ipcRenderer.invoke(IPC.embeddedViewCreate, input),
+  launchEmbeddedIdentities: (identityIds) =>
+    ipcRenderer.invoke(IPC.embeddedLaunchBatch, identityIds),
   setEmbeddedViewLayout: (viewId, layoutId) =>
     ipcRenderer.invoke(IPC.embeddedViewLayout, viewId, layoutId),
   groupLooseTabs: (layoutId) => ipcRenderer.invoke(IPC.embeddedGroupLoose, layoutId),

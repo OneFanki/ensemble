@@ -294,30 +294,13 @@ export const useEmbeddedStore = defineStore("embedded", () => {
       .map((id) => workspace.identities.find((identity) => identity.id === id))
       .filter((identity): identity is NonNullable<typeof identity> => Boolean(identity));
     if (chosen.length === 0) return;
-
-    const created = await window.ensemble.createEmbeddedView({
-      layoutId: workspace.settings.layout,
-    });
-    state.value = created;
-    const viewId = created.activeViewId;
-    const view = created.views.find((item) => item.id === viewId);
-    if (!viewId || !view) return;
-    const slotCount = embeddedSlotCount(view.layoutId, view.slotRects);
-
-    for (const [index, identity] of chosen.entries()) {
-      const tab = await window.ensemble.openEmbeddedTab({
-        identityId: identity.id,
-        siteId: identity.siteId,
-        label: identity.name,
-        ...(identity.color ? { color: identity.color } : {}),
-        viewId,
-      });
-      // More members than cells: the extra pages stay in the view off stage,
-      // which is the same rule a manual drop follows.
-      if (index < slotCount) {
-        state.value = await window.ensemble.pinEmbeddedTab(viewId, index, tab.id);
-      }
-    }
+    // One main-process call owns the whole run now: pages are created
+    // concurrently, pinned by index against the slot count read at pin time,
+    // and rolled back together on failure. The old renderer loop awaited one
+    // full page load per member and died on a layout change mid-run.
+    state.value = await window.ensemble.launchEmbeddedIdentities(
+      chosen.map((identity) => identity.id),
+    );
   }
 
   async function openView(viewId: string): Promise<void> {

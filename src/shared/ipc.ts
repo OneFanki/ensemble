@@ -198,6 +198,8 @@ export const IPC = {
   embeddedViewActivate: "embedded:view-activate",
   /** Creates an empty view container; views are never created by dragging. */
   embeddedViewCreate: "embedded:view-create",
+  /** Launches several identities into one scratch view; owned by the main process. */
+  embeddedLaunchBatch: "embedded:launch-batch",
   embeddedViewLayout: "embedded:view-layout",
   /** Groups every loose page into a new view with this layout. */
   embeddedGroupLoose: "embedded:group-loose",
@@ -464,6 +466,12 @@ export interface EnsembleApi {
   activateEmbeddedView(viewId: string | null): Promise<EmbeddedState>;
   /** Creates an empty view and puts it on stage. */
   createEmbeddedView(input: { name?: string; layoutId?: LayoutId }): Promise<EmbeddedState>;
+  /**
+   * Launches several identities into one scratch view with the default layout.
+   * The main process owns the whole run: pages are created concurrently, pinned
+   * by index, and rolled back together when one fails.
+   */
+  launchEmbeddedIdentities(identityIds: string[]): Promise<EmbeddedState>;
   setEmbeddedViewLayout(viewId: string, layoutId: LayoutId): Promise<EmbeddedState>;
   /** Groups every loose page into a new view with this layout; returns its id. */
   groupLooseTabs(layoutId: LayoutId): Promise<string | undefined>;

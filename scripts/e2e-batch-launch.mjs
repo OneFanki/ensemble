@@ -11,6 +11,11 @@
  *    (the site's `autoSubmit`) → wait for the session → navigate back to the
  *    start path. A second launch of the same account must confirm the session
  *    and go straight to the start path without visiting the login page again.
+ * 3. A batch whose default layout is Free (无布局) still creates every page and
+ *    leaves them unpinned in the view off stage — the old renderer loop died on
+ *    a stale slot count with "槽位不存在".
+ * 4. An envelope-style check endpoint (200 even signed out, verdict in the
+ *    body) signs in via the site's `authCheckSignedOut` marker.
  *
  * The mock server counts GET /login hits, which is what makes "did not detour
  * through the login page" observable instead of assumed.
@@ -46,6 +51,14 @@ const page = createServer((req, res) => {
   if (url.pathname === "/api/session") {
     res.writeHead(signedIn ? 200 : 401, { "content-type": "application/json" });
     res.end(JSON.stringify({ signedIn }));
+    return;
+  }
+  // Envelope-style session endpoint: like many API backends it answers 200 even
+  // when signed out and puts the verdict in the body. Only a body marker can
+  // tell the two apart.
+  if (url.pathname === "/api/session-envelope") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(signedIn ? JSON.stringify({ status: 0, signedIn: true }) : JSON.stringify({ status: 2014, msg: "mock请先登录" }));
     return;
   }
   if (url.pathname === "/login") {
@@ -201,23 +214,22 @@ async function waitFor(client, expression, timeout = 40_000) {
   return false;
 }
 
-/** The batch launcher's exact IPC sequence: one view, one page per account. */
+/**
+ * Batch launch through the one main-process IPC that owns the whole run.
+ * Returns the tab ids in account order, scoped to the view the call created
+ * (identityId alone is ambiguous once earlier batches are still open).
+ */
 async function batchLaunch(client, siteId, accounts) {
   return client.evaluate(`(async () => {
-    const created = await window.ensemble.createEmbeddedView({ layoutId: "2x2" });
-    const viewId = created.activeViewId;
-    const tabs = [];
-    for (const account of ${JSON.stringify(accounts)}) {
-      const tab = await window.ensemble.openEmbeddedTab({
-        identityId: account.identityId,
-        siteId: ${JSON.stringify(siteId)},
-        label: account.label,
-        viewId,
-      });
-      tabs.push(tab.id);
-      await window.ensemble.pinEmbeddedTab(viewId, tabs.length - 1, tab.id);
-    }
-    return tabs;
+    const state = await window.ensemble.launchEmbeddedIdentities(
+      ${JSON.stringify(accounts.map((account) => account.identityId))},
+    );
+    const viewId = state.activeViewId;
+    const wanted = ${JSON.stringify(accounts.map((account) => account.identityId))};
+    return wanted.map(
+      (identityId) =>
+        state.tabs.find((tab) => tab.viewId === viewId && tab.identityId === identityId)?.id,
+    );
   })()`);
 }
 
@@ -367,6 +379,87 @@ try {
     "a tab without an identity is still blank",
     blank === "about:blank" || blank === "" || blank === undefined,
     blank,
+  );
+
+  // --- Batch under the Free layout (无布局): the old renderer loop threw
+  // "槽位不存在" on stale slot counts and died halfway. The main-process batch
+  // re-reads the slot table at pin time, so every page must still be created
+  // and stay in the view off stage. ---
+  await client.evaluate(
+    `window.ensemble.saveAppSettings({ layout: "free" })`,
+  );
+  await wait(300);
+  const freeTabs = await batchLaunch(client, site.id, [
+    { identityId: alpha.id, label: "账号甲" },
+    { identityId: beta.id, label: "账号乙" },
+  ]);
+  const freeState = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const view = state.views.find((item) => item.id === state.activeViewId);
+    return {
+      layoutId: view?.layoutId,
+      slotTabs: view?.slotTabs,
+      inView: state.tabs.filter((tab) => tab.viewId === state.activeViewId).length,
+    };
+  })()`);
+  check(
+    "a batch under the Free layout still creates every page",
+    freeTabs?.length === 2 && freeTabs.every(Boolean) && freeState?.inView === 2,
+    { freeTabs, freeState },
+  );
+  // Free counts as ONE full-stage cell: the first page takes the stage, the
+  // rest stay in the view off stage. The old loop died on exactly this layout
+  // with "槽位不存在" once it tried to pin the second member.
+  check(
+    "Free-layout batch pins only the first page and throws nowhere",
+    freeState?.layoutId === "free" &&
+      Array.isArray(freeState?.slotTabs) &&
+      freeState.slotTabs.length === 1 &&
+      freeState.slotTabs[0] === freeTabs?.[0],
+    freeState,
+  );
+
+  // --- Envelope-style auth check: the endpoint answers 200 even when signed
+  // out and only the body marker tells the truth. The pipeline must read the
+  // marker, sign the account in, and land it on its start path. ---
+  const envelopeSite = await call("create_site", {
+    name: "信封式登录站点",
+    baseUrl: PAGE_URL,
+    loginPath: "/login",
+    authCheckPath: "/api/session-envelope",
+    authCheckSignedOut: "mock请先登录",
+    autoSubmit: true,
+    password: "e2e-site-password",
+  });
+  const gamma = await call("create_identity", {
+    siteId: envelopeSite.id,
+    name: "账号丙",
+    username: "user-gamma",
+    role: "成员",
+    color: "rose",
+    passwordMode: "inherit",
+    startPath: "/gamma",
+  });
+  const envelopeTab = await client.evaluate(`(async () => {
+    const tab = await window.ensemble.openEmbeddedTab({
+      identityId: ${JSON.stringify(gamma.id)},
+      siteId: ${JSON.stringify(envelopeSite.id)},
+      label: "账号丙",
+    });
+    return tab.id;
+  })()`);
+  const envelopeInfos = await waitFor(
+    client,
+    `(async () => {
+      const infos = await (${tabInfoExpression([envelopeTab])})();
+      return infos[0]?.url === "${PAGE_URL}gamma" && infos[0]?.title.includes("已登录");
+    })()`,
+  ).then(() => client.evaluate(`(${tabInfoExpression([envelopeTab])})()`));
+  check(
+    "a 200-envelope check endpoint signs in via the body marker",
+    envelopeInfos?.[0]?.url === `${PAGE_URL}gamma` &&
+      envelopeInfos?.[0]?.title.includes("已登录"),
+    envelopeInfos,
   );
 } catch (error) {
   check("run completed", false, String(error));

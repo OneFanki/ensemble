@@ -33,6 +33,39 @@
 #### Full changes
 
 
+## [1.3.0] - 2026-10-31
+
+### 中文
+
+- **批量启动一次全开**：多个账号同时打开，不再一个等一个，总时长约原来的三分之一；中途改布局也不会再打断启动
+- **接口「未登录也返回 200」的站点能自动登录了**：站点设置新增「未登录标记」，填一段未登录响应里才有的文字，检测命中就按未登录处理
+- **多开更省资源**：不在画面里的标签页闲置一分钟后自动降速，AI 一操作立即恢复全速，多账号并排不再持续吃满 GPU
+- 修复无布局 / 松散标签页下打开菜单时，底下的页面整体上移一截的问题
+
+#### 完整变更
+
+- **批量启动改由主进程并发执行**：一批最多 3 页同时打开；落格按打开时的实时布局计算，中途切到无布局只会让多出的页面留在视图内，不再抛「槽位不存在」打断整批；任一页面失败时整批连同容器一起回收，不会留下开了一半的结果
+- **站点新增「未登录标记」（可选）**：有些后端无论是否登录都返回 HTTP 200，登录与否只看响应体里的业务码，导致自动登录永远误判「已登录」。在站点设置里填入未登录响应里出现的文字（前 4 KB 内匹配），命中即按未登录处理，优先于 HTTP 状态。启动自动登录与账号页的批量登录态检测共用这一判定；MCP 的 `create_site` / `update_site` 也可设置
+- **停放页自动降速**：不在画面中的标签页闲置 60 秒后按 8× CPU 节流降速，rAF 驱动的 3D 场景帧率按比例回落；正在播放声音、开着 DevTools 或回到画面中的页面不受影响；AI 的每条操作（读取、点击、截图）都会先把页面恢复全速再执行。自动化测试运行（headless）不启用降速
+- **修复无布局弹层底图上移**：打开「从站点打开」菜单、右键菜单等弹层时，垫在底下的页面截图比实况位置高出一个标签条高度（26px），弹层关闭后恢复。根因是冻结截图没有走与实况摆放相同的几何函数
+- 回归覆盖：批量与登录标记 `e2e-batch-launch`（10 项）、弹层底图 `e2e-overlay-freeze`（7 项）、标记判定 `tests/auth-check-marker.test.ts`
+
+### English
+
+- **Batch launch opens everyone at once**: identities in a batch now open concurrently instead of one after another, finishing in about a third of the time; changing the layout mid-run no longer aborts the launch
+- **Auto-login works on APIs that answer 200 even when signed out**: sites gain an optional "signed-out marker" — a snippet from the signed-out response body; when the check endpoint's body matches it, the session is treated as signed out
+- **Lighter when many accounts are open**: tabs outside the stage throttle down after a minute idle and return to full speed the moment the AI touches them, so a wall of accounts no longer pins the GPU
+- Fixed the page jumping up by the tab-strip height whenever an overlay opened over a flat / no-layout stage
+
+#### Full changes
+
+- **Batch launch is owned by the main process and runs concurrently**: up to 3 pages open at a time; slot assignment re-reads the live layout, so switching to the Free layout mid-run simply parks the extra pages instead of throwing and killing the batch; any failure recycles the whole batch together with its container
+- **Sites gain an optional "signed-out marker"**: some backends wrap every answer in HTTP 200 and put the verdict in the body, which made the session probe read signed-out as signed-in and never fill. Enter a snippet that only appears in the signed-out body (matched within the first 4 KB); a hit overrides the HTTP status. Both the launch auto-login and the accounts-page batch auth check share this rule, and MCP `create_site` / `update_site` can set it
+- **Parked tabs slow down when idle**: after 60 seconds without AI traffic, an off-stage tab is throttled to 8× CPU, which brings rAF-driven 3D scenes down proportionally. Audible pages, pages with DevTools open, and pages on stage are never touched, and every AI command restores full speed before it runs. Headless test runs keep throttling off
+- **Fixed the overlay backdrop jumping in flat mode**: the frozen picture painted under menus sat one 26px tab-strip band higher than the live page, because the freeze path skipped the geometry function the live placement uses
+- Regression coverage: batch and marker `e2e-batch-launch` (10 checks), overlay freeze `e2e-overlay-freeze` (7 checks), marker matching `tests/auth-check-marker.test.ts`
+
+
 ## [1.2.0] - 2026-10-27
 
 ### 中文

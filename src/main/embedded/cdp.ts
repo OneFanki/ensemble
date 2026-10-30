@@ -18,7 +18,16 @@ export class EmbeddedCdp {
   /** Resolves once attach and focus emulation are both in place. */
   private ready: Promise<void> | null = null;
 
-  constructor(private readonly contents: WebContents) {}
+  constructor(
+    private readonly contents: WebContents,
+    /**
+     * Called before every protocol command. The browser manager uses it to
+     * keep the page usable: a parked page idles hidden after a while, and the
+     * first CDP call of an AI burst must show it again before the actual
+     * command runs — screenshots and input dispatch included.
+     */
+    private readonly onActivity?: () => Promise<void> | void,
+  ) {}
 
   isAttached(): boolean {
     return this.attached && !this.contents.isDestroyed();
@@ -65,8 +74,23 @@ export class EmbeddedCdp {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
+    await this.onActivity?.();
     await this.prepare();
     return (await this.contents.debugger.sendCommand(method, params)) as T;
+  }
+
+  /**
+   * CPU throttling control for the parked-page slowdown.
+   *
+   * Deliberately not routed through `send`: the sweep must not count as AI
+   * activity, or it would keep the page awake forever. Range is 1 (no
+   * throttling) to 20.
+   */
+  async setCpuThrottlingRate(factor: number): Promise<void> {
+    await this.prepare();
+    await this.contents.debugger.sendCommand("Emulation.setCPUThrottlingRate", {
+      rate: factor,
+    });
   }
 
   async evaluate<T>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {

@@ -197,6 +197,46 @@ try {
   check("the stage is frozen behind it", dialog?.frozen === 1, dialog);
   check("the dialog is the topmost element", dialog?.topIsInDialog === true, dialog);
 
+  // --- Flat mode (loose tab): the frozen picture must sit exactly where the
+  // live view was, including the 26px instance-tab-strip band. Freezing at the
+  // raw stage origin painted the page one band too high, so the page visibly
+  // jumped up whenever an overlay opened over a flat stage (2026-10-30). ---
+  const flat = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const before = await api.getEmbeddedState();
+    // A genuinely flat stage: close the view ("+" would otherwise join it —
+    // that is the dock's contract), then open a loose tab.
+    if (before.activeViewId) await api.closeEmbeddedView(before.activeViewId, "all");
+    const loose = await api.openEmbeddedTab({});
+    await api.navigateEmbeddedTab(loose.id, ${JSON.stringify(`http://127.0.0.1:${PAGE_PORT}/flat`)});
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const state = await api.getEmbeddedState();
+      const tab = state.tabs.find((item) => item.id === loose.id);
+      if (tab?.url?.startsWith("http://127.0.0.1:${PAGE_PORT}")) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const state = await api.getEmbeddedState();
+    const tab = state.tabs.find((item) => item.id === loose.id);
+    const slots = await api.freezeEmbedded();
+    return { activeViewId: state.activeViewId ?? null, bounds: tab?.bounds, slots };
+  })()`);
+  const flatSlot = flat?.slots?.[0];
+  check(
+    "flat stage is actually flat (no view active)",
+    flat?.activeViewId === null,
+    flat?.activeViewId,
+  );
+  check(
+    "flat freeze lands on the live view rect, header band included",
+    Boolean(flatSlot) &&
+      Boolean(flat?.bounds) &&
+      flatSlot.rect.y === flat.bounds.y &&
+      flatSlot.rect.height === flat.bounds.height &&
+      flatSlot.rect.x === flat.bounds.x &&
+      flatSlot.rect.width === flat.bounds.width,
+    { bounds: flat?.bounds, rect: flatSlot?.rect },
+  );
+
   client.close();
 } catch (error) {
   check("run completed", false, String(error));

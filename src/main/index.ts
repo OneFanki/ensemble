@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
-import { setCoreLocale } from "@core/i18n/translate";
+import { setCoreLocale, t } from "@core/i18n/translate";
 import { nextActiveInstanceId } from "@core/launch/active-instance";
 import { resolveLoginFields } from "@core/login-fields";
 import {
@@ -298,6 +298,9 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       }
     },
     ...(headless ? { headless: true } : {}),
+    // Headless runs keep every page unthrottled (same reason as the windows
+    // themselves); interactive runs freeze parked pages an AI is not using.
+    ...(headless ? {} : { aiIdleFreeze: true }),
     // Read lazily: pages are opened long after the browser is constructed, and
     // the settings may have changed since. Tabs already open keep the proxy they
     // loaded with until they reload, which is how a browser behaves.
@@ -474,10 +477,15 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
   const probe = async (): Promise<boolean | "pending" | "unknown"> => {
     if (!site?.authCheckPath) return "unknown";
     try {
-      const result = await browser.authProbe(tabId, site.authCheckPath, site.baseUrl);
+      const result = await browser.authProbe(
+        tabId,
+        site.authCheckPath,
+        site.baseUrl,
+        site.authCheckSignedOut,
+      );
       if (result.ok) return result.signedIn === true;
       if (result.reason === "cross-origin" || result.reason === "bad-site") return "unknown";
-    } catch {
+    } catch (error) {
       // The tab may be mid-navigation; the caller decides whether to retry.
     }
     return "pending";
@@ -2626,6 +2634,44 @@ function registerIpc(workspace: WorkspaceService): void {
     // until the browser page is in front.
     browser.focusPage();
     return state;
+  });
+  handle(IPC.embeddedLaunchBatch, async (identityIds: string[]) => {
+    const browser = ensureEmbeddedBrowser();
+    if (!service) throw new Error("工作区未就绪");
+    const members = (Array.isArray(identityIds) ? identityIds : [])
+      .map((id) => service?.findIdentity(String(id)))
+      .filter((identity) => identity !== undefined);
+    if (members.length === 0) throw new Error(t("error.viewMembers"));
+    const siteId = members[0]?.siteId;
+    // Same rule as the external batch: one layout describes one screen, so a
+    // batch spanning two sites has no sensible tiling.
+    if (members.some((identity) => identity.siteId !== siteId)) {
+      throw new Error(t("error.batchMixedSites"));
+    }
+    // A batch is the one launch that is about a layout: one scratch container,
+    // laid out with the current default layout, gone from the workspace when
+    // closed. The whole run — creation, pinning, rollback — lives in the main
+    // process so a renderer navigation cannot interrupt it halfway.
+    const state = browser.createView({
+      layoutId: service.settingsSnapshot().layout,
+    });
+    const viewId = state.activeViewId;
+    if (!viewId) throw new Error("批量启动容器创建失败");
+    browser.focusPage();
+    return browser.launchIdentityBatch(
+      members.map((identity) => ({
+        identityId: identity.id,
+        ...(identity.siteId ? { siteId: identity.siteId } : {}),
+        label: identity.name,
+        ...(identity.color ? { color: identity.color } : {}),
+        url: embeddedStartUrl(identity.id),
+      })),
+      viewId,
+      (tab, index) => {
+        const identityId = members[index]?.id;
+        if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
+      },
+    );
   });
   handle(IPC.embeddedViewLayout, (viewId: string, layoutId: LayoutId) =>
     ensureEmbeddedBrowser().setViewLayout(String(viewId), String(layoutId)),

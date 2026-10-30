@@ -16,7 +16,7 @@ import {
   type WaitCondition,
   type WaitResult,
 } from "@core/cdp/inspect";
-import { buildAuthCheckExpression, buildFillExpression } from "@core/cdp/login";
+import { bodyMarksSignedOut, buildAuthCheckExpression, buildFillExpression } from "@core/cdp/login";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -55,6 +55,29 @@ import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type WebC
 import { EmbeddedCdp } from "./cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
+
+/**
+ * How long CDP traffic keeps a parked page exempt from the freeze sweep.
+ *
+ * Generous on purpose: a polling wait or a slow flow re-marks the page on every
+ * command, so the window only ever lapses on real idleness — an AI session that
+ * stopped talking, a page parked while the user reads the accounts page.
+ */
+const AI_ACTIVE_WINDOW_MS = 60_000;
+const FREEZE_SWEEP_INTERVAL_MS = 10_000;
+/**
+ * CPU throttling applied to parked pages past their idle window.
+ *
+ * This is the only per-page lever Electron 44 actually honours — measured on
+ * this very codebase: native background throttling never fires (a view parked
+ * off the window stays "visible"), `Page.setWebLifecycleState` only shallow-
+ * freezes a visible page (rAF keeps firing), and `setVisible(false)` does not
+ * flip `document.visibilityState` either (rAF keeps firing, proven via a
+ * same-partition reader tab). Throttling slows every renderer task, so an
+ * rAF-driven 3D loop misses frames proportionally — the scene costs less
+ * without any visibility semantics being faked. 1 restores full speed.
+ */
+const PARKED_CPU_THROTTLE = 8;
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -146,6 +169,19 @@ export interface EmbeddedBrowserOptions {
    * this page, here it is" — and a test asking for a page is not a user.
    */
   headless?: boolean;
+  /**
+   * Slow parked pages down once they have been idle for a while.
+   *
+   * A page parked off the window is still "visible" to Chromium, so the stock
+   * background throttling never kicks in, and neither lifecycle freezing nor
+   * `setVisible(false)` changes that (both measured — see `PARKED_CPU_THROTTLE`).
+   * What works is CDP CPU throttling: the sweep throttles parked pages to
+   * `PARKED_CPU_THROTTLE` after `AI_ACTIVE_WINDOW_MS` without CDP traffic, and
+   * the first CDP command of an AI burst restores full speed before the command
+   * runs (the hook in `EmbeddedCdp.send` is awaited). Headless runs keep this
+   * off: their timing assertions assume pages run unthrottled.
+   */
+  aiIdleFreeze?: boolean;
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
@@ -246,6 +282,19 @@ export class EmbeddedBrowser {
    * needed. Bounded because the entries hold base64 payloads.
    */
   private faviconCache = new Map<string, { data: string; fetched: number }>();
+  /**
+   * Per-page AI activity bookkeeping for the parked-page hiding.
+   *
+   * `aiActiveUntil` records how long CDP traffic keeps a page exempt from the
+   * sweep; `throttledTabs` tracks pages currently throttled; `stagedTabs` mirrors
+   * "which pages are on stage right now" (recomputed by `applyLayout`, the one
+   * placement authority) so the sweep never hides a page the user is looking
+   * at. All three are runtime-only: a restart starts from scratch.
+   */
+  private aiActiveUntil = new Map<string, number>();
+  private throttledTabs = new Set<string>();
+  private stagedTabs = new Set<string>();
+  private freezeSweep: NodeJS.Timeout | undefined;
 
   constructor(private readonly options: EmbeddedBrowserOptions) {}
 
@@ -651,6 +700,28 @@ export class EmbeddedBrowser {
     if (slotIndex < 0 || slotIndex >= slotCount) throw new Error("槽位不存在");
     const tab = tabId ? this.requireTab(tabId) : undefined;
     const root = tab ? (this.instanceRoot(tab.instanceId) ?? tab) : undefined;
+    this.placeInstanceInSlot(view, slotIndex, root, tab);
+    this.applyLayout();
+    this.emitState();
+    return this.state();
+  }
+
+  /**
+   * Writes one instance into a view's slot table. Shared by the drag-and-drop
+   * pin and the batch launcher; callers decide whether an out-of-range slot is
+   * an error (the UI) or a silent skip (the batch).
+   */
+  private placeInstanceInSlot(
+    view: ViewRecord,
+    slotIndex: number,
+    root: TabRecord | undefined,
+    pinned?: TabRecord,
+  ): void {
+    const slotCount = embeddedSlotRects(
+      view.layoutId,
+      { x: 0, y: 0, width: 1, height: 1 },
+      view.slotRects,
+    ).length;
     if (root && root.viewId !== view.id) {
       // Pinning is also how a loose instance joins a view.
       this.assignView(root, view.id);
@@ -669,12 +740,102 @@ export class EmbeddedBrowser {
     );
     if (root && view.focusedTabId !== root.id) {
       view.focusedTabId = root.id;
-      this.activeTabId = tab?.id ?? root.id;
+      this.activeTabId = pinned?.id ?? root.id;
     }
     this.activeViewId = view.id;
+  }
+
+  /**
+   * Launches a batch of identities into one view, a few pages at a time.
+   *
+   * The batch belongs to the main process, not to a renderer for-loop: pages
+   * are created `concurrency` at a time (each `createTab` waits out a full page
+   * load, so serial creation made a four-member batch take four loads end to
+   * end), and each page is pinned into the slot matching its order — against
+   * the slot count read *at pin time*, so a layout switched to Free mid-run
+   * just leaves the extras off stage instead of throwing "槽位不存在" and
+   * killing the run. Any failure recycles every page this call created together
+   * with the container: a batch is all-or-nothing (same rule as the external
+   * launcher).
+   */
+  async launchIdentityBatch(
+    inputs: Array<{
+      identityId?: string;
+      siteId?: string;
+      label?: string;
+      color?: RoleColor;
+      url?: string;
+    }>,
+    viewId: string,
+    onCreated?: (tab: EmbeddedTab, index: number) => void,
+    concurrency = 3,
+  ): Promise<EmbeddedState> {
+    const view = this.requireView(viewId);
+    let failed = false;
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < inputs.length && !failed) {
+        const index = cursor++;
+        const input = inputs[index];
+        if (!input) break;
+        try {
+          const tab = await this.createTab({
+            ...(input.url ? { url: input.url } : {}),
+            ...(input.identityId ? { identityId: input.identityId } : {}),
+            ...(input.siteId ? { siteId: input.siteId } : {}),
+            ...(input.label ? { label: input.label } : {}),
+            ...(input.color ? { color: input.color } : {}),
+            viewId: view.id,
+            origin: "manual",
+          });
+          onCreated?.(tab, index);
+          this.pinBatchTab(view, index, tab.id);
+        } catch (error) {
+          // Flag first: sibling workers check it before starting another page.
+          failed = true;
+          throw error;
+        }
+      }
+    };
+    // allSettled, not all: a rollback must wait out the in-flight page loads,
+    // or pages that land after the recycle would survive as orphans.
+    const results = await Promise.allSettled(
+      Array.from({ length: Math.max(1, Math.min(concurrency, inputs.length)) }, worker),
+    );
+    const failure = results.find((item) => item.status === "rejected");
+    if (failure) {
+      failed = true;
+      // The container came from this call, so it goes back with the pages.
+      this.closeView(view.id, "all");
+      throw failure.reason;
+    }
+    // No trailing activate(): the old renderer loop never activated during a
+    // batch, and activate() routes through planTabClick, whose grid plan would
+    // write a slot entry even into a Free layout's empty slot table. Pinning
+    // has already focused the page in slot 0 for a slotted layout.
     this.applyLayout();
     this.emitState();
     return this.state();
+  }
+
+  /**
+   * Batch-time pin: slots are counted when the pin runs, not when the batch
+   * started, and an out-of-range index is a skip rather than an error — with
+   * more members than cells the extras stay in the view off stage, which is the
+   * same rule a manual drop follows.
+   */
+  private pinBatchTab(view: EmbeddedView, slotIndex: number, tabId: string): void {
+    const slotCount = embeddedSlotRects(
+      view.layoutId,
+      { x: 0, y: 0, width: 1, height: 1 },
+      view.slotRects,
+    ).length;
+    if (slotIndex < 0 || slotIndex >= slotCount) return;
+    const tab = this.requireTab(tabId);
+    const root = this.instanceRoot(tab.instanceId) ?? tab;
+    this.placeInstanceInSlot(view, slotIndex, root, tab);
+    this.applyLayout();
+    this.emitState();
   }
 
   renameView(viewId: string, name: string): EmbeddedState {
@@ -944,7 +1105,7 @@ export class EmbeddedBrowser {
       instanceId,
       ...(input.openerId ? { openerId: input.openerId } : {}),
       view,
-      cdp: new EmbeddedCdp(view.webContents),
+      cdp: new EmbeddedCdp(view.webContents, () => this.markCdpActivity(id)),
       url: "about:blank",
       title: "",
       loading: false,
@@ -1318,6 +1479,9 @@ export class EmbeddedBrowser {
     const tab = this.requireTab(tabId);
     const target = normalizeEmbeddedUrl(url);
     if (!target) throw new Error("只支持 http(s) 地址");
+    // A frozen page must take the navigation; loadURL alone can leave the
+    // old document parked in the lifecycle cache.
+    this.wakeTab(tabId);
     await tab.view.webContents.loadURL(target).catch(() => {
       // The error page is the feedback; the tab stays alive.
     });
@@ -1331,16 +1495,19 @@ export class EmbeddedBrowser {
 
   back(tabId: string): void {
     const tab = this.requireTab(tabId);
+    this.wakeTab(tabId);
     if (this.safeNav(tab, "canGoBack")) tab.view.webContents.navigationHistory.goBack();
   }
 
   forward(tabId: string): void {
     const tab = this.requireTab(tabId);
+    this.wakeTab(tabId);
     if (this.safeNav(tab, "canGoForward")) tab.view.webContents.navigationHistory.goForward();
   }
 
   reload(tabId: string): void {
     const tab = this.requireTab(tabId);
+    this.wakeTab(tabId);
     tab.crashed = false;
     tab.view.webContents.reload();
   }
@@ -1486,6 +1653,9 @@ export class EmbeddedBrowser {
   private discardTab(tab: TabRecord): void {
     const index = this.tabs.indexOf(tab);
     if (index >= 0) this.tabs.splice(index, 1);
+    this.aiActiveUntil.delete(tab.id);
+    this.throttledTabs.delete(tab.id);
+    this.stagedTabs.delete(tab.id);
     // The last page of an instance carries the instance with it; drop the
     // clean-session marker with it so the set does not grow forever.
     if (!this.tabs.some((item) => item.instanceId === tab.instanceId)) {
@@ -1582,7 +1752,11 @@ export class EmbeddedBrowser {
       // renderer draws it in the empty stage; it is plain HTML and needs no
       // native view behind it.
       if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
+        if (this.throttledTabs.delete(page.id)) {
+        void page.cdp.setCpuThrottlingRate(1).catch(() => {});
+      }
         page.view.setBounds(embeddedViewRect(this.stage));
+        this.stagedTabs.add(page.id);
       }
       if (tab?.devtools?.mode === "docked") this.placeDevTools(tab);
       return;
@@ -1603,7 +1777,11 @@ export class EmbeddedBrowser {
       if (!page || page.view.webContents.isDestroyed()) return;
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
+      if (this.throttledTabs.delete(page.id)) {
+        void page.cdp.setCpuThrottlingRate(1).catch(() => {});
+      }
       page.view.setBounds(embeddedViewRect(slot));
+      this.stagedTabs.add(page.id);
     });
     // Docked DevTools follow the cell they were opened in, so a layout change or
     // a different page on screen keeps the panel beside the right page.
@@ -1633,6 +1811,9 @@ export class EmbeddedBrowser {
    *    happen at creation.
    */
   private parkAll(): void {
+    // Everything leaves the stage together; the placement loops in
+    // `applyLayout` re-add the pages that come right back.
+    this.stagedTabs.clear();
     const content = this.hostContentSize();
     const parked = parkedViewBounds(content);
     for (const tab of this.tabs) {
@@ -1643,6 +1824,69 @@ export class EmbeddedBrowser {
       if (tab.devtools?.mode === "docked" && !tab.devtools.view.webContents.isDestroyed()) {
         tab.devtools.view.setBounds(parked);
       }
+    }
+  }
+
+  /**
+   * Records CDP traffic and thaws the page if the sweep froze it.
+   *
+   * Awaited by `EmbeddedCdp.send` before the actual command runs, so the first
+   * command of a burst — a screenshot, a click — never lands on a frozen page.
+   * Everything AI does flows through the CDP facade, which makes this the single
+   * choke point for "the AI is using this page right now".
+   */
+  private async markCdpActivity(tabId: string): Promise<void> {
+    if (!this.options.aiIdleFreeze) return;
+    this.aiActiveUntil.set(tabId, Date.now() + AI_ACTIVE_WINDOW_MS);
+    this.wakeTab(tabId);
+    this.ensureFreezeSweep();
+  }
+
+  /** Restores full speed outside the CDP path: re-staging, navigation, reload. */
+  private wakeTab(tabId: string): void {
+    if (!this.options.aiIdleFreeze) return;
+    const tab = this.findTab(tabId);
+    if (!tab || !this.throttledTabs.delete(tab.id)) return;
+    void tab.cdp.setCpuThrottlingRate(1).catch(() => {
+      // Best-effort: a failed restore costs speed, never correctness, and the
+      // next CDP burst retries the wake.
+    });
+  }
+
+  private ensureFreezeSweep(): void {
+    if (!this.options.aiIdleFreeze || this.freezeSweep) return;
+    this.freezeSweep = setInterval(() => this.sweepFrozenCandidates(), FREEZE_SWEEP_INTERVAL_MS);
+    this.freezeSweep.unref?.();
+  }
+
+  /**
+   * Hides parked pages whose AI activity window has lapsed.
+   *
+   * Conservative on purpose: pages on stage, loading, crashed, blank, audible,
+   * or with a DevTools panel attached keep rendering. A page that refuses to
+   * hide simply stays visible — the feature degrades to "no hiding" instead of
+   * breaking automation.
+   */
+  private sweepFrozenCandidates(): void {
+    const now = Date.now();
+    for (const id of [...this.aiActiveUntil.keys()]) {
+      if (!this.findTab(id)) {
+        this.aiActiveUntil.delete(id);
+        this.throttledTabs.delete(id);
+        this.stagedTabs.delete(id);
+      }
+    }
+    for (const tab of this.tabs) {
+      if (this.stagedTabs.has(tab.id) || this.throttledTabs.has(tab.id)) continue;
+      const contents = tab.view.webContents;
+      if (contents.isDestroyed() || contents.isLoading() || tab.crashed) continue;
+      if (isBlankTab(tab) || tab.devtools) continue;
+      if (contents.isCurrentlyAudible()) continue;
+      if ((this.aiActiveUntil.get(tab.id) ?? 0) > now) continue;
+      this.throttledTabs.add(tab.id);
+      void tab.cdp
+        .setCpuThrottlingRate(PARKED_CPU_THROTTLE)
+        .catch(() => this.throttledTabs.delete(tab.id));
     }
   }
 
@@ -2244,6 +2488,7 @@ export class EmbeddedBrowser {
     tabId: string,
     checkPath: string,
     baseUrl: string,
+    signedOutMarker?: string,
   ): Promise<{ ok: boolean; signedIn?: boolean; reason?: string }> {
     const tab = this.requireTab(tabId);
     let expected = "";
@@ -2260,19 +2505,23 @@ export class EmbeddedBrowser {
     }
     if (!origin || origin === "null") return { ok: false, reason: "not-loaded" };
     if (origin !== expected) return { ok: false, reason: "cross-origin" };
-    let result: { ok?: boolean } | undefined;
+    let result: { ok?: boolean; body?: string } | undefined;
     try {
       // awaitPromise is mandatory here: the expression is an async IIFE around
       // a fetch, and without it Runtime.evaluate returns the unsettled Promise,
       // which serializes to `{}` — every probe would read as signed out.
-      result = await tab.cdp.evaluate<{ ok: boolean }>(buildAuthCheckExpression(checkPath), {
-        awaitPromise: true,
-      });
+      result = await tab.cdp.evaluate<{ ok: boolean; body?: string }>(
+        buildAuthCheckExpression(checkPath),
+        { awaitPromise: true },
+      );
     } catch {
       return { ok: false, reason: "probe-failed" };
     }
     if (!result) return { ok: false, reason: "probe-failed" };
-    return { ok: true, signedIn: result.ok === true };
+    // A 200 envelope that carries the site's signed-out marker is signed out,
+    // no matter what the HTTP status says.
+    const signedIn = result.ok === true && !bodyMarksSignedOut(result.body, signedOutMarker);
+    return { ok: true, signedIn };
   }
 
   /** Fills the saved credentials of the tab's identity, when it has any. */
@@ -2446,8 +2695,12 @@ export class EmbeddedBrowser {
 
     const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
     const page = tab ? this.activePageOf(tab.instanceId) : undefined;
-    // Flat mode paints the page at the stage origin: there is no header band.
-    if (page && stage && !isBlankTab(page)) await capture(page, stage);
+    // Flat mode must freeze through `embeddedViewRect`, same as the live
+    // placement in `applyLayout`: the stage does have a header band (the
+    // instance tab strip, 26px, since flat stages grew one), and freezing at
+    // the raw stage origin painted the picture one band too high — the page
+    // visibly jumped up whenever an overlay opened.
+    if (page && stage && !isBlankTab(page)) await capture(page, embeddedViewRect(stage));
     return shots;
   }
 

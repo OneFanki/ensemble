@@ -61,4 +61,35 @@ describe("tray and MCP lifecycle contract", () => {
   it("routes every quit path through the same teardown", () => {
     expect(handlerBody(main, "before-quit")).toMatch(/shutdownAndQuit\(\)/);
   });
+
+  it("starts the endpoint before the window, so a stuck renderer load cannot starve it", () => {
+    // The two used to be serial the other way round: `await createWindow()` then
+    // `await mcpServer.start()`. A renderer whose load never settled left the
+    // endpoint unbound for the whole session, with no error to explain it.
+    // Comments are stripped first: the comment explaining this fix quotes the old
+    // order, and a plain indexOf would match it.
+    const code = main.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const start = /mcp\s*\.start\(\)/.exec(code);
+    const windowIndex = code.indexOf("await createWindow()");
+    expect(start).not.toBeNull();
+    expect(windowIndex).toBeGreaterThan(-1);
+    expect(start?.index ?? -1).toBeLessThan(windowIndex);
+    // Started, not awaited: the retry ladder spends ~9 s on a busy port, and
+    // awaiting it here would hold the window back for exactly that long.
+    expect(code).not.toMatch(/await\s+mcp(Server)?\s*\.start\(\)/);
+  });
+
+  it("races the renderer load against a deadline", () => {
+    expect(main).toMatch(/RENDERER_LOAD_TIMEOUT_MS/);
+    expect(main).toMatch(/Promise\.race\(\[/);
+  });
+
+  it("retries a busy MCP port instead of reporting a dead endpoint", () => {
+    expect(server).toMatch(/BIND_RETRY_DELAYS_MS/);
+    expect(server).toMatch(/EADDRINUSE/);
+  });
+
+  it("reports a bind in progress instead of a bare 'not running'", () => {
+    expect(server).toMatch(/starting: this\.starting/);
+  });
 });

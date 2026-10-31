@@ -10,14 +10,16 @@ import {
   viewSlotFractions,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
-import type { Bookmark, SlotRect } from "@shared/types";
+import type { Bookmark, DownloadAction, DownloadEntry, SlotRect } from "@shared/types";
 import {
   ArrowLeft,
   ArrowRight,
   Bug,
   Copy,
   CornerDownLeft,
+  Download,
   ExternalLink,
+  FolderOpen,
   KeyRound,
   Minus,
   Plus,
@@ -25,6 +27,7 @@ import {
   Search,
   ShieldCheck,
   Star,
+  Trash2,
   X,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -683,10 +686,72 @@ function reportStage(): void {
 }
 
 let resizeObserver: ResizeObserver | null = null;
+let offDownloads: (() => void) | undefined;
+
+/**
+ * The download list lives in the main process (a download belongs to the
+ * session, not the tab that started it), so this panel is a view of that list:
+ * closing the page does not lose an entry, and reopening the surface shows what
+ * finished while it was gone.
+ */
+const downloadEntries = ref<DownloadEntry[]>([]);
+const downloadsOpen = ref(false);
+const downloadsAnchor = ref<HTMLElement | null>(null);
+const activeDownloads = computed(
+  () => downloadEntries.value.filter((entry) => entry.state === "progressing").length,
+);
+const hasFinishedDownloads = computed(() =>
+  downloadEntries.value.some((entry) => entry.state !== "progressing"),
+);
+
+function downloadPercent(entry: DownloadEntry): number {
+  if (!entry.totalBytes) return 0;
+  return Math.min(100, Math.round((entry.receivedBytes / entry.totalBytes) * 100));
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const power = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / 1024 ** power).toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
+}
+
+function downloadStatus(entry: DownloadEntry): string {
+  if (entry.state === "progressing") {
+    return entry.totalBytes
+      ? `${downloadPercent(entry)}% · ${formatBytes(entry.receivedBytes)} / ${formatBytes(entry.totalBytes)}`
+      : formatBytes(entry.receivedBytes);
+  }
+  if (entry.state === "completed") return t("app.downloadDone", { size: formatBytes(entry.receivedBytes) });
+  return entry.state === "cancelled" ? t("app.downloadCancelled") : t("app.downloadInterrupted");
+}
+
+async function actOnDownload(action: DownloadAction, id?: string) {
+  downloadEntries.value = await window.ensemble.actOnDownload(action, id);
+}
+
+/** Closes the panel on a click anywhere else, the way a menu does. */
+function onDocumentPointerDown(event: PointerEvent) {
+  if (!downloadsOpen.value) return;
+  if (downloadsAnchor.value?.contains(event.target as Node)) return;
+  downloadsOpen.value = false;
+}
 
 onMounted(async () => {
   store.setStageMounted(true);
   await store.init();
+  void window.ensemble.listDownloads().then((entries) => {
+    downloadEntries.value = entries;
+  });
+  offDownloads = window.ensemble.onDownloadsChanged((entries) => {
+    const before = activeDownloads.value;
+    downloadEntries.value = entries;
+    // A download that just started opens the panel, the way a browser surfaces
+    // one without asking; progress on an existing entry must not reopen a panel
+    // the user closed.
+    if (activeDownloads.value > before) downloadsOpen.value = true;
+  });
+  document.addEventListener("pointerdown", onDocumentPointerDown);
   if (stage.value) {
     resizeObserver = new ResizeObserver(() => reportStage());
     resizeObserver.observe(stage.value);
@@ -699,6 +764,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   store.setStageMounted(false);
   resizeObserver?.disconnect();
+  offDownloads?.();
+  document.removeEventListener("pointerdown", onDocumentPointerDown);
   window.removeEventListener("resize", reportStage);
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("pointermove", onResizeMove);
@@ -1148,6 +1215,92 @@ function fillMessage(reason?: string): string {
         <Search :size="15" />
       </button>
       <!--
+        Downloads: a panel rather than a page, because the useful actions are
+        "open it" and "show me where it went" — both of which should not cost a
+        navigation away from the page the user is working on.
+      -->
+      <div ref="downloadsAnchor" class="downloads-anchor">
+        <button
+          type="button"
+          class="icon"
+          :class="{ active: downloadsOpen }"
+          :title="t('app.downloads')"
+          :aria-label="t('app.downloads')"
+          :aria-expanded="downloadsOpen"
+          @click="downloadsOpen = !downloadsOpen"
+        >
+          <Download :size="15" />
+          <span v-if="activeDownloads" class="download-badge">{{ activeDownloads }}</span>
+        </button>
+        <div v-if="downloadsOpen" class="downloads-panel">
+          <div class="downloads-head">
+            <span>{{ t("app.downloads") }}</span>
+            <button
+              v-if="hasFinishedDownloads"
+              type="button"
+              class="downloads-clear"
+              @click="actOnDownload('clear')"
+            >
+              {{ t("app.downloadsClear") }}
+            </button>
+          </div>
+          <div v-if="!downloadEntries.length" class="downloads-empty">
+            {{ t("app.downloadsEmpty") }}
+          </div>
+          <div
+            v-for="entry in downloadEntries"
+            :key="entry.id"
+            class="download-row"
+            :class="entry.state"
+          >
+            <div class="download-main">
+              <button
+                type="button"
+                class="download-name"
+                :disabled="entry.state !== 'completed'"
+                :title="entry.savePath || entry.filename"
+                @click="actOnDownload('open', entry.id)"
+              >
+                {{ entry.filename }}
+              </button>
+              <span class="download-sub">{{ downloadStatus(entry) }}</span>
+              <div v-if="entry.state === 'progressing'" class="download-bar">
+                <span :style="{ width: `${downloadPercent(entry)}%` }" />
+              </div>
+            </div>
+            <div class="download-actions">
+              <button
+                v-if="entry.state === 'progressing'"
+                type="button"
+                class="download-mini"
+                :title="t('app.downloadCancel')"
+                @click="actOnDownload('cancel', entry.id)"
+              >
+                <X :size="13" />
+              </button>
+              <template v-else>
+                <button
+                  type="button"
+                  class="download-mini"
+                  :title="t('app.downloadReveal')"
+                  @click="actOnDownload('reveal', entry.id)"
+                >
+                  <FolderOpen :size="13" />
+                </button>
+                <button
+                  type="button"
+                  class="download-mini"
+                  :title="t('app.downloadRemove')"
+                  @click="actOnDownload('remove', entry.id)"
+                >
+                  <Trash2 :size="13" />
+                </button>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!--
         Zoom lives in the toolbar so it can be found without knowing the
         shortcut. It stays visible (a hidden control is a control nobody
         discovers) but is drawn quietly at the global default and takes the
@@ -1596,6 +1749,157 @@ function fillMessage(reason?: string): string {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden;
+}
+
+/* Downloads: the panel hangs off its toolbar button, so it stays glued to the
+   control at any window width. Same surface/shadow language as the site
+   suggestions above it — one popover style, not two. */
+.downloads-anchor {
+  position: relative;
+  display: flex;
+}
+
+.downloads-anchor .icon {
+  position: relative;
+}
+
+.download-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+}
+
+.downloads-panel {
+  position: absolute;
+  z-index: 71;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 320px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  overflow: hidden auto;
+}
+
+.downloads-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.downloads-clear {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.downloads-empty {
+  padding: 18px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.download-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.download-row:last-child {
+  border-bottom: 0;
+}
+
+.download-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.download-name {
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.download-name:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.download-row.completed .download-name:hover {
+  color: var(--accent);
+}
+
+.download-sub {
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.download-bar {
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.download-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 150ms linear;
+}
+
+.download-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+}
+
+.download-mini {
+  border: 0;
+  background: none;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.download-mini:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .suggestion {

@@ -15,6 +15,8 @@ import type {
   AuthCheckResult,
   AutoFillReport,
   BookmarkDraft,
+  DownloadAction,
+  DownloadEntry,
   Engine,
   FocusLabelPayload,
   IdentityDraft,
@@ -131,6 +133,13 @@ export const IPC = {
   mcpInfo: "mcp:info",
   mcpUpdate: "mcp:update",
   mcpChanged: "mcp:changed",
+  /** Downloads across every identity partition. */
+  downloadsList: "downloads:list",
+  downloadsAct: "downloads:act",
+  /** Main → renderer: the download list changed (progress, finish, removal). */
+  downloadsChanged: "downloads:changed",
+  /** Main → renderer: the macOS app menu asked for the settings page (Cmd+,). */
+  appOpenSettings: "app:open-settings",
   /** Main → renderer: an AI client acted on a page, with its origin. */
   aiPageAction: "ai:page-action",
   credentialsSet: "credentials:set",
@@ -335,6 +344,32 @@ export interface EnsembleApi {
   updateMcp(patch: McpPatch): Promise<McpStatus>;
   /** Fires when the endpoint starts, stops, or moves to another port. */
   onMcpChanged(listener: (status: McpStatus) => void): () => void;
+  /**
+   * Fires when the native app menu asks for the settings page.
+   *
+   * On macOS the menu is the only way to reach Cmd+, — a menu-less app has no
+   * accelerator table at all — so the request travels from main to renderer
+   * instead of the renderer binding the key itself.
+   */
+  onOpenSettings(listener: () => void): () => void;
+  /**
+   * Downloads from every identity partition, newest first.
+   *
+   * A download belongs to the session that started it, not to a tab: the list
+   * survives closing the page that triggered it, which is what makes "open the
+   * file I just downloaded" possible after the page is gone.
+   */
+  listDownloads(): Promise<DownloadEntry[]>;
+  /**
+   * Acts on one entry and returns the list after the action.
+   *
+   * `clear` ignores the id and drops every finished entry; `remove` drops one.
+   * Opening and revealing go through `shell` in the main process, so the
+   * renderer never learns a path it could hand to something else.
+   */
+  actOnDownload(action: DownloadAction, id?: string): Promise<DownloadEntry[]>;
+  /** Fires on progress, completion, cancellation and removal. */
+  onDownloadsChanged(listener: (entries: DownloadEntry[]) => void): () => void;
   /**
    * Fires whenever an AI client acts on a page, with the site it touched.
    *

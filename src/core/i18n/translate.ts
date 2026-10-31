@@ -2,6 +2,8 @@ export type CoreLocale = "zh" | "en";
 
 const messages = {
   zh: {
+    "menu.settings": "设置…",
+    "menu.window": "窗口",
     "vault.basicText":
       "当前系统没有可用的密钥环，凭据只做了弱加密。建议安装系统密钥环，或在设置中为 Ensemble 设置主密码。",
     "vault.unavailable": "凭据存储不可用，密码不会被保存。",
@@ -45,6 +47,8 @@ const messages = {
     "instance.cleanLabel": "干净会话",
   },
   en: {
+    "menu.settings": "Settings…",
+    "menu.window": "Window",
     "vault.basicText":
       "No system keyring is available, so credentials are only weakly encrypted. Consider installing a keyring or setting a master password.",
     "vault.unavailable": "Credential storage is unavailable; passwords will not be saved.",

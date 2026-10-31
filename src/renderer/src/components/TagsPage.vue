@@ -25,10 +25,17 @@ const TAG_COLORS: RoleColor[] = ["amber", "teal", "violet", "rose", "blue", "sla
 const newTagName = ref("");
 const newTagColor = ref<RoleColor>("slate");
 const tagError = ref("");
-/** Tag being renamed inline; `null` means no chip is in edit mode. */
-const renamingTagId = ref<string | null>(null);
-const renameTagName = ref("");
-const renameInput = ref<HTMLInputElement[] | null>(null);
+/** Tag being edited inline; `null` means no row is in edit mode. */
+const editingTagId = ref<string | null>(null);
+const editTagName = ref("");
+/**
+ * Colour the row's edit mode is showing.
+ *
+ * Held separately from `tag.color`: the row must be able to preview a colour
+ * without saving it, and Esc has to be able to drop the change.
+ */
+const editTagColor = ref<RoleColor>("slate");
+const editInput = ref<HTMLInputElement[] | null>(null);
 
 const tags = computed(() => store.snapshot?.tags ?? []);
 
@@ -75,24 +82,35 @@ async function createTag() {
 }
 
 /**
- * Renaming happens in place on the chip: a native prompt for one short string
- * was both out of place visually and impossible to style.
+ * Editing happens in place on the row: a native prompt for one short string was
+ * both out of place visually and impossible to style. The row carries the name
+ * and the colour together, so one mode covers both — a tag's colour is part of
+ * what it looks like everywhere it is applied, not a separate setting.
  */
-function startRenameTag(tag: Tag): void {
-  renamingTagId.value = tag.id;
-  renameTagName.value = tag.name;
-  void nextTick(() => renameInput.value?.[0]?.select());
+function startEditTag(tag: Tag): void {
+  editingTagId.value = tag.id;
+  editTagName.value = tag.name;
+  editTagColor.value = tag.color;
+  void nextTick(() => editInput.value?.[0]?.select());
 }
 
-async function commitRenameTag(tag: Tag): Promise<void> {
+async function commitEditTag(tag: Tag): Promise<void> {
   // Enter commits and unmounts the input, which also fires `blur`; the guard
   // makes the second call a no-op instead of a duplicate save.
-  if (renamingTagId.value !== tag.id) return;
-  const name = renameTagName.value.trim();
-  renamingTagId.value = null;
-  if (!name || name === tag.name) return;
-  // `run` in the store reports failures as a toast; the chip keeps the old name.
-  await store.saveTag({ id: tag.id, name, color: tag.color });
+  if (editingTagId.value !== tag.id) return;
+  const name = editTagName.value.trim();
+  const color = editTagColor.value;
+  editingTagId.value = null;
+  // An emptied name is the user backing out, not a request to save a nameless
+  // tag. A colour-only change still counts as an edit and must be saved.
+  if (!name || (name === tag.name && color === tag.color)) return;
+  // `run` in the store reports failures as a toast; the row keeps the old name.
+  await store.saveTag({ id: tag.id, name, color });
+}
+
+/** Leaves edit mode without saving, including a colour that was only previewed. */
+function cancelEditTag(): void {
+  editingTagId.value = null;
 }
 
 async function removeTag(tag: Tag) {
@@ -151,23 +169,44 @@ import IconButton from "./ui/IconButton.vue";
         v-for="tag in tags"
         :key="tag.id"
         class="row"
-        :style="{ '--tag': `var(--role-${tag.color})` }"
+        :class="{ editing: editingTagId === tag.id }"
+        :style="{ '--tag': `var(--role-${editingTagId === tag.id ? editTagColor : tag.color})` }"
       >
         <span class="dot"></span>
         <input
-          v-if="renamingTagId === tag.id"
-          ref="renameInput"
-          v-model="renameTagName"
+          v-if="editingTagId === tag.id"
+          ref="editInput"
+          v-model="editTagName"
           class="rename"
-          @keydown.enter.prevent="commitRenameTag(tag)"
-          @keydown.esc.prevent="renamingTagId = null"
-          @blur="commitRenameTag(tag)"
+          @keydown.enter.prevent="commitEditTag(tag)"
+          @keydown.esc.prevent="cancelEditTag"
+          @blur="commitEditTag(tag)"
         />
         <span v-else class="name">{{ tag.name }}</span>
+        <!--
+          The colour picker lives inside the edit mode rather than behind its own
+          popover: the row already owns a mode for the name, and a colour is part
+          of what the tag looks like, not a separate setting.
+          `mousedown.prevent` keeps the name input from losing focus — a blur
+          would commit the edit and unmount the swatches before the click lands.
+        -->
+        <span v-if="editingTagId === tag.id" class="color-row edit-colors">
+          <button
+            v-for="color in TAG_COLORS"
+            :key="color"
+            type="button"
+            class="color-dot"
+            :class="{ picked: editTagColor === color }"
+            :style="{ background: `var(--role-${color})` }"
+            :aria-label="color"
+            @mousedown.prevent
+            @click="editTagColor = color"
+          ></button>
+        </span>
         <span class="usage mono" :class="{ unused: isUnused(tag) }">{{ usage(tag) }}</span>
         <IconButton :ariaLabel="$t('app.edit')"
-          :title="$t('app.tagRename')"
-          @click="startRenameTag(tag)">
+          :title="$t('app.tagEdit')"
+          @click="startEditTag(tag)">
           <Pencil :size="12" />
         </IconButton>
         <IconButton variant="danger" :ariaLabel="$t('app.delete')"
@@ -238,11 +277,15 @@ import IconButton from "./ui/IconButton.vue";
 .color-row {
   display: flex;
   gap: 4px;
+  /* Never shrink the swatches: in the edit row they sit between the name input
+     and the usage column, and squeezing them makes them unclickable. */
+  flex: 0 0 auto;
 }
 
 .color-dot {
   width: 15px;
   height: 15px;
+  flex: 0 0 15px;
   border-radius: 50%;
   border: 2px solid transparent;
   padding: 0;
@@ -250,6 +293,12 @@ import IconButton from "./ui/IconButton.vue";
 
 .color-dot.picked {
   border-color: var(--text);
+}
+
+/* Edit mode: keep the usage column readable instead of letting it collapse
+   against the swatches. */
+.row.editing .usage {
+  min-width: 60px;
 }
 
 /* Every page carries its own copy of the button skin; this component is

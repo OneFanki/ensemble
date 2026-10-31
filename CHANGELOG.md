@@ -33,6 +33,33 @@
 #### Full changes
 
 
+## [1.3.1] - 2026-10-31
+
+### 中文
+
+- **多开账号不再白烧 CPU**：上一版宣称的「停放页闲置降速」实际从未生效（扫描没被启动、手段也压不住 3D 帧循环），现改为闲置 60 秒后整体冻结页面脚本，AI 一操作立即恢复
+- **右下角提示不再被裁成两截**：批量启动后的「自动登录未完成」提示卡片此前可能贴着 dock 宽度排版、文字从两侧被裁断，现已挂到窗口根上，任何情况下都完整显示在右下角
+
+#### 完整变更
+
+- **停放页睡眠重做**：CDP CPU 节流拖不动 compositor 驱动的 rAF 帧循环、`setVisible(false)` 连 `visibilityState` 都不变（均实测），真正生效的是 `Page.setWebLifecycleState: "frozen"`——页面 JavaScript 整体挂起，3D 场景随之停。停放页闲置 60 秒（期间无 AI 操作）即冻结；AI 的每条命令先唤醒再执行，回到画面中或导航也会唤醒。正在播放声音、开着 DevTools 或在画面中的页面不受影响；自动化测试运行不启用
+- **修复扫描启动**：上一版的降速扫描挂在「第一次 AI 命令」上才启动，纯手工使用的会话里从未运行过；现于浏览器构造时无条件启动
+- **Toast 锚点加固**：`position: fixed` 的视口锚定在祖先带 transform 时会被劫持（toast 被按 dock 宽度排版、文字两侧裁断）。ToastStack 现在 Teleport 到 body，锚点不可能再被任何祖先偷走；宽度同时钳制在视口内
+- 回归覆盖：`e2e-toast-geometry.mjs`（8 项，含 125% 缩放视口）新增；`e2e-batch-launch`（10 项）、`e2e-overlay-freeze`（7 项）复跑全绿
+
+### English
+
+- **Many open accounts no longer burn CPU**: the previous release's "idle parked tabs slow down" never actually engaged (the sweep was not started, and the lever could not tame rAF-driven 3D loops). Parked tabs now freeze entirely after 60 seconds idle and wake the moment the AI touches them
+- **Bottom-right toasts are no longer clipped**: the batch-launch "auto-login incomplete" cards could be laid out at the dock's width with text cut on both edges; they are now mounted at the document root and always render fully in the corner
+
+#### Full changes
+
+- **Parked-tab sleep reworked**: CDP CPU throttling does not slow compositor-driven rAF loops and `setVisible(false)` does not even flip `visibilityState` (both measured); what works is `Page.setWebLifecycleState: "frozen"`, which suspends the page's JavaScript entirely. A parked tab freezes after 60 seconds without AI traffic; every AI command wakes the page before it runs, and re-staging or navigation wakes it too. Audible pages, pages with DevTools open, and pages on stage are never frozen; headless test runs keep the feature off
+- **Sweep start fixed**: the previous release armed the sweep lazily on the first AI command, so a hands-on session never froze anything; it now starts unconditionally when the browser is constructed
+- **Toast anchor hardened**: a `position: fixed` viewport anchor is hijacked whenever an ancestor carries a transform (toasts laid out at the dock's width with both text edges clipped). ToastStack now teleports to body, so no ancestor can steal the anchor, and its width is clamped to the viewport
+- Regression coverage: new `e2e-toast-geometry.mjs` (8 checks, at a 125%-scaled viewport); `e2e-batch-launch` (10) and `e2e-overlay-freeze` (7) re-run green
+
+
 ## [1.3.0] - 2026-10-31
 
 ### 中文

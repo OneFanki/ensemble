@@ -1,6 +1,6 @@
 {
   "name": "ensemble",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "description": "Every account of one system, signed in at once. A local multi-account browser workbench for permission and collaboration testing.",
   "license": "MIT",
@@ -58,6 +58,7 @@
     "e2e:dom-resolver": "node scripts/e2e-dom-resolver.mjs",
     "e2e:flows": "node scripts/e2e-flows.mjs",
     "e2e:batch-launch": "node scripts/e2e-batch-launch.mjs",
+    "e2e:toast-geometry": "node scripts/e2e-toast-geometry.mjs",
     "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs"
   },
   "devDependencies": {

@@ -236,11 +236,13 @@ try {
       const doc = document.documentElement;
       const stack = document.querySelector('.toast-stack');
       const rect = stack?.getBoundingClientRect();
+      const dock = document.querySelector('.dock')?.getBoundingClientRect();
       return {
         count: document.querySelectorAll('.toast').length,
         viewportW: doc.clientWidth,
         offsetParent: stack?.offsetParent ? (stack.offsetParent.className || stack.offsetParent.tagName) : null,
         stack: rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null,
+        dock: dock ? { left: dock.left, right: dock.right } : null,
       };
     })()`);
     if (toasts.count >= names.length) break;
@@ -270,6 +272,18 @@ try {
       toasts.stack.right <= toasts.viewportW &&
       toasts.stack.bottom <= viewportH,
     { stack: toasts.stack, viewportH },
+  );
+  // The assertion that actually matches what the user sees: the stage's native
+  // page view paints over every HTML layer, so any part of the stack hanging
+  // past the dock's left edge is unpainted — invisible text with no DOM symptom
+  // (getBoundingClientRect cannot know about native occlusion). The stack must
+  // therefore sit entirely inside the dock's rectangle.
+  check(
+    "toast stack stays inside the dock rectangle (native views cover the stage)",
+    Boolean(toasts.stack && toasts.dock) &&
+      toasts.stack.left >= toasts.dock.left - 1 &&
+      toasts.stack.right <= toasts.dock.right + 1,
+    { stack: toasts.stack, dock: toasts.dock },
   );
 
   client.close();

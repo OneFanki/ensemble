@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-vue-next";
+import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const store = useWorkspaceStore();
+// The dock's width bounds the stack: a native page view paints over everything
+// on the stage, so any part of a toast that hangs past the dock's left edge is
+// simply not painted (2026-10-31 — the cards were missing their first characters).
+const embedded = useEmbeddedStore();
 </script>
 
 <template>
@@ -10,12 +15,15 @@ const store = useWorkspaceStore();
     Teleported to body, same as the other floaters: position:fixed is only
     viewport-relative while no ancestor carries a transform (or contain /
     will-change). One such ancestor anywhere between here and the shell root
-    silently turns the viewport anchor into that element — the stack then lays
-    out at the dock's width and the cards clip their own text on both edges
-    (2026-10-31). Body is the end of the chain, so the anchor cannot be stolen.
+    silently turns the viewport anchor into that element. Body is the end of
+    the chain, so the anchor cannot be stolen.
   -->
   <Teleport to="body">
-    <div class="toast-stack" aria-live="polite">
+    <div
+      class="toast-stack"
+      aria-live="polite"
+      :style="{ '--dock-w': `${embedded.dockWidth}px` }"
+    >
       <div
         v-for="toast in store.toasts"
         :key="toast.id"
@@ -43,9 +51,10 @@ const store = useWorkspaceStore();
   display: flex;
   flex-direction: column;
   gap: 7px;
-  /* Never wider than the viewport: an unbreakable line's min-content can
-     beat max-width:380px and spill past the right edge. */
-  max-width: min(380px, calc(100vw - 36px));
+  /* Never leave the dock: the stage's native page view paints over every HTML
+     layer, so a card wider than the dock has its left part unpainted. 18px in
+     from each edge keeps the stack floating inside the dock's own rectangle. */
+  max-width: min(380px, calc(var(--dock-w, 292px) - 36px));
   pointer-events: none;
 }
 

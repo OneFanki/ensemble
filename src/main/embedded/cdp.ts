@@ -80,17 +80,17 @@ export class EmbeddedCdp {
   }
 
   /**
-   * CPU throttling control for the parked-page slowdown.
+   * Page lifecycle control for the parked-page sleep.
    *
-   * Deliberately not routed through `send`: the sweep must not count as AI
-   * activity, or it would keep the page awake forever. Range is 1 (no
-   * throttling) to 20.
+   * Deliberately not routed through `send`: the freeze sweep must not count as
+   * AI activity, or it would keep the page awake forever. `"frozen"` suspends
+   * the page's JavaScript entirely (measured: `Runtime.evaluate` on a frozen
+   * page never returns), which is what actually stops a 3D scene — CPU
+   * throttling and `setVisible(false)` measurably do not.
    */
-  async setCpuThrottlingRate(factor: number): Promise<void> {
+  async lifecycle(state: "frozen" | "active"): Promise<void> {
     await this.prepare();
-    await this.contents.debugger.sendCommand("Emulation.setCPUThrottlingRate", {
-      rate: factor,
-    });
+    await this.contents.debugger.sendCommand("Page.setWebLifecycleState", { state });
   }
 
   async evaluate<T>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {

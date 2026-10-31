@@ -65,19 +65,6 @@ import { applyProxyToSession } from "../proxy";
  */
 const AI_ACTIVE_WINDOW_MS = 60_000;
 const FREEZE_SWEEP_INTERVAL_MS = 10_000;
-/**
- * CPU throttling applied to parked pages past their idle window.
- *
- * This is the only per-page lever Electron 44 actually honours — measured on
- * this very codebase: native background throttling never fires (a view parked
- * off the window stays "visible"), `Page.setWebLifecycleState` only shallow-
- * freezes a visible page (rAF keeps firing), and `setVisible(false)` does not
- * flip `document.visibilityState` either (rAF keeps firing, proven via a
- * same-partition reader tab). Throttling slows every renderer task, so an
- * rAF-driven 3D loop misses frames proportionally — the scene costs less
- * without any visibility semantics being faked. 1 restores full speed.
- */
-const PARKED_CPU_THROTTLE = 8;
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -170,16 +157,19 @@ export interface EmbeddedBrowserOptions {
    */
   headless?: boolean;
   /**
-   * Slow parked pages down once they have been idle for a while.
+   * Put parked pages to sleep once they have been idle for a while.
    *
    * A page parked off the window is still "visible" to Chromium, so the stock
-   * background throttling never kicks in, and neither lifecycle freezing nor
-   * `setVisible(false)` changes that (both measured — see `PARKED_CPU_THROTTLE`).
-   * What works is CDP CPU throttling: the sweep throttles parked pages to
-   * `PARKED_CPU_THROTTLE` after `AI_ACTIVE_WINDOW_MS` without CDP traffic, and
-   * the first CDP command of an AI burst restores full speed before the command
-   * runs (the hook in `EmbeddedCdp.send` is awaited). Headless runs keep this
-   * off: their timing assertions assume pages run unthrottled.
+   * background throttling never fires while the app window itself is on screen,
+   * and neither CPU throttling nor `setVisible(false)` stops a rAF-driven
+   * scene (both measured). What does is CDP `Page.setWebLifecycleState:
+   * "frozen"` — it suspends the page's JavaScript entirely (an evaluate against
+   * a frozen page never returns), which stops the scene's timers and render
+   * loop with it. The sweep freezes parked pages after `AI_ACTIVE_WINDOW_MS`
+   * without CDP traffic; the first CDP command of an AI burst wakes the page
+   * before the command runs (the hook in `EmbeddedCdp.send` awaits the wake),
+   * and re-staging or navigation wakes it too. Headless runs keep this off:
+   * their timing assertions assume pages run unthrottled.
    */
   aiIdleFreeze?: boolean;
   /** Persists a runtime layout change back to the view definition. */
@@ -283,20 +273,29 @@ export class EmbeddedBrowser {
    */
   private faviconCache = new Map<string, { data: string; fetched: number }>();
   /**
-   * Per-page AI activity bookkeeping for the parked-page hiding.
+   * Per-page AI activity bookkeeping for the parked-page sleep.
    *
    * `aiActiveUntil` records how long CDP traffic keeps a page exempt from the
-   * sweep; `throttledTabs` tracks pages currently throttled; `stagedTabs` mirrors
-   * "which pages are on stage right now" (recomputed by `applyLayout`, the one
-   * placement authority) so the sweep never hides a page the user is looking
-   * at. All three are runtime-only: a restart starts from scratch.
+   * sweep; `frozenTabs` tracks pages currently frozen (JavaScript suspended);
+   * `stagedTabs` mirrors "which pages are on stage right now" (recomputed by
+   * `applyLayout`, the one placement authority) so the sweep never freezes a
+   * page the user is looking at. All three are runtime-only: a restart starts
+   * from scratch.
    */
   private aiActiveUntil = new Map<string, number>();
-  private throttledTabs = new Set<string>();
+  private frozenTabs = new Set<string>();
   private stagedTabs = new Set<string>();
   private freezeSweep: NodeJS.Timeout | undefined;
 
-  constructor(private readonly options: EmbeddedBrowserOptions) {}
+  constructor(private readonly options: EmbeddedBrowserOptions) {
+    // The sweep must exist from construction, not from the first CDP command:
+    // it used to be armed lazily inside `markCdpActivity`, so a session with no
+    // AI traffic — the common one — never froze anything at all.
+    if (options.aiIdleFreeze) {
+      this.freezeSweep = setInterval(() => this.sweepFrozenCandidates(), FREEZE_SWEEP_INTERVAL_MS);
+      this.freezeSweep.unref?.();
+    }
+  }
 
   /**
    * Applies the global zoom setting.
@@ -1654,7 +1653,7 @@ export class EmbeddedBrowser {
     const index = this.tabs.indexOf(tab);
     if (index >= 0) this.tabs.splice(index, 1);
     this.aiActiveUntil.delete(tab.id);
-    this.throttledTabs.delete(tab.id);
+    this.frozenTabs.delete(tab.id);
     this.stagedTabs.delete(tab.id);
     // The last page of an instance carries the instance with it; drop the
     // clean-session marker with it so the set does not grow forever.
@@ -1752,9 +1751,7 @@ export class EmbeddedBrowser {
       // renderer draws it in the empty stage; it is plain HTML and needs no
       // native view behind it.
       if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
-        if (this.throttledTabs.delete(page.id)) {
-        void page.cdp.setCpuThrottlingRate(1).catch(() => {});
-      }
+        void this.wakeTab(page.id);
         page.view.setBounds(embeddedViewRect(this.stage));
         this.stagedTabs.add(page.id);
       }
@@ -1777,9 +1774,7 @@ export class EmbeddedBrowser {
       if (!page || page.view.webContents.isDestroyed()) return;
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
-      if (this.throttledTabs.delete(page.id)) {
-        void page.cdp.setCpuThrottlingRate(1).catch(() => {});
-      }
+      void this.wakeTab(page.id);
       page.view.setBounds(embeddedViewRect(slot));
       this.stagedTabs.add(page.id);
     });
@@ -1828,65 +1823,61 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Records CDP traffic and thaws the page if the sweep froze it.
+   * Records CDP traffic and wakes the page if the sweep put it to sleep.
    *
    * Awaited by `EmbeddedCdp.send` before the actual command runs, so the first
-   * command of a burst — a screenshot, a click — never lands on a frozen page.
-   * Everything AI does flows through the CDP facade, which makes this the single
-   * choke point for "the AI is using this page right now".
+   * command of a burst — a screenshot, a click — never lands on a frozen page:
+   * a frozen page suspends JavaScript entirely, and an evaluate against it
+   * would never return. The wake is awaited (not fired and forgotten) so the
+   * ordering holds without relying on CDP pipelining. Everything AI does flows
+   * through the CDP facade, which makes this the single choke point for "the
+   * AI is using this page right now".
    */
   private async markCdpActivity(tabId: string): Promise<void> {
     if (!this.options.aiIdleFreeze) return;
     this.aiActiveUntil.set(tabId, Date.now() + AI_ACTIVE_WINDOW_MS);
-    this.wakeTab(tabId);
-    this.ensureFreezeSweep();
+    await this.wakeTab(tabId);
   }
 
-  /** Restores full speed outside the CDP path: re-staging, navigation, reload. */
-  private wakeTab(tabId: string): void {
+  /** Wakes a sleeping page: AI traffic, re-staging, navigation, reload. */
+  private async wakeTab(tabId: string): Promise<void> {
     if (!this.options.aiIdleFreeze) return;
     const tab = this.findTab(tabId);
-    if (!tab || !this.throttledTabs.delete(tab.id)) return;
-    void tab.cdp.setCpuThrottlingRate(1).catch(() => {
-      // Best-effort: a failed restore costs speed, never correctness, and the
-      // next CDP burst retries the wake.
-    });
-  }
-
-  private ensureFreezeSweep(): void {
-    if (!this.options.aiIdleFreeze || this.freezeSweep) return;
-    this.freezeSweep = setInterval(() => this.sweepFrozenCandidates(), FREEZE_SWEEP_INTERVAL_MS);
-    this.freezeSweep.unref?.();
+    if (!tab || !this.frozenTabs.delete(tab.id)) return;
+    try {
+      await tab.cdp.lifecycle("active");
+    } catch {
+      // Best-effort: a failed wake is retried by the next CDP command, and
+      // navigation paths below do not depend on the lifecycle state.
+    }
   }
 
   /**
-   * Hides parked pages whose AI activity window has lapsed.
+   * Freezes parked pages whose AI activity window has lapsed.
    *
    * Conservative on purpose: pages on stage, loading, crashed, blank, audible,
-   * or with a DevTools panel attached keep rendering. A page that refuses to
-   * hide simply stays visible — the feature degrades to "no hiding" instead of
-   * breaking automation.
+   * or with a DevTools panel attached keep running. A page that refuses the
+   * lifecycle command simply stays awake — the feature degrades to "no
+   * sleeping" instead of breaking automation.
    */
   private sweepFrozenCandidates(): void {
     const now = Date.now();
     for (const id of [...this.aiActiveUntil.keys()]) {
       if (!this.findTab(id)) {
         this.aiActiveUntil.delete(id);
-        this.throttledTabs.delete(id);
+        this.frozenTabs.delete(id);
         this.stagedTabs.delete(id);
       }
     }
     for (const tab of this.tabs) {
-      if (this.stagedTabs.has(tab.id) || this.throttledTabs.has(tab.id)) continue;
+      if (this.stagedTabs.has(tab.id) || this.frozenTabs.has(tab.id)) continue;
       const contents = tab.view.webContents;
       if (contents.isDestroyed() || contents.isLoading() || tab.crashed) continue;
       if (isBlankTab(tab) || tab.devtools) continue;
       if (contents.isCurrentlyAudible()) continue;
       if ((this.aiActiveUntil.get(tab.id) ?? 0) > now) continue;
-      this.throttledTabs.add(tab.id);
-      void tab.cdp
-        .setCpuThrottlingRate(PARKED_CPU_THROTTLE)
-        .catch(() => this.throttledTabs.delete(tab.id));
+      this.frozenTabs.add(tab.id);
+      void tab.cdp.lifecycle("frozen").catch(() => this.frozenTabs.delete(tab.id));
     }
   }
 

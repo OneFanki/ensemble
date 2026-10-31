@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onClickOutside } from "@vueuse/core";
-import { AppWindow, Check, ChevronDown, Monitor, ShieldOff } from "lucide-vue-next";
+import { AppWindow, BookOpen, Check, ChevronDown, Monitor, ShieldOff } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
+import { guideIsUnread } from "../onboarding/guide";
 import Logo from "./Logo.vue";
 
-const emit = defineEmits<{ menuOpen: [boolean] }>();
+const emit = defineEmits<{ menuOpen: [boolean]; openGuide: [] }>();
 
 const store = useWorkspaceStore();
 const { t } = useI18n();
@@ -14,6 +15,15 @@ const { t } = useI18n();
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 const launchOpen = ref(false);
 const launchSwitcher = ref<HTMLElement | null>(null);
+
+/**
+ * Whether to mark the guide as unread.
+ *
+ * A stored version number, not a timestamp: "have they seen the current guide"
+ * is the actual question, and re-reading it should not require a new flag.
+ * Bumping the guide's version is what re-lights the dot after a real change.
+ */
+const guideUnread = computed(() => guideIsUnread(store.settings));
 
 onClickOutside(launchSwitcher, () => {
   launchOpen.value = false;
@@ -82,6 +92,22 @@ async function openClean(): Promise<void> {
     </div>
 
     <div class="right no-drag">
+      <!-- The guide lives here rather than in the side rail: the rail is a list
+           of things you work *with*, and help is not one of them. Top right is
+           where people look for it, and the dot is the only thing that says
+           "there is something to read" without interrupting. -->
+      <button
+        type="button"
+        class="guide-button"
+        :class="{ unread: guideUnread }"
+        :aria-label="$t('app.guideOpen')"
+        :title="$t('app.guideOpen')"
+        @click="emit('openGuide')"
+      >
+        <BookOpen :size="14" />
+        <span v-if="guideUnread" class="guide-dot" aria-hidden="true"></span>
+      </button>
+
       <!-- One switch decides where every launch goes. Adding a second button to
            each management page made the same action look like two features. -->
       <div ref="launchSwitcher" class="launch-switcher" data-tour="launch-target">
@@ -290,6 +316,38 @@ async function openClean(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Same vocabulary as .launch-switch beside it: a quiet square the icon centers
+   in. Without these rules the button renders native — the uncentered icon the
+   title bar shipped with for a while. */
+.guide-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.guide-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Unread mark, not a count: a dot on the corner that clears once opened. */
+.guide-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .launch-switcher {

@@ -1,5 +1,14 @@
 import type { Flow, FlowParam, FlowStep } from "./flows";
-import type { Bookmark, Identity, LayoutPreset, LoginField, Site, SlotRect, View } from "./types";
+import type {
+  Bookmark,
+  BookmarkFolder,
+  Identity,
+  LayoutPreset,
+  LoginField,
+  Site,
+  SlotRect,
+  View,
+} from "./types";
 
 /**
  * Portable workspace snapshot. IDs are preserved so re-importing an export on the
@@ -31,6 +40,8 @@ export interface WorkspaceExportFile {
    * the distinction — so they import even into a workspace with no sites at all.
    */
   bookmarks?: Bookmark[];
+  /** Folders of the bookmark tree; absent in exports from before the tree existed. */
+  bookmarkFolders?: BookmarkFolder[];
   secrets?: SealedSecrets;
 }
 
@@ -275,23 +286,82 @@ function sanitizePreset(raw: unknown): LayoutPreset | undefined {
 }
 
 /**
+ * Validates imported bookmark folders, dropping anything that cannot form a
+ * tree node.
+ *
+ * Parent links are validated as a second pass rather than inline: a file can
+ * store folders in any order, so the parent may arrive after the child, and a
+ * cycle can only be seen once every node is known. A link that points at a
+ * dropped folder, or one that closes a loop, falls back to the top level — the
+ * folder keeps existing, only its position is repaired.
+ */
+export function sanitizeBookmarkFolders(input: unknown): BookmarkFolder[] {
+  if (!Array.isArray(input)) return [];
+  const out: BookmarkFolder[] = [];
+  const ids = new Set<string>();
+  for (const [index, item] of input.entries()) {
+    if (!isRecord(item)) continue;
+    const name = optionalText(item["name"], 60)?.trim();
+    if (!name) continue;
+    const id = optionalText(item["id"], 80) ?? `folder-${index}`;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    const now = new Date().toISOString();
+    const folder: BookmarkFolder = {
+      id,
+      name,
+      order:
+        typeof item["order"] === "number" && Number.isFinite(item["order"]) ? item["order"] : index,
+      createdAt: optionalText(item["createdAt"]) ?? now,
+      updatedAt: optionalText(item["updatedAt"]) ?? now,
+    };
+    const parentId = optionalText(item["parentId"], 80)?.trim();
+    if (parentId) folder.parentId = parentId;
+    out.push(folder);
+  }
+  const byId = new Map(out.map((folder) => [folder.id, folder]));
+  for (const folder of out) {
+    if (!folder.parentId) continue;
+    const visited = new Set<string>([folder.id]);
+    let valid = false;
+    let cursor = folder;
+    while (cursor.parentId) {
+      const parent = byId.get(cursor.parentId);
+      if (!parent || visited.has(parent.id)) break;
+      visited.add(parent.id);
+      if (!parent.parentId) {
+        valid = true;
+        break;
+      }
+      cursor = parent;
+    }
+    if (!valid) delete folder.parentId;
+  }
+  return out;
+}
+
+/**
  * Validates one imported bookmark.
  *
  * The rules match `sanitizeBookmarks` in the store — an export is a hand-editable
  * file, so the same "no bookmark the app cannot open" rule has to hold here.
  * Ordered after the import so appends land at the end of the grid in file order.
+ * A `folderId` survives only when the same file carries that folder: importing
+ * half of a tree must not leave bookmarks pointing at a folder nobody has.
  */
-function sanitizeBookmark(raw: unknown, index: number): Bookmark | undefined {
+function sanitizeBookmark(raw: unknown, index: number, folderIds?: Set<string>): Bookmark | undefined {
   if (!isRecord(raw)) return undefined;
   const url = optionalText(raw["url"], 2000);
   if (!url || !/^https?:\/\//i.test(url)) return undefined;
   const id = optionalText(raw["id"], 80) ?? `bookmark-import-${index}`;
   const favicon = optionalText(raw["favicon"], 400_000);
+  const folderId = optionalText(raw["folderId"], 80)?.trim();
   return {
     id,
     name: optionalText(raw["name"], 120) ?? new URL(url).host,
     url,
     ...(favicon?.startsWith("data:image/") ? { favicon } : {}),
+    ...(folderId && (!folderIds || folderIds.has(folderId)) ? { folderId } : {}),
     order: typeof raw["order"] === "number" && Number.isFinite(raw["order"]) ? raw["order"] : index,
     createdAt: optionalText(raw["createdAt"]) ?? new Date().toISOString(),
     updatedAt: optionalText(raw["updatedAt"]) ?? new Date().toISOString(),
@@ -337,9 +407,11 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
         .map(sanitizePreset)
         .filter((preset): preset is LayoutPreset => Boolean(preset))
     : [];
+  const bookmarkFolders = sanitizeBookmarkFolders(input["bookmarkFolders"]);
+  const folderIds = new Set(bookmarkFolders.map((folder) => folder.id));
   const bookmarks = Array.isArray(input["bookmarks"])
     ? input["bookmarks"]
-        .map(sanitizeBookmark)
+        .map((raw, index) => sanitizeBookmark(raw, index, folderIds))
         .filter((bookmark): bookmark is Bookmark => Boolean(bookmark))
     : [];
 
@@ -356,6 +428,7 @@ export function parseExportFile(input: unknown): WorkspaceExportFile {
     flows,
     layoutPresets,
     bookmarks,
+    bookmarkFolders,
     ...(secrets && typeof secrets.payload === "string" ? { secrets } : {}),
   };
 }

@@ -160,6 +160,10 @@ function fakeSurface(): EmbeddedSurface {
       calls.push({ method: "wait", args: [tabId, input] });
       return { ok: true, waitedMs: 120 };
     },
+    setViewport: (tabId: string, size: { width: number; height: number } | null) => {
+      calls.push({ method: "setViewport", args: [tabId, size] });
+      return size;
+    },
     setLayout: (layoutId) => {
       calls.push({ method: "setLayout", args: [layoutId] });
       return { tabs, views: [{ id: "view-1", name: "视图", layoutId }] };
@@ -388,6 +392,32 @@ describe("browser tool calls", () => {
     // No selector at all: the page resolves "用户名" to its own input. This is
     // the shape a component-library form needs — its DOM has no stable paths.
     expect(typed?.args[1]).toEqual({ label: "用户名", exact: true });
+  });
+
+  it("pins a tab to a fixed viewport and hands reset through untouched", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+
+    const set = await rpc(toolCall("set_browser_viewport", { width: 390, height: 844 }));
+    expect(set.json.result.isError).toBeUndefined();
+    const applied = calls.find((call) => call.method === "setViewport");
+    expect(applied?.args).toEqual(["tab-1", { width: 390, height: 844 }]);
+
+    const reset = await rpc(toolCall("reset_browser_viewport", {}));
+    expect(reset.json.result.isError).toBeUndefined();
+    const cleared = calls.filter((call) => call.method === "setViewport").at(-1);
+    expect(cleared?.args).toEqual(["tab-1", null]);
+  });
+
+  it("refuses an out-of-range viewport with the usable range in the message", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const refused = await rpc(toolCall("set_browser_viewport", { width: 200, height: 844 }));
+    expect(refused.json.result.isError).toBe(true);
+    expect(refused.json.result.content[0].text).toMatch(/320/);
+    // The refusal must not have reached the surface: a half-applied viewport
+    // would leave the page somewhere neither adaptive nor the requested size.
+    expect(calls.some((call) => call.method === "setViewport")).toBe(false);
   });
 
   it("clicks an element by its text", async () => {

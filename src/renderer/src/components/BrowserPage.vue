@@ -7,10 +7,14 @@ import {
   embeddedSlotRects,
   isBlankTab,
   tabDisplayTitle,
+  VIEWPORT_MAX_HEIGHT,
+  VIEWPORT_MAX_WIDTH,
+  VIEWPORT_MIN,
+  VIEWPORT_PRESETS,
   viewSlotFractions,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
-import type { Bookmark, SlotRect } from "@shared/types";
+import type { Bookmark, BookmarkDraft, Identity, SlotRect } from "@shared/types";
 import {
   ArrowLeft,
   ArrowRight,
@@ -25,12 +29,14 @@ import {
   Search,
   ShieldCheck,
   Star,
+  Users,
   X,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import BookmarkDialog from "./BookmarkDialog.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
@@ -100,6 +106,9 @@ const bookmarkedEntry = computed<Bookmark | undefined>(() => {
   return workspace.bookmarks.find((item) => samePage(item.url, tab.url));
 });
 
+/** The bookmark dialog over the stage; `null` means closed. */
+const bookmarkDialogDraft = ref<BookmarkDraft | null>(null);
+
 /** URL equality that ignores the hash and a trailing slash on the path. */
 function samePage(a: string, b: string): boolean {
   if (!a || !b) return false;
@@ -162,11 +171,12 @@ async function toggleAiOrigin(): Promise<void> {
 }
 
 /**
- * Star in the address bar: one click adds the current page, another removes it.
+ * Star in the address bar: one click removes an existing bookmark, adding opens
+ * the bookmark dialog with the page prefilled.
  *
  * The name offered is the page title, which is what the user recognises; the
- * host is the fallback for a page that has not set one. Everything goes through
- * the same `saveBookmark` call the grid's rename uses, so the URL rule is
+ * host is the fallback for a page that has not set one. Saving goes through the
+ * same `saveBookmark` call the management page uses, so the URL rule is
  * enforced in one place.
  */
 async function toggleBookmark(): Promise<void> {
@@ -189,12 +199,21 @@ async function toggleBookmark(): Promise<void> {
   }
   if (!host) return;
   const name = (tab.title || "").trim() || host;
-  await workspace.saveBookmark({ name: name.slice(0, 120), url: tab.url });
-  // The icon is already in hand here: the tab fetched it through its own session,
-  // so the grid does not have to make a second request for the same bytes.
-  const saved = workspace.bookmarks.find((item) => samePage(item.url, tab.url));
-  if (saved && tab.favicon) await workspace.setBookmarkFavicon(saved.id, tab.favicon);
-  workspace.notify(t("app.bookmarkAdded", { name }), "success");
+  bookmarkDialogDraft.value = { name: name.slice(0, 120), url: tab.url };
+}
+
+async function onBookmarkDialogSave(draft: BookmarkDraft): Promise<void> {
+  // run() reports the failure itself and returns undefined — without the truth
+  // check the star would announce a bookmark that never landed.
+  if (!(await workspace.saveBookmark(draft))) return;
+  bookmarkDialogDraft.value = null;
+  // The icon is already in hand here: the tab fetched it through its own
+  // session, so the grid does not have to make a second request for the bytes.
+  const saved = workspace.bookmarks.find((item) => samePage(item.url, draft.url));
+  if (saved && activeTab.value?.favicon) {
+    await workspace.setBookmarkFavicon(saved.id, activeTab.value.favicon);
+  }
+  workspace.notify(t("app.bookmarkAdded", { name: saved?.name ?? draft.name }), "success");
 }
 
 /**
@@ -333,6 +352,57 @@ const menuPageCount = computed(() => {
 });
 
 /**
+ * The menu page's viewport, read from live state rather than the snapshot taken
+ * when the menu opened: applying a preset re-lays the page out and the menu
+ * should follow to mark the new active row.
+ */
+const menuViewport = computed(() => {
+  const id = tabMenu.value?.page.id;
+  return id ? store.state.tabs.find((tab) => tab.id === id)?.viewport : undefined;
+});
+
+const customWidth = ref("");
+const customHeight = ref("");
+const viewportError = ref<string | null>(null);
+
+async function applyViewport(size: { width: number; height: number } | null): Promise<void> {
+  const page = tabMenu.value?.page;
+  if (!page) return;
+  viewportError.value = null;
+  try {
+    await store.setViewport(page.id, size);
+  } catch (error) {
+    viewportError.value = (error as Error).message;
+  }
+}
+
+async function applyCustomViewport(): Promise<void> {
+  const width = Number(customWidth.value);
+  const height = Number(customHeight.value);
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < VIEWPORT_MIN ||
+    width > VIEWPORT_MAX_WIDTH ||
+    height < VIEWPORT_MIN ||
+    height > VIEWPORT_MAX_HEIGHT
+  ) {
+    viewportError.value = t("app.viewportRangeError", {
+      wMax: VIEWPORT_MAX_WIDTH,
+      hMax: VIEWPORT_MAX_HEIGHT,
+      min: VIEWPORT_MIN,
+    });
+    return;
+  }
+  await applyViewport({ width, height });
+  if (!viewportError.value) {
+    customWidth.value = "";
+    customHeight.value = "";
+    closeTabMenu();
+  }
+}
+
+/**
  * Blank pages the stage has to draw itself.
  *
  * The main process keeps a blank page's native view parked, so the app's own
@@ -456,6 +526,8 @@ function activateSlot(rootId: string | null): void {
  * The header band is the only HTML above a live page, so that is the drop target.
  */
 const dropSlot = ref<number | null>(null);
+/** Empty cell whose account picker is open; one at a time, like a menu. */
+const openSlotPicker = ref<number | null>(null);
 
 function onSlotDragOver(slotIndex: number, event: DragEvent): void {
   if (!event.dataTransfer?.types.includes("text/plain")) return;
@@ -952,10 +1024,52 @@ async function fillLogin(tabId: string): Promise<void> {
 }
 
 /** Empty slot → new tab pinned there and focused, ready for an address. */
-async function addToSlot(slotIndex: number): Promise<void> {
+async function addToSlot(slotIndex: number, identityId?: string): Promise<void> {
   const view = activeView.value;
   if (!view) return;
-  await store.openTabInSlot(view.id, slotIndex);
+  openSlotPicker.value = null;
+  await store.openTabInSlot(view.id, slotIndex, identityId);
+}
+
+/**
+ * Accounts offered for an empty cell: the site's own, in stored order.
+ *
+ * Two ways to know the site, tried in that order:
+ *
+ * 1. The view definition this container was opened from — the normal case, and
+ *    the only one that works for an empty view. A saved view knows its site
+ *    without needing a page in it.
+ * 2. A page already in the container, for a view assembled by hand (dragged
+ *    together, no definition). This is why the fallback stays: a hand-made
+ *    container is exactly the one that most needs the picker.
+ *
+ * An empty container with no definition offers nothing: there is nothing to
+ * infer from, and listing every identity in the workspace would turn the small
+ * menu into a second identities page. Dragging one account in is what
+ * establishes the site, which is the gesture that created this case.
+ */
+function slotIdentities(slotIndex: number): Identity[] {
+  void slotIndex;
+  const siteId = viewSiteId.value;
+  if (!siteId) return [];
+  return workspace.identities.filter((identity) => identity.siteId === siteId);
+}
+
+const viewSiteId = computed<string | undefined>(() => {
+  const view = activeView.value;
+  if (!view) return undefined;
+  if (view.viewDefinitionId) {
+    const definition = workspace.views.find((item) => item.id === view.viewDefinitionId);
+    if (definition?.siteId) return definition.siteId;
+  }
+  for (const tab of store.viewInstances(view.id)) {
+    if (tab.siteId) return tab.siteId;
+  }
+  return undefined;
+});
+
+function toggleSlotPicker(slotIndex: number): void {
+  openSlotPicker.value = openSlotPicker.value === slotIndex ? null : slotIndex;
 }
 
 /**
@@ -1019,7 +1133,20 @@ function fillMessage(reason?: string): string {
     case "no-identity":
       return t("app.browserFillNoIdentity");
     case "no-password":
+      // Kept for older surfaces and for a resolver that could not say more.
       return t("app.browserFillNoPassword");
+    // The four specific reasons. Each names the dialog that actually fixes it:
+    // "no password" alone sent users to edit the account when the site was the
+    // one missing its default.
+    case "identity-empty":
+      return t("app.browserFillIdentityEmpty");
+    case "site-empty":
+      return t("app.browserFillSiteEmpty");
+    case "no-site":
+    case "no-site-record":
+      return t("app.browserFillNoSite");
+    case "reference-broken":
+      return t("app.browserFillReferenceBroken");
     case "cross-origin":
       return t("app.browserFillCrossOrigin");
     default:
@@ -1393,14 +1520,58 @@ function fillMessage(reason?: string): string {
         @drop="onSlotDrop(slot.index, $event)"
       >
         <span class="slot-empty-index mono">{{ slot.index + 1 }}</span>
-        <button
-          type="button"
-          class="slot-add"
-          @click="addToSlot(slot.index)"
-        >
-          <Plus :size="13" />
-          {{ t("app.browserAddTabHere") }}
-        </button>
+        <!-- Two affordances in one empty cell. The plain button is the common
+             case — "put a page here, I will type an address" — and stays a
+             single click. The picker beside it answers the other half of what an
+             empty cell means here: "this cell is this account". Without it,
+             building a grid of identities meant adding blank pages and then
+             finding each account somewhere else. -->
+        <div class="slot-add-row">
+          <button
+            type="button"
+            class="slot-add"
+            @click="addToSlot(slot.index)"
+          >
+            <Plus :size="13" />
+            {{ t("app.browserAddTabHere") }}
+          </button>
+          <div
+            v-if="slotIdentities(slot.index).length"
+            class="slot-identity"
+            :class="{ open: openSlotPicker === slot.index }"
+          >
+            <button
+              type="button"
+              class="slot-add slot-add-icon"
+              :aria-label="t('app.browserAddIdentityHere')"
+              :aria-expanded="openSlotPicker === slot.index"
+              :title="t('app.browserAddIdentityHere')"
+              @click="toggleSlotPicker(slot.index)"
+            >
+              <Users :size="13" />
+            </button>
+            <div v-if="openSlotPicker === slot.index" class="slot-identity-menu" role="listbox">
+              <!-- Only accounts of the site this view belongs to: a grid mixes
+                   accounts of one system, and listing every identity of every
+                   site would turn this small menu into a second identities page. -->
+              <button
+                v-for="identity in slotIdentities(slot.index)"
+                :key="identity.id"
+                type="button"
+                class="slot-identity-item"
+                role="option"
+                @click="addToSlot(slot.index, identity.id)"
+              >
+                <span
+                  class="identity-dot"
+                  :style="{ background: `var(--role-${identity.color ?? 'amber'})` }"
+                ></span>
+                <span class="identity-name">{{ identity.name }}</span>
+                <span v-if="identity.role" class="identity-role">{{ identity.role }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Divider handles sit in the HTML header bands; the page body is painted
@@ -1449,7 +1620,6 @@ function fillMessage(reason?: string): string {
         </button>
         <button
           type="button"
-          role="menuitem"
           class="tab-menu-item"
           :disabled="isBlankTab(tabMenu.page)"
           @click="copyTabUrl"
@@ -1457,6 +1627,59 @@ function fillMessage(reason?: string): string {
           <CornerDownLeft :size="12" />
           {{ t("app.browserCopyUrl") }}
         </button>
+        <div class="tab-menu-sep"></div>
+        <!--
+          Resolution. Adaptive is the normal state; a preset pins the page to a
+          fixed CSS viewport rendered scaled-to-fit, for checking how a layout
+          behaves at a phone or desktop size without a second window. The custom
+          row keeps the menu self-sufficient — two numbers, not a dialog.
+        -->
+        <div class="menu-section-label">{{ t("app.viewportLabel") }}</div>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :class="{ checked: !menuViewport }"
+          @click="applyViewport(null)"
+        >
+          {{ t("app.viewportAdaptive") }}
+        </button>
+        <button
+          v-for="preset in VIEWPORT_PRESETS"
+          :key="preset.name"
+          type="button"
+          role="menuitem"
+          class="tab-menu-item mono"
+          :class="{ checked: menuViewport?.width === preset.width && menuViewport?.height === preset.height }"
+          @click="applyViewport({ width: preset.width, height: preset.height })"
+        >
+          {{ preset.name }}
+        </button>
+        <div class="viewport-custom">
+          <input
+            v-model="customWidth"
+            class="viewport-input mono"
+            type="number"
+            :min="VIEWPORT_MIN"
+            :max="VIEWPORT_MAX_WIDTH"
+            :placeholder="$t('app.viewportWidth')"
+            @keydown.enter="applyCustomViewport"
+          />
+          <span class="viewport-x mono">×</span>
+          <input
+            v-model="customHeight"
+            class="viewport-input mono"
+            type="number"
+            :min="VIEWPORT_MIN"
+            :max="VIEWPORT_MAX_HEIGHT"
+            :placeholder="$t('app.viewportHeight')"
+            @keydown.enter="applyCustomViewport"
+          />
+          <button type="button" class="viewport-apply" @click="applyCustomViewport">
+            {{ t("app.viewportApply") }}
+          </button>
+        </div>
+        <p v-if="viewportError" class="viewport-error" role="alert">{{ viewportError }}</p>
         <div class="tab-menu-sep"></div>
         <button type="button" role="menuitem" class="tab-menu-item" @click="closeTab">
           <X :size="12" />
@@ -1474,6 +1697,14 @@ function fillMessage(reason?: string): string {
         </button>
       </div>
     </Teleport>
+
+    <BookmarkDialog
+      v-if="bookmarkDialogDraft"
+      :draft="bookmarkDialogDraft"
+      :folders="workspace.bookmarkFolders"
+      @save="onBookmarkDialogSave"
+      @close="bookmarkDialogDraft = null"
+    />
   </section>
 </template>
 
@@ -1857,6 +2088,86 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
+.slot-add-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Square icon button beside the main one: the picker is the secondary path, so
+   it must not compete with "add a page here" for attention. */
+.slot-add-icon {
+  padding: 6px 7px;
+}
+
+.slot-identity {
+  position: relative;
+}
+
+/*
+ * The picker opens downwards inside the empty cell.
+ *
+ * Unlike the dock's badge hint this one can afford to be a normal dropdown: the
+ * cell is the app's own HTML (an empty slot has no native page over it), and the
+ * stage does not scroll, so there is nothing to clip it. Capped height with its
+ * own scroll for a site with many accounts.
+ */
+.slot-identity-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 168px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+
+.slot-identity-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slot-identity-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.identity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Role is a hint, not a label: keep it quiet so the name stays the thing read. */
+.identity-role {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--faint);
+}
+
 .divider {
   position: absolute;
   z-index: 2;
@@ -2000,5 +2311,72 @@ function fillMessage(reason?: string): string {
   height: 1px;
   margin: 4px 2px;
   background: var(--line-soft);
+}
+
+/* Resolution section of the tab menu. */
+.menu-section-label {
+  padding: 4px 10px 2px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.tab-menu-item.checked {
+  color: var(--accent);
+}
+
+.viewport-custom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 6px;
+}
+
+.viewport-input {
+  width: 52px;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 10.5px;
+  color: var(--text);
+  outline: 0;
+  /* Hide the spinner buttons: the stepper eats half of a 52px field. */
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.viewport-input::-webkit-outer-spin-button,
+.viewport-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.viewport-x {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.viewport-apply {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 3px 8px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.viewport-apply:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.viewport-error {
+  padding: 0 10px 6px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--danger, #e5484d);
 }
 </style>

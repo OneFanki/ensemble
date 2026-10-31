@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  Bookmark,
   ChevronLeft,
   ChevronRight,
   Globe2,
@@ -15,7 +16,15 @@ import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 
-type RailView = "browser" | "sites" | "identities" | "views" | "flows" | "tags" | "settings";
+type RailView =
+  | "browser"
+  | "sites"
+  | "identities"
+  | "views"
+  | "flows"
+  | "tags"
+  | "bookmarks"
+  | "settings";
 
 const props = defineProps<{
   view: RailView;
@@ -37,6 +46,7 @@ const { t } = useI18n();
 const expanded = ref(window.localStorage.getItem("ensemble.rail.expanded") === "1");
 const runningCount = computed(() => embedded.tabs.length + store.instances.length);
 const tags = computed(() => store.snapshot?.tags ?? []);
+const bookmarkCount = computed(() => store.bookmarks.length);
 
 function navigate(next: typeof props.view): void {
   emit("navigate", next);
@@ -121,6 +131,23 @@ function toggleExpanded(): void {
         <span class="nav-label">{{ t("app.flows") }}</span>
         <span class="nav-tail mono">{{ store.flows.length }}</span>
         <span v-if="!expanded" class="tip">{{ t("app.flows") }}</span>
+      </button>
+      <!-- Bookmarks sit with the other collections rather than only on the
+           new-tab page: managing them (renaming, moving between folders,
+           deleting) is a page-shaped job, and the start-page grid has to stay
+           quiet enough to look like a start page. -->
+      <button
+        type="button"
+        data-nav="bookmarks"
+        class="nav-item"
+        :class="{ active: view === 'bookmarks' }"
+        :aria-label="t('app.bookmarks')"
+        @click="navigate('bookmarks')"
+      >
+        <Bookmark :size="15" class="nav-icon" />
+        <span class="nav-label">{{ t("app.bookmarks") }}</span>
+        <span class="nav-tail mono">{{ bookmarkCount }}</span>
+        <span v-if="!expanded" class="tip">{{ t("app.bookmarks") }}</span>
       </button>
       <button
         type="button"

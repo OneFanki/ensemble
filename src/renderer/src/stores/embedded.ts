@@ -252,9 +252,20 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     state.value = await window.ensemble.openEmbeddedTabInView(viewId);
   }
 
-  /** Opens a blank tab pinned to one slot of a view and focuses it. */
-  async function openTabInSlot(viewId: string, slotIndex: number): Promise<void> {
-    state.value = await window.ensemble.openEmbeddedTabInSlot(viewId, slotIndex);
+  /**
+   * Opens a blank tab pinned to one slot of a view and focuses it.
+   *
+   * `identityId` fills the slot as that account, in its own session partition.
+   * An empty slot used to mean "any page", which in practice meant a daily-profile
+   * page — so building a grid of six accounts required opening six blank pages
+   * and then hunting each account down elsewhere.
+   */
+  async function openTabInSlot(
+    viewId: string,
+    slotIndex: number,
+    identityId?: string,
+  ): Promise<void> {
+    state.value = await window.ensemble.openEmbeddedTabInSlot(viewId, slotIndex, identityId);
   }
 
   /** One more page in an existing instance; same session, same window. */
@@ -332,6 +343,20 @@ export const useEmbeddedStore = defineStore("embedded", () => {
 
   async function setLayout(viewId: string, layoutId: LayoutId): Promise<void> {
     state.value = await window.ensemble.setEmbeddedViewLayout(viewId, layoutId);
+  }
+
+  /**
+   * Pins a page to a fixed CSS viewport, or returns it to adaptive fill.
+   *
+   * The new state arrives on the `onEmbeddedState` push: the manager re-lays
+   * the page out (fitted and centred), and the dock and slot chrome both read
+   * that broadcast, so there is nothing to merge here.
+   */
+  async function setViewport(
+    tabId: string,
+    size: { width: number; height: number } | null,
+  ): Promise<void> {
+    await window.ensemble.setEmbeddedViewport(tabId, size);
   }
 
   /**
@@ -442,6 +467,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     activateView,
     createView,
     setLayout,
+    setViewport,
     groupIntoLooseView,
     setSlotRects,
     pin,

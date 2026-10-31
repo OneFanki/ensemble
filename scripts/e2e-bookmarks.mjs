@@ -8,8 +8,12 @@
  * 1. A page with no identity lands in the daily profile, and "clean open" lands
  *    in a throwaway session that is not the daily profile and not persistent.
  * 2. The bookmark grid renders on the new-tab surface, renames in place, and
- *    deletes through the right-click menu.
- * 3. The address-bar star adds the current page and toggles off again.
+ *    deletes through the right-click menu. A legacy `folder` name label in the
+ *    seeded file loads as a real folder and shows up in the strip.
+ * 3. The address-bar star opens the bookmark dialog with the page offered, and
+ *    saving it files the bookmark; the filled star still toggles off.
+ * 4. The management page: folders nest through the dialog, the bookmark dialog
+ *    files into a picked folder, and deleting a folder re-parents its contents.
  *
  * Everything runs headless: a real window is parked outside every display so the
  * compositor still produces frames (screenshots would hang on a hidden window).
@@ -50,6 +54,9 @@ writeFileSync(
     manualEngines: [],
     layoutPresets: [],
     // Two bookmarks so drag/order and the grid's multi-tile layout are real.
+    // The second one carries the legacy `folder` name label — the shape files
+    // wrote before folders became records — so the load-time migration is
+    // exercised by the real startup path, not only by unit tests.
     bookmarks: [
       {
         id: uuid(30),
@@ -63,6 +70,7 @@ writeFileSync(
         id: uuid(31),
         name: "第二个书签",
         url: "https://example.invalid/two",
+        folder: "旧分组",
         order: 1,
         createdAt: now,
         updatedAt: now,
@@ -202,6 +210,34 @@ try {
     fallback,
   );
 
+  // --- Legacy folder migration ----------------------------------------------
+  const migrated = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getWorkspace();
+    const folders = state.bookmarkFolders ?? [];
+    return {
+      names: folders.map((folder) => folder.name),
+      filedAs: state.bookmarks.map((bookmark) => {
+        const folder = folders.find((item) => item.id === bookmark.folderId);
+        return folder?.name ?? null;
+      }),
+      stripChips: [...document.querySelectorAll('.folder-strip .folder-chip')].map((chip) =>
+        chip.textContent.trim(),
+      ),
+    };
+  })()`);
+  check(
+    "a legacy folder label loads as a real top-level folder",
+    migrated?.names?.length === 1 &&
+      migrated.names[0] === "旧分组" &&
+      migrated.filedAs[1] === "旧分组",
+    migrated,
+  );
+  check(
+    "the new-tab strip lists the migrated folder with its count",
+    (migrated?.stripChips ?? []).some((text) => text.includes("旧分组") && text.includes("1")),
+    migrated?.stripChips,
+  );
+
   // --- Rename in place ------------------------------------------------------
   const renamed = await client.evaluate(`(async () => {
     const tile = document.querySelector('.bookmarks .tile');
@@ -310,31 +346,42 @@ try {
 
   const star = await client.evaluate(`(async () => {
     // Drive the real button so the click path (not just the service) is covered.
+    // Adding now opens the dialog; the name arrives prefilled from the title.
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const before = await window.ensemble.getWorkspace();
-      const starButton = document.querySelector('.toolbar .icon.star');
-      if (!starButton) return { missing: true };
-      const wasPressed = starButton.getAttribute('aria-pressed');
-      starButton.click();
-      await wait(800);
-      const after = await window.ensemble.getWorkspace();
-      if (after.bookmarks.length !== before.bookmarks.length) {
-        return {
-          missing: false,
-          wasPressed,
-          nowPressed: document.querySelector('.toolbar .icon.star')?.getAttribute('aria-pressed'),
-          delta: after.bookmarks.length - before.bookmarks.length,
-          urls: after.bookmarks.map((item) => item.url),
-        };
-      }
-      await wait(400);
-    }
-    return { missing: false, delta: 0 };
+    const before = await window.ensemble.getWorkspace();
+    const starButton = document.querySelector('.toolbar .icon.star');
+    if (!starButton) return { missing: true };
+    starButton.click();
+    await wait(600);
+    const dialog = document.querySelector('.content');
+    const title = dialog?.querySelector('.title')?.textContent?.trim() ?? '';
+    const offered = dialog?.querySelector('.form input.input')?.value ?? '';
+    const picker = Boolean(dialog?.querySelector('.tree-pick'));
+    const saveButton = [...(dialog?.querySelectorAll('.foot .btn') ?? [])].find((button) =>
+      button.textContent.includes('保存'),
+    );
+    saveButton?.click();
+    await wait(900);
+    const after = await window.ensemble.getWorkspace();
+    return {
+      missing: false,
+      title,
+      offered,
+      picker,
+      dialogClosed: !document.querySelector('.content .tree-pick'),
+      delta: after.bookmarks.length - before.bookmarks.length,
+      urls: after.bookmarks.map((item) => item.url),
+      nowPressed: document.querySelector('.toolbar .icon.star')?.getAttribute('aria-pressed'),
+    };
   })()`);
   check(
-    "the star adds the current page to the bookmarks",
-    star?.missing === false && star?.delta === 1,
+    "the star opens the new-bookmark dialog with the page offered",
+    star?.missing === false && star?.title === "新建书签" && (star?.offered ?? "").length > 0 && star?.picker === true,
+    star,
+  );
+  check(
+    "saving the dialog files the page as a bookmark",
+    star?.delta === 1 && star?.dialogClosed === true,
     star,
   );
   check(
@@ -365,6 +412,367 @@ try {
     unstar?.after === unstar?.before - 1 && unstar?.pressed === "false",
     unstar,
   );
+
+  // --- Management page: tree, dialogs, nesting ------------------------------
+  await client.evaluate(`document.querySelector('[data-nav="bookmarks"]')?.click()`);
+  const pageReady = await waitFor(client, `Boolean(document.querySelector('.bookmarks-page .tree'))`);
+  check("the management page opens with its folder tree", pageReady === true);
+
+  const made = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const head = document.querySelector('.bookmarks-page .page-head');
+    [...(head?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent.includes('新建文件夹'))
+      ?.click();
+    await wait(500);
+    const dialog = document.querySelector('.content');
+    const input = dialog?.querySelector('.form input.input');
+    if (!input) return { ok: false, step: 'dialog-open' };
+    input.value = '工作';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...(dialog.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.includes('保存'))
+      ?.click();
+    await wait(700);
+    const state = await window.ensemble.getWorkspace();
+    const folder = (state.bookmarkFolders ?? []).find((item) => item.name === '工作');
+    const treeNames = [...document.querySelectorAll('.bookmarks-page .tree .tree-name')].map(
+      (el) => el.textContent.trim(),
+    );
+    // The success toast must only ever follow a real save: a failure path that
+    // still toasted success would read as created while the tree stays empty.
+    const lastToast = [...document.querySelectorAll('.toast')].pop()?.textContent?.trim() ?? '';
+    return {
+      ok: Boolean(folder),
+      folderId: folder?.id ?? null,
+      treeNames,
+      lastToast,
+      successToasted: lastToast.includes('已创建文件夹'),
+    };
+  })()`);
+  check(
+    "a folder can be created from the header dialog",
+    made?.ok === true && made?.treeNames?.includes('工作'),
+    made,
+  );
+  check(
+    "the success toast follows an actual save, not a swallowed failure",
+    made?.successToasted === true,
+    made?.lastToast,
+  );
+
+  const nested = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const rows = [...document.querySelectorAll('.bookmarks-page .tree .tree-row')];
+    const workRow = rows.find(
+      (row) => row.querySelector('.tree-name')?.textContent?.trim() === '工作',
+    );
+    // The row's first hover action is "add a folder inside".
+    workRow?.querySelector('.tree-actions button')?.click();
+    await wait(500);
+    const dialog = document.querySelector('.content');
+    const picked = [...(dialog?.querySelectorAll('.tree-pick .pick-row') ?? [])]
+      .find((row) => row.classList.contains('on'))
+      ?.textContent?.trim();
+    const input = dialog?.querySelector('.form input.input');
+    if (!input) return { ok: false, step: 'dialog', picked };
+    input.value = '后台';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    [...(dialog.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.includes('保存'))
+      ?.click();
+    await wait(700);
+    const state = await window.ensemble.getWorkspace();
+    const parent = (state.bookmarkFolders ?? []).find((item) => item.name === '工作');
+    const child = (state.bookmarkFolders ?? []).find((item) => item.name === '后台');
+    return { ok: Boolean(parent && child && child.parentId === parent.id), picked };
+  })()`);
+  check(
+    "a child folder is created under the selected folder, prefilled in the picker",
+    nested?.ok === true && (nested?.picked ?? '').includes('工作'),
+    nested,
+  );
+
+  const filed = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const head = document.querySelector('.bookmarks-page .page-head');
+    [...(head?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent.includes('新建书签'))
+      ?.click();
+    await wait(500);
+    const dialog = document.querySelector('.content');
+    const inputs = [...(dialog?.querySelectorAll('.form input.input') ?? [])];
+    if (inputs.length < 2) return { ok: false, step: 'inputs' };
+    inputs[0].value = '控制台';
+    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    inputs[1].value = 'https://console.example.com/admin';
+    inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+    [...(dialog?.querySelectorAll('.tree-pick .pick-row') ?? [])]
+      .find((row) => row.querySelector('.pick-name')?.textContent?.trim() === '后台')
+      ?.click();
+    await wait(200);
+    [...(dialog.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.includes('保存'))
+      ?.click();
+    await wait(700);
+    const state = await window.ensemble.getWorkspace();
+    const child = (state.bookmarkFolders ?? []).find((item) => item.name === '后台');
+    const bookmark = state.bookmarks.find((item) => item.name === '控制台');
+    return {
+      ok: Boolean(bookmark && bookmark.folderId === child?.id),
+      dialogGone: !document.querySelector('.content .tree-pick'),
+    };
+  })()`);
+  check(
+    "a new bookmark lands in the folder picked in the dialog",
+    filed?.ok === true && filed?.dialogGone === true,
+    filed,
+  );
+
+  const drill = await client.evaluate(`(async () => {
+    const rows = [...document.querySelectorAll('.bookmarks-page .tree .tree-row')];
+    rows
+      .find((row) => row.querySelector('.tree-name')?.textContent?.trim() === '后台')
+      ?.click();
+    await new Promise((done) => setTimeout(done, 300));
+    const crumbs = [...document.querySelectorAll('.bookmarks-page .crumb')].map((el) =>
+      el.textContent.trim(),
+    );
+    const names = [...document.querySelectorAll('.bookmarks-page .row-name')].map((el) =>
+      el.textContent.trim(),
+    );
+    return { crumbs, names };
+  })()`);
+  check(
+    "selecting a folder filters the list and builds the breadcrumb",
+    drill?.crumbs?.join('>') === '全部>工作>后台' && drill?.names?.includes('控制台'),
+    drill,
+  );
+
+  const moved = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const row = document.querySelector('.bookmarks-page .rows .row');
+    row?.querySelector('.icon-btn:not(.danger)')?.click();
+    await wait(500);
+    const dialog = document.querySelector('.content');
+    // The picker's first row is the root option: 未分类.
+    dialog?.querySelector('.tree-pick .pick-row')?.click();
+    await wait(200);
+    [...(dialog.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.includes('保存'))
+      ?.click();
+    await wait(700);
+    const state = await window.ensemble.getWorkspace();
+    return { folderId: state.bookmarks.find((item) => item.name === '控制台')?.folderId ?? null };
+  })()`);
+  check("editing in the dialog can move a bookmark to unfiled", moved?.folderId === null, moved);
+
+  const refiled = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    // The bookmark just left the open folder, so go back to "all" where the
+    // row is visible again, and find it by name — the first row is whatever
+    // the seed sorted first, not necessarily the one this scenario created.
+    document.querySelector('.bookmarks-page .tree .tree-row.root')?.click();
+    await wait(400);
+    const target = [...document.querySelectorAll('.bookmarks-page .rows .row')].find(
+      (row) => row.querySelector('.row-name')?.textContent?.trim() === '控制台',
+    );
+    target?.querySelector('.icon-btn:not(.danger)')?.click();
+    await wait(500);
+    const dialog = document.querySelector('.content');
+    [...(dialog?.querySelectorAll('.tree-pick .pick-row') ?? [])]
+      .find((row) => row.querySelector('.pick-name')?.textContent?.trim() === '后台')
+      ?.click();
+    await wait(200);
+    [...(dialog.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.includes('保存'))
+      ?.click();
+    await wait(700);
+    const state = await window.ensemble.getWorkspace();
+    const child = (state.bookmarkFolders ?? []).find((item) => item.name === '后台');
+    return { filed: state.bookmarks.find((item) => item.name === '控制台')?.folderId === child?.id };
+  })()`);
+  check("a bookmark can be re-filed through the edit dialog", refiled?.filed === true, refiled);
+
+  const reparent = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const rows = [...document.querySelectorAll('.bookmarks-page .tree .tree-row')];
+    const childRow = rows.find(
+      (row) => row.querySelector('.tree-name')?.textContent?.trim() === '后台',
+    );
+    // The row's last hover action is delete.
+    [...(childRow?.querySelectorAll('.tree-actions button') ?? [])].pop()?.click();
+    await wait(500);
+    [...(document.querySelectorAll('.content .actions .btn') ?? [])]
+      .find((button) => button.textContent.trim() === '删除')
+      ?.click();
+    await wait(800);
+    const state = await window.ensemble.getWorkspace();
+    const folders = state.bookmarkFolders ?? [];
+    return {
+      foldersLeft: folders.map((folder) => folder.name),
+      bookmarkFiledTo:
+        folders.find((folder) => folder.id === state.bookmarks.find((item) => item.name === '控制台')?.folderId)
+          ?.name ?? null,
+    };
+  })()`);
+  check(
+    "deleting a folder re-parents its bookmark one level up",
+    (reparent?.foldersLeft ?? []).includes('后台') === false && reparent?.bookmarkFiledTo === '工作',
+    reparent,
+  );
+
+  // --- File-manager drag & drop ---------------------------------------------
+  // Synthetic DragEvents drive the real handlers: drag a bookmark row onto a
+  // folder row to file it, and drag folders onto tree nodes to nest or uproot.
+  const dragged = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const fire = (el, type) => el.dispatchEvent(
+      new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }),
+    );
+    const state = () => window.ensemble.getWorkspace();
+    const folderByName = (s, name) => (s.bookmarkFolders ?? []).find((f) => f.name === name);
+    const rowOf = (name) => [...document.querySelectorAll('.bookmarks-page .rows .row')].find(
+      (row) => row.querySelector('.row-name')?.textContent?.trim() === name,
+    );
+    const treeOf = (name) => [...document.querySelectorAll('.bookmarks-page .tree .tree-row')].find(
+      (row) => row.querySelector('.tree-name')?.textContent?.trim() === name,
+    );
+    // The renamed seed bookmark is the unfiled one at this point; file it into 工作 by dropping the row.
+    let s = await state();
+    const workId = folderByName(s, '工作')?.id;
+    const docRow = rowOf('改名后的书签');
+    if (!docRow || !workId) return { ok: false, step: 'setup' };
+    fire(docRow, 'dragstart');
+    fire(docRow, 'dragover');
+    fire(rowOf('工作'), 'dragover');
+    fire(rowOf('工作'), 'drop');
+    fire(docRow, 'dragend');
+    await wait(700);
+    s = await state();
+    const filed = s.bookmarks.find((item) => item.name === '改名后的书签')?.folderId === workId;
+    // Nest 工作 under 旧分组 by dropping the folder row on the tree node.
+    fire(rowOf('工作'), 'dragstart');
+    fire(treeOf('旧分组'), 'dragover');
+    fire(treeOf('旧分组'), 'drop');
+    fire(rowOf('工作'), 'dragend');
+    await wait(700);
+    s = await state();
+    const nested = folderByName(s, '工作')?.parentId === folderByName(s, '旧分组')?.id;
+    // 工作 is one level down now, so enter 旧分组 to see its row again — the
+    // root list only ever shows top-level folders, exactly like a file manager.
+    treeOf('旧分组')?.click();
+    await wait(500);
+    // Drop the folder on the root node to bring it back to the top level.
+    fire(rowOf('工作'), 'dragstart');
+    fire(treeOf('全部'), 'dragover');
+    fire(treeOf('全部'), 'drop');
+    fire(rowOf('工作'), 'dragend');
+    await wait(700);
+    s = await state();
+    const uprooted = folderByName(s, '工作')?.parentId === undefined;
+    // Unfile the bookmark again via the root drop target, from inside 工作.
+    treeOf('工作')?.click();
+    await wait(500);
+    fire(rowOf('改名后的书签'), 'dragstart');
+    fire(treeOf('全部'), 'dragover');
+    fire(treeOf('全部'), 'drop');
+    fire(rowOf('改名后的书签'), 'dragend');
+    await wait(700);
+    s = await state();
+    const unfiled = s.bookmarks.find((item) => item.name === '改名后的书签')?.folderId === undefined;
+    return { ok: filed && nested && uprooted && unfiled, filed, nested, uprooted, unfiled };
+  })()`);
+  check(
+    "rows drag onto folders and tree nodes to file, nest and uproot",
+    dragged?.ok === true,
+    dragged,
+  );
+
+  // --- Import from an installed browser --------------------------------------
+  // This machine has real Edge/Firefox profiles, so the dialog lists real
+  // sources and importing one exercises the actual file parsing, sqlite copy
+  // included, inside Electron's runtime.
+  const imported = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const head = document.querySelector('.bookmarks-page .page-head');
+    [...(head?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent.includes('导入'))
+      ?.click();
+    await wait(1200);
+    const sources = await window.ensemble.bookmarkImportSources();
+    const rows = [...document.querySelectorAll('.content .source')];
+    if (!rows.length) return { listed: sources.length, imported: false };
+    rows[0]?.click();
+    await wait(300);
+    const before = (await window.ensemble.getWorkspace()).bookmarks.length;
+    [...(document.querySelector('.content')?.querySelectorAll('.foot .btn') ?? [])]
+      .find((button) => button.textContent.trim() === '导入')
+      ?.click();
+    await wait(3000);
+    const after = await window.ensemble.getWorkspace();
+    const lastToast = [...document.querySelectorAll('.toast')].pop()?.textContent?.trim() ?? '';
+    return {
+      listed: sources.length,
+      imported: true,
+      grew: after.bookmarks.length >= before,
+      browserFolder: (after.bookmarkFolders ?? []).some((folder) => /书签$/.test(folder.name)),
+      lastToast,
+    };
+  })()`);
+  check(
+    "the import dialog lists the browsers installed on this machine",
+    (imported?.listed ?? 0) >= 1,
+    imported,
+  );
+  check(
+    "importing a real browser profile lands a browser folder",
+    imported?.imported === true &&
+      imported?.grew === true &&
+      (imported?.browserFolder === true || (imported?.lastToast ?? '').includes('没有可导入')),
+    imported,
+  );
+
+  // Back on a blank start page, the strip shows the surviving folder only.
+  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
+  await client.evaluate(`window.ensemble.openEmbeddedTab({})`);
+  const strip = await waitFor(
+    client,
+    `Boolean(document.querySelector('.blank-slot .new-tab')) && [...document.querySelectorAll('.folder-strip .folder-chip')].some((chip) => chip.textContent.includes('工作'))`,
+  );
+  const stripChips = await client.evaluate(
+    `[...document.querySelectorAll('.folder-strip .folder-chip')].map((chip) => chip.textContent.trim())`,
+  );
+  check(
+    "the start-page strip lists the surviving folder, not the deleted one",
+    strip === true && (stripChips ?? []).every((text) => !text.includes('后台')),
+    stripChips,
+  );
+
+  // Dropping a tile on a folder chip files it, straight from the start page.
+  const chipFiled = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const state = () => window.ensemble.getWorkspace();
+    const workId = (await state()).bookmarkFolders.find((f) => f.name === '工作')?.id;
+    const tile = [...document.querySelectorAll('.bookmarks .tile')].find(
+      (item) => item.querySelector('.tile-name')?.textContent?.trim() === '改名后的书签',
+    );
+    const chip = [...document.querySelectorAll('.folder-strip .folder-chip')].find((item) =>
+      item.textContent.includes('工作'),
+    );
+    if (!tile || !chip || !workId) return { ok: false, step: 'setup' };
+    const fire = (el, type) => el.dispatchEvent(
+      new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }),
+    );
+    fire(tile, 'dragstart');
+    fire(chip, 'dragover');
+    fire(chip, 'drop');
+    fire(tile, 'dragend');
+    await wait(700);
+    const s = await state();
+    return { ok: s.bookmarks.find((item) => item.name === '改名后的书签')?.folderId === workId };
+  })()`);
+  check("a tile dropped on a folder chip is filed into it", chipFiled?.ok === true, chipFiled);
 
   client.close();
 } catch (error) {

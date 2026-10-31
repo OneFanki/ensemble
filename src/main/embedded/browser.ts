@@ -1439,6 +1439,15 @@ export class EmbeddedBrowser {
         event.preventDefault();
         this.closeTab(tab.id);
       }
+      // Browser muscle memory: Ctrl+R / F5 reload the page the key lands on,
+      // Ctrl+Shift+R bypasses the cache. Electron binds no default reload, so
+      // without the interception the keystroke dies in the page and reads as
+      // a dead shortcut.
+      if (key === "f5" || (modifier && key === "r")) {
+        event.preventDefault();
+        if (modifier && input.shift) this.hardReload(tab.id);
+        else this.reload(tab.id);
+      }
       // The same toggle Chrome offers: F12, and Ctrl+Shift+I for laptops whose
       // F12 shares a row with volume. The DevTools' own webContents gets the
       // same handler below — with focus inside the panel, this one never fires.
@@ -1509,6 +1518,23 @@ export class EmbeddedBrowser {
     this.wakeTab(tabId);
     tab.crashed = false;
     tab.view.webContents.reload();
+  }
+
+  /** Reloads bypassing the HTTP cache — Chrome's Ctrl+Shift+R. */
+  hardReload(tabId: string): void {
+    const tab = this.requireTab(tabId);
+    this.wakeTab(tabId);
+    tab.crashed = false;
+    tab.view.webContents.reloadIgnoringCache();
+  }
+
+  /** Reloads whatever page the chrome is currently framing (app-level Ctrl+R). */
+  reloadActive(): void {
+    if (this.activeTabId) this.reload(this.activeTabId);
+  }
+
+  hardReloadActive(): void {
+    if (this.activeTabId) this.hardReload(this.activeTabId);
   }
 
   /**

@@ -20,12 +20,17 @@ const DEBUG_PORT = 9793;
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-zoom-"));
 
 const page = createServer((req, res) => {
+  pageGets += 1;
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>缩放页</title></head>
 <body><h1>缩放测试</h1></body></html>`);
 });
 await new Promise((done) => page.listen(PAGE_PORT, "127.0.0.1", done));
 const PAGE_URL = `http://127.0.0.1:${PAGE_PORT}/`;
+// Every mock-page GET the server has seen. A reload is only observable from
+// the outside as another request — the DOM cannot tell a fresh load from a
+// live one.
+let pageGets = 0;
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
@@ -152,7 +157,7 @@ async function pageZoom(marker) {
 }
 
 /** Dispatches a real Ctrl +/- key press into one embedded page. */
-async function pressCtrlKey(marker, key, code, windowsVirtualKeyCode) {
+async function pressCtrlKey(marker, key, code, windowsVirtualKeyCode, modifiers = 2) {
   const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
   const target = list.find((item) => item.url === `${PAGE_URL}?tab=${marker}`);
   if (!target) return false;
@@ -160,7 +165,7 @@ async function pressCtrlKey(marker, key, code, windowsVirtualKeyCode) {
   try {
     await client.send("Input.dispatchKeyEvent", {
       type: "rawKeyDown",
-      modifiers: 2, // Ctrl
+      modifiers, // 2 = Ctrl, 0 = none, 2|8 = Ctrl+Shift
       key,
       code,
       windowsVirtualKeyCode,
@@ -168,7 +173,7 @@ async function pressCtrlKey(marker, key, code, windowsVirtualKeyCode) {
     });
     await client.send("Input.dispatchKeyEvent", {
       type: "keyUp",
-      modifiers: 2,
+      modifiers,
       key,
       code,
       windowsVirtualKeyCode,
@@ -304,6 +309,63 @@ try {
     return { id: tab.id, zoom: tab.zoom };
   })()`);
   check("new pages start at the current default", fresh?.zoom === 80, fresh);
+
+  // --- Browser muscle memory: Ctrl+R / F5 reload the page, from the page and
+  // from the app chrome. Electron binds no default reload, so both layers had
+  // to learn it; a reload is only observable as another server-side GET. ---
+  const getsBeforeCtrlR = pageGets;
+  const ctrlRPressed = await pressCtrlKey("a", "r", "KeyR", 82);
+  await wait(1500);
+  check(
+    "Ctrl+R on a page reloads it",
+    ctrlRPressed && pageGets >= getsBeforeCtrlR + 1,
+    { ctrlRPressed, gets: { before: getsBeforeCtrlR, after: pageGets } },
+  );
+
+  const getsBeforeF5 = pageGets;
+  const f5Pressed = await pressCtrlKey("a", "F5", "F5", 116, 0);
+  await wait(1500);
+  check(
+    "F5 on a page reloads it",
+    f5Pressed && pageGets >= getsBeforeF5 + 1,
+    { f5Pressed, gets: { before: getsBeforeF5, after: pageGets } },
+  );
+
+  const getsBeforeHard = pageGets;
+  const hardPressed = await pressCtrlKey("a", "r", "KeyR", 82, 2 | 8);
+  await wait(1500);
+  check(
+    "Ctrl+Shift+R hard-reloads the page",
+    hardPressed && pageGets >= getsBeforeHard + 1,
+    { hardPressed, gets: { before: getsBeforeHard, after: pageGets } },
+  );
+
+  // With the focus on the app's own chrome (this CDP client talks to the app
+  // renderer), Ctrl+R must reload the page the chrome is framing — the active
+  // tab at this point is the fresh page from above.
+  const getsBeforeChrome = pageGets;
+  await client.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    modifiers: 2,
+    key: "r",
+    code: "KeyR",
+    windowsVirtualKeyCode: 82,
+    nativeVirtualKeyCode: 82,
+  });
+  await client.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: 2,
+    key: "r",
+    code: "KeyR",
+    windowsVirtualKeyCode: 82,
+    nativeVirtualKeyCode: 82,
+  });
+  await wait(1500);
+  check(
+    "Ctrl+R from the app chrome reloads the active page",
+    pageGets >= getsBeforeChrome + 1,
+    { gets: { before: getsBeforeChrome, after: pageGets } },
+  );
 
   // --- DevTools dock and detach -------------------------------------------
   const docked = await client.evaluate(`(async () => {

@@ -1483,12 +1483,22 @@ async function createWindow(): Promise<void> {
   // `before-input-event` handles the toggle and this listener never fires; from
   // the chrome, no page sees the key at all — which read as "F12 does nothing".
   //
+  // The same reach applies to reload: with the focus on the chrome, Ctrl+R / F5
+  // must still reload the page the chrome is framing instead of falling dead.
+  //
   // keyDown only: the keyUp of the same press arrives after DevTools have opened
   // and taken focus, and toggling on it would shut the panel immediately.
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (input.type !== "keyDown" || input.isAutoRepeat) return;
     const key = input.key.toLowerCase();
-    if (key !== "f12" && !(input.control && input.shift && key === "i")) return;
+    const modifier = process.platform === "darwin" ? input.meta : input.control;
+    if (key === "f5" || (modifier && key === "r")) {
+      event.preventDefault();
+      if (modifier && input.shift) ensureEmbeddedBrowser().hardReloadActive();
+      else ensureEmbeddedBrowser().reloadActive();
+      return;
+    }
+    if (key !== "f12" && !(modifier && input.shift && key === "i")) return;
     event.preventDefault();
     ensureEmbeddedBrowser().toggleDevToolsForFocusedPage();
   });

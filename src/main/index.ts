@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
@@ -43,6 +43,8 @@ import { parseExportFile } from "@shared/transfer";
 import type {
   AppSettings,
   BookmarkDraft,
+  DownloadAction,
+  DownloadEntry,
   FocusLabelPayload,
   IdentityDraft,
   LayoutId,
@@ -83,6 +85,7 @@ import {
   Tray,
 } from "electron";
 import { EmbeddedBrowser } from "./embedded/browser";
+import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
 import { LoginCaptureStore } from "./embedded/login-capture";
 import { McpServer } from "./mcp/server";
@@ -195,6 +198,14 @@ const loginCaptures = new LoginCaptureStore();
  * partitions.
  */
 let embedded: EmbeddedBrowser | null = null;
+/**
+ * Downloads from every identity partition, for the browser toolbar.
+ *
+ * Created up front rather than with the browser: the list has to survive the
+ * surface being closed and reopened, and the IPC channel answers even before a
+ * tab exists.
+ */
+const downloads = new DownloadManager(broadcastDownloads);
 /** A parsed import file waiting for its confirmation, keyed by absolute path. */
 let pendingImport: { path: string; payload: ReturnType<typeof parseExportFile> } | null = null;
 /** An account bundle picked but not yet applied, same lifecycle as `pendingImport`. */
@@ -215,6 +226,15 @@ let updateTimer: NodeJS.Timeout | null = null;
 const UPDATE_FIRST_CHECK_MS = 8_000;
 /** How often a background check repeats while the app stays open. */
 const UPDATE_REPEAT_MS = 6 * 60 * 60 * 1_000;
+
+/**
+ * How long the window load may hold up the rest of startup.
+ *
+ * The window is visible from the first frame; this deadline only decides when
+ * the code behind it (embedded surface, tray, MCP endpoint) stops waiting for a
+ * `did-finish-load` that may never arrive.
+ */
+const RENDERER_LOAD_TIMEOUT_MS = 15_000;
 
 /** Native window-control colors mirror the renderer tokens for each theme. */
 const TITLEBAR_COLORS = {
@@ -305,6 +325,9 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // the settings may have changed since. Tabs already open keep the proxy they
     // loaded with until they reload, which is how a browser behaves.
     proxy: () => settingsCache ?? (service?.settingsSnapshot() ?? DEFAULT_SETTINGS),
+    // Downloads are session state, so every partition the surface configures
+    // has to be handed to the manager — a missed one downloads invisibly.
+    onSessionReady: (ses) => downloads.attach(ses),
     // Dragging a layout picker in the sidebar edits the open container only for
     // hand-made views; saved views persist the choice back to the definition.
     onViewLayoutChange: (viewDefinitionId, layoutId) => {
@@ -718,6 +741,18 @@ function broadcastMcp(): void {
   if (!mcpServer) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(IPC.mcpChanged, mcpServer.status());
+  }
+}
+
+/**
+ * The toolbar draws the list, so it is told whenever an entry changes.
+ *
+ * The manager throttles progress updates; a finished download skips that and
+ * arrives immediately, because "it is done" is the one update the user acts on.
+ */
+function broadcastDownloads(entries: DownloadEntry[]): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC.downloadsChanged, entries);
   }
 }
 
@@ -1427,6 +1462,74 @@ function ensureTrayMenuMatches(count: number): void {
   trayRebuild?.();
 }
 
+/**
+ * macOS application menu.
+ *
+ * A menu-less app has no accelerator table at all: Cmd+, does nothing and
+ * Cmd+Q / Cmd+H / Cmd+M lose their standard meanings, because those bindings
+ * live in the menu, not in Chromium. Windows and Linux keep the bare window —
+ * there the menu bar would draw a strip the layout does not account for.
+ *
+ * Everything except the settings entry comes from Electron's own roles, so the
+ * labels follow the system language.
+ */
+function buildMacMenu(): Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        {
+          label: t("menu.settings"),
+          accelerator: "Command+,",
+          click: () => requestOpenSettings(),
+        },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    // `windowMenu` carries Minimize/Zoom/Front but not Close, and Cmd+W is a
+    // standard macOS binding — with `closeToTray` it hides the window instead of
+    // ending the session, which is exactly what the close button already does.
+    {
+      label: t("menu.window"),
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "separator" },
+        { role: "close" },
+        { type: "separator" },
+        { role: "front" },
+      ],
+    },
+  ]);
+}
+
+/** Opens Settings from the native menu; the renderer owns the page itself. */
+function requestOpenSettings(): void {
+  showMainWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const send = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.appOpenSettings);
+  };
+  // A request that lands while the page is still loading would reach a renderer
+  // that has not registered its listener yet; hold it until the load settles.
+  if (mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.once("did-finish-load", send);
+    return;
+  }
+  send();
+}
+
 async function createWindow(): Promise<void> {
   const isMac = process.platform === "darwin";
   mainWindow = new BrowserWindow({
@@ -1462,7 +1565,7 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  Menu.setApplicationMenu(null);
+  Menu.setApplicationMenu(isMac ? buildMacMenu() : null);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -1506,10 +1609,31 @@ async function createWindow(): Promise<void> {
     void shutdownAndQuit();
   });
 
-  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
-    await mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]);
-  } else {
-    await mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+  /*
+   * The window is already on screen; what this await guards is everything that
+   * comes after it. `loadFile` settles on did-finish-load, and a renderer that
+   * never finishes loading leaves that promise pending forever — which used to
+   * take the tray, the embedded surface and the MCP endpoint down with it.
+   * Racing a deadline keeps a stuck load from becoming a stuck app.
+   */
+  const loadPromise =
+    isDev && process.env["ELECTRON_RENDERER_URL"]
+      ? mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"])
+      : mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+  const loaded = await Promise.race([
+    loadPromise.then(
+      () => true,
+      (error: unknown) => {
+        logLine(`renderer load failed: ${(error as Error).message}`);
+        console.error("[ensemble] renderer load failed", error);
+        return false;
+      },
+    ),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), RENDERER_LOAD_TIMEOUT_MS)),
+  ]);
+  if (!loaded) {
+    logLine(`renderer load did not finish within ${RENDERER_LOAD_TIMEOUT_MS}ms`);
+    console.error(`[ensemble] renderer load did not finish within ${RENDERER_LOAD_TIMEOUT_MS}ms`);
   }
 
   if (headless) parkWindowOffscreen(mainWindow);
@@ -2303,6 +2427,38 @@ function registerIpc(workspace: WorkspaceService): void {
     return status;
   });
 
+  handle(IPC.downloadsList, () => downloads.list());
+
+  /*
+   * One entry point for every toolbar action.
+   *
+   * `open` and `reveal` are the reason this lives in main: the path stays on
+   * this side, and the renderer only ever names an entry by id. A cancelled or
+   * interrupted download has no file to open, so those actions no-op instead of
+   * failing the whole call.
+   */
+  handle(IPC.downloadsAct, (action: DownloadAction, id?: string) => {
+    const entry = id ? downloads.find(id) : undefined;
+    switch (action) {
+      case "cancel":
+        if (id) downloads.cancel(id);
+        break;
+      case "remove":
+        if (id) downloads.remove(id);
+        break;
+      case "clear":
+        downloads.clear();
+        break;
+      case "open":
+        if (entry?.savePath) void shell.openPath(entry.savePath);
+        break;
+      case "reveal":
+        if (entry?.savePath) shell.showItemInFolder(entry.savePath);
+        break;
+    }
+    return downloads.list();
+  });
+
   handle(IPC.appSetTheme, (theme: AppSettings["theme"]) => {
     applyTheme(theme);
   });
@@ -2780,6 +2936,29 @@ function dateStamp(): string {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 }
 
+/**
+ * Startup diagnostics on disk.
+ *
+ * A packaged macOS app launched from Finder has no readable stdout, so a failed
+ * bind or a renderer that never finished loading left no trace anywhere the user
+ * (or a later debugging session) could look. Startup-critical lines land in
+ * userData/logs/main.log instead. The file is truncated past the cap rather than
+ * rotated: one bounded file, nothing to clean up by hand.
+ */
+const LOG_MAX_BYTES = 512 * 1024;
+
+function logLine(message: string): void {
+  try {
+    const dir = join(userDataDir(), "logs");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "main.log");
+    if (existsSync(file) && statSync(file).size > LOG_MAX_BYTES) writeFileSync(file, "");
+    appendFileSync(file, `${new Date().toISOString()} ${message}\n`, "utf8");
+  } catch {
+    // Diagnostics must never be the reason startup fails.
+  }
+}
+
 // A second instance would own its own browsers and MCP port, and both would write
 // workspace.json. The first instance wins and simply reveals its window instead.
 const gotLock = app.requestSingleInstanceLock();
@@ -2807,6 +2986,17 @@ if (!gotLock) {
     // the packaged executable. In development the process is electron.exe, so
     // without this the taskbar shows Electron's logo for our window.
     if (process.platform === "win32") app.setAppUserModelId("io.github.onefanki.ensemble");
+    // The About panel is reachable from the app menu; without this it shows the
+    // bare product name with no version, which is the first thing a bug report
+    // needs.
+    if (process.platform === "darwin") {
+      app.setAboutPanelOptions({
+        applicationName: "Ensemble",
+        applicationVersion: app.getVersion(),
+        version: `Electron ${process.versions.electron ?? ""}`,
+        copyright: "MIT License",
+      });
+    }
 
     service = new WorkspaceService({
       userDataDir: userDataDir(),
@@ -2988,8 +3178,40 @@ if (!gotLock) {
     });
 
     registerIpc(service);
+    /*
+     * The endpoint starts before the window, never after it.
+     *
+     * These used to be serial: `await createWindow(); await mcpServer.start()`.
+     * `createWindow` awaits the renderer load, whose promise settles on
+     * did-finish-load — a load that never finished therefore left the endpoint
+     * unbound for the whole session, while `status()` reported enabled-but-not-
+     * running with no error to explain it. Nothing in the server needs the
+     * window (`ensureEmbeddedBrowser` attaches lazily), so the window cannot
+     * gate it any more.
+     *
+     * Started, not awaited: a busy port spends the whole retry ladder (~9 s)
+     * inside `start()`, and that wait belongs behind the window, not in front of
+     * it — the upgrade case where the previous instance is still releasing the
+     * socket is exactly when the window would otherwise sit missing. The status
+     * line lands in main.log as soon as the bind settles, whichever finishes
+     * first.
+     */
+    const mcp = mcpServer;
+    const mcpReady = mcp
+      .start()
+      .then(() => {
+        const endpoint = mcp.status();
+        logLine(
+          endpoint.running
+            ? `mcp listening on ${endpoint.url}`
+            : `mcp not running (enabled=${endpoint.enabled})${endpoint.error ? `: ${endpoint.error}` : ""}`,
+        );
+      })
+      .catch((error: unknown) => {
+        logLine(`mcp start failed: ${(error as Error).message}`);
+      });
     await createWindow();
-    await mcpServer.start();
+    await mcpReady;
 
     /**
      * A freshly started window opens with one blank page.

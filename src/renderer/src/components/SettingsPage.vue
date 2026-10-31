@@ -1133,7 +1133,13 @@ async function submitMaster() {
           </div>
           <div class="block-actions">
             <span class="status-chip" :class="{ on: mcp?.running }">
-              {{ mcp?.running ? $t("app.mcpRunning") : $t("app.mcpStopped") }}
+              {{
+                mcp?.running
+                  ? $t("app.mcpRunning")
+                  : mcp?.starting
+                    ? $t("app.mcpStarting")
+                    : $t("app.mcpStopped")
+              }}
             </span>
           </div>
         </div>

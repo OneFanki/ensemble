@@ -202,15 +202,16 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
   渲染层 CSP 是 `img-src 'self' data:`，不加载远程图片；更重要的是图标要用页面自己的会话去取
   （登录态、区域、Cookie 都跟着走），只有主进程做得到。`inlineFavicon` 把类型与大小规则抽成
   纯函数，避免为了测它而启动 Electron。
-- **停放页空闲后降速（`aiIdleFreeze`，headless 关闭）。** 页面挪出窗口只是看不见，Chromium
-  仍视其为「可见」，原生后台节流永不触发——每个停放页（包括 3D 首页）都会满速渲染；实测
-  `Page.setWebLifecycleState` 与 `setVisible(false)` 都改变不了这一点（前者对可见页只做浅冻
-  结、rAF 照跑，后者连 `visibilityState` 都不变，均以同 partition 读者页实测）。真正生效的杠杆
-  是 CDP CPU 节流：停放页闲置 60 秒（窗口期内无任何 CDP 流量）后由 10 秒一轮的扫描压到 8×，
-  rAF 回调变慢、3D 帧率按比例回落；AI 的每条命令经 `EmbeddedCdp.send` 前都会 **await** 一次
-  恢复满速，所以截图、点击永远全速执行。扫描刻意保守：台上、加载中、崩溃、空白、有声、开着
-  DevTools 的页面一律不动；恢复失败只损失速度不损正确性。另注意窗口级遮挡：整个应用被盖住
-  或最小化时，Chromium 原生节流本就会把所有页压到 1–2 FPS，无需任何额外机制。
+- **停放页空闲后睡眠（`aiIdleFreeze`，headless 关闭）。** 页面挪出窗口只是看不见，Chromium
+  仍视其为「可见」，原生后台节流永不触发——应用窗口在屏上时，每个停放页（包括 3D 首页）都会
+  满速渲染。实测 `setVisible(false)` 连 `visibilityState` 都不变（JS/rAF 照跑），CPU 节流拖不
+  动 compositor 驱动的帧循环；真正生效的是 CDP `Page.setWebLifecycleState: "frozen"`——页面
+  JavaScript 整体挂起（冻结页上 evaluate 永不返回），3D 场景随之停。停放页闲置 60 秒（窗口期
+  内无任何 CDP 流量）后由 10 秒一轮的扫描冻结，**扫描在浏览器构造时无条件启动**（曾惰性启动
+  于首次 CDP 命令，纯手工会话里从未运行过）；AI 的每条命令经 `EmbeddedCdp.send` 前都会
+  **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击永远落在活页面上。扫描刻意保守：台上、
+  加载中、崩溃、空白、有声、开着 DevTools 的页面一律不动。另注意窗口级遮挡：整个应用被盖住
+  或移出屏幕时，Chromium 原生节流本就会把所有页压停，无需任何额外机制。
 
 ### 流程：把走通的操作存成资产
 

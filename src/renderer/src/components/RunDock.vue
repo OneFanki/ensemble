@@ -511,14 +511,21 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
       </header>
 
       <div class="scroll">
-        <!-- Views: block level, coloured, collapsible; instances are rows. -->
+        <!--
+          Views: block level, coloured, collapsible; instances are rows.
+          `gridded` shows the slot-number column (only a real grid can
+          cross-reference one) and deepens the page-list indent to clear it.
+        -->
         <section
           v-for="view in embedded.views"
           :key="view.id"
           class="view-block"
           :class="[
             viewDropClass(view.id),
-            { active: view.id === embedded.state.activeViewId },
+            {
+              active: view.id === embedded.state.activeViewId,
+              gridded: embedded.slots(view) > 1,
+            },
           ]"
           @dragover="onViewDragOver(view.id, $event)"
           @drop="onDrop"
@@ -619,14 +626,18 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 @click="embedded.activate(activePageOf(root).id)"
                 @keydown.enter="embedded.activate(activePageOf(root).id)"
               >
-                <span class="slot-no mono">{{ slotNumber(root) ?? "·" }}</span>
-                <span
-                  class="tab-dot"
-                  :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
-                ></span>
-                <!-- Same mark as the page tabs on the stage: a row is a tab,
-                     and a tab starts with its site's icon. -->
-                <TabIcon :src="faviconOf(root)" :size="12" />
+                <span v-if="embedded.slots(view) > 1" class="slot-no mono">{{ slotNumber(root) ?? "·" }}</span>
+                <!-- Identity colour rides the icon's corner (same mark as the
+                     collapsed strip): a 5px free-standing dot spent 11px of
+                     every row pushing the icon right, and with same-coloured
+                     identities it read as pure noise between the levels. -->
+                <span class="tab-icon-wrap">
+                  <TabIcon :src="faviconOf(root)" :size="12" />
+                  <span
+                    class="row-role"
+                    :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
+                  ></span>
+                </span>
                 <!-- The full URL lives on the label rather than the row: the
                      badge at the row's end answers to its own drawn hint, and a
                      native title on an ancestor would pop up over it anyway. -->
@@ -746,12 +757,16 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 @click="embedded.activate(activePageOf(root).id)"
                 @keydown.enter="embedded.activate(activePageOf(root).id)"
               >
-                <span class="slot-no mono">{{ isOnStage(root) ? "▣" : "·" }}</span>
-                <span
-                  class="tab-dot"
-                  :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
-                ></span>
-                <TabIcon :src="faviconOf(root)" :size="12" />
+                <!-- The focused row's accent bar already says "this is what the
+                     stage shows" in flat mode; a ▣/· column spent 16px per row
+                     repeating it. -->
+                <span class="tab-icon-wrap">
+                  <TabIcon :src="faviconOf(root)" :size="12" />
+                  <span
+                    class="row-role"
+                    :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
+                  ></span>
+                </span>
                 <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
                 <span class="tab-account">{{ accountOf(root) }}</span>
                 <!-- How many AI operations this site has seen in this session.
@@ -1361,11 +1376,27 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   color: var(--faint);
 }
 
-.tab-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+/* The identity colour rides the favicon's corner — the same mark the collapsed
+   strip paints on its tiles — instead of a free-standing dot that pushed every
+   root row 11px deeper than its children. Drawn always: with a placeholder
+   icon the corner is the only thing saying which account the row belongs to. */
+.tab-icon-wrap {
+  position: relative;
   flex: none;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+
+.row-role {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, var(--bg));
 }
 
 .tab-label {
@@ -1467,12 +1498,19 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
   background: var(--surface-3);
 }
 
-/* Pages of one instance: indented under its row, like nested browser tabs. */
+/* Pages of one instance: indented under its row, like nested browser tabs.
+   The indent must clear the parent row's icon (5px padding + 12px icon + 6px
+   gap = 23px; +22px more when the slot-number column is shown in a grid), or
+   the levels visually invert and children read as siblings. */
 .pages {
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line-soft);
-  margin-left: 21px;
+  margin-left: 23px;
+}
+
+.view-block.gridded .pages {
+  margin-left: 45px;
 }
 
 .page-row {

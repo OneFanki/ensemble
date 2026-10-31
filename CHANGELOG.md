@@ -22,15 +22,29 @@
 
 ### 中文
 
-<!-- 摘要（2–5 条）写在这里，应用内更新弹窗只显示这一段。 -->
+- **Ctrl+R / F5 刷新内置页面**：页面内、地址栏、dock 上按都生效；Ctrl+Shift+R 绕过缓存强制刷新（macOS 为 Cmd）
+- **运行栏层级清晰化**：身份色点下沉为网站图标角标、格位号只在多格布局显示、子页缩进严格深于父行——多账号时父/子页面一眼可分
+- **toast 在 dock 展开时不再被页面盖住半截**：舞台上的原生页面永远画在 HTML 之上，此前 toast 比 dock 宽的部分连同折行尾字都被盖住；现在宽度钳制在 dock 之内，完整可见
 
 #### 完整变更
 
+- 运行栏（dock）行内结构精简：5px 独立身份色点改为 favicon 右下角 4px 角标（与折叠图标列同款）；格位号列仅网格布局（`slots > 1`）显示；散标签组的「▣/·」列删除（选中行 accent 竖条已表达同义）；`.pages` 缩进 21px → 23px/45px（网格），修复「父级缩进反而更大」的层级倒挂
+- 刷新快捷键两层拦截：焦点在页面时走页面的 `before-input-event`，焦点在应用壳上时由主窗口兜底重载「壳当前框住的页面」；DevTools 面板聚焦沿用既有转发。Electron 不绑默认刷新，不拦就是死键
+- toast 宽度绑定 dock 宽度（`min(380px, dock - 36px)`），`e2e-toast-geometry` 新增「stack ⊆ dock 矩形」断言（9 项）。dock 折叠态（34px 图标列）为已知架构边界，彻底方案是独立原生 toast 窗口
+- 1.3.1 的 Teleport 修复保留：它防的是祖先 transform 劫持 fixed 锚点的另一类问题
+- `e2e-zoom-devtools` 的 mock 服务器加 GET 计数器，新增 4 条刷新用例（33 项）；刷新只能从服务端请求数观测，DOM 无法区分新载与活页
+
 ### English
 
-<!-- Summary (2–5 lines); the in-app updater shows only this part. -->
+- **Ctrl+R / F5 reload embedded pages**: works from inside a page, the address bar, and the dock; Ctrl+Shift+R bypasses the cache (Cmd on macOS)
+- **Toasts are no longer half-covered by the page while the dock is open**: the stage's native view paints above every HTML layer, so the part of a toast wider than the dock — including a wrapped tail character — went unpainted. Toasts are now clamped to the dock's width and render fully
 
 #### Full changes
+
+- Reload shortcuts are intercepted at two layers: the page's `before-input-event` when a page has focus, and a main-window fallback that reloads the page the chrome is framing when the focus is on the app's own UI; the DevTools panel keeps its existing forward-to-page behavior. Electron binds no default reload — without this the keys are simply dead
+- Toast width now tracks the dock width (`min(380px, dock - 36px)`); `e2e-toast-geometry` gains a "stack inside the dock rectangle" assertion (9 checks). The collapsed dock (34px icon strip) remains a known architectural boundary; the complete fix would be a dedicated native toast window
+- The 1.3.1 Teleport fix stays: it guards the other class of problem, a transformed ancestor stealing the fixed anchor
+- `e2e-zoom-devtools`' mock server now counts GETs and gained 4 reload checks (33 total); a reload is only observable server-side — the DOM cannot tell a fresh load from a live one
 
 
 ## [1.3.1] - 2026-10-31

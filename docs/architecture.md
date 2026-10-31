@@ -94,6 +94,11 @@
 `zoomBy` 在页面上按 Ctrl +/-/0 时写入 `zoomOverride`（仅内存，随标签页消失），并在
 `before-input-event` 里拦截——网页自己会吞掉这些按键。
 
+刷新快捷键同理分两层拦截：焦点在页面里时由页面的 `before-input-event` 处理
+（Ctrl+R / F5 重载、Ctrl+Shift+R 绕过缓存），焦点在应用壳上（地址栏、dock）时由主窗口层兜底，
+重载的总是「壳当前框住的页面」；DevTools 面板聚焦时沿用既有行为（转发给被测页）。
+Electron 不绑任何默认刷新，不拦就是死键。
+
 内置表面在 `src/main/embedded/`：
 
 - `browser.ts` 管理主窗口里的**浏览器实例**、页面与**视图容器**。一个视图是一块共享

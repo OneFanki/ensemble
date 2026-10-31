@@ -6,21 +6,31 @@ const store = useWorkspaceStore();
 </script>
 
 <template>
-  <div class="toast-stack" aria-live="polite">
-    <div
-      v-for="toast in store.toasts"
-      :key="toast.id"
-      class="toast"
-      :class="toast.tone"
-      :role="toast.tone === 'error' ? 'alert' : 'status'"
-    >
-      <CircleAlert v-if="toast.tone === 'error'" :size="13" />
-      <CircleCheck v-else-if="toast.tone === 'success'" :size="13" />
-      <TriangleAlert v-else-if="toast.tone === 'warning'" :size="13" />
-      <Info v-else :size="13" />
-      <span>{{ toast.text }}</span>
+  <!--
+    Teleported to body, same as the other floaters: position:fixed is only
+    viewport-relative while no ancestor carries a transform (or contain /
+    will-change). One such ancestor anywhere between here and the shell root
+    silently turns the viewport anchor into that element — the stack then lays
+    out at the dock's width and the cards clip their own text on both edges
+    (2026-10-31). Body is the end of the chain, so the anchor cannot be stolen.
+  -->
+  <Teleport to="body">
+    <div class="toast-stack" aria-live="polite">
+      <div
+        v-for="toast in store.toasts"
+        :key="toast.id"
+        class="toast"
+        :class="toast.tone"
+        :role="toast.tone === 'error' ? 'alert' : 'status'"
+      >
+        <CircleAlert v-if="toast.tone === 'error'" :size="13" />
+        <CircleCheck v-else-if="toast.tone === 'success'" :size="13" />
+        <TriangleAlert v-else-if="toast.tone === 'warning'" :size="13" />
+        <Info v-else :size="13" />
+        <span>{{ toast.text }}</span>
+      </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -33,7 +43,9 @@ const store = useWorkspaceStore();
   display: flex;
   flex-direction: column;
   gap: 7px;
-  max-width: 380px;
+  /* Never wider than the viewport: an unbreakable line's min-content can
+     beat max-width:380px and spill past the right edge. */
+  max-width: min(380px, calc(100vw - 36px));
   pointer-events: none;
 }
 

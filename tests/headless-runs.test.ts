@@ -87,6 +87,7 @@ describe("automation scripts", () => {
     "e2e-restore-surface.mjs",
     "e2e-site-tags.mjs",
     "e2e-tab-reorder.mjs",
+    "e2e-toast-geometry.mjs",
     "e2e-ui-regressions.mjs",
     "e2e-v1-upgrade.mjs",
     "e2e-zoom-devtools.mjs",

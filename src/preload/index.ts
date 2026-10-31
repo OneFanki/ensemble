@@ -3,6 +3,7 @@ import { type EnsembleApi, IPC } from "@shared/ipc";
 import type {
   AiPageAction,
   AutoFillReport,
+  DownloadEntry,
   FocusLabelPayload,
   LoginCaptureNotice,
   McpStatus,
@@ -72,6 +73,18 @@ const api: EnsembleApi = {
     const handler = (_event: unknown, status: McpStatus) => listener(status);
     ipcRenderer.on(IPC.mcpChanged, handler);
     return () => ipcRenderer.removeListener(IPC.mcpChanged, handler);
+  },
+  onOpenSettings: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.appOpenSettings, handler);
+    return () => ipcRenderer.removeListener(IPC.appOpenSettings, handler);
+  },
+  listDownloads: () => ipcRenderer.invoke(IPC.downloadsList),
+  actOnDownload: (action, id) => ipcRenderer.invoke(IPC.downloadsAct, action, id),
+  onDownloadsChanged: (listener) => {
+    const handler = (_event: unknown, entries: DownloadEntry[]) => listener(entries);
+    ipcRenderer.on(IPC.downloadsChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.downloadsChanged, handler);
   },
   onAiPageAction: (listener) => {
     const handler = (_event: unknown, action: AiPageAction) => listener(action);

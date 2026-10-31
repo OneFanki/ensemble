@@ -39,6 +39,15 @@ import type {
 const DEFAULT_PORT = 47_821;
 const MAX_BODY_BYTES = 1_000_000;
 const AUDIT_FILE = "mcp-audit.log";
+/**
+ * Retry ladder for a busy port, in milliseconds.
+ *
+ * EADDRINUSE is what an upgrade or a quick restart looks like from here: the
+ * previous instance is still releasing the socket. A single failed bind used to
+ * leave the endpoint dead until the user toggled it or restarted the app, so a
+ * busy port now gets ~9 seconds of patience instead of one attempt.
+ */
+const BIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400, 4_800];
 
 /**
  * What an MCP client is told about this server at `initialize`.
@@ -537,7 +546,11 @@ function timingSafeToken(actual: string, expected: string): boolean {
 export class McpServer {
   private server: Server | null = null;
   private running = false;
+  /** True between the first bind attempt and the last one settling. */
+  private starting = false;
   private lastError: string | undefined;
+  /** errno code behind `lastError`; only a busy port is worth another attempt. */
+  private lastErrorKind: string | undefined;
   private settings: McpSettings;
   /** Port the current socket is on, kept after close so status() stays readable. */
   private cachedPort = 0;
@@ -631,6 +644,7 @@ export class McpServer {
     return {
       enabled: this.settings.enabled,
       running: this.running,
+      starting: this.starting,
       port,
       url: `http://127.0.0.1:${port}/mcp`,
       token: this.settings.token,
@@ -678,31 +692,63 @@ export class McpServer {
     return this.status();
   }
 
+  /**
+   * Binds the endpoint, waiting out a port that is still being released.
+   *
+   * Only EADDRINUSE is retried: a port that is merely busy heals by waiting,
+   * while EACCES and friends will fail identically however long we wait, and
+   * retrying them would just delay the error the user needs to see.
+   */
   async start(): Promise<void> {
     if (!this.settings.enabled || this.server) return;
+    this.lastError = undefined;
+    this.lastErrorKind = undefined;
+    this.starting = true;
+    try {
+      for (let attempt = 0; attempt <= BIND_RETRY_DELAYS_MS.length; attempt += 1) {
+        // The user may switch the endpoint off while a retry is waiting.
+        if (!this.settings.enabled) return;
+        if (await this.tryBind()) return;
+        if (this.lastErrorKind !== "EADDRINUSE") return;
+        const delay = BIND_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) return;
+        console.warn(`[mcp] port ${this.settings.port} is busy, retrying in ${delay}ms`);
+        // Let the UI say "starting" instead of "not running" with no reason.
+        this.options.onChange?.();
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    } finally {
+      this.starting = false;
+      this.options.onChange?.();
+    }
+  }
+
+  /** One bind attempt; resolves true once the socket is listening. */
+  private async tryBind(): Promise<boolean> {
     const server = createServer((request, response) => {
       void this.handle(request, response);
     });
-    this.lastError = undefined;
-    await new Promise<void>((resolve) => {
-      const onError = (error: Error) => {
-        this.lastError = error.message;
+    return new Promise<boolean>((resolve) => {
+      const onError = (error: NodeJS.ErrnoException) => {
         server.removeListener("listening", onListening);
         server.close();
         this.server = null;
         this.running = false;
+        this.lastError = error.message;
+        this.lastErrorKind = error.code;
         console.error("[mcp] failed to bind", this.settings.port, error.message);
-        resolve();
+        resolve(false);
       };
       const onListening = () => {
         server.removeListener("error", onError);
         this.server = server;
         this.running = true;
+        this.lastErrorKind = undefined;
         const address = server.address();
         this.cachedPort =
           address && typeof address !== "string" ? address.port : this.settings.port;
         console.log(`[mcp] listening on http://127.0.0.1:${this.cachedPort}/mcp`);
-        resolve();
+        resolve(true);
       };
       server.once("error", onError);
       server.once("listening", onListening);

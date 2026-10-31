@@ -782,6 +782,8 @@ export interface McpSettings {
 export interface McpStatus {
   enabled: boolean;
   running: boolean;
+  /** True while a bind attempt (or the retry ladder behind it) is in flight. */
+  starting?: boolean;
   port: number;
   /** Ready-to-paste URL, e.g. http://127.0.0.1:47821/mcp */
   url: string;
@@ -823,3 +825,28 @@ export interface McpPatch {
   /** Replaces the bearer token; every client must update its config. */
   rotateToken?: boolean;
 }
+
+/** Lifecycle of one download, as the toolbar shows it. */
+export type DownloadState = "progressing" | "completed" | "cancelled" | "interrupted";
+
+/**
+ * One download entry.
+ *
+ * `savePath` is empty while the save dialog is still open and stays empty when
+ * the user cancels it — `state` is the field that says what happened.
+ */
+export interface DownloadEntry {
+  id: string;
+  filename: string;
+  url: string;
+  savePath: string;
+  state: DownloadState;
+  receivedBytes: number;
+  totalBytes: number;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  finishedAt?: number;
+}
+
+/** What the toolbar may ask a download to do. */
+export type DownloadAction = "cancel" | "open" | "reveal" | "remove" | "clear";

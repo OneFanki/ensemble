@@ -55,7 +55,7 @@ import {
   interpolateStep,
 } from "@shared/flows";
 import type { AppSettings, LayoutId, RoleColor, SlotRect } from "@shared/types";
-import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type WebContents } from "electron";
+import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type Session, type WebContents } from "electron";
 import { EmbeddedCdp } from "./cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
@@ -232,6 +232,14 @@ export interface EmbeddedBrowserOptions {
    * is how a normal browser behaves.
    */
   proxy?: () => Pick<AppSettings, "proxyMode" | "proxyUrl" | "proxyBypass">;
+  /**
+   * A session partition was just configured.
+   *
+   * Downloads live on the session, not the page, so the download manager has to
+   * hook every partition this surface creates — identity partitions and clean
+   * sessions alike.
+   */
+  onSessionReady?: (ses: Session) => void;
 }
 
 /** Scheme + host of a URL, or "" for anything that does not parse. */
@@ -1226,6 +1234,9 @@ export class EmbeddedBrowser {
       callback(allowed.includes(permission));
     });
     target.setPermissionCheckHandler(() => false);
+    // Same reason as the proxy: a download is session state, so a partition
+    // that is never handed to the manager would download invisibly.
+    this.options.onSessionReady?.(target);
   }
 
   /**

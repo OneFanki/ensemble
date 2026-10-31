@@ -162,6 +162,8 @@ onMounted(async () => {
   window.ensemble.onUpdateAvailable((result) => {
     updatePrompt.value = result;
   });
+  // Cmd+, arrives from the native menu; the renderer never binds the key itself.
+  window.ensemble.onOpenSettings(() => openSettings());
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -219,6 +221,16 @@ const settingsTabSeq = ref(0);
 function openMcpSettings() {
   settingsTab.value = "mcp";
   settingsTabSeq.value += 1;
+  view.value = "settings";
+}
+/**
+ * Settings page from the native menu (Cmd+, on macOS).
+ *
+ * Unlike `openMcpSettings` this does not retarget the tab: the user asked for
+ * "settings", not for a particular pane, so whatever they opened last is what
+ * they expect to see.
+ */
+function openSettings() {
   view.value = "settings";
 }
 function startTour() {

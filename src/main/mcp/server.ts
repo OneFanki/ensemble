@@ -15,6 +15,7 @@ import {
 } from "@shared/embedded";
 import type { Flow, FlowRunResult, FlowStep } from "@shared/flows";
 import { resolveParams } from "@shared/flows";
+import { LOCALE_SETTINGS } from "@shared/locale";
 import {
   flowDraftSchema,
   identityDraftSchema,
@@ -367,7 +368,7 @@ const WRITABLE_SETTINGS = [
  */
 const writableSettingsProps = (): Record<string, unknown> => ({
   theme: { type: "string", enum: ["dark", "light", "system"], description: "界面主题" },
-  locale: { type: "string", enum: ["zh", "en"], description: "界面语言" },
+  locale: { type: "string", enum: [...LOCALE_SETTINGS], description: "界面语言" },
   layout: string("单独启动身份时使用的窗口布局 id，例如 2x2 / free"),
   launchTarget: {
     type: "string",

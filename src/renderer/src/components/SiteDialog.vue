@@ -112,6 +112,8 @@ function submit() {
     baseUrl: form.baseUrl.trim(),
     authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
     authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
+    authTokenKey: (form.authTokenKey ?? "").trim() || undefined,
+    authTokenHeader: (form.authTokenHeader ?? "").trim() || undefined,
     // Only what the user actually did. An empty input and an unfelt checkbox
     // both mean "leave the stored password alone".
     ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
@@ -191,6 +193,31 @@ function normalizePath(event: Event) {
         />
         <span class="hint">{{ $t("app.loginMarkerHint") }}</span>
       </label>
+
+      <!-- Header-token sites: the session lives in localStorage and rides a
+           private header, so a cookie-only probe reads every session as signed
+           out. The token is read from the page at check time. -->
+      <div class="row">
+        <label class="field grow">
+          <span class="label">{{ $t("app.loginTokenKeyOptional") }}</span>
+          <input
+            v-model="form.authTokenKey"
+            class="input mono"
+            data-field="authTokenKey"
+            :placeholder="$t('app.loginTokenKeyPlaceholder')"
+          />
+          <span class="hint">{{ $t("app.loginTokenKeyHint") }}</span>
+        </label>
+        <label class="field">
+          <span class="label">{{ $t("app.loginTokenHeaderOptional") }}</span>
+          <input
+            v-model="form.authTokenHeader"
+            class="input mono"
+            data-field="authTokenHeader"
+            placeholder="token"
+          />
+        </label>
+      </div>
 
       <section class="group">
         <div class="group-head">

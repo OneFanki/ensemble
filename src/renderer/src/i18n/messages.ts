@@ -181,6 +181,11 @@ export const messages = {
       loginMarkerPlaceholder: "例如：请先登录",
       loginMarkerHint:
         "检测地址返回 200 也可能未登录时（接口信封式应答），填未登录响应 body 里的字样，命中即按未登录处理。",
+      loginTokenKeyOptional: "令牌存储键（可选）",
+      loginTokenKeyPlaceholder: "例如：token",
+      loginTokenKeyHint:
+        "站点用私订请求头而非 cookie 鉴权时，填会话令牌在页面 localStorage 里的键名；检测会读取它一并发送，否则登录态永远显示已过期。",
+      loginTokenHeaderOptional: "令牌请求头",
       autoSubmit: "填充后自动提交",
       layout: "窗口布局",
       members: "成员",
@@ -1144,6 +1149,11 @@ export const messages = {
       loginMarkerPlaceholder: 'e.g. "signed_out"',
       loginMarkerHint:
         "If the check endpoint answers 200 even when signed out (envelope-style API), enter a body substring from the signed-out reply; a hit reads as signed out.",
+      loginTokenKeyOptional: "Token storage key (optional)",
+      loginTokenKeyPlaceholder: 'e.g. "token"',
+      loginTokenKeyHint:
+        "For sites that authenticate a private request header instead of a cookie, enter the localStorage key holding the session token; the check reads and sends it. Without it a header-token site always reads as expired.",
+      loginTokenHeaderOptional: "Token header",
       autoSubmit: "Submit after fill",
       layout: "Window layout",
       members: "Members",

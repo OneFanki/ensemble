@@ -313,6 +313,8 @@ function openEditSite(siteId?: string) {
     loginPath: env.loginPath,
     authCheckPath: env.authCheckPath ?? "",
     authCheckSignedOut: env.authCheckSignedOut ?? "",
+    authTokenKey: env.authTokenKey ?? "",
+    authTokenHeader: env.authTokenHeader ?? "",
     autoSubmit: env.autoSubmit,
     tagIds: env.tagIds ? [...env.tagIds] : [],
   };

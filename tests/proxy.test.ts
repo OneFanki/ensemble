@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isProxyUrlUsable, proxyBypassRules, proxyEndpoint, resolveProxyRules } from "@shared/proxy";
+import {
+  CONNECTIVITY_PROBES,
+  isProxyUrlUsable,
+  proxyBypassRules,
+  proxyEndpoint,
+  resolveProxyRules,
+} from "@shared/proxy";
 
 /**
  * The proxy mapping is what decides whether a user behind Clash can reach the
@@ -96,5 +102,21 @@ describe("proxy bypass", () => {
   it("accepts spaces as separators, since people paste lists", () => {
     expect(proxyBypassRules("a.test  b.test")).toContain("a.test");
     expect(proxyBypassRules("a.test  b.test")).toContain("b.test");
+  });
+});
+
+describe("connectivity probes", () => {
+  it("probes the update host first, then a proxy-only endpoint", () => {
+    // The order is the reading order: GitHub answering says the update path
+    // works; gstatic answering says traffic can leave through the proxy.
+    expect(CONNECTIVITY_PROBES.map((probe) => probe.id)).toEqual(["updateApi", "proxyExit"]);
+  });
+
+  it("only ever probes https endpoints", () => {
+    // A test that fires http would leak the probe itself to whatever sits on
+    // the path; the whole point is to measure the configured route.
+    for (const probe of CONNECTIVITY_PROBES) {
+      expect(probe.url).toMatch(/^https:\/\//);
+    }
   });
 });

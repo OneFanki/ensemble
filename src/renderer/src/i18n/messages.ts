@@ -736,6 +736,20 @@ export const messages = {
       proxyBypassLabel: "跳过代理的主机",
       proxyBypassHint: "逗号分隔；本地地址始终直连",
       proxyManualInvalid: "地址形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080",
+      proxyTestLabel: "在线测试",
+      proxyTestButton: "测试连接",
+      proxyTestRunning: "测试中…",
+      probeUpdateApi: "更新接口（GitHub）",
+      probeProxyExit: "代理出口（gstatic 204）",
+      probeOk: "通 · {ms} ms",
+      probeFail: "不通 · {message}",
+      proxyReadoutAllOk:
+        "两条路径都通。要确认流量确实走了代理，看代理客户端「连接」页里有没有本应用或 api.github.com 这条记录。",
+      proxyReadoutGithubBlocked:
+        "探测端点可达但 GitHub 不通：多半是分流规则把 api.github.com 指成直连或拒绝，去代理客户端查这个域名。",
+      proxyReadoutProbeOnly:
+        "GitHub 可达但代理探测端点不通：通常说明流量没走代理（直连成功），或节点故障。",
+      proxyReadoutAllFail: "两个端点都不通：代理不可用、节点故障或本机断网。",
 
       // Update dialog
       updateDialogTitle: "发现新版本 {version}",
@@ -1753,6 +1767,21 @@ export const messages = {
       proxyBypassLabel: "Hosts that skip the proxy",
       proxyBypassHint: "Comma separated; local addresses always connect directly",
       proxyManualInvalid: "Use a form like http://127.0.0.1:7890 or socks5://127.0.0.1:1080",
+      proxyTestLabel: "Connectivity test",
+      proxyTestButton: "Test connection",
+      proxyTestRunning: "Testing…",
+      probeUpdateApi: "Update API (GitHub)",
+      probeProxyExit: "Proxy exit (gstatic 204)",
+      probeOk: "ok · {ms} ms",
+      probeFail: "failed · {message}",
+      proxyReadoutAllOk:
+        "Both paths answer. To confirm traffic really rides the proxy, look for this app or api.github.com in the proxy client's connections page.",
+      proxyReadoutGithubBlocked:
+        "The probe endpoint answers but GitHub does not: split routing most likely sends api.github.com direct or rejects it — check that domain in the proxy client.",
+      proxyReadoutProbeOnly:
+        "GitHub answers but the probe endpoint does not: traffic is probably going direct (no proxy), or the node is down.",
+      proxyReadoutAllFail:
+        "Neither endpoint answers: the proxy is unusable, the node is down, or the machine is offline.",
 
       // Update dialog
       updateDialogTitle: "Version {version} is available",

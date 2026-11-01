@@ -105,3 +105,40 @@ export function resolveProxyRules(
 export function isProxyUrlUsable(url: string | undefined): boolean {
   return proxyEndpoint(url) !== undefined;
 }
+
+/**
+ * Endpoints the settings page's connectivity test fires, in display order.
+ *
+ * Two on purpose, because they answer the two questions behind "is my proxy
+ * working":
+ *
+ * - `updateApi` is the host the update check uses, so reaching it means the
+ *   update path works.
+ * - `proxyExit` is a captive-portal probe (204, no body) that is unreachable
+ *   without a proxy from the region this feature is for. It failing while
+ *   GitHub answers is the signature of traffic not going through the proxy at
+ *   all — which is exactly what a user cannot see from the update bar alone.
+ *
+ * The e2e swaps these for local servers via `ENSEMBLE_CONNECTIVITY_*` so the
+ * flow runs without touching the network.
+ */
+export interface ConnectivityProbe {
+  id: "updateApi" | "proxyExit";
+  url: string;
+}
+
+export const CONNECTIVITY_PROBES: ConnectivityProbe[] = [
+  { id: "updateApi", url: "https://api.github.com/zen" },
+  { id: "proxyExit", url: "https://www.gstatic.com/generate_204" },
+];
+
+export interface ConnectivityProbeResult {
+  id: ConnectivityProbe["id"];
+  status: "ok" | "error";
+  /** Milliseconds until the response headers, or until the failure. */
+  ms: number;
+  /** HTTP status when a response arrived; absent for network-level failures. */
+  httpStatus?: number;
+  /** Failure reason, e.g. `net::ERR_TIMED_OUT` or `HTTP 502`. */
+  message?: string;
+}

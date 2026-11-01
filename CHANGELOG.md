@@ -28,6 +28,8 @@
 - **AI 驱动更可靠**：语义定位与点击穿透 shadow DOM 和同源 iframe；点击结果带实际落点（hit），被遮挡不再靠猜；自动填充失败会说清缺的是哪一个密码；运行栏 AI 次数徽标按页面计数，审计日志补记页面 id
 - **站点默认密码可以在站点上设置**：以前只能进账号对话框配，站点下一堆账号都继承时反而没人找得到；现在建站点、改站点时就能填，列表上直接标出「已设置 / 未设置」
 - **更多列表可以拖拽排序**：标签页拖动手柄调整顺序（站点页的分组顺序随之变化）；站点卡片可在分组内拖动，顺序全局生效；书签文件夹支持同级排序（拖到行的上/下缘插入，拖到中间仍是归档）；流程步骤可直接拖动，上下箭头保留
+- **修复语言「跟随系统」保存报错**：设置校验漏了 `system`，点按钮只弹校验错误、不生效；现在能正常保存，AI 的 update_settings 也同步放开
+- **代理设置新增「测试连接」**：一键探测更新接口（GitHub）和代理出口（gstatic 204），逐条显示延迟并按结果给判读——「更新检查不走代理」是不是分流规则把 GitHub 指成了直连，一眼可见
 
 #### 完整变更
 
@@ -53,6 +55,8 @@
 - 标签、站点、书签文件夹的重排各加一条 IPC（`site-tag:move` / `site:move` / `bookmark:folder-move`）：服务层沿用视图的「数组顺序即列表顺序」，只有文件夹用 `order` 且只在同级重排。分组视图里的落点下标按存储数组换算，避免一开筛选就落错位置
 - 书签拖进文件夹时改为追加到目标文件夹末尾：原先保留旧的全局 `order`，归档后的位置由旧序号决定，看起来像随机插入
 - 流程步骤拖拽只在编辑器草稿内重排，保存时随流程整体提交，因此不新增 IPC；步骤行加拖拽手柄，避免与输入框的文本选择冲突
+- 修复语言「跟随系统」无法保存：`settingsPatchSchema` 只列了 zh/en，点设置页第一段（存 `system`）时 zod 校验失败，错误原文以 toast 弹出且设置不落盘。schema 与 MCP `update_settings` 的枚举改为从 `LOCALE_SETTINGS` 单一来源派生（类型同步），补 schema 回归测试与实机 e2e（`pnpm run e2e:settings-locale`）
+- 代理设置新增连通性测试：两个探针都走 defaultSession（与更新检查同一网络栈、同一份代理设置），非 2xx 也按失败返回并保留状态码；判读文案覆盖「全通 / GitHub 被分流 / 仅 GitHub 通 / 全不通」四种组合。探针端点是 `src/shared/proxy.ts` 里的常量，e2e 用 `ENSEMBLE_CONNECTIVITY_*` 指向本地服务器验证全流程（`pnpm run e2e:connectivity`）
 
 ### English
 
@@ -62,6 +66,8 @@
 - **AI driving is more reliable**: snapshots and clicks pierce shadow DOM and same-origin iframes; click results carry where the events actually landed (hit); a failed autofill says which password is missing; the dock's AI badge counts per page and the audit log records the page id
 - **A site can carry its own default password**: it was only settable from an account dialog, so when every account on a site inherited it, nobody could find it. It now lives on the site dialog itself, and the site list shows Set / Not set
 - **More lists reorder by dragging**: tags reorder from their row grip (the site groups follow), site cards drag inside a group with the order applying globally, bookmark folders reorder among siblings (drop on the top or bottom edge to insert, the middle still files), and flow steps drag directly while the arrow buttons stay
+- **Fixed the "follow system" language option**: the settings validation missed `system`, so clicking it only surfaced an error and never saved; it saves now, and the AI's update_settings accepts it too
+- **The proxy settings gain a connectivity test**: one click probes the update API (GitHub) and a proxy exit (gstatic 204), shows per-probe latency, and reads the combination for you — so "is my update check really going through the proxy" stops being guesswork
 
 #### Full changes
 
@@ -84,6 +90,8 @@
 - Tag, site and bookmark-folder reordering each got one IPC (`site-tag:move`, `site:move`, `bookmark:folder-move`); the service follows the view rule — the stored array order is the list order — and only folders use `order`, scoped to siblings. Drop indexes from a grouped view are translated to the stored array, so turning on a filter cannot land the row somewhere else
 - Filing a bookmark into a folder now appends it to that folder: the old code kept the bookmark's global `order`, so it landed wherever its previous slot happened to fall
 - Flow-step drag reorders the editor draft only and saves with the flow, so no IPC is involved; the grip keeps the drag away from the row's inputs
+- Fixed the "follow system" language option failing to save: the settings patch schema listed only zh/en, so clicking the picker's first segment (which stores `system`) failed validation, surfaced the raw issues as a toast and never persisted. The schema and MCP `update_settings` enums now derive from a single `LOCALE_SETTINGS` source (the type follows), with a schema regression test and a real-app e2e (`pnpm run e2e:settings-locale`)
+- The proxy settings gain a connectivity test: both probes ride the default session (the same network stack and proxy settings as the update check), and a non-2xx answer counts as a failure with its status kept. The readout covers all four combinations. Probe endpoints live as constants in `src/shared/proxy.ts`; the e2e points them at local servers via `ENSEMBLE_CONNECTIVITY_*` (`pnpm run e2e:connectivity`)
 
 ## [1.3.1] - 2026-10-31
 

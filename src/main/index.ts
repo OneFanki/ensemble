@@ -27,6 +27,11 @@ import {
 import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
 import { localeTag, resolveLocale } from "@shared/locale";
 import {
+  CONNECTIVITY_PROBES,
+  type ConnectivityProbe,
+  type ConnectivityProbeResult,
+} from "@shared/proxy";
+import {
   type AccountsExportOutcome,
   type AccountsImportPickOutcome,
   type ExportOutcome,
@@ -1728,6 +1733,72 @@ async function checkForUpdate(): Promise<UpdateCheckResult> {
   }
 }
 
+const CONNECTIVITY_TIMEOUT_MS = 5_000;
+
+/**
+ * The endpoints one connectivity test run probes.
+ *
+ * Same list as `CONNECTIVITY_PROBES`, with the e2e's local-server overrides
+ * applied; an env override only exists so the flow can be driven without
+ * reaching the real network.
+ */
+function connectivityProbes(): ConnectivityProbe[] {
+  return [
+    {
+      id: "updateApi",
+      url:
+        process.env["ENSEMBLE_CONNECTIVITY_UPDATE_API"] ??
+        CONNECTIVITY_PROBES.find((probe) => probe.id === "updateApi")!.url,
+    },
+    {
+      id: "proxyExit",
+      url:
+        process.env["ENSEMBLE_CONNECTIVITY_PROBE"] ??
+        CONNECTIVITY_PROBES.find((probe) => probe.id === "proxyExit")!.url,
+    },
+  ];
+}
+
+/**
+ * One GET through the default session, timed.
+ *
+ * The session is the point: it carries whatever `applyProxyToDefaultSession`
+ * configured, so a probe answers the same question the update check answers.
+ * A non-2xx response counts as a failure with its status kept — a proxy that
+ * answers 502 is a finding, not a success.
+ */
+async function runConnectivityProbe(probe: ConnectivityProbe): Promise<ConnectivityProbeResult> {
+  const started = performance.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CONNECTIVITY_TIMEOUT_MS);
+  try {
+    const response = await net.fetch(probe.url, {
+      headers: { "user-agent": "ensemble-connectivity-test" },
+      signal: controller.signal,
+    });
+    const ms = Math.round(performance.now() - started);
+    if (!response.ok) {
+      return {
+        id: probe.id,
+        status: "error",
+        ms,
+        httpStatus: response.status,
+        message: `HTTP ${response.status}`,
+      };
+    }
+    return { id: probe.id, status: "ok", ms, httpStatus: response.status };
+  } catch (error) {
+    return {
+      id: probe.id,
+      status: "error",
+      ms: Math.round(performance.now() - started),
+      message: (error as Error).message,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Location the verified installer is written to for the current version. */
 function updateDownloadPath(assetName: string): string {
   const base = process.env["ENSEMBLE_UPDATE_DIR"] ?? join(app.getPath("temp"), "ensemble-updates");
@@ -2581,6 +2652,10 @@ function registerIpc(workspace: WorkspaceService): void {
     // the user postponed it earlier, otherwise the button would look broken.
     if (result.status === "available") pendingUpdate = result;
     return result;
+  });
+
+  handle(IPC.proxyTestConnectivity, async () => {
+    return Promise.all(connectivityProbes().map(runConnectivityProbe));
   });
 
   handle(IPC.appDownloadUpdate, async () => {

@@ -7,6 +7,7 @@ import type {
   StageRect,
 } from "./embedded";
 import type { FlowDraft, FlowRunResult } from "./flows";
+import type { ConnectivityProbeResult } from "./proxy";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
   AiPageAction,
@@ -251,6 +252,8 @@ export const IPC = {
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
   embeddedFreeze: "embedded:freeze",
   settingsSave: "settings:save",
+  /** Fires the connectivity test shown in the proxy settings. */
+  proxyTestConnectivity: "proxy:test-connectivity",
   appSetTheme: "app:set-theme",
   appQuit: "app:quit",
   appOpenExternal: "app:open-external",
@@ -371,6 +374,8 @@ export interface EnsembleApi {
   pickAccountsImport(): Promise<AccountsImportPickOutcome>;
   applyAccountsImport(passphrase?: string): Promise<AccountsImportApplyOutcome>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
+  /** Fires the connectivity test; every probe is one GET through the session. */
+  testProxyConnectivity(): Promise<ConnectivityProbeResult[]>;
 
   mcpStatus(): Promise<McpStatus>;
   updateMcp(patch: McpPatch): Promise<McpStatus>;

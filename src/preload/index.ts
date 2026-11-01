@@ -69,6 +69,7 @@ const api: EnsembleApi = {
   pickAccountsImport: () => ipcRenderer.invoke(IPC.accountsImportPick),
   applyAccountsImport: (passphrase) => ipcRenderer.invoke(IPC.accountsImportApply, passphrase),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
+  testProxyConnectivity: () => ipcRenderer.invoke(IPC.proxyTestConnectivity),
 
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpInfo),
   updateMcp: (patch) => ipcRenderer.invoke(IPC.mcpUpdate, patch),

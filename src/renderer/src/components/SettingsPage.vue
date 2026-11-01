@@ -2,6 +2,7 @@
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { BundleImportResult, BundlePreview } from "@shared/accounts-transfer";
 import type { LocaleSetting } from "@shared/locale";
+import type { ConnectivityProbeResult } from "@shared/proxy";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   Bot,
@@ -123,6 +124,38 @@ function saveProxyUrl(value: string): void {
 function saveProxyBypass(value: string): void {
   void store.saveSettings({ proxyBypass: value.trim() });
 }
+
+/*
+ * The connectivity test.
+ *
+ * Two probes, not one: reaching the update host proves the update path, and the
+ * gstatic 204 probe failing while GitHub answers is the signature of traffic
+ * not going through the proxy at all — the thing a user cannot see from the
+ * update bar alone. Results render in place; a failure here is information.
+ */
+const probeResults = ref<ConnectivityProbeResult[] | null>(null);
+const probing = ref(false);
+
+async function runConnectivityTest(): Promise<void> {
+  probing.value = true;
+  try {
+    probeResults.value = (await store.testProxyConnectivity()) ?? null;
+  } finally {
+    probing.value = false;
+  }
+}
+
+const probeReadout = computed(() => {
+  const results = probeResults.value;
+  if (!results || results.length < 2) return "";
+  const update = results.find((result) => result.id === "updateApi");
+  const exit = results.find((result) => result.id === "proxyExit");
+  if (!update || !exit) return "";
+  if (update.status === "ok" && exit.status === "ok") return t("app.proxyReadoutAllOk");
+  if (update.status === "error" && exit.status === "ok") return t("app.proxyReadoutGithubBlocked");
+  if (update.status === "ok" && exit.status === "error") return t("app.proxyReadoutProbeOnly");
+  return t("app.proxyReadoutAllFail");
+});
 
 const updateTone = computed(() => {
   if (!update.value) return "muted";
@@ -815,6 +848,28 @@ async function submitMaster() {
           />
         </div>
         <p class="fineprint">{{ $t("app.proxyNote") }}</p>
+        <div class="option-row proxy-fields">
+          <span class="option-label">{{ $t("app.proxyTestLabel") }}</span>
+          <AppButton size="sm" :disabled="probing" @click="runConnectivityTest">
+            {{ probing ? $t("app.proxyTestRunning") : $t("app.proxyTestButton") }}
+          </AppButton>
+        </div>
+        <ul v-if="probeResults" class="probe-results">
+          <li v-for="result in probeResults" :key="result.id" class="probe-row">
+            <span class="probe-dot" :class="result.status"></span>
+            <span class="probe-name">
+              {{ $t(result.id === "updateApi" ? "app.probeUpdateApi" : "app.probeProxyExit") }}
+            </span>
+            <span class="mono probe-detail">
+              {{
+                result.status === "ok"
+                  ? $t("app.probeOk", { ms: result.ms })
+                  : $t("app.probeFail", { message: result.message ?? "" })
+              }}
+            </span>
+          </li>
+        </ul>
+        <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
         <div class="option-row">
           <span class="option-label">{{ $t("app.overlaySetting") }}</span>
           <div class="segmented">
@@ -1569,6 +1624,51 @@ async function submitMaster() {
 .proxy-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.probe-results {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.probe-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+}
+
+.probe-dot.ok {
+  background: var(--role-teal);
+}
+
+.probe-dot.error {
+  background: var(--red);
+}
+
+.probe-name {
+  flex: 0 0 auto;
+}
+
+.probe-detail {
+  color: var(--faint);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .option-row {

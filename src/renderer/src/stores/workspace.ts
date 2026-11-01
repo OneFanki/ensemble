@@ -888,6 +888,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
+  /**
+   * Fires the connectivity probes for the proxy settings.
+   *
+   * Returns the raw results rather than toasting: the settings page renders
+   * each line with its latency, and a failure there is information, not an
+   * accident to be dismissed.
+   */
+  async function testProxyConnectivity() {
+    return run("settings", () => window.ensemble.testProxyConnectivity());
+  }
+
   async function exportWorkspace(options: { includeSecrets: boolean; passphrase?: string }) {
     return run("transfer", () => window.ensemble.exportWorkspace(toPlain(options)));
   }
@@ -1022,6 +1033,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMasterPassword,
     changeMasterPassword,
     saveSettings,
+    testProxyConnectivity,
     exportWorkspace,
     pickImport,
     applyImport,

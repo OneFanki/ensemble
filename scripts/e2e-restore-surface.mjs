@@ -13,7 +13,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PAGE_PORT = 9670;
-const MCP_PORT = 49784;
+// Ask the OS for a free port instead of hardcoding one: a fixed port ends up
+// inside a Windows excluded range after some reboots (Hyper-V reserves dynamic
+// ranges) and the MCP endpoint dies with EACCES before the test even starts.
+const freePort = await new Promise((resolve, reject) => {
+  const probe = createServer();
+  probe.once("error", reject);
+  probe.listen(0, "127.0.0.1", () => {
+    const { port } = probe.address();
+    probe.close(() => resolve(port));
+  });
+});
+const MCP_PORT = freePort;
 const TOKEN = "e2e-restore-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-restore-"));
 

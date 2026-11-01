@@ -469,3 +469,86 @@ describe("bookmark folder tree", () => {
     expect(() => service.saveBookmarkFolder({ name: "   " })).toThrow();
   });
 });
+
+describe("bookmark and folder ordering", () => {
+  it("reorders folders among their siblings", () => {
+    const first = service.saveBookmarkFolder({ name: "甲" });
+    service.saveBookmarkFolder({ name: "乙" });
+    service.saveBookmarkFolder({ name: "丙" });
+    service.moveBookmarkFolder(first.id, 2);
+    expect(service.snapshot().bookmarkFolders.map((item) => item.name)).toEqual([
+      "乙",
+      "丙",
+      "甲",
+    ]);
+    expect(service.snapshot().bookmarkFolders.map((item) => item.order)).toEqual([0, 1, 2]);
+  });
+
+  it("moves a folder backwards as well as forwards", () => {
+    service.saveBookmarkFolder({ name: "甲" });
+    service.saveBookmarkFolder({ name: "乙" });
+    const last = service.saveBookmarkFolder({ name: "丙" });
+    service.moveBookmarkFolder(last.id, 0);
+    expect(service.snapshot().bookmarkFolders.map((item) => item.name)).toEqual([
+      "丙",
+      "甲",
+      "乙",
+    ]);
+  });
+
+  it("renumbers only the siblings, leaving other levels alone", () => {
+    const root = service.saveBookmarkFolder({ name: "工作" });
+    service.saveBookmarkFolder({ name: "个人" });
+    const a = service.saveBookmarkFolder({ name: "甲", parentId: root.id });
+    const b = service.saveBookmarkFolder({ name: "乙", parentId: root.id });
+    service.moveBookmarkFolder(b.id, 0);
+    const folders = service.snapshot().bookmarkFolders;
+    expect(folders.filter((item) => item.parentId === root.id).map((item) => item.name)).toEqual([
+      "乙",
+      "甲",
+    ]);
+    // The root level kept its own order: a move inside one parent must not
+    // renumber the levels around it.
+    expect(folders.filter((item) => !item.parentId).map((item) => item.name)).toEqual([
+      "工作",
+      "个人",
+    ]);
+    expect(folders.find((item) => item.id === a.id)?.order).toBe(1);
+  });
+
+  it("clamps a drop index and refuses an unknown folder", () => {
+    const only = service.saveBookmarkFolder({ name: "甲" });
+    service.moveBookmarkFolder(only.id, 99);
+    expect(service.snapshot().bookmarkFolders.map((item) => item.name)).toEqual(["甲"]);
+    expect(() => service.moveBookmarkFolder("missing", 0)).toThrow("文件夹不存在");
+  });
+
+  it("appends a bookmark when it is filed into a folder", () => {
+    const folder = service.saveBookmarkFolder({ name: "工作" });
+    const first = service.saveBookmark({ name: "一", url: "https://a.example.com" });
+    service.saveBookmark({ name: "二", url: "https://b.example.com" });
+    service.saveBookmark({ name: "三", url: "https://c.example.com", folderId: folder.id });
+    // Re-filing an older bookmark must land after the folder's current last
+    // row, not keep the global slot it had while unfiled.
+    service.saveBookmark({ id: first.id, name: first.name, url: first.url, folderId: folder.id });
+    expect(
+      service
+        .snapshot()
+        .bookmarks.filter((item) => item.folderId === folder.id)
+        .map((item) => item.name),
+    ).toEqual(["三", "一"]);
+  });
+
+  it("appends when a bookmark is unfiled as well", () => {
+    const folder = service.saveBookmarkFolder({ name: "工作" });
+    const filed = service.saveBookmark({
+      name: "一",
+      url: "https://a.example.com",
+      folderId: folder.id,
+    });
+    service.saveBookmark({ name: "二", url: "https://b.example.com" });
+    service.saveBookmark({ id: filed.id, name: filed.name, url: filed.url });
+    expect(service.snapshot().bookmarks.map((item) => item.name)).toEqual(["二", "一"]);
+    expect(service.snapshot().bookmarks[1]?.folderId).toBeUndefined();
+  });
+});

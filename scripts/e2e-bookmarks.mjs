@@ -187,15 +187,38 @@ try {
     grid?.surface === true && grid?.count === 2 && grid?.hasGrid === true,
     grid,
   );
+  // The level grid's root lists top-level folders first, then unfiled
+  // bookmarks; the second seed bookmark is inside the migrated folder, so it
+  // only appears once the folder tile is entered.
   check(
-    "bookmark tiles carry their names",
-    grid?.names?.[0] === "文档首页" && grid?.names?.[1] === "第二个书签",
+    "root tiles carry the migrated folder then the unfiled bookmark",
+    grid?.names?.[0] === "旧分组" && grid?.names?.[1] === "文档首页",
     grid?.names,
+  );
+
+  const entered = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const folderTile = [...document.querySelectorAll('.bookmarks .tile')].find(
+      (item) => item.querySelector('.tile-name')?.textContent?.trim() === '旧分组',
+    );
+    folderTile?.click();
+    await wait(400);
+    const names = [...document.querySelectorAll('.bookmarks .tile .tile-name')].map((el) =>
+      el.textContent?.trim(),
+    );
+    document.querySelector('.folder-strip .folder-chip')?.click();
+    await wait(400);
+    return { names };
+  })()`);
+  check(
+    "entering a folder tile reveals the bookmark filed inside it",
+    entered?.names?.length === 1 && entered?.names?.[0] === "第二个书签",
+    entered?.names,
   );
 
   // A tile without an icon falls back to a stable colour block with an initial.
   const fallback = await client.evaluate(`(() => {
-    const tile = document.querySelector('.bookmarks .tile .tile-icon');
+    const tile = document.querySelector('.bookmarks .tile:not(.folder-tile) .tile-icon');
     return {
       hasImage: Boolean(tile?.querySelector('img')),
       initial: tile?.querySelector('.tile-initial')?.textContent?.trim() ?? '',
@@ -220,8 +243,8 @@ try {
         const folder = folders.find((item) => item.id === bookmark.folderId);
         return folder?.name ?? null;
       }),
-      stripChips: [...document.querySelectorAll('.folder-strip .folder-chip')].map((chip) =>
-        chip.textContent.trim(),
+      folderTiles: [...document.querySelectorAll('.bookmarks .tile.folder-tile')].map((tile) =>
+        tile.textContent?.trim() ?? '',
       ),
     };
   })()`);
@@ -233,14 +256,14 @@ try {
     migrated,
   );
   check(
-    "the new-tab strip lists the migrated folder with its count",
-    (migrated?.stripChips ?? []).some((text) => text.includes("旧分组") && text.includes("1")),
-    migrated?.stripChips,
+    "the new-tab folder tile lists the migrated folder with its count",
+    (migrated?.folderTiles ?? []).some((text) => text.includes("旧分组") && text.includes("1")),
+    migrated?.folderTiles,
   );
 
   // --- Rename in place ------------------------------------------------------
   const renamed = await client.evaluate(`(async () => {
-    const tile = document.querySelector('.bookmarks .tile');
+    const tile = document.querySelector('.bookmarks .tile:not(.folder-tile)');
     tile.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     await new Promise((done) => setTimeout(done, 250));
     const input = document.querySelector('.bookmarks .tile .tile-rename');
@@ -268,6 +291,15 @@ try {
 
   // --- Right-click menu deletes --------------------------------------------
   const removed = await client.evaluate(`(async () => {
+    // The level grid shows one level at a time: the second seed bookmark lives
+    // inside the migrated 旧分组 folder, so the root only tiles the unfiled
+    // one. Enter the folder and delete ITS tile — the unfiled bookmark stays
+    // for the management-page drag block below.
+    const folderTile = [...document.querySelectorAll('.bookmarks .tile')].find(
+      (item) => item.querySelector('.tile-name')?.textContent?.trim() === '旧分组',
+    );
+    folderTile?.click();
+    await new Promise((done) => setTimeout(done, 400));
     const tiles = [...document.querySelectorAll('.bookmarks .tile')];
     const target = tiles[tiles.length - 1];
     target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 300 }));
@@ -280,11 +312,18 @@ try {
     menu?.querySelectorAll('.menu-row')[1]?.click();
     await new Promise((done) => setTimeout(done, 700));
     const state = await window.ensemble.getWorkspace();
+    const folderEmptied = document.querySelectorAll('.bookmarks .tile').length;
+    // Back to the root level for the checks that follow.
+    document.querySelector('.folder-strip .folder-chip')?.click();
+    await new Promise((done) => setTimeout(done, 400));
     return {
       menuOpened: Boolean(menu),
       rows,
       remaining: state.bookmarks.map((item) => item.name),
-      tiles: document.querySelectorAll('.bookmarks .tile').length,
+      folderEmptied,
+      rootHasRenamed: [...document.querySelectorAll('.bookmarks .tile .tile-name')].some(
+        (name) => name.textContent?.trim() === '改名后的书签',
+      ),
     };
   })()`);
   check(
@@ -294,7 +333,7 @@ try {
   );
   check(
     "the remove row deletes that bookmark and leaves the other",
-    removed?.remaining?.length === 1 && removed?.tiles === 1,
+    removed?.remaining?.length === 1 && removed?.folderEmptied === 0 && removed?.rootHasRenamed === true,
     removed,
   );
 
@@ -736,17 +775,19 @@ try {
   // Back on a blank start page, the strip shows the surviving folder only.
   await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
   await client.evaluate(`window.ensemble.openEmbeddedTab({})`);
+  // The start page navigates one level at a time: top-level folders appear as
+  // tiles, the strip above them is the breadcrumb.
   const strip = await waitFor(
     client,
-    `Boolean(document.querySelector('.blank-slot .new-tab')) && [...document.querySelectorAll('.folder-strip .folder-chip')].some((chip) => chip.textContent.includes('工作'))`,
+    `Boolean(document.querySelector('.blank-slot .new-tab')) && [...document.querySelectorAll('.bookmarks .tile.folder-tile .tile-name')].some((name) => name.textContent?.trim() === '工作')`,
   );
-  const stripChips = await client.evaluate(
-    `[...document.querySelectorAll('.folder-strip .folder-chip')].map((chip) => chip.textContent.trim())`,
+  const folderTileNames = await client.evaluate(
+    `[...document.querySelectorAll('.bookmarks .tile.folder-tile .tile-name')].map((name) => name.textContent?.trim())`,
   );
   check(
-    "the start-page strip lists the surviving folder, not the deleted one",
-    strip === true && (stripChips ?? []).every((text) => !text.includes('后台')),
-    stripChips,
+    "the start page lists the surviving folder, not the deleted one",
+    strip === true && (folderTileNames ?? []).every((text) => !text.includes('后台')),
+    folderTileNames,
   );
 
   // Dropping a tile on a folder chip files it, straight from the start page.
@@ -761,22 +802,24 @@ try {
     const tile = [...document.querySelectorAll('.bookmarks .tile')].find(
       (item) => item.querySelector('.tile-name')?.textContent?.trim() === '改名后的书签',
     );
-    const chip = [...document.querySelectorAll('.folder-strip .folder-chip')].find((item) =>
-      item.textContent.includes('工作'),
+    // Top-level exact name: the imported browser tree nests everything under
+    // one folder, so a same-named folder deeper down cannot appear here.
+    const workTile = [...document.querySelectorAll('.bookmarks .tile.folder-tile')].find(
+      (item) => item.querySelector('.tile-name')?.textContent?.trim() === '工作',
     );
-    if (!tile || !chip || !workId) return { ok: false, step: 'setup' };
+    if (!tile || !workTile || !workId) return { ok: false, step: 'setup' };
     const fire = (el, type) => el.dispatchEvent(
       new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }),
     );
     fire(tile, 'dragstart');
-    fire(chip, 'dragover');
-    fire(chip, 'drop');
+    fire(workTile, 'dragover');
+    fire(workTile, 'drop');
     fire(tile, 'dragend');
     await wait(700);
     const s = await state();
     return { ok: s.bookmarks.find((item) => item.name === '改名后的书签')?.folderId === workId };
   })()`);
-  check("a tile dropped on a folder chip is filed into it", chipFiled?.ok === true, chipFiled);
+  check("a tile dropped on a folder tile is filed into it", chipFiled?.ok === true, chipFiled);
 
   client.close();
 } catch (error) {

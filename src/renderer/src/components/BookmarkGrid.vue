@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Bookmark, BookmarkFolder } from "@shared/types";
-import { Folder, Pencil, Trash2 } from "lucide-vue-next";
+import { ChevronDown, Folder, Pencil, Trash2 } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -259,13 +259,54 @@ const crumbs = computed(() => [
 ]);
 
 function enter(folder: BookmarkFolder): void {
+  openCrumb.value = null;
   path.value = [...path.value, folder];
 }
 
 /** Jump back to a crumb; index 0 clears the path. */
 function jumpTo(index: number): void {
+  openCrumb.value = null;
   path.value = path.value.slice(0, index);
 }
+
+/**
+ * The caret on a crumb drops that level's child folders, so a deep tree is
+ * crossable without walking in and back out: pick any sibling level directly.
+ */
+const openCrumb = ref<number | null>(null);
+
+function crumbChildren(index: number): BookmarkFolder[] {
+  const folder = crumbs.value[index]?.folder;
+  return folder
+    ? (childrenMap.value.get(folder.id) ?? [])
+    : props.folders.filter((item) => !item.parentId);
+}
+
+function toggleCrumb(index: number): void {
+  openCrumb.value = openCrumb.value === index ? null : index;
+}
+
+function jumpInto(index: number, child: BookmarkFolder): void {
+  openCrumb.value = null;
+  path.value = [...path.value.slice(0, index), child];
+}
+
+function onWindowPointerDownForCrumb(event: PointerEvent): void {
+  if (event.target instanceof HTMLElement && event.target.closest(".crumb-wrap")) return;
+  openCrumb.value = null;
+}
+
+watch(openCrumb, (value) => {
+  if (value === null) {
+    window.removeEventListener("pointerdown", onWindowPointerDownForCrumb, true);
+  } else {
+    window.addEventListener("pointerdown", onWindowPointerDownForCrumb, true);
+  }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("pointerdown", onWindowPointerDownForCrumb, true);
+});
 
 // A path into a folder that no longer exists would dead-end, so it truncates
 // back to the last survivor.
@@ -305,21 +346,50 @@ function onDropIntoFolder(id: string): void {
     <nav v-if="crumbs.length > 1 || levelFolders.length" class="folder-strip" :aria-label="t('app.bookmarks')">
       <template v-for="(crumb, index) in crumbs" :key="crumb.folder?.id ?? 'root'">
         <span v-if="index > 0" class="crumb-sep">/</span>
-        <button
-          type="button"
-          class="folder-chip"
-          :class="{
-            active: index === crumbs.length - 1,
-            drop: dropFolder === (crumb.folder?.id ?? ''),
-          }"
-          :disabled="index === crumbs.length - 1"
-          @click="jumpTo(index)"
-          @dragover="onDragOverFolder(crumb.folder?.id ?? '', $event)"
-          @dragleave="dropFolder === (crumb.folder?.id ?? '') ? (dropFolder = null) : null"
-          @drop.prevent="onDropIntoFolder(crumb.folder?.id ?? '')"
-        >
-          {{ crumb.folder ? crumb.folder.name : t("app.bookmarkAllFolders") }}
-        </button>
+        <span class="crumb-wrap">
+          <button
+            type="button"
+            class="folder-chip"
+            :class="{
+              active: index === crumbs.length - 1,
+              drop: dropFolder === (crumb.folder?.id ?? ''),
+            }"
+            :disabled="index === crumbs.length - 1"
+            @click="jumpTo(index)"
+            @dragover="onDragOverFolder(crumb.folder?.id ?? '', $event)"
+            @dragleave="dropFolder === (crumb.folder?.id ?? '') ? (dropFolder = null) : null"
+            @drop.prevent="onDropIntoFolder(crumb.folder?.id ?? '')"
+          >
+            {{ crumb.folder ? crumb.folder.name : t("app.bookmarkAllFolders") }}
+          </button>
+          <!-- The caret drops this level's children: cross a deep tree without
+               walking in and back out. Hidden when the level has no folders. -->
+          <button
+            v-if="crumbChildren(index).length"
+            type="button"
+            class="crumb-caret"
+            :class="{ open: openCrumb === index }"
+            :aria-label="crumb.folder ? crumb.folder.name : t('app.bookmarkAllFolders')"
+            :aria-expanded="openCrumb === index"
+            @click.stop="toggleCrumb(index)"
+          >
+            <ChevronDown :size="10" />
+          </button>
+          <div v-if="openCrumb === index" class="crumb-menu" role="menu">
+            <button
+              v-for="child in crumbChildren(index)"
+              :key="child.id"
+              type="button"
+              role="menuitem"
+              class="crumb-menu-row"
+              @click.stop="jumpInto(index, child)"
+            >
+              <Folder :size="11" />
+              <span class="crumb-menu-name">{{ child.name }}</span>
+              <span class="crumb-menu-count mono">{{ subtreeCount(child) }}</span>
+            </button>
+          </div>
+        </span>
       </template>
     </nav>
 
@@ -446,6 +516,93 @@ function onDropIntoFolder(id: string): void {
 
 .crumb-sep {
   align-self: center;
+  color: var(--faint);
+}
+
+/* Crumb + caret travel as one unit so the dropdown anchors to their pair. */
+.crumb-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.crumb-caret {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 19px;
+  margin-left: -3px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.crumb-caret:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.crumb-caret svg {
+  transition: transform 0.12s ease;
+}
+
+.crumb-caret.open svg {
+  transform: rotate(180deg);
+}
+
+.crumb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 4;
+  min-width: 170px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+
+.crumb-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 7px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.crumb-menu-row:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.crumb-menu-row svg {
+  flex: none;
+  color: var(--faint);
+}
+
+.crumb-menu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-menu-count {
+  margin-left: auto;
+  font-size: 9.5px;
   color: var(--faint);
 }
 

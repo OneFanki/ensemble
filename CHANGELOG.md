@@ -30,6 +30,7 @@
 - **登录态检测认得私订头令牌站点了**：此前只带 cookie 的检测在令牌站点上永远显示「已过期」，重新登录也消不掉；现在站点可配令牌存储键，检测会读页面里的会话令牌随请求发送，重新登录成功后还会自动复检、过期徽标当场更新
 - **新标签页书签改为逐层导航**：浏览器导入几百条书签不再平铺成一面墙；当前层文件夹先成瓦片、点击下钻，面包屑回跳，磁贴拖上去即归档
 - **书签管理页左右独立滚动**：目录树与列表各自滚动，面包屑不再被长树拖走；树行数字贴右缘、悬停按钮浮层化，不再像排坏了
+- **新标签页搜索直达深层书签**：搜索框输入即全树匹配书签名（↑↓ 选择、回车打开，不选则照常走网址/引擎）；面包屑每级带下拉箭头，展开该层子文件夹直达——深树不必逐层点进去再退出来
 - **Ctrl+R / F5 刷新内置页面**：页面内、地址栏、dock 上按都生效；Ctrl+Shift+R 绕过缓存强制刷新（macOS 为 Cmd）
 - **运行栏层级清晰化**：身份色点下沉为网站图标角标、格位号只在多格布局显示、子页缩进严格深于父行——多账号时父/子页面一眼可分
 - **toast 在 dock 展开时不再被页面盖住半截**：舞台上的原生页面永远画在 HTML 之上，此前 toast 比 dock 宽的部分连同折行尾字都被盖住；现在宽度钳制在 dock 之内，完整可见
@@ -66,6 +67,7 @@
 - 令牌探测：站点新增 `authTokenKey` / `authTokenHeader`（站点对话框与 MCP create_site / update_site 均可配置），探针在检查时从页面 localStorage 读令牌随请求发送；打开窗口检测、无窗口后台检测、内置表面自动登录等待循环三处同源生效。重新登录（`fillLogin`）提交成功后静置 2 秒自动复检并落库，过期结果附填充记录（「HTTP 200 + signed-out marker · 已填充并提交」），把「填了但没登录上」与「还没检测」区分开
 - 树行悬停按钮从占位改为浮层：原来 `opacity: 0` 的按钮仍占布局，把每个计数从右缘顶到行中间，看起来像 bug；现在计数贴真实右缘、悬停时按钮淡入盖住计数的位置。顺带修了一个隐患——隐形按钮此前仍可接收点击（`pointer-events` 直到悬停才打开）
 - 新标签页网格 move 语义修正：拖拽排序的落点索引改按全量书签序解析，层过滤视图下原来会插错位置；文件夹瓦片与面包屑都是投递目标，拖到根面包屑即取消归档
+- 搜索建议在名称前缀 > 名称包含 > URL 包含三档排序、上限 8 条：检索是深层书签的主路径，网格导航留给浏览；无输入或关闭「新标签页显示书签」设置时不出现。面包屑下拉只列该层子文件夹（带子树书签计数），链两级下拉即达任意深度；点外部关闭，箭头在有子级的层才显示
 - 标签、站点、书签文件夹的重排各加一条 IPC（`site-tag:move` / `site:move` / `bookmark:folder-move`）：服务层沿用视图的「数组顺序即列表顺序」，只有文件夹用 `order` 且只在同级重排。分组视图里的落点下标按存储数组换算，避免一开筛选就落错位置
 - 书签拖进文件夹时改为追加到目标文件夹末尾：原先保留旧的全局 `order`，归档后的位置由旧序号决定，看起来像随机插入
 - 流程步骤拖拽只在编辑器草稿内重排，保存时随流程整体提交，因此不新增 IPC；步骤行加拖拽手柄，避免与输入框的文本选择冲突
@@ -82,6 +84,7 @@
 - **Session checks understand header-token sites**: a cookie-only probe read every session as expired on sites that authenticate a private header from localStorage — re-logging in never cleared the badge. A site can now declare its token storage key; the probe reads and sends the token, and a successful relogin re-checks automatically so the badge updates on the spot
 - **The new-tab bookmark grid navigates**: a browser import no longer flattens hundreds of bookmarks into one wall; the current level's folders come first as tiles that drill in, with a breadcrumb to jump back and drop targets to file tiles
 - **The bookmark management page scrolls in two panes**: the tree and the list scroll independently and the breadcrumb stays put; tree counts sit at the true right edge and hover actions fade in over them instead of looking mislaid
+- **Deep bookmarks are reachable from the new tab directly**: the search box now matches bookmark names across the whole tree (arrow keys to pick, Enter to open — otherwise it still resolves as a URL or a search), and every breadcrumb crumb carries a dropdown of that level's child folders, so a deep tree no longer means walking in and back out
 - **Ctrl+R / F5 reload embedded pages**: works from inside a page, the address bar, and the dock; Ctrl+Shift+R bypasses the cache (Cmd on macOS)
 - **Toasts are no longer half-covered by the page while the dock is open**: the stage's native view paints above every HTML layer, so the part of a toast wider than the dock — including a wrapped tail character — went unpainted. Toasts are now clamped to the dock's width and render fully
 - **More lists reorder by dragging**: tags reorder from their row grip (the site groups follow), site cards drag inside a group with the order applying globally, bookmark folders reorder among siblings (drop on the top or bottom edge to insert, the middle still files), and flow steps drag directly while the arrow buttons stay
@@ -113,6 +116,7 @@
 - Token probes: sites gain `authTokenKey` / `authTokenHeader` (settable in the site dialog and via MCP create_site / update_site); the probe reads the token from the page's localStorage at check time. All three probe sites share it — the open-window check, the windowless background check, and the embedded surface's auto-login wait loop. A relogin (`fillLogin`) now settles for two seconds after a submit, re-checks, and persists; an expired verdict carries the fill record ("HTTP 200 + signed-out marker · filled and submitted"), separating "filled but not signed in" from "never checked"
 - Tree row actions overlay the count instead of reserving layout space: the invisible buttons used to push every count off the right edge, mid-row, like a rendering bug. Counts sit at the true right edge now and the actions fade in over the vacated spot. This also fixes a latent trap — invisible buttons still caught clicks until now (`pointer-events` opens only on hover)
 - The new-tab grid's move semantics are fixed: a drag-drop landing index resolves against the full workspace order — in a level-filtered view the filtered position used to land the tile in the wrong place; folder tiles and breadcrumb crumbs are drop targets, and the root crumb unfiles
+- Suggestions rank name-prefix above name-substring above URL-substring and cap at eight rows: retrieval is the main path to a deep bookmark, the grid remains for browsing; nothing appears with an empty input or when the new-tab bookmark setting is off. The crumb dropdown lists child folders only, with their subtree bookmark counts — two chained dropdowns reach any depth; it closes on an outside click and the caret only renders where children exist
 - Tag, site and bookmark-folder reordering each got one IPC (`site-tag:move`, `site:move`, `bookmark:folder-move`); the service follows the view rule — the stored array order is the list order — and only folders use `order`, scoped to siblings. Drop indexes from a grouped view are translated to the stored array, so turning on a filter cannot land the row somewhere else
 - Filing a bookmark into a folder now appends it to that folder: the old code kept the bookmark's global `order`, so it landed wherever its previous slot happened to fall
 - Flow-step drag reorders the editor draft only and saves with the flow, so no IPC is involved; the grip keeps the drag away from the row's inputs

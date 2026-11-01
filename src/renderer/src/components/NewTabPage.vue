@@ -3,8 +3,8 @@ import type { EmbeddedTab } from "@shared/embedded";
 import { NEW_TAB_BACKDROPS, newTabBackdrop } from "@shared/newtab";
 import { enginePreview, isValidEngineTemplate, resolveBrowserInput } from "@shared/search";
 import type { Bookmark } from "@shared/types";
-import { Check, ChevronDown, Palette, Plus, Search, X } from "lucide-vue-next";
-import { computed, nextTick, ref } from "vue";
+import { Check, ChevronDown, Palette, Plus, Search, Star, X } from "lucide-vue-next";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -61,6 +61,12 @@ async function submit(): Promise<void> {
   error.value = "";
   const value = input.value;
   if (!value) return;
+  // A highlighted suggestion is the pick: Enter opens it instead of searching.
+  const picked = suggestions.value[suggestIndex.value];
+  if (picked) {
+    openSuggestion(picked);
+    return;
+  }
   const url = resolveBrowserInput(value, engine.value);
   if (!url) {
     error.value = t("app.newTabBadInput");
@@ -68,6 +74,71 @@ async function submit(): Promise<void> {
   }
   query.value = "";
   await store.navigate(props.tab.id, url);
+}
+
+/** Host of a bookmark URL for the suggestion row's secondary label. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Bookmarks matching the typed text, across the whole tree.
+ *
+ * Deep folder trees make search the fast path: a bookmark four levels down is
+ * reachable with a few keystrokes instead of four clicks into the grid. Name
+ * matches rank above URL matches; the cap keeps the panel a suggestion, not a
+ * second grid.
+ */
+const suggestions = computed(() => {
+  const q = input.value.toLowerCase();
+  if (!q || !workspace.settings.newTabBookmarks) return [];
+  const scored: Array<{ bookmark: Bookmark; rank: number }> = [];
+  for (const bookmark of workspace.bookmarks) {
+    const name = bookmark.name.toLowerCase();
+    const url = bookmark.url.toLowerCase();
+    let rank = -1;
+    if (name.startsWith(q)) rank = 0;
+    else if (name.includes(q)) rank = 1;
+    else if (url.includes(q)) rank = 2;
+    if (rank >= 0) scored.push({ bookmark, rank });
+  }
+  return scored
+    .sort((left, right) => left.rank - right.rank)
+    .slice(0, 8)
+    .map((entry) => entry.bookmark);
+});
+
+/** The suggestion Enter will open; `-1` means none highlighted — Enter searches. */
+const suggestIndex = ref(-1);
+
+watch(query, () => {
+  suggestIndex.value = -1;
+});
+
+function onInputKeydown(event: KeyboardEvent): void {
+  if (!suggestions.value.length) return;
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    suggestIndex.value = (suggestIndex.value + 1) % suggestions.value.length;
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    suggestIndex.value =
+      suggestIndex.value < 0
+        ? suggestions.value.length - 1
+        : (suggestIndex.value - 1 + suggestions.value.length) % suggestions.value.length;
+  } else if (event.key === "Escape") {
+    suggestIndex.value = -1;
+  }
+}
+
+function openSuggestion(bookmark: Bookmark): void {
+  query.value = "";
+  suggestIndex.value = -1;
+  emit("openBookmark", bookmark);
 }
 
 async function chooseEngine(id: string): Promise<void> {
@@ -187,7 +258,32 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
           :placeholder="t('app.newTabPlaceholder')"
           :aria-label="t('app.newTabPlaceholder')"
           @input="error = ''"
+          @keydown="onInputKeydown"
         />
+        <!-- Bookmark suggestions across the whole tree: the deep-path escape
+             hatch. Enter with a row highlighted opens it; otherwise the
+             default (URL or search engine) applies. -->
+        <div v-if="suggestions.length" class="nt-suggest" role="listbox" :aria-label="t('app.bookmarks')">
+          <button
+            v-for="(bookmark, index) in suggestions"
+            :key="bookmark.id"
+            type="button"
+            role="option"
+            class="nt-suggest-row"
+            :class="{ active: index === suggestIndex }"
+            :aria-selected="index === suggestIndex"
+            :title="`${bookmark.name}\n${bookmark.url}`"
+            @mouseenter="suggestIndex = index"
+            @click="openSuggestion(bookmark)"
+          >
+            <span class="nt-suggest-icon">
+              <img v-if="bookmark.favicon" :src="bookmark.favicon" alt="" draggable="false" />
+              <Star v-else :size="11" />
+            </span>
+            <span class="nt-suggest-name">{{ bookmark.name }}</span>
+            <span class="nt-suggest-url mono">{{ hostOf(bookmark.url) }}</span>
+          </button>
+        </div>
         <button type="submit" class="nt-go" :disabled="!input" :aria-label="t('app.newTabGo')">
           <Search :size="15" />
         </button>
@@ -416,6 +512,78 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   color: var(--text);
   font-size: 13px;
   outline: none;
+}
+
+/*
+ * Suggestion panel, anchored to the search box. It covers the grid behind it
+ * (z-index over the tiles) and scrolls if eight rows outgrow the box.
+ */
+.nt-suggest {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 3;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+
+.nt-suggest-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.nt-suggest-row:hover,
+.nt-suggest-row.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nt-suggest-icon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  border-radius: 4px;
+  overflow: hidden;
+  color: var(--faint);
+}
+
+.nt-suggest-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.nt-suggest-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nt-suggest-url {
+  margin-left: auto;
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--faint);
 }
 
 .nt-go {

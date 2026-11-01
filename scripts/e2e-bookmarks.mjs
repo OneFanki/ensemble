@@ -821,6 +821,61 @@ try {
   })()`);
   check("a tile dropped on a folder tile is filed into it", chipFiled?.ok === true, chipFiled);
 
+  // A crumb caret drops that level's children: reach a sibling level without
+  // walking in and back out.
+  const crumbJump = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const caret = document.querySelector('.crumb-wrap .crumb-caret');
+    if (!caret) return { ok: false, step: 'caret' };
+    caret.click();
+    await wait(300);
+    const menuRows = [...document.querySelectorAll('.crumb-menu .crumb-menu-name')].map((n) =>
+      n.textContent?.trim(),
+    );
+    if (!menuRows?.includes('旧分组')) return { ok: false, step: 'menu', menuRows };
+    const row = [...document.querySelectorAll('.crumb-menu .crumb-menu-row')].find(
+      (item) => item.querySelector('.crumb-menu-name')?.textContent?.trim() === '旧分组',
+    );
+    row?.click();
+    await wait(500);
+    const crumbs = [...document.querySelectorAll('.folder-strip .folder-chip')].map((chip) =>
+      chip.textContent?.trim(),
+    );
+    // 旧分组 is empty here (its bookmark was deleted earlier), so the grid has
+    // no tiles — the jump itself is what the check asserts.
+    const tiles = document.querySelectorAll('.bookmarks .tile').length;
+    return { ok: crumbs.length === 2 && crumbs[1] === '旧分组' && tiles === 0, crumbs, tiles };
+  })()`);
+  check("a crumb caret jumps straight into a sibling level", crumbJump?.ok === true, crumbJump);
+
+  // Search matches bookmarks across the whole tree, so a bookmark filed deep
+  // opens from the root with a few keystrokes.
+  const search = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    document.querySelector('.folder-strip .folder-chip')?.click();
+    await wait(400);
+    const input = document.querySelector('.nt-input');
+    if (!input) return { ok: false, step: 'input' };
+    input.value = '控制台';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(400);
+    const rows = [...document.querySelectorAll('.nt-suggest .nt-suggest-name')].map((n) =>
+      n.textContent?.trim(),
+    );
+    if (!rows?.includes('控制台')) return { ok: false, step: 'suggest', rows };
+    const row = [...document.querySelectorAll('.nt-suggest .nt-suggest-row')].find(
+      (item) => item.querySelector('.nt-suggest-name')?.textContent?.trim() === '控制台',
+    );
+    row?.click();
+    await wait(800);
+    return { ok: true, rows, newTabGone: !document.querySelector('.blank-slot .new-tab') };
+  })()`);
+  check(
+    "searching the new-tab box surfaces a deep bookmark and opening it navigates",
+    search?.ok === true && search?.newTabGone === true,
+    search,
+  );
+
   client.close();
 } catch (error) {
   check("run completed", false, String(error));

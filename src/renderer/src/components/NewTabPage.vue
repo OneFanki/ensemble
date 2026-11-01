@@ -52,6 +52,10 @@ const backdrop = computed(() => newTabBackdrop(workspace.settings.newTabBackgrou
  * is something to show. An empty grid would be a permanently empty box.
  */
 const bookmarks = computed(() => (workspace.settings.newTabBookmarks ? workspace.bookmarks : []));
+/** Folders follow the same switch, or the grid would show folder tiles alone. */
+const gridFolders = computed(() =>
+  workspace.settings.newTabBookmarks ? workspace.bookmarkFolders : [],
+);
 
 async function submit(): Promise<void> {
   error.value = "";
@@ -125,13 +129,14 @@ async function moveBookmark(bookmark: Bookmark, toIndex: number): Promise<void> 
   await workspace.moveBookmark(bookmark.id, toIndex);
 }
 
-/** Dropping a tile on a folder chip files it into that folder. */
+/** Dropping a tile on a folder tile or breadcrumb crumb files it there. */
 async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void> {
   await workspace.saveBookmark({
     id: bookmark.id,
     name: bookmark.name,
     url: bookmark.url,
-    folderId,
+    // An empty id is the root crumb: "unfile", not "store an empty label".
+    folderId: folderId || undefined,
   });
 }
 </script>
@@ -222,9 +227,9 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
       </form>
 
       <BookmarkGrid
-        v-if="bookmarks.length"
+        v-if="bookmarks.length || gridFolders.length"
         :bookmarks="bookmarks"
-        :folders="workspace.bookmarkFolders"
+        :folders="gridFolders"
         @open="openBookmark"
         @rename="renameBookmark"
         @remove="removeBookmark"

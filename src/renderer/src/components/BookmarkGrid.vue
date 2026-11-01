@@ -169,7 +169,7 @@ function onDragLeave(index: number): void {
   if (dropIndex.value === index) dropIndex.value = null;
 }
 
-function onDrop(bookmark: Bookmark, index: number, event: DragEvent): void {
+function onDrop(bookmark: Bookmark, event: DragEvent): void {
   event.preventDefault();
   const id = draggingId.value;
   draggingId.value = null;
@@ -177,9 +177,11 @@ function onDrop(bookmark: Bookmark, index: number, event: DragEvent): void {
   if (!id || id === bookmark.id) return;
   const moving = props.bookmarks.find((item) => item.id === id);
   if (!moving) return;
-  // Dropping on a tile takes that tile's place, which is exactly the index the
-  // service's splice-out-then-insert produces.
-  emit("move", moving, index);
+  // Dropping on a tile takes that tile's place. The index resolves against the
+  // full workspace order, not the visible level: the service splices the
+  // stored array, and a level-filtered position would land the tile elsewhere.
+  const targetIndex = props.bookmarks.findIndex((item) => item.id === bookmark.id);
+  if (targetIndex >= 0) emit("move", moving, targetIndex);
 }
 
 function onDragEnd(): void {
@@ -188,140 +190,160 @@ function onDragEnd(): void {
 }
 
 /**
- * The strip shows the top level of the folder tree, one chip per folder that
- * has anything in it anywhere below. The tree itself stays on the management
- * page: a start page shows folders to filter by, and a nested outline there
- * would turn the grid into a file manager.
+ * The grid navigates one level at a time, like the management page.
+ *
+ * It used to show every bookmark in the workspace flat, which turned a browser
+ * import — hundreds of bookmarks in a deep tree — into one endless page of
+ * tiles. Now the current level's folders come first as tiles that drill in,
+ * then that folder's own bookmarks; the strip above is a breadcrumb of the
+ * open path and doubles as a drop target, so a tile dropped on a crumb is
+ * filed into that folder.
  */
+const path = ref<BookmarkFolder[]>([]);
+
 const childrenMap = computed(() => {
-  const map = new Map<string, string[]>();
+  const map = new Map<string, BookmarkFolder[]>();
   for (const folder of props.folders) {
     if (!folder.parentId) continue;
     const list = map.get(folder.parentId) ?? [];
-    list.push(folder.id);
+    list.push(folder);
     map.set(folder.parentId, list);
   }
   return map;
 });
 
-/** A folder and every folder under it — a chip counts and filters the subtree. */
+/** A folder and every folder under it — a tile's count covers the subtree. */
 function subtreeIds(rootId: string): Set<string> {
   const ids = new Set<string>([rootId]);
   const stack = [rootId];
   while (stack.length) {
     const current = stack.pop();
     for (const child of childrenMap.value.get(current ?? "") ?? []) {
-      if (!ids.has(child)) {
-        ids.add(child);
-        stack.push(child);
+      if (!ids.has(child.id)) {
+        ids.add(child.id);
+        stack.push(child.id);
       }
     }
   }
   return ids;
 }
 
-const chips = computed(() => {
-  const out: Array<{ id: string; name: string; count: number }> = [];
-  for (const folder of props.folders) {
-    if (folder.parentId) continue;
-    const ids = subtreeIds(folder.id);
-    const count = props.bookmarks.filter(
-      (bookmark) => bookmark.folderId && ids.has(bookmark.folderId),
-    ).length;
-    // An empty folder exists by choice now that folders are records, but the
-    // strip answers "which folder has anything in it" — so it stays hidden.
-    if (count === 0) continue;
-    out.push({ id: folder.id, name: folder.name, count });
-  }
-  return out;
-});
+/** Bookmark count in a folder's subtree — what entering the folder yields. */
+function subtreeCount(folder: BookmarkFolder): number {
+  const ids = subtreeIds(folder.id);
+  return props.bookmarks.filter(
+    (bookmark) => bookmark.folderId && ids.has(bookmark.folderId),
+  ).length;
+}
 
-/** `null` means "all", which is what an untouched start page should show. */
-const activeFolder = ref<string | null>(null);
+const currentFolder = computed(() => path.value[path.value.length - 1] ?? null);
 
-// A filter pointing at a folder that no longer exists would silently show an
-// empty grid, so it falls back to "all".
+/** Folders one level below the open path; the root lists top-level folders. */
+const levelFolders = computed(() =>
+  currentFolder.value
+    ? (childrenMap.value.get(currentFolder.value.id) ?? [])
+    : props.folders.filter((folder) => !folder.parentId),
+);
+
+/** The open folder's own bookmarks; at the root, the unfiled ones. */
+const levelBookmarks = computed(() =>
+  props.bookmarks.filter(
+    (bookmark) => (bookmark.folderId ?? null) === (currentFolder.value?.id ?? null),
+  ),
+);
+
+/** The strip's crumbs; the first one is always the root ("all"). */
+const crumbs = computed(() => [
+  { folder: null as BookmarkFolder | null },
+  ...path.value.map((folder) => ({ folder })),
+]);
+
+function enter(folder: BookmarkFolder): void {
+  path.value = [...path.value, folder];
+}
+
+/** Jump back to a crumb; index 0 clears the path. */
+function jumpTo(index: number): void {
+  path.value = path.value.slice(0, index);
+}
+
+// A path into a folder that no longer exists would dead-end, so it truncates
+// back to the last survivor.
 watch(
   () => props.folders,
   (list) => {
-    if (activeFolder.value && !list.some((folder) => folder.id === activeFolder.value)) {
-      activeFolder.value = null;
+    const kept: BookmarkFolder[] = [];
+    for (const folder of path.value) {
+      if (!list.some((item) => item.id === folder.id)) break;
+      kept.push(folder);
     }
+    if (kept.length !== path.value.length) path.value = kept;
   },
 );
 
-const shown = computed(() => {
-  if (activeFolder.value === null) return props.bookmarks;
-  const ids = subtreeIds(activeFolder.value);
-  return props.bookmarks.filter((bookmark) => bookmark.folderId && ids.has(bookmark.folderId));
-});
+/** Folder id the pointer is over while a tile is dragged, for the highlight. */
+const dropFolder = ref<string | null>(null);
 
-/**
- * Clicking the folder that is already open returns to "all".
- *
- * A filter with no way out except a separate "all" chip doubles the row for one
- * word, and people press the same chip twice before looking for it.
- */
-function pickFolder(id: string | null): void {
-  activeFolder.value = activeFolder.value === id ? null : id;
-}
-
-/** Chip the pointer is over while a tile is dragged, for the drop highlight. */
-const dropChip = ref<string | null>(null);
-
-function onDragOverChip(id: string, event: DragEvent): void {
+function onDragOverFolder(id: string, event: DragEvent): void {
   if (!draggingId.value) return;
   event.preventDefault();
-  dropChip.value = id;
+  dropFolder.value = id;
 }
 
-function onDropChip(id: string): void {
+function onDropIntoFolder(id: string): void {
   const dragged = props.bookmarks.find((item) => item.id === draggingId.value);
   draggingId.value = null;
-  dropChip.value = null;
-  if (dragged) emit('file', dragged, id);
+  dropFolder.value = null;
+  if (dragged) emit("file", dragged, id);
 }
 </script>
 
 <template>
-  <div v-if="count" ref="root" class="bookmark-area">
-    <!-- Folder strip: the whole bar, or one top-level folder at a time. The
-         count is part of the label because "which folder has anything in it"
-         is the question this row exists to answer. -->
-    <div v-if="chips.length" class="folder-strip" role="tablist">
-      <button
-        type="button"
-        role="tab"
-        class="folder-chip"
-        :class="{ active: activeFolder === null }"
-        :aria-selected="activeFolder === null"
-        @click="pickFolder(null)"
-      >
-        {{ t("app.bookmarkAllFolders") }}
-        <span class="folder-count mono">{{ count }}</span>
-      </button>
-      <button
-        v-for="chip in chips"
-        :key="chip.id"
-        type="button"
-        role="tab"
-        class="folder-chip"
-        :class="{ active: activeFolder === chip.id, drop: dropChip === chip.id }"
-        :aria-selected="activeFolder === chip.id"
-        @click="pickFolder(chip.id)"
-        @dragover="onDragOverChip(chip.id, $event)"
-        @dragleave="dropChip === chip.id ? dropChip = null : null"
-        @drop.prevent="onDropChip(chip.id)"
-      >
-        <Folder :size="11" />
-        {{ chip.name }}
-        <span class="folder-count mono">{{ chip.count }}</span>
-      </button>
-    </div>
+  <div v-if="count || folders.length" ref="root" class="bookmark-area">
+    <!-- Breadcrumb of the open path; a dropped tile is filed into the crumb's
+         folder (the root crumb unfiles). -->
+    <nav v-if="crumbs.length > 1 || levelFolders.length" class="folder-strip" :aria-label="t('app.bookmarks')">
+      <template v-for="(crumb, index) in crumbs" :key="crumb.folder?.id ?? 'root'">
+        <span v-if="index > 0" class="crumb-sep">/</span>
+        <button
+          type="button"
+          class="folder-chip"
+          :class="{
+            active: index === crumbs.length - 1,
+            drop: dropFolder === (crumb.folder?.id ?? ''),
+          }"
+          :disabled="index === crumbs.length - 1"
+          @click="jumpTo(index)"
+          @dragover="onDragOverFolder(crumb.folder?.id ?? '', $event)"
+          @dragleave="dropFolder === (crumb.folder?.id ?? '') ? (dropFolder = null) : null"
+          @drop.prevent="onDropIntoFolder(crumb.folder?.id ?? '')"
+        >
+          {{ crumb.folder ? crumb.folder.name : t("app.bookmarkAllFolders") }}
+        </button>
+      </template>
+    </nav>
 
     <div class="bookmarks" :aria-label="t('app.bookmarks')">
+      <!-- Folders first, the way a directory lists; a tile drills in. -->
       <button
-        v-for="(bookmark, index) in shown"
+        v-for="folder in levelFolders"
+        :key="folder.id"
+        type="button"
+        class="tile folder-tile"
+        :class="{ drop: dropFolder === folder.id }"
+        :title="t('app.bookmarkFolderRowHint', { count: subtreeCount(folder) })"
+        @click="enter(folder)"
+        @dragover="onDragOverFolder(folder.id, $event)"
+        @dragleave="dropFolder === folder.id ? (dropFolder = null) : null"
+        @drop.prevent="onDropIntoFolder(folder.id)"
+      >
+        <span class="tile-icon folder"><Folder :size="16" /></span>
+        <span class="tile-name">{{ folder.name }}</span>
+        <span class="tile-count mono">{{ subtreeCount(folder) }}</span>
+      </button>
+
+      <button
+        v-for="(bookmark, index) in levelBookmarks"
         :key="bookmark.id"
         type="button"
         class="tile"
@@ -334,7 +356,7 @@ function onDropChip(id: string): void {
         @dragstart="onDragStart(bookmark, $event)"
         @dragover="onDragOver(index, $event)"
         @dragleave="onDragLeave(index)"
-        @drop="onDrop(bookmark, index, $event)"
+        @drop="onDrop(bookmark, $event)"
         @dragend="onDragEnd"
       >
         <span class="tile-icon" :style="bookmark.favicon ? {} : fallbackStyle(bookmark.url)">
@@ -416,6 +438,17 @@ function onDropChip(id: string): void {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+/* The open crumb is disabled (it is where you are), so it keeps the active
+   look without the pointer affordance. */
+.folder-chip:disabled {
+  cursor: default;
+}
+
+.crumb-sep {
+  align-self: center;
+  color: var(--faint);
+}
+
 .folder-count {
   font-size: 9.5px;
   color: var(--faint);
@@ -478,6 +511,21 @@ function onDropChip(id: string): void {
 .tile.drop {
   border-color: color-mix(in srgb, var(--line) 40%, var(--accent));
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* A folder tile shares the bookmark tile's shape; the accent wash is what says
+   "this one opens a level" rather than an address. */
+.tile-icon.folder {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+}
+
+/* Subtree bookmark count under the folder name — entering the folder yields
+   this many bookmarks across its whole subtree. */
+.tile-count {
+  margin-top: -3px;
+  font-size: 9.5px;
+  color: var(--faint);
 }
 
 .tile-icon {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RoleColor, Tag } from "@shared/types";
-import { Pencil, Tag as TagIcon, Trash2 } from "lucide-vue-next";
+import { GripVertical, Pencil, Tag as TagIcon, Trash2 } from "lucide-vue-next";
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
@@ -38,6 +38,47 @@ const editTagColor = ref<RoleColor>("slate");
 const editInput = ref<HTMLInputElement[] | null>(null);
 
 const tags = computed(() => store.snapshot?.tags ?? []);
+
+/*
+ * Reordering by dragging the row's grip.
+ *
+ * The grip rather than the whole row: a row also carries an inline name input
+ * and a colour picker, and a draggable row would swallow text selection and the
+ * first click of an edit. The tag list is never filtered, so the visible index
+ * is the stored index and no translation is needed.
+ */
+const draggedTagId = ref<string | null>(null);
+const dropTagId = ref<string | null>(null);
+
+function onTagDragStart(tag: Tag, event: DragEvent): void {
+  draggedTagId.value = tag.id;
+  event.dataTransfer?.setData("text/plain", tag.id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onTagDragOver(tag: Tag, event: DragEvent): void {
+  if (!draggedTagId.value || draggedTagId.value === tag.id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dropTagId.value = tag.id;
+}
+
+function onTagDragLeave(tag: Tag): void {
+  if (dropTagId.value === tag.id) dropTagId.value = null;
+}
+
+async function onTagDrop(tag: Tag): Promise<void> {
+  const movingId = draggedTagId.value;
+  onTagDragEnd();
+  if (!movingId || movingId === tag.id) return;
+  const toIndex = tags.value.findIndex((item) => item.id === tag.id);
+  if (toIndex >= 0) await store.moveTag(movingId, toIndex);
+}
+
+function onTagDragEnd(): void {
+  draggedTagId.value = null;
+  dropTagId.value = null;
+}
 
 /** "3 个站点 · 5 个账号 · 1 个视图", so an unused tag is obvious. */
 function usage(tag: Tag): string {
@@ -169,9 +210,26 @@ import IconButton from "./ui/IconButton.vue";
         v-for="tag in tags"
         :key="tag.id"
         class="row"
-        :class="{ editing: editingTagId === tag.id }"
+        :class="{
+          editing: editingTagId === tag.id,
+          dragging: draggedTagId === tag.id,
+          drop: dropTagId === tag.id,
+        }"
         :style="{ '--tag': `var(--role-${editingTagId === tag.id ? editTagColor : tag.color})` }"
+        @dragover="onTagDragOver(tag, $event)"
+        @dragleave="onTagDragLeave(tag)"
+        @drop.prevent="onTagDrop(tag)"
       >
+        <span
+          class="grip"
+          draggable="true"
+          :title="$t('app.dragReorder')"
+          :aria-label="$t('app.dragReorder')"
+          @dragstart="onTagDragStart(tag, $event)"
+          @dragend="onTagDragEnd"
+        >
+          <GripVertical :size="12" />
+        </span>
         <span class="dot"></span>
         <input
           v-if="editingTagId === tag.id"
@@ -340,6 +398,28 @@ import IconButton from "./ui/IconButton.vue";
 
 .row + .row {
   border-top: 1px solid var(--line-soft);
+}
+
+/* Drag handle: the row also edits inline, so only this grip starts a drag. */
+.grip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--faint);
+  cursor: grab;
+}
+
+.grip:active {
+  cursor: grabbing;
+}
+
+.row.dragging {
+  opacity: 0.5;
+}
+
+/* Insertion line: the row below the pointer receives the dragged tag. */
+.row.drop {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .dot {

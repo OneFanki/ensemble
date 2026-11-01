@@ -2,7 +2,16 @@
 import type { Flow, FlowParam, FlowStep } from "@shared/flows";
 import { FLOW_ACTIONS, FLOW_KEYS, summarizeStep } from "@shared/flows";
 import type { Identity, Site } from "@shared/types";
-import { ArrowRight, ListChecks, Pencil, Play, Plus, Trash2, X } from "lucide-vue-next";
+import {
+  ArrowRight,
+  GripVertical,
+  ListChecks,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-vue-next";
 import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
@@ -198,6 +207,45 @@ function moveStep(index: number, delta: number) {
   if (next < 0 || next >= steps.length) return;
   const [item] = steps.splice(index, 1);
   if (item) steps.splice(next, 0, item);
+}
+
+/*
+ * Step rows also drag, from the grip only: a row is mostly inputs, and a
+ * draggable row would fight text selection. The arrow buttons stay — they are
+ * the keyboard path to the same result.
+ */
+const draggedStepIndex = ref<number | null>(null);
+const dropStepIndex = ref<number | null>(null);
+
+function onStepDragStart(index: number, event: DragEvent): void {
+  draggedStepIndex.value = index;
+  event.dataTransfer?.setData("text/plain", String(index));
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onStepDragOver(index: number, event: DragEvent): void {
+  if (draggedStepIndex.value === null || draggedStepIndex.value === index) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dropStepIndex.value = index;
+}
+
+function onStepDragLeave(index: number): void {
+  if (dropStepIndex.value === index) dropStepIndex.value = null;
+}
+
+function onStepDrop(index: number): void {
+  const from = draggedStepIndex.value;
+  onStepDragEnd();
+  if (from === null || from === index) return;
+  const steps = draft.value.steps;
+  const [item] = steps.splice(from, 1);
+  if (item) steps.splice(index, 0, item);
+}
+
+function onStepDragEnd(): void {
+  draggedStepIndex.value = null;
+  dropStepIndex.value = null;
 }
 
 /** Fields a step shows depend on its action; anything irrelevant would confuse. */
@@ -482,8 +530,26 @@ async function saveDraft() {
             </button>
           </div>
           <p class="hint">{{ $t("app.flowStepTargetHint") }}</p>
-          <div v-for="(step, index) in draft.steps" :key="index" class="step-editor">
+          <div
+            v-for="(step, index) in draft.steps"
+            :key="index"
+            class="step-editor"
+            :class="{ dragging: draggedStepIndex === index, drop: dropStepIndex === index }"
+            @dragover="onStepDragOver(index, $event)"
+            @dragleave="onStepDragLeave(index)"
+            @drop.prevent="onStepDrop(index)"
+          >
             <div class="step-top">
+              <span
+                class="step-grip"
+                draggable="true"
+                :title="$t('app.dragReorder')"
+                :aria-label="$t('app.dragReorder')"
+                @dragstart="onStepDragStart(index, $event)"
+                @dragend="onStepDragEnd"
+              >
+                <GripVertical :size="12" />
+              </span>
               <span class="step-index mono">{{ index + 1 }}</span>
               <SelectField
                 :model-value="step.action"
@@ -1012,6 +1078,29 @@ async function saveDraft() {
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+
+/* Drag handle: rows are full of inputs, so only the grip starts a drag. */
+.step-grip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--faint);
+  cursor: grab;
+}
+
+.step-grip:active {
+  cursor: grabbing;
+}
+
+.step-editor.dragging {
+  opacity: 0.5;
+}
+
+/* Insertion line at the top of the step the drag would land on. */
+.step-editor.drop {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .step-top {

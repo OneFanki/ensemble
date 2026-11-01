@@ -2006,6 +2006,12 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  handle(IPC.siteMove, (id: string, toIndex: number) => {
+    workspace.moveSite(String(id), Number(toIndex));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
   handle(IPC.tagSave, (draft: TagDraft) => {
     workspace.saveTag(tagDraftSchema.parse(draft));
     broadcastWorkspace();
@@ -2014,6 +2020,12 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.tagDelete, (id: string) => {
     workspace.deleteTag(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.tagMove, (id: string, toIndex: number) => {
+    workspace.moveTag(String(id), Number(toIndex));
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -2150,6 +2162,12 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.bookmarkFolderDelete, (id: string) => {
     workspace.deleteBookmarkFolder(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkFolderMove, (id: string, toIndex: number) => {
+    workspace.moveBookmarkFolder(String(id), Number(toIndex));
     broadcastWorkspace();
     return workspace.snapshot();
   });

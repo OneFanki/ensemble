@@ -91,10 +91,14 @@ export const IPC = {
   enginesRemoveManual: "engines:remove-manual",
   siteSave: "site:save",
   siteDelete: "site:delete",
+  /** Reorders sites; the stored array order is the display order. */
+  siteMove: "site:move",
   /** Creates or renames a display-only site tag. */
   tagSave: "site-tag:save",
   /** Deletes a tag and unlinks it from every site; sites themselves stay. */
   tagDelete: "site-tag:delete",
+  /** Reorders tags; the array order is the group order on every page. */
+  tagMove: "site-tag:move",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
   /** Points a batch of accounts at one site; also re-links accounts with none. */
@@ -125,6 +129,8 @@ export const IPC = {
   bookmarkFolderSave: "bookmark:folder-save",
   /** Deletes one folder; its contents re-parent one level up. */
   bookmarkFolderDelete: "bookmark:folder-delete",
+  /** Reorders a folder among its siblings; parents are changed by folder-save. */
+  bookmarkFolderMove: "bookmark:folder-move",
   /** Detects importable browser bookmark profiles on this machine. */
   bookmarkImportSources: "bookmark:import-sources",
   /** Imports one detected source by id. */
@@ -273,8 +279,12 @@ export interface EnsembleApi {
 
   saveSite(draft: SiteDraft): Promise<WorkspaceSnapshot>;
   deleteSite(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a site within the list; the stored array order is the display order. */
+  moveSite(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   saveTag(draft: TagDraft): Promise<WorkspaceSnapshot>;
   deleteTag(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a tag within the list; the array order is the group order. */
+  moveTag(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
   /**
@@ -317,6 +327,8 @@ export interface EnsembleApi {
   saveBookmarkFolder(draft: BookmarkFolderDraft): Promise<WorkspaceSnapshot>;
   /** Deletes one folder; its contents re-parent one level up. */
   deleteBookmarkFolder(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a folder among its siblings; only the sibling order changes. */
+  moveBookmarkFolder(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   /** Detects importable browser bookmark profiles on this machine. */
   bookmarkImportSources(): Promise<BookmarkImportSourceInfo[]>;
   /** Imports one detected source by id; the snapshot already carries the tree. */

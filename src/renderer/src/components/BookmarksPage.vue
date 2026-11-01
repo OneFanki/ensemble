@@ -46,6 +46,9 @@ function countOf(folderId: string): number {
   return bookmarks.value.filter((bookmark) => bookmark.folderId === folderId).length;
 }
 
+/** Bookmarks that belong to no folder — the root row's count. */
+const unfiledCount = computed(() => bookmarks.value.filter((bookmark) => !bookmark.folderId).length);
+
 /**
  * Collapsed rather than expanded ids: a folder created after the page loaded is
  * visible without anyone updating the set, which is what an "expanded" set
@@ -368,9 +371,9 @@ function onDropOnNothing(): void {
         >
           <Globe :size="12" />
           <span class="tree-name">{{ t("app.bookmarkAllFolders") }}</span>
-          <span class="tree-count mono">
-            {{ bookmarks.filter((bookmark) => !bookmark.folderId).length }}
-          </span>
+          <!-- Zero reads as noise at the right edge of every empty folder; a
+               file manager shows nothing until there is something. -->
+          <span v-if="unfiledCount > 0" class="tree-count mono">{{ unfiledCount }}</span>
         </button>
         <!-- A folder row is a div because it nests three more buttons (child,
              edit, delete); a button inside a button is invalid HTML and the
@@ -401,7 +404,7 @@ function onDropOnNothing(): void {
           </span>
           <Folder :size="12" class="tree-icon" />
           <span class="tree-name">{{ folder.name }}</span>
-          <span class="tree-count mono">{{ countOf(folder.id) }}</span>
+          <span v-if="countOf(folder.id) > 0" class="tree-count mono">{{ countOf(folder.id) }}</span>
           <span class="tree-actions" @click.stop @keydown.stop>
             <button
               type="button"
@@ -563,13 +566,21 @@ function onDropOnNothing(): void {
 </template>
 
 <style scoped>
+/*
+ * Fixed frame, two independent scrollers.
+ *
+ * The page used to scroll as one document, so the tree and the list moved
+ * together and a long tree dragged the breadcrumb out of view. The header and
+ * the breadcrumb now stay put; each column scrolls alone, like the two panes
+ * of the file manager this page imitates.
+ */
 .bookmarks-page {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 18px 22px 28px;
+  padding: 18px 22px 18px;
+  height: 100%;
   min-height: 0;
-  overflow-y: auto;
 }
 
 .page-head {
@@ -605,7 +616,9 @@ function onDropOnNothing(): void {
   display: grid;
   grid-template-columns: 235px minmax(0, 1fr);
   gap: 14px;
-  align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
 }
 
 .tree {
@@ -616,9 +629,20 @@ function onDropOnNothing(): void {
   border-radius: var(--radius);
   background: var(--bg);
   padding: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .tree-row {
+  /* Anchor for the hover actions: they overlay the row's right edge instead of
+     taking part in the layout. */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -637,12 +661,16 @@ div.tree-row {
   cursor: default;
 }
 
+/* The hover background doubles as the backdrop colour for the actions that
+   fade in over the row's right edge. */
 .tree-row:hover {
+  --row-bg: var(--surface-2);
   background: var(--surface-2);
 }
 
 .tree-row.on {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  --row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--row-bg);
   color: var(--text);
 }
 
@@ -702,22 +730,44 @@ div.tree-row {
 }
 
 .tree-count {
+  /* Pinned to the row's true right edge. The hover actions used to sit here in
+     the layout while invisible, shoving every count left by their reserved
+     width — numbers floated mid-row and the tree looked broken. */
   margin-left: auto;
   font-size: 9.5px;
   color: var(--faint);
+  transition: opacity 0.1s ease;
 }
 
+/*
+ * Row actions overlay the count instead of reserving space: hidden they cost
+ * nothing, on hover they fade in over the spot the count vacates — the file
+ * manager pattern. The backdrop fades from the row's own background so a long
+ * name sliding underneath still reads.
+ */
 .tree-actions {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 2px;
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: 4px;
+  padding-left: 14px;
+  background: linear-gradient(to right, transparent, var(--row-bg, var(--bg)) 10px);
   opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
 }
 
 .tree-row:hover .tree-actions,
 .row:hover .tree-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.tree-row:hover .tree-count {
+  opacity: 0;
 }
 
 .tree-row.on .tree-count {
@@ -759,8 +809,11 @@ div.tree-row {
   flex-direction: column;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .row {

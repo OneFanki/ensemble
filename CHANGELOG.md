@@ -27,6 +27,7 @@
 - **书签支持多层文件夹，像文件管理器一样操作**：新建/编辑走一个弹窗；管理页左侧是目录树，「全部」列出顶层文件夹和未分类书签；行可拖拽——拖到文件夹归档或移动、拖到行排序，磁贴拖到文件夹条归档；删除文件夹时内容上提一级；支持直接从本机的 Edge / Chrome / Firefox 导入书签（只读、自动去重）；旧数据自动迁移
 - **AI 驱动更可靠**：语义定位与点击穿透 shadow DOM 和同源 iframe；点击结果带实际落点（hit），被遮挡不再靠猜；自动填充失败会说清缺的是哪一个密码；运行栏 AI 次数徽标按页面计数，审计日志补记页面 id
 - **站点默认密码可以在站点上设置**：以前只能进账号对话框配，站点下一堆账号都继承时反而没人找得到；现在建站点、改站点时就能填，列表上直接标出「已设置 / 未设置」
+- **更多列表可以拖拽排序**：标签页拖动手柄调整顺序（站点页的分组顺序随之变化）；站点卡片可在分组内拖动，顺序全局生效；书签文件夹支持同级排序（拖到行的上/下缘插入，拖到中间仍是归档）；流程步骤可直接拖动，上下箭头保留
 
 #### 完整变更
 
@@ -49,6 +50,9 @@
 - `tests/embedded-viewport.test.ts` 钉住「bounds/scale = 目标尺寸」这条恒等式与校验边界；MCP 侧两条测试覆盖预设应用与越界拒绝（拒绝发生在到达 surface 之前，不会留下半套状态）
 - MCP 新增 `compose_view`：把已打开的若干标签页组合成一个视图并分配格位。先全量校验再动手，中途失败按逆序把页面送回原位
 - `update_settings` 拒绝带用户名密码的代理地址：审计日志是明文文件，脱敏按字段名匹配，藏在 URL 里的凭据会被原样写盘。同一处理也覆盖了导航工具里的 URL
+- 标签、站点、书签文件夹的重排各加一条 IPC（`site-tag:move` / `site:move` / `bookmark:folder-move`）：服务层沿用视图的「数组顺序即列表顺序」，只有文件夹用 `order` 且只在同级重排。分组视图里的落点下标按存储数组换算，避免一开筛选就落错位置
+- 书签拖进文件夹时改为追加到目标文件夹末尾：原先保留旧的全局 `order`，归档后的位置由旧序号决定，看起来像随机插入
+- 流程步骤拖拽只在编辑器草稿内重排，保存时随流程整体提交，因此不新增 IPC；步骤行加拖拽手柄，避免与输入框的文本选择冲突
 
 ### English
 
@@ -57,6 +61,7 @@
 - **Bookmarks nest, and the page works like a file manager**: creating and editing happens in one dialog; the management page has a folder tree, All lists top-level folders plus unfiled bookmarks, and rows drag — onto a folder to file it, onto a row to reorder, tiles onto the start-page strip to file them; deleting a folder moves its contents up one level. Bookmarks import straight from Edge / Chrome / Firefox installed on this machine (read-only, duplicates skipped); legacy name labels load as real folders
 - **AI driving is more reliable**: snapshots and clicks pierce shadow DOM and same-origin iframes; click results carry where the events actually landed (hit); a failed autofill says which password is missing; the dock's AI badge counts per page and the audit log records the page id
 - **A site can carry its own default password**: it was only settable from an account dialog, so when every account on a site inherited it, nobody could find it. It now lives on the site dialog itself, and the site list shows Set / Not set
+- **More lists reorder by dragging**: tags reorder from their row grip (the site groups follow), site cards drag inside a group with the order applying globally, bookmark folders reorder among siblings (drop on the top or bottom edge to insert, the middle still files), and flow steps drag directly while the arrow buttons stay
 
 #### Full changes
 
@@ -76,6 +81,9 @@
 - The management page works like a file manager: All is the root (top-level folders plus unfiled bookmarks) and subfolders list before bookmarks; one drag vocabulary covers everything — a row dropped on a folder row or tree node files it, a row dropped on another row reorders, a start-page tile dropped on a folder chip files it; dropping a folder into its own subtree is refused by the service
 - Browser import: the main process read-only parses Edge / Chrome's Bookmarks JSON and Firefox's places.sqlite (copied to a temp staging dir with its -wal/-shm sidecars and opened read-only; the browser is never touched), maps each browser group to a "<browser> bookmarks" top-level folder, dedupes with the same URL canonicalization the workspace stores, prunes branches the dedupe emptied, and is idempotent on re-import; the renderer only ever sees opaque source ids, never file paths
 - The title bar's `guide-button` / `guide-dot` had no style rules at all, so the button rendered native with an off-center icon; it now shares the visual vocabulary of the launch switch beside it. The guide window is slimmed down: the per-section back link, the back-to-start button and the cross-link chips are gone (the left list owns navigation and never scrolls away), the flow arrows sit between the boxes instead of inside them, and the nav's first entry drops its decorative icon so the list's left edge aligns
+- Tag, site and bookmark-folder reordering each got one IPC (`site-tag:move`, `site:move`, `bookmark:folder-move`); the service follows the view rule — the stored array order is the list order — and only folders use `order`, scoped to siblings. Drop indexes from a grouped view are translated to the stored array, so turning on a filter cannot land the row somewhere else
+- Filing a bookmark into a folder now appends it to that folder: the old code kept the bookmark's global `order`, so it landed wherever its previous slot happened to fall
+- Flow-step drag reorders the editor draft only and saves with the flow, so no IPC is involved; the grip keeps the drag away from the row's inputs
 
 ## [1.3.1] - 2026-10-31
 

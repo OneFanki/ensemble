@@ -63,6 +63,7 @@ import {
   buildAuthCheckExpression,
   buildFillExpression,
   type FillOutcome,
+  resolveAuthTokenSource,
 } from "./cdp/login";
 import { createKdfParams, deriveKey, open, seal } from "./credentials/crypto";
 import {
@@ -118,6 +119,15 @@ import {
 } from "./bookmarks-import";
 import { JsonStore } from "./storage/json-store";
 import { joinUrl, safeExternalUrl, sameOrigin } from "./util/url";
+
+/**
+ * How long a relogin waits before re-checking the session.
+ *
+ * The submit's answer — the cookie or localStorage token the probe reads —
+ * arrives after the fill returns, and the SPA usually redirects right after;
+ * probing immediately reads the pre-login state back.
+ */
+const RELOGIN_SETTLE_MS = 2_000;
 
 export interface WorkspaceServiceOptions {
   userDataDir: string;
@@ -385,6 +395,8 @@ export class WorkspaceService {
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
         authCheckSignedOut: draft.authCheckSignedOut,
+        authTokenKey: draft.authTokenKey,
+        authTokenHeader: draft.authTokenHeader,
         autoSubmit: draft.autoSubmit,
         tagIds,
         updatedAt: now,
@@ -398,6 +410,8 @@ export class WorkspaceService {
         loginPath: draft.loginPath,
         authCheckPath: draft.authCheckPath,
         authCheckSignedOut: draft.authCheckSignedOut,
+        authTokenKey: draft.authTokenKey,
+        authTokenHeader: draft.authTokenHeader,
         autoSubmit: draft.autoSubmit,
         tagIds,
         createdAt: now,
@@ -2762,7 +2776,7 @@ export class WorkspaceService {
       if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
       const result = await evaluate<{ status: number; ok: boolean; url: string; body?: string }>(
         page,
-        buildAuthCheckExpression(checkPath),
+        buildAuthCheckExpression(checkPath, resolveAuthTokenSource(site)),
         { awaitPromise: true },
       );
       return this.recordStatus(
@@ -2816,7 +2830,7 @@ export class WorkspaceService {
       if (!sameOrigin(location, site.baseUrl)) return unknown(t("auth.crossOrigin"));
       const result = await evaluate<{ status: number; ok: boolean; url: string; body?: string }>(
         session.page,
-        buildAuthCheckExpression(checkPath),
+        buildAuthCheckExpression(checkPath, resolveAuthTokenSource(site)),
         { awaitPromise: true },
       );
       return this.recordStatus(
@@ -3045,6 +3059,21 @@ export class WorkspaceService {
       outcome.submitted ? t("auth.filledSubmitted") : t("auth.filled"),
       ...fillWarnings(outcome),
     ];
+    // A submitted login is not a logged-in session yet: the server's answer —
+    // and with it the cookie or token the check reads — lands after the submit,
+    // and a client-rendered app may redirect before a probe could run. Settle
+    // briefly, then re-check so the expired badge clears itself instead of
+    // waiting for a manual session check.
+    if (outcome.submitted && site.authCheckPath) {
+      await new Promise((resolve) => setTimeout(resolve, RELOGIN_SETTLE_MS));
+      const { result, changed } = await this.runAuthCheck(identity);
+      if (changed) this.persist();
+      // Still expired after a fill means the verdict is about the session, not
+      // about the fill — keep both facts on the record.
+      return result.status === "expired"
+        ? { ...result, detail: `${result.detail} · ${notes.join(" · ")}` }
+        : result;
+    }
     return {
       identityId,
       status: "unknown",

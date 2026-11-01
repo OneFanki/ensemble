@@ -221,18 +221,56 @@ export function buildFillExpression(input: LoginFillInput): string {
   })()`;
 }
 
-export function buildAuthCheckExpression(checkPath: string): string {
+/**
+ * Where a header-token site keeps its session token.
+ *
+ * Some backends authenticate a private request header read from the page's
+ * localStorage instead of a cookie. A cookie-only probe then reads every
+ * session — including a live one — as signed out, and no amount of re-logging
+ * in clears the "expired" badge. The token cannot be stored in the site
+ * config: it rotates with the session, so it has to be read from the page at
+ * check time.
+ */
+export interface AuthTokenSource {
+  /** localStorage key the token lives under. */
+  key: string;
+  /** Request header the token is sent as. */
+  header: string;
+}
+
+/**
+ * Resolves the probe's token source from the site config.
+ *
+ * The header name is optional and defaults to `"token"` — the only convention
+ * a header-token site has needed so far; the storage key is what actually
+ * varies.
+ */
+export function resolveAuthTokenSource(site: {
+  authTokenKey?: string;
+  authTokenHeader?: string;
+}): AuthTokenSource | undefined {
+  if (!site.authTokenKey) return undefined;
+  return { key: site.authTokenKey, header: site.authTokenHeader || "token" };
+}
+
+export function buildAuthCheckExpression(checkPath: string, token?: AuthTokenSource): string {
   // Cache-bust on every evaluation: the answer flips with the session (401
   // before sign-in, 2xx after), and a cached pre-login 401 made the auto-login
   // routine wait out its whole deadline believing the sign-in had failed.
   const separator = checkPath.includes("?") ? "&" : "?";
   const target = JSON.stringify(`${checkPath}${separator}_=${Date.now()}`);
+  // The token is read at check time, not baked into the expression: it rotates
+  // with the session, and the same compiled expression serves every check.
+  const tokenLine = token
+    ? `const stored = localStorage.getItem(${JSON.stringify(token.key)});\n    const headers = { accept: "application/json", ...(stored ? { ${JSON.stringify(token.header)}: stored } : {}) };`
+    : `const headers = { accept: "application/json" };`;
   return `(async () => {
     try {
+      ${tokenLine}
       const response = await fetch(${target}, {
         credentials: "include",
         redirect: "follow",
-        headers: { accept: "application/json" }
+        headers
       });
       let body;
       try {

@@ -4,6 +4,7 @@ import { copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
 import { setCoreLocale, t } from "@core/i18n/translate";
+import { resolveAuthTokenSource } from "@core/cdp/login";
 import { nextActiveInstanceId } from "@core/launch/active-instance";
 import { resolveLoginFields } from "@core/login-fields";
 import {
@@ -509,6 +510,7 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
         site.authCheckPath,
         site.baseUrl,
         site.authCheckSignedOut,
+        resolveAuthTokenSource(site),
       );
       if (result.ok) return result.signedIn === true;
       if (result.reason === "cross-origin" || result.reason === "bad-site") return "unknown";

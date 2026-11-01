@@ -155,6 +155,21 @@ export interface Site {
    */
   authCheckSignedOut?: string;
   /**
+   * localStorage key that holds the site's session token, for header-token
+   * sites.
+   *
+   * Some backends authenticate a private header (`token`) read from the page's
+   * localStorage instead of a cookie, so a cookie-only probe reads every
+   * session — including a live one — as signed out. When set, the check probe
+   * reads this key at check time and sends the value along.
+   */
+  authTokenKey?: string;
+  /**
+   * Header name the token is sent as. Defaults to "token" when a key is set;
+   * only meaningful together with {@link Site.authTokenKey}.
+   */
+  authTokenHeader?: string;
+  /**
    * Whether to press the login button after filling.
    *
    * Absent means "follow `settings.autoSubmitLogin`", which is the shape a
@@ -623,6 +638,10 @@ export interface SiteDraft {
   authCheckPath?: string;
   /** Body marker that reads as "signed out" on a 200 response; see {@link Site}. */
   authCheckSignedOut?: string;
+  /** localStorage key that holds the session token; see {@link Site.authTokenKey}. */
+  authTokenKey?: string;
+  /** Header name the token is sent as; see {@link Site.authTokenHeader}. */
+  authTokenHeader?: string;
   /** Absent = follow the global default. */
   autoSubmit?: boolean;
   tagIds?: string[];

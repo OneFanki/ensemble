@@ -1808,6 +1808,10 @@ export class McpServer {
             authCheckSignedOut: string(
               "未登录标记：200 响应 body 里出现该子串即视为未登录（API 信封式后端用），可省略",
             ),
+            authTokenKey: string(
+              "会话令牌在页面 localStorage 里的键名（私订请求头鉴权的站点用），可省略",
+            ),
+            authTokenHeader: string("令牌发送的请求头名，默认 token，可省略"),
             password: string("站点默认密码，写入加密凭据库后不回显"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
             tagIds: {
@@ -1832,6 +1836,12 @@ export class McpServer {
             ...(typeof args["authCheckSignedOut"] === "string" && args["authCheckSignedOut"].trim()
               ? { authCheckSignedOut: args["authCheckSignedOut"] }
               : {}),
+            ...(typeof args["authTokenKey"] === "string" && args["authTokenKey"].trim()
+              ? { authTokenKey: args["authTokenKey"] }
+              : {}),
+            ...(typeof args["authTokenHeader"] === "string" && args["authTokenHeader"].trim()
+              ? { authTokenHeader: args["authTokenHeader"] }
+              : {}),
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
             ...(password ? { password } : {}),
           });
@@ -1850,6 +1860,8 @@ export class McpServer {
             loginPath: string("新登录入口"),
             authCheckPath: string("新检测地址"),
             authCheckSignedOut: string("新未登录标记（200 body 子串）；传空串清除"),
+            authTokenKey: string("新令牌 localStorage 键名；传空串清除"),
+            authTokenHeader: string("新令牌请求头名；传空串清除"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
           },
           ["id"],
@@ -1857,6 +1869,8 @@ export class McpServer {
         run: (args) => {
           const existing = findSite(args["id"]);
           const marker = args["authCheckSignedOut"];
+          const tokenKey = args["authTokenKey"];
+          const tokenHeader = args["authTokenHeader"];
           const draft: SiteDraft = {
             id: existing.id,
             name: typeof args["name"] === "string" ? args["name"] : existing.name,
@@ -1871,6 +1885,12 @@ export class McpServer {
               typeof marker === "string"
                 ? marker.trim() || undefined
                 : existing.authCheckSignedOut,
+            authTokenKey:
+              typeof tokenKey === "string" ? tokenKey.trim() || undefined : existing.authTokenKey,
+            authTokenHeader:
+              typeof tokenHeader === "string"
+                ? tokenHeader.trim() || undefined
+                : existing.authTokenHeader,
             autoSubmit:
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
             tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,

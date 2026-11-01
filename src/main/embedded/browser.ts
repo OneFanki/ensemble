@@ -17,7 +17,12 @@ import {
   type WaitCondition,
   type WaitResult,
 } from "@core/cdp/inspect";
-import { bodyMarksSignedOut, buildAuthCheckExpression, buildFillExpression } from "@core/cdp/login";
+import {
+  bodyMarksSignedOut,
+  buildAuthCheckExpression,
+  buildFillExpression,
+  type AuthTokenSource,
+} from "@core/cdp/login";
 import type { MissingCredentialReason } from "@core/credentials/vault";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
@@ -2578,14 +2583,16 @@ export class EmbeddedBrowser {
 
   /**
    * Checks the tab's session against a protected path: an in-page fetch with
-   * cookies, so the answer reflects this tab's own partition, not a cached
-   * record. Callers use it to decide whether a launch still needs a login.
+   * cookies (plus the site's localStorage token when configured), so the answer
+   * reflects this tab's own partition, not a cached record. Callers use it to
+   * decide whether a launch still needs a login.
    */
   async authProbe(
     tabId: string,
     checkPath: string,
     baseUrl: string,
     signedOutMarker?: string,
+    token?: AuthTokenSource,
   ): Promise<{ ok: boolean; signedIn?: boolean; reason?: string }> {
     const tab = this.requireTab(tabId);
     let expected = "";
@@ -2608,7 +2615,7 @@ export class EmbeddedBrowser {
       // a fetch, and without it Runtime.evaluate returns the unsettled Promise,
       // which serializes to `{}` — every probe would read as signed out.
       result = await tab.cdp.evaluate<{ ok: boolean; body?: string }>(
-        buildAuthCheckExpression(checkPath),
+        buildAuthCheckExpression(checkPath, token),
         { awaitPromise: true },
       );
     } catch {

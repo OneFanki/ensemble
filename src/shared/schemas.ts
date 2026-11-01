@@ -37,6 +37,10 @@ export const siteDraftSchema = z.object({
   authCheckPath: pathValue.optional(),
   /** Body substring that reads as "signed out" on a 200 response. */
   authCheckSignedOut: z.string().trim().min(1).max(200).optional(),
+  /** localStorage key that holds the session token, for header-token sites. */
+  authTokenKey: z.string().trim().min(1).max(120).optional(),
+  /** Header name the token is sent as; defaults to "token". */
+  authTokenHeader: z.string().trim().min(1).max(60).optional(),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean().optional(),
   tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),

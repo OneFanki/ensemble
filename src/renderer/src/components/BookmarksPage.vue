@@ -253,6 +253,12 @@ async function moveTo(bookmark: Bookmark, folderId: string): Promise<void> {
 const dragging = ref<{ kind: "bookmark" | "folder"; id: string } | null>(null);
 /** Folder the pointer is over; `""` is the root (unfiled). Null is no target. */
 const dropFolder = ref<string | null>(null);
+/**
+ * Edge of a folder row a dragged folder would land on, for the sibling reorder.
+ * `null` means the pointer is in the middle third, where the drop files into
+ * the folder instead.
+ */
+const dropFolderEdge = ref<{ id: string; side: "before" | "after" } | null>(null);
 /** Bookmark row the pointer is over, for the reorder rule. */
 const dropRow = ref<string | null>(null);
 
@@ -265,6 +271,7 @@ function onDragStart(kind: "bookmark" | "folder", id: string, event: DragEvent):
 function onDragEnd(): void {
   dragging.value = null;
   dropFolder.value = null;
+  dropFolderEdge.value = null;
   dropRow.value = null;
 }
 
@@ -288,10 +295,75 @@ function canDropInto(folderId: string): boolean {
 }
 
 function onDragOverFolder(folderId: string, event: DragEvent): void {
+  // The outer thirds of a folder row mean "insert before/after among siblings";
+  // the middle keeps the original meaning, "file into this folder". Only a
+  // folder can reorder, and only against a sibling — `order` ranks siblings
+  // only, so a cross-level drop has no position to mean.
+  if (folderId) {
+    const zone = folderZone(folderId, event);
+    if (zone !== "into") {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      dropFolderEdge.value = { id: folderId, side: zone };
+      dropFolder.value = null;
+      dropRow.value = null;
+      return;
+    }
+  }
   if (!canDropInto(folderId)) return;
   event.preventDefault();
   dropFolder.value = folderId;
+  dropFolderEdge.value = null;
   dropRow.value = null;
+}
+
+/** Sibling folders under one parent, in stored order. */
+function siblingsOf(parentId: string | undefined): BookmarkFolder[] {
+  return folders.value
+    .filter((folder) => (folder.parentId ?? undefined) === parentId)
+    .sort((left, right) => left.order - right.order);
+}
+
+/** Which third of the row the pointer is in, when a sibling folder is dragged. */
+function folderZone(folderId: string, event: DragEvent): "before" | "into" | "after" {
+  const drag = dragging.value;
+  if (drag?.kind !== "folder" || drag.id === folderId) return "into";
+  const target = folders.value.find((folder) => folder.id === folderId);
+  const moving = folders.value.find((folder) => folder.id === drag.id);
+  if (!target || !moving) return "into";
+  if ((target.parentId ?? undefined) !== (moving.parentId ?? undefined)) return "into";
+  const row = event.currentTarget as HTMLElement | null;
+  if (!row) return "into";
+  const rect = row.getBoundingClientRect();
+  // A pointer outside the row is not "the top edge" — it is a drop whose
+  // position was never set (programmatic drags do this). Keep the old meaning
+  // there instead of turning every such drop into a reorder.
+  const offset = event.clientY - rect.top;
+  if (offset < 0 || offset > rect.height) return "into";
+  const ratio = offset / rect.height;
+  if (ratio < 0.3) return "before";
+  if (ratio > 0.7) return "after";
+  return "into";
+}
+
+/** Drops on a folder row: a sibling edge reorders, everything else files. */
+async function onDropOnFolder(folderId: string): Promise<void> {
+  const drag = dragging.value;
+  const edge = dropFolderEdge.value;
+  if (drag?.kind === "folder" && edge?.id === folderId) {
+    const target = folders.value.find((folder) => folder.id === folderId);
+    const siblings = target ? siblingsOf(target.parentId ?? undefined) : [];
+    const from = siblings.findIndex((folder) => folder.id === drag.id);
+    const to = siblings.findIndex((folder) => folder.id === folderId);
+    onDragEnd();
+    if (!target || from < 0 || to < 0) return;
+    // The service inserts at the final index after the moving row is removed,
+    // so the target's index shifts when the drag started above it.
+    const base = from < to ? to - 1 : to;
+    await workspace.moveBookmarkFolder(drag.id, edge.side === "after" ? base + 1 : base);
+    return;
+  }
+  await onDropIntoFolder(folderId);
 }
 
 async function onDropIntoFolder(folderId: string): Promise<void> {
@@ -315,6 +387,9 @@ function onDragOverRow(bookmark: Bookmark, event: DragEvent): void {
   event.preventDefault();
   dropRow.value = bookmark.id;
   dropFolder.value = null;
+  // A bookmark row ends the folder-edge gesture; without this the edge line
+  // stayed lit on the folder row the pointer had already left.
+  dropFolderEdge.value = null;
 }
 
 async function onDropOnRow(bookmark: Bookmark): Promise<void> {
@@ -330,6 +405,7 @@ async function onDropOnRow(bookmark: Bookmark): Promise<void> {
 function onDropOnNothing(): void {
   // Leaving the list clears the highlight; the drag itself ends with onDragEnd.
   dropFolder.value = null;
+  dropFolderEdge.value = null;
   dropRow.value = null;
 }
 </script>
@@ -382,14 +458,19 @@ function onDropOnNothing(): void {
           v-for="{ folder, depth, hasChildren } in treeRows"
           :key="folder.id"
           class="tree-row"
-          :class="{ on: selected.kind === 'folder' && selected.id === folder.id, drop: dropFolder === folder.id }"
+          :class="{
+            on: selected.kind === 'folder' && selected.id === folder.id,
+            drop: dropFolder === folder.id,
+            'drop-before': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'before',
+            'drop-after': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'after',
+          }"
           :style="{ paddingLeft: `${4 + depth * 13}px` }"
           role="button"
           tabindex="0"
           @click="selected = { kind: 'folder', id: folder.id }"
           @keydown.enter.prevent="selected = { kind: 'folder', id: folder.id }"
           @dragover="onDragOverFolder(folder.id, $event)"
-          @drop.prevent="onDropIntoFolder(folder.id)"
+          @drop.prevent="onDropOnFolder(folder.id)"
         >
           <span class="twist">
             <button
@@ -459,7 +540,12 @@ function onDropOnNothing(): void {
             v-for="folder in view.folders"
             :key="folder.id"
             class="row folder"
-            :class="{ drop: dropFolder === folder.id, dragging: dragging?.id === folder.id }"
+            :class="{
+              drop: dropFolder === folder.id,
+              dragging: dragging?.id === folder.id,
+              'drop-before': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'before',
+              'drop-after': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'after',
+            }"
             draggable="true"
             role="button"
             tabindex="0"
@@ -468,7 +554,7 @@ function onDropOnNothing(): void {
             @dragstart="onDragStart('folder', folder.id, $event)"
             @dragend="onDragEnd"
             @dragover="onDragOverFolder(folder.id, $event)"
-            @drop.prevent="onDropIntoFolder(folder.id)"
+            @drop.prevent="onDropOnFolder(folder.id)"
           >
             <span class="row-icon"><Folder :size="11" /></span>
             <span class="row-name">{{ folder.name }}</span>
@@ -680,6 +766,18 @@ div.tree-row {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: -2px;
+}
+
+/* Edge drops reorder among siblings, so they read as an insertion line rather
+   than as "this folder receives the drag". */
+.tree-row.drop-before,
+.row.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.tree-row.drop-after,
+.row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .tree-row.root {

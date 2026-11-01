@@ -57,7 +57,11 @@ async function rpc(body) {
 
 try {
   let up = false;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  // 60s was too short: the first launch of a freshly built bundle pays a
+  // one-off macOS scan and builds its Chromium profile from scratch, which was
+  // measured at several minutes — the poll then gave up on an app that was
+  // still coming up, and the cleanup below turned that into bogus failures.
+  for (let attempt = 0; attempt < 480; attempt += 1) {
     await wait(500);
     try {
       const response = await fetch(`http://127.0.0.1:${PORT}/mcp`, {
@@ -242,8 +246,14 @@ try {
   console.log("app log tail:", log.slice(-800));
   process.exitCode = 1;
 } finally {
+  // Two-stage shutdown: one SIGTERM starts teardown but the process can still be
+  // alive (measured). Deleting the profile out from under a live app makes it
+  // report failures — missing settings, a renderer that cannot load — that have
+  // nothing to do with the build being tested.
   app.kill();
   await wait(1500);
+  app.kill("SIGKILL");
+  await wait(500);
   try {
     rmSync(userData, { recursive: true, force: true });
   } catch {

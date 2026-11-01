@@ -6,7 +6,15 @@
  * given a translated界面 they never asked for. Picking a language in settings
  * stores it explicitly and stops following the OS.
  */
-export type LocaleSetting = "system" | "zh" | "en";
+/**
+ * The values the language setting can take, in picker order.
+ *
+ * One list on purpose: the type, the settings schema and the MCP wire schema
+ * all derive from it, so adding a language cannot update one copy and leave the
+ * others rejecting what the UI now offers.
+ */
+export const LOCALE_SETTINGS = ["system", "zh", "en"] as const;
+export type LocaleSetting = (typeof LOCALE_SETTINGS)[number];
 export type Locale = "zh" | "en";
 
 /** Maps a system locale tag such as "zh-CN" or "en-US" onto a supported one. */

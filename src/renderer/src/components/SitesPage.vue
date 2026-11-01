@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Site, Tag as WorkspaceTag } from "@shared/types";
-import { Globe, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
-import { computed } from "vue";
+import { Globe, GripVertical, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useConfirmStore } from "../stores/confirm";
@@ -21,6 +21,47 @@ const { t } = useI18n();
 
 const sites = computed(() => store.sites);
 const tags = computed(() => store.snapshot?.tags ?? []);
+
+/*
+ * Reordering by dragging a card's grip.
+ *
+ * A group is a view over the global site list (a site with two tags shows up in
+ * two groups), so the drop index is the target's index in `sites`, not its index
+ * inside the group. Dragging inside one group therefore moves the site globally
+ * and every other group follows — the order is one list, not one per tag.
+ */
+const draggedSiteId = ref<string | null>(null);
+const dropSiteId = ref<string | null>(null);
+
+function onSiteDragStart(site: Site, event: DragEvent): void {
+  draggedSiteId.value = site.id;
+  event.dataTransfer?.setData("text/plain", site.id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onSiteDragOver(site: Site, event: DragEvent): void {
+  if (!draggedSiteId.value || draggedSiteId.value === site.id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dropSiteId.value = site.id;
+}
+
+function onSiteDragLeave(site: Site): void {
+  if (dropSiteId.value === site.id) dropSiteId.value = null;
+}
+
+async function onSiteDrop(site: Site): Promise<void> {
+  const movingId = draggedSiteId.value;
+  onSiteDragEnd();
+  if (!movingId || movingId === site.id) return;
+  const toIndex = sites.value.findIndex((item) => item.id === site.id);
+  if (toIndex >= 0) await store.moveSite(movingId, toIndex);
+}
+
+function onSiteDragEnd(): void {
+  draggedSiteId.value = null;
+  dropSiteId.value = null;
+}
 
 /**
  * Sites grouped by tag. A site with several tags appears in each group — the
@@ -137,8 +178,22 @@ import IconButton from "./ui/IconButton.vue";
             v-for="site in group.sites"
             :key="site.id"
             class="env-card"
+            :class="{ dragging: draggedSiteId === site.id, drop: dropSiteId === site.id }"
+            @dragover="onSiteDragOver(site, $event)"
+            @dragleave="onSiteDragLeave(site)"
+            @drop.prevent="onSiteDrop(site)"
           >
             <div class="card-head">
+              <span
+                class="site-grip"
+                draggable="true"
+                :title="$t('app.dragReorder')"
+                :aria-label="$t('app.dragReorder')"
+                @dragstart="onSiteDragStart(site, $event)"
+                @dragend="onSiteDragEnd"
+              >
+                <GripVertical :size="12" />
+              </span>
               <span class="env-dot"></span>
               <h2 class="env-name">{{ site.name }}</h2>
             </div>
@@ -305,6 +360,29 @@ h1 {
 .env-card.active {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+/* Drag handle: cards carry buttons, so only the grip starts a drag. */
+.site-grip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--faint);
+  cursor: grab;
+}
+
+.site-grip:active {
+  cursor: grabbing;
+}
+
+.env-card.dragging {
+  opacity: 0.5;
+}
+
+/* Insertion line at the top of the card the drag would land on. */
+.env-card.drop {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
 .card-head {

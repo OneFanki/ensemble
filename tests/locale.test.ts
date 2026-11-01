@@ -1,5 +1,12 @@
+import {
+  LOCALE_SETTINGS,
+  type LocaleSetting,
+  localeFromSystemLocale,
+  localeTag,
+  resolveLocale,
+} from "@shared/locale";
+import { settingsPatchSchema } from "@shared/schemas";
 import { describe, expect, it } from "vitest";
-import { localeFromSystemLocale, localeTag, resolveLocale } from "@shared/locale";
 
 describe("locale resolution", () => {
   it("maps any Chinese system tag to zh", () => {
@@ -31,5 +38,29 @@ describe("locale resolution", () => {
   it("produces the tag Chromium and the DevTools front-end expect", () => {
     expect(localeTag("zh")).toBe("zh-CN");
     expect(localeTag("en")).toBe("en-US");
+  });
+});
+
+describe("settings schema locale", () => {
+  it("accepts the system locale the language picker stores", () => {
+    // Regression: the picker's first segment stores "system", but the settings
+    // patch schema only listed zh/en, so clicking 跟随系统 surfaced the raw
+    // zod issues as a toast and never saved.
+    expect(settingsPatchSchema.parse({ locale: "system" }).locale).toBe("system");
+  });
+
+  it("still accepts an explicit language", () => {
+    expect(settingsPatchSchema.safeParse({ locale: "zh" }).success).toBe(true);
+    expect(settingsPatchSchema.safeParse({ locale: "en" }).success).toBe(true);
+  });
+
+  it("rejects a language the app cannot render", () => {
+    expect(settingsPatchSchema.safeParse({ locale: "fr" }).success).toBe(false);
+  });
+
+  it("derives the type from the same list the schema validates", () => {
+    // Compile-time tie: if the picker order changes, the type follows.
+    const values: LocaleSetting[] = [...LOCALE_SETTINGS];
+    expect(values).toContain("system");
   });
 });

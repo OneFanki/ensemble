@@ -3,6 +3,7 @@ import { type EnsembleApi, IPC } from "@shared/ipc";
 import type {
   AiPageAction,
   AutoFillReport,
+  DownloadEntry,
   FocusLabelPayload,
   LoginCaptureNotice,
   McpStatus,
@@ -26,8 +27,10 @@ const api: EnsembleApi = {
 
   saveSite: (draft) => ipcRenderer.invoke(IPC.siteSave, draft),
   deleteSite: (id) => ipcRenderer.invoke(IPC.siteDelete, id),
+  moveSite: (id, toIndex) => ipcRenderer.invoke(IPC.siteMove, id, toIndex),
   saveTag: (draft) => ipcRenderer.invoke(IPC.tagSave, draft),
   deleteTag: (id) => ipcRenderer.invoke(IPC.tagDelete, id),
+  moveTag: (id, toIndex) => ipcRenderer.invoke(IPC.tagMove, id, toIndex),
   saveIdentity: (draft) => ipcRenderer.invoke(IPC.identitySave, draft),
   deleteIdentity: (id) => ipcRenderer.invoke(IPC.identityDelete, id),
   linkIdentitiesToSite: (identityIds, siteId) =>
@@ -52,6 +55,7 @@ const api: EnsembleApi = {
   moveBookmark: (id, toIndex) => ipcRenderer.invoke(IPC.bookmarkMove, id, toIndex),
   saveBookmarkFolder: (draft) => ipcRenderer.invoke(IPC.bookmarkFolderSave, draft),
   deleteBookmarkFolder: (id) => ipcRenderer.invoke(IPC.bookmarkFolderDelete, id),
+  moveBookmarkFolder: (id, toIndex) => ipcRenderer.invoke(IPC.bookmarkFolderMove, id, toIndex),
   bookmarkImportSources: () => ipcRenderer.invoke(IPC.bookmarkImportSources),
   bookmarkImport: (id) => ipcRenderer.invoke(IPC.bookmarkImport, id),
   acceptSiteOrigin: (siteId) => ipcRenderer.invoke(IPC.siteAcceptOrigin, siteId),
@@ -65,6 +69,7 @@ const api: EnsembleApi = {
   pickAccountsImport: () => ipcRenderer.invoke(IPC.accountsImportPick),
   applyAccountsImport: (passphrase) => ipcRenderer.invoke(IPC.accountsImportApply, passphrase),
   saveSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
+  testProxyConnectivity: () => ipcRenderer.invoke(IPC.proxyTestConnectivity),
 
   mcpStatus: () => ipcRenderer.invoke(IPC.mcpInfo),
   updateMcp: (patch) => ipcRenderer.invoke(IPC.mcpUpdate, patch),
@@ -72,6 +77,18 @@ const api: EnsembleApi = {
     const handler = (_event: unknown, status: McpStatus) => listener(status);
     ipcRenderer.on(IPC.mcpChanged, handler);
     return () => ipcRenderer.removeListener(IPC.mcpChanged, handler);
+  },
+  onOpenSettings: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.appOpenSettings, handler);
+    return () => ipcRenderer.removeListener(IPC.appOpenSettings, handler);
+  },
+  listDownloads: () => ipcRenderer.invoke(IPC.downloadsList),
+  actOnDownload: (action, id) => ipcRenderer.invoke(IPC.downloadsAct, action, id),
+  onDownloadsChanged: (listener) => {
+    const handler = (_event: unknown, entries: DownloadEntry[]) => listener(entries);
+    ipcRenderer.on(IPC.downloadsChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.downloadsChanged, handler);
   },
   onAiPageAction: (listener) => {
     const handler = (_event: unknown, action: AiPageAction) => listener(action);

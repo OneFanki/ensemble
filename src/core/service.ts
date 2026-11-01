@@ -501,6 +501,23 @@ export class WorkspaceService {
     this.persist();
   }
 
+  /**
+   * Moves a tag within the list.
+   *
+   * The stored array order *is* the display order: the sites page draws one
+   * group per tag in this order, and every tag filter follows it. Tags have no
+   * `order` field for the same reason views do not — the array is the order.
+   */
+  moveTag(id: string, toIndex: number): void {
+    const from = this.data.tags.findIndex((tag) => tag.id === id);
+    if (from < 0) throw new Error(t("error.tagMissing"));
+    const [moved] = this.data.tags.splice(from, 1);
+    if (!moved) return;
+    const target = Math.max(0, Math.min(this.data.tags.length, Math.trunc(toIndex)));
+    this.data.tags.splice(target, 0, moved);
+    this.persist();
+  }
+
   deleteSite(id: string): void {
     const identityIds = this.data.identities
       .filter((identity) => identity.siteId === id)
@@ -528,6 +545,25 @@ export class WorkspaceService {
       delete this.settings.lastViewId;
       this.settingsStore.write(this.settings);
     }
+    this.persist();
+  }
+
+  /**
+   * Moves a site within the list.
+   *
+   * The array order is the only order: sites are grouped by tag in the UI, and
+   * the same global order decides the order inside every group (and the order
+   * of the site groups on the identity and flow pages). Moving a site into
+   * another tag group is an edit of the site's tags, not a reorder, so it stays
+   * in the site dialog.
+   */
+  moveSite(id: string, toIndex: number): void {
+    const from = this.data.sites.findIndex((site) => site.id === id);
+    if (from < 0) throw new Error(t("error.siteMissing"));
+    const [moved] = this.data.sites.splice(from, 1);
+    if (!moved) return;
+    const target = Math.max(0, Math.min(this.data.sites.length, Math.trunc(toIndex)));
+    this.data.sites.splice(target, 0, moved);
     this.persist();
   }
 
@@ -1031,10 +1067,21 @@ export class WorkspaceService {
     if (draft.id) {
       const existing = this.data.bookmarks.find((item) => item.id === draft.id);
       if (!existing) throw new Error("书签不存在");
+      const movedFolder = (existing.folderId ?? undefined) !== folderId;
       existing.name = name;
       existing.url = normalized;
       if (folderId) existing.folderId = folderId;
       else delete existing.folderId;
+      if (movedFolder) {
+        // Filing is "append to that folder", not "keep the global slot this
+        // bookmark happened to occupy": the old order says nothing about where
+        // it belongs among its new siblings.
+        existing.order =
+          this.data.bookmarks.reduce(
+            (max, item) => (item.id === existing.id ? max : Math.max(max, item.order)),
+            -1,
+          ) + 1;
+      }
       existing.updatedAt = now;
       this.persist();
       return existing;
@@ -1288,6 +1335,34 @@ export class WorkspaceService {
     const target = Math.max(0, Math.min(this.data.bookmarks.length, Math.trunc(toIndex)));
     this.data.bookmarks.splice(target, 0, moved);
     this.data.bookmarks.forEach((item, index) => {
+      item.order = index;
+    });
+    this.persist();
+  }
+
+  /**
+   * Moves a folder among its siblings.
+   *
+   * `order` only ranks siblings, so a reorder is scoped to one parent: a drop
+   * across levels would have no meaning. Changing the parent stays in
+   * {@link saveBookmarkFolder}, which also owns the cycle check.
+   */
+  moveBookmarkFolder(id: string, toIndex: number): void {
+    const folder = this.data.bookmarkFolders.find((item) => item.id === id);
+    if (!folder) throw new Error("文件夹不存在");
+    const parentId = folder.parentId ?? undefined;
+    const siblings = this.data.bookmarkFolders
+      .filter((item) => (item.parentId ?? undefined) === parentId)
+      .sort((left, right) => left.order - right.order);
+    const from = siblings.findIndex((item) => item.id === id);
+    if (from < 0) return;
+    const [moved] = siblings.splice(from, 1);
+    if (!moved) return;
+    const target = Math.max(0, Math.min(siblings.length, Math.trunc(toIndex)));
+    siblings.splice(target, 0, moved);
+    // Renumber the whole sibling set: imported trees can arrive with gaps or
+    // duplicate keys, and only a dense sequence keeps the next drop predictable.
+    siblings.forEach((item, index) => {
       item.order = index;
     });
     this.persist();

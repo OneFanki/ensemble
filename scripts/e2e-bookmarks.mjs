@@ -753,7 +753,11 @@ try {
   const chipFiled = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     const state = () => window.ensemble.getWorkspace();
-    const workId = (await state()).bookmarkFolders.find((f) => f.name === '工作')?.id;
+    // Top-level only: an imported browser tree may contain a folder with the
+    // same name, and this check is about the chip, which is a top-level folder.
+    const workId = (await state()).bookmarkFolders.find(
+      (f) => f.name === '工作' && !f.parentId,
+    )?.id;
     const tile = [...document.querySelectorAll('.bookmarks .tile')].find(
       (item) => item.querySelector('.tile-name')?.textContent?.trim() === '改名后的书签',
     );

@@ -7,6 +7,7 @@ import type {
   StageRect,
 } from "./embedded";
 import type { FlowDraft, FlowRunResult } from "./flows";
+import type { ConnectivityProbeResult } from "./proxy";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
   AiPageAction,
@@ -18,6 +19,8 @@ import type {
   BookmarkFolderDraft,
   BookmarkImportOutcome,
   BookmarkImportSourceInfo,
+  DownloadAction,
+  DownloadEntry,
   Engine,
   FocusLabelPayload,
   IdentityDraft,
@@ -89,10 +92,14 @@ export const IPC = {
   enginesRemoveManual: "engines:remove-manual",
   siteSave: "site:save",
   siteDelete: "site:delete",
+  /** Reorders sites; the stored array order is the display order. */
+  siteMove: "site:move",
   /** Creates or renames a display-only site tag. */
   tagSave: "site-tag:save",
   /** Deletes a tag and unlinks it from every site; sites themselves stay. */
   tagDelete: "site-tag:delete",
+  /** Reorders tags; the array order is the group order on every page. */
+  tagMove: "site-tag:move",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
   /** Points a batch of accounts at one site; also re-links accounts with none. */
@@ -123,6 +130,8 @@ export const IPC = {
   bookmarkFolderSave: "bookmark:folder-save",
   /** Deletes one folder; its contents re-parent one level up. */
   bookmarkFolderDelete: "bookmark:folder-delete",
+  /** Reorders a folder among its siblings; parents are changed by folder-save. */
+  bookmarkFolderMove: "bookmark:folder-move",
   /** Detects importable browser bookmark profiles on this machine. */
   bookmarkImportSources: "bookmark:import-sources",
   /** Imports one detected source by id. */
@@ -142,6 +151,13 @@ export const IPC = {
   mcpInfo: "mcp:info",
   mcpUpdate: "mcp:update",
   mcpChanged: "mcp:changed",
+  /** Downloads across every identity partition. */
+  downloadsList: "downloads:list",
+  downloadsAct: "downloads:act",
+  /** Main → renderer: the download list changed (progress, finish, removal). */
+  downloadsChanged: "downloads:changed",
+  /** Main → renderer: the macOS app menu asked for the settings page (Cmd+,). */
+  appOpenSettings: "app:open-settings",
   /** Main → renderer: an AI client acted on a page, with its origin. */
   aiPageAction: "ai:page-action",
   credentialsSet: "credentials:set",
@@ -236,6 +252,8 @@ export const IPC = {
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
   embeddedFreeze: "embedded:freeze",
   settingsSave: "settings:save",
+  /** Fires the connectivity test shown in the proxy settings. */
+  proxyTestConnectivity: "proxy:test-connectivity",
   appSetTheme: "app:set-theme",
   appQuit: "app:quit",
   appOpenExternal: "app:open-external",
@@ -264,8 +282,12 @@ export interface EnsembleApi {
 
   saveSite(draft: SiteDraft): Promise<WorkspaceSnapshot>;
   deleteSite(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a site within the list; the stored array order is the display order. */
+  moveSite(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   saveTag(draft: TagDraft): Promise<WorkspaceSnapshot>;
   deleteTag(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a tag within the list; the array order is the group order. */
+  moveTag(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
   /**
@@ -308,6 +330,8 @@ export interface EnsembleApi {
   saveBookmarkFolder(draft: BookmarkFolderDraft): Promise<WorkspaceSnapshot>;
   /** Deletes one folder; its contents re-parent one level up. */
   deleteBookmarkFolder(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a folder among its siblings; only the sibling order changes. */
+  moveBookmarkFolder(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   /** Detects importable browser bookmark profiles on this machine. */
   bookmarkImportSources(): Promise<BookmarkImportSourceInfo[]>;
   /** Imports one detected source by id; the snapshot already carries the tree. */
@@ -350,11 +374,39 @@ export interface EnsembleApi {
   pickAccountsImport(): Promise<AccountsImportPickOutcome>;
   applyAccountsImport(passphrase?: string): Promise<AccountsImportApplyOutcome>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
+  /** Fires the connectivity test; every probe is one GET through the session. */
+  testProxyConnectivity(): Promise<ConnectivityProbeResult[]>;
 
   mcpStatus(): Promise<McpStatus>;
   updateMcp(patch: McpPatch): Promise<McpStatus>;
   /** Fires when the endpoint starts, stops, or moves to another port. */
   onMcpChanged(listener: (status: McpStatus) => void): () => void;
+  /**
+   * Fires when the native app menu asks for the settings page.
+   *
+   * On macOS the menu is the only way to reach Cmd+, — a menu-less app has no
+   * accelerator table at all — so the request travels from main to renderer
+   * instead of the renderer binding the key itself.
+   */
+  onOpenSettings(listener: () => void): () => void;
+  /**
+   * Downloads from every identity partition, newest first.
+   *
+   * A download belongs to the session that started it, not to a tab: the list
+   * survives closing the page that triggered it, which is what makes "open the
+   * file I just downloaded" possible after the page is gone.
+   */
+  listDownloads(): Promise<DownloadEntry[]>;
+  /**
+   * Acts on one entry and returns the list after the action.
+   *
+   * `clear` ignores the id and drops every finished entry; `remove` drops one.
+   * Opening and revealing go through `shell` in the main process, so the
+   * renderer never learns a path it could hand to something else.
+   */
+  actOnDownload(action: DownloadAction, id?: string): Promise<DownloadEntry[]>;
+  /** Fires on progress, completion, cancellation and removal. */
+  onDownloadsChanged(listener: (entries: DownloadEntry[]) => void): () => void;
   /**
    * Fires whenever an AI client acts on a page, with the site it touched.
    *

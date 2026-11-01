@@ -431,12 +431,31 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("site", () => window.ensemble.deleteSite(id));
   }
 
+  /**
+   * Drag-to-reorder for the sites list.
+   *
+   * Applies the returned snapshot instead of waiting for the broadcast, for the
+   * same reason `moveView` does: the dropped card must stay where it was put.
+   */
+  async function moveSite(id: string, toIndex: number) {
+    return run("site", async () => {
+      apply(await window.ensemble.moveSite(id, toIndex));
+    });
+  }
+
   async function saveTag(draft: TagDraft) {
     return run("site", () => window.ensemble.saveTag(toPlain(draft)));
   }
 
   async function deleteTag(id: string) {
     return run("site", () => window.ensemble.deleteTag(id));
+  }
+
+  /** Drag-to-reorder for the tag list; the array order is the group order. */
+  async function moveTag(id: string, toIndex: number) {
+    return run("site", async () => {
+      apply(await window.ensemble.moveTag(id, toIndex));
+    });
   }
 
   async function saveIdentity(draft: IdentityDraft) {
@@ -577,6 +596,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("bookmark", async () => {
       apply(await window.ensemble.deleteBookmarkFolder(id));
       return true;
+    });
+  }
+
+  /** Reorders a folder among its siblings; parents change through folder-save. */
+  async function moveBookmarkFolder(id: string, toIndex: number) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.moveBookmarkFolder(id, toIndex));
     });
   }
 
@@ -862,6 +888,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
+  /**
+   * Fires the connectivity probes for the proxy settings.
+   *
+   * Returns the raw results rather than toasting: the settings page renders
+   * each line with its latency, and a failure there is information, not an
+   * accident to be dismissed.
+   */
+  async function testProxyConnectivity() {
+    return run("settings", () => window.ensemble.testProxyConnectivity());
+  }
+
   async function exportWorkspace(options: { includeSecrets: boolean; passphrase?: string }) {
     return run("transfer", () => window.ensemble.exportWorkspace(toPlain(options)));
   }
@@ -937,8 +974,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     flows,
     saveSite,
     deleteSite,
+    moveSite,
     saveTag,
     deleteTag,
+    moveTag,
     saveIdentity,
     deleteIdentity,
     linkIdentitiesToSite,
@@ -962,6 +1001,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loadBookmarkImportSources,
     importBookmarks,
     deleteBookmarkFolder,
+    moveBookmarkFolder,
     runFlow,
     setViewLayout,
     setViewSlots,
@@ -993,6 +1033,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMasterPassword,
     changeMasterPassword,
     saveSettings,
+    testProxyConnectivity,
     exportWorkspace,
     pickImport,
     applyImport,

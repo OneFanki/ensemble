@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LOCALE_SETTINGS } from "./locale";
 
 const httpUrl = z
   .string()
@@ -165,7 +166,7 @@ export const bookmarkFolderDraftSchema = z.object({
 
 export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
-  locale: z.enum(["zh", "en"]).optional(),
+  locale: z.enum(LOCALE_SETTINGS).optional(),
   lastSiteId: z.string().optional(),
   lastView: z.enum(["browser", "sites", "identities", "views", "flows", "tags"]).optional(),
   lastViewId: z.string().optional(),

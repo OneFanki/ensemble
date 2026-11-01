@@ -384,6 +384,9 @@ function onDragOverRow(bookmark: Bookmark, event: DragEvent): void {
   event.preventDefault();
   dropRow.value = bookmark.id;
   dropFolder.value = null;
+  // A bookmark row ends the folder-edge gesture; without this the edge line
+  // stayed lit on the folder row the pointer had already left.
+  dropFolderEdge.value = null;
 }
 
 async function onDropOnRow(bookmark: Bookmark): Promise<void> {

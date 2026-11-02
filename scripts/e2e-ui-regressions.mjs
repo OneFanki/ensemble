@@ -686,19 +686,19 @@ try {
     { stepper: sizing?.stepper },
   );
 
-  // --- The site menu: toggling, switching, and the cover handshake ----------
-  // Three things broke here at once, all invisible without driving the panel:
-  // the chevron could not close it, clicking a site in the left column closed
-  // it instead of switching, and it painted before the native page was parked,
-  // so its left half was covered for about 100ms.
+  // --- The account chooser: toggling, switching, and the cover handshake ----
+  // Three things broke here once, all invisible without driving the panel: the
+  // trigger could not close it, clicking a site in the left column closed it
+  // instead of switching, and it painted before the native page was parked, so
+  // its left half was covered for about 100ms.
   const menuOpen = await client.evaluate(`(async () => {
-    const chevron = document.querySelector('.toolbar .split-more');
+    const trigger = document.querySelector('.toolbar .split-main');
     // Retried: the click is dispatched while the toolbar may still be settling
     // after the resize above, and a click that lands on a re-rendering button is
     // swallowed. Retrying the open is not weakening the check — the assertions
     // below still fail on a panel that paints before the stage is parked.
     for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
-      chevron?.click();
+      trigger?.click();
       await new Promise((r) => setTimeout(r, 900));
     }
     const panel = document.querySelector('.open-panel');
@@ -717,34 +717,62 @@ try {
     };
   })()`);
   check(
-    "the chevron opens the site menu with the live page already parked",
+    "the new-tab button opens the account chooser with the live page already parked",
     menuOpen?.open === true && menuOpen?.frozen > 0,
     menuOpen,
   );
   check(
-    "the site menu marks exactly one active site",
+    "the chooser marks exactly one active site",
     menuOpen?.active === 1,
     { active: menuOpen?.active, rows: menuOpen?.rows },
   );
-  check("the site menu shows no dangling tag row", menuOpen?.tagNote === false, menuOpen);
+  check("the chooser shows no dangling tag row", menuOpen?.tagNote === false, menuOpen);
+
+  const menuShape = await client.evaluate(`(() => {
+    const rows = [...document.querySelectorAll('.account-row')];
+    const anonymous = rows.filter((el) => el.classList.contains('anonymous'));
+    const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
+    const firstAccountIndex = rows.findIndex((el) => !el.classList.contains('anonymous'));
+    const lastAnonymousIndex = rows.map((el) => el.classList.contains('anonymous')).lastIndexOf(true);
+    return {
+      accounts: accounts.length,
+      anonymous: anonymous.length,
+      // The three anonymous rows are the site's two openings plus a blank page.
+      names: anonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
+      blank: rows.some((el) => el.textContent.includes('空白页')),
+      // Fixed rows come first and stay put: a site with thirty accounts must not
+      // push "open daily" past the fold.
+      anonymousBeforeAccounts: lastAnonymousIndex < firstAccountIndex,
+    };
+  })()`);
+  check(
+    "the chooser lists accounts plus the three non-account openings",
+    menuShape?.accounts > 0 && menuShape?.anonymous === 3 && menuShape?.blank === true,
+    menuShape,
+  );
+  check(
+    "the three fixed openings come before the account list",
+    menuShape?.anonymousBeforeAccounts === true,
+    menuShape,
+  );
 
   const menuClosed = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-more')?.click();
+    document.querySelector('.toolbar .split-main')?.click();
     await new Promise((r) => setTimeout(r, 700));
     return Boolean(document.querySelector('.open-panel'));
   })()`);
-  check("a second click on the chevron closes the menu", menuClosed === false, {
+  check("a second click on the trigger closes the chooser", menuClosed === false, {
     menuClosed,
   });
 
   const menuSwitch = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-more')?.click();
+    document.querySelector('.toolbar .split-main')?.click();
     await new Promise((r) => setTimeout(r, 900));
     const rows = [...document.querySelectorAll('.site-row')];
     rows[1]?.click();
     await new Promise((r) => setTimeout(r, 500));
     const active = document.querySelector('.site-row.active .site-name');
-    const accounts = [...document.querySelectorAll('.account-row:not(.clean) .acc-name')].map(
+    const accounts = [...document.querySelectorAll('.account-row:not(.anonymous) .acc-name')].map(
       (el) => el.textContent.trim(),
     );
     return {
@@ -1558,7 +1586,19 @@ try {
     closeOne,
   );
 
+  // The menu floats over a *frozen picture*, and a blank page has no native
+  // pixels to capture — `freeze()` skips it on purpose so the app's new-tab
+  // surface is not painted over. After the close above the remaining page can be
+  // blank, so put real content on stage first; otherwise this check fails for a
+  // reason that has nothing to do with the menu.
   const menu = await client.evaluate(`(async () => {
+    const state0 = await window.ensemble.getEmbeddedState();
+    const view0 = state0.views.find((item) => item.id === state0.activeViewId);
+    const rootId = view0?.slotTabs?.find(Boolean);
+    if (rootId) {
+      await window.ensemble.navigateEmbeddedTab(rootId, ${JSON.stringify(PAGE_URL)});
+      await new Promise((r) => setTimeout(r, 1200));
+    }
     const tab = document.querySelector('.stage .slot-tab');
     if (!tab) {
       const state = await window.ensemble.getEmbeddedState();

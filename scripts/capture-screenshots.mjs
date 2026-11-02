@@ -176,7 +176,7 @@ const SHOTS = [
   { name: "settings-en", locale: "en", view: "settings" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
-  { name: "env-menu", locale: "zh", view: "browser", clicks: [".split-more"] },
+  { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-main"] },
   {
     name: "site-dialog",
     locale: "zh",

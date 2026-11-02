@@ -17,6 +17,7 @@ import {
   normalizeEmbeddedUrl,
   parkedViewBounds,
   viewIsOnScreen,
+  resolveSlotPages,
   resolveSlotTabs,
 } from "@shared/embedded";
 
@@ -77,6 +78,36 @@ describe("slot assignment", () => {
   it("always returns exactly the slot count", () => {
     expect(resolveSlotTabs([], undefined, 4)).toEqual([null, null, null, null]);
     expect(resolveSlotTabs(["a", "b", "c", "d", "e"], undefined, 2)).toEqual(["a", "b"]);
+  });
+
+  it("keeps a repeated instance only when the caller allows it", () => {
+    // One account shown in two cells is the same-instance split; the same table
+    // arriving by accident (a stale pin) must still collapse to one cell.
+    const split = resolveSlotTabs(["a", "b"], ["a", "a"], 2, { allowDuplicates: true });
+    expect(split).toEqual(["a", "a"]);
+    expect(resolveSlotTabs(["a", "b"], ["a", "a"], 2)).toEqual(["a", "b"]);
+    // Unknown ids are dropped even with duplicates allowed: a closed page is not
+    // a split.
+    expect(resolveSlotTabs(["a"], ["gone", "gone"], 2, { allowDuplicates: true })).toEqual([
+      "a",
+      null,
+    ]);
+  });
+
+  it("keeps a page pin only while its instance fills more than one cell", () => {
+    // Pages `a` and `a2` belong to instance `a`; `b` is a second window.
+    const instanceOf = (tabId: string) => tabId.charAt(0);
+    const split = resolveSlotPages(["a", "a"], ["a", "a2"], instanceOf);
+    expect(split).toEqual(["a", "a2"]);
+
+    // The moment the instance holds one cell, the pin must go: otherwise the
+    // cell is frozen on one page while its strip still looks like a switcher.
+    const merged = resolveSlotPages(["a", null], ["a", "a2"], instanceOf);
+    expect(merged).toEqual([null, null]);
+
+    // A pin from another window is never valid, and neither is a closed page.
+    expect(resolveSlotPages(["a", "a"], ["a", "b"], instanceOf)).toEqual(["a", null]);
+    expect(resolveSlotPages(["a", "a"], ["a", "gone"], instanceOf)).toEqual(["a", null]);
   });
 });
 

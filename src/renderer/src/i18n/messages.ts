@@ -294,7 +294,7 @@ export const messages = {
         "一个本地多账号工作台：每个身份使用独立的浏览器 profile，Cookie 和登录态互不影响。",
       tourSiteSwitcherTitle: "启动方式",
       tourSiteSwitcherBody:
-        "这里选一次内置还是外置浏览器，账号页和视图页的启动都跟着它走。站点不再是一个全局筛选器。",
+        "这里选一次内置还是外置浏览器，账号页和视图页的启动都跟着它走。",
       tourSideNavTitle: "五个工作区",
       tourSideNavBody:
         "浏览器看正在跑的页面，站点存地址，身份存账号，视图把多个身份按布局一起打开，设置管理浏览器、密码和 AI 接入。",
@@ -480,7 +480,7 @@ export const messages = {
 
       // Site view
       sitesSubtitle:
-        "站点是登录配方和归属：一个地址、登录路径与默认密码。它不再限定你能看到哪些账号——账号页按站点分组，视图可以跨站点。",
+        "站点是登录配方和归属：一个地址、登录路径与默认密码。账号页按站点分组，视图可以跨站点。",
       emptySites: "还没有站点。新建账号时也可以直接选「新建站点」，不必先来这里。",
       switchSite: "切换站点",
       manageSites: "管理站点",
@@ -525,7 +525,7 @@ export const messages = {
       customTag: "自定义",
       freeLayoutTitle: "无布局：每个窗口都铺满屏幕",
       freeLayoutNote:
-        "适合小屏幕或多账号对照：四个窗口都以全屏尺寸打开，互相重叠，用任务栏或 Alt+Tab 切换。不再把屏幕切成看不清的小块。",
+        "适合小屏幕或多账号对照：四个窗口都以全屏尺寸打开，互相重叠，用任务栏或 Alt+Tab 切换。",
 
       // Layout editor
       newLayoutTitle: "新建窗口布局",
@@ -845,8 +845,10 @@ export const messages = {
       browser: "浏览器",
       browserEmptyTitle: "还没有打开任何页面",
       browserEmptyHint: "在站点或身份页点「内置浏览器」，或者在这里新建一个空白页。",
-      openFromSite: "从站点打开",
+      newPageAs: "新建页面 · 用哪个账号",
       noMatchingSites: "没有匹配的站点",
+      openBlankPage: "空白页",
+      openBlankPageHint: "不加账号，用日常档案自己登录",
       openSiteDaily: "日常打开",
       openSiteDailyHint: "用日常档案，已登录的站点直接进",
       openSiteClean: "干净打开",
@@ -873,10 +875,16 @@ export const messages = {
         "这一页的缩放已不同于全局默认；点一下回到默认（Ctrl + 加号/减号缩放，Ctrl + 0 复位）",
       browserInstancePages: "这个格子里实例的标签页",
       browserNewTabHere: "在这个实例里新建标签页",
+      browserUnsplit: "不再分屏，这一格跟随窗口当前页",
       browserCloseTab: "关闭标签页",
       browserCloseOtherTabs: "关闭其他标签页",
       viewportLabel: "页面分辨率",
+      viewportInherit: "跟随全局",
       viewportAdaptive: "自适应",
+      viewportDefaultLabel: "全局分辨率",
+      viewportDefaultHint: "新页面默认用这个尺寸；单个标签页在标签上右键单独设",
+      viewportGlobalOff: "自适应",
+      viewportApplyAll: "应用到全部",
       viewportWidth: "宽",
       viewportHeight: "高",
       viewportApply: "应用",
@@ -1298,7 +1306,7 @@ export const messages = {
         "A local multi-account workbench: every identity gets its own browser profile, so cookies and login state stay isolated.",
       tourSiteSwitcherTitle: "Launch target",
       tourSiteSwitcherBody:
-        "Pick built-in or external once; launches from the accounts and views pages follow it. A site is no longer a global filter.",
+        "Pick built-in or external once; launches from the accounts and views pages follow it.",
       tourSideNavTitle: "Five workspaces",
       tourSideNavBody:
         "Browser shows the running pages, sites hold addresses, identities hold accounts, views open several identities in a layout, and Settings manages browsers, passwords, and AI access.",
@@ -1498,7 +1506,7 @@ export const messages = {
 
       // Site view
       sitesSubtitle:
-        "A site is a login recipe and an owner: one address, a login path and a default password. It no longer scopes what you can see — accounts are grouped by site, and a view may span several.",
+        "A site is a login recipe and an owner: one address, a login path and a default password. Accounts are grouped by site, and a view may span several.",
       emptySites:
         "No sites yet. The new-identity form can create one inline; you do not have to start here.",
       switchSite: "Switch site",
@@ -1548,7 +1556,7 @@ export const messages = {
       customTag: "Custom",
       freeLayoutTitle: "No layout: every window fills the screen",
       freeLayoutNote:
-        "Built for small screens and side-by-side comparison: every window opens full size and they overlap. Switch with the taskbar or Alt+Tab instead of splitting the screen into unusable tiles.",
+        "Built for small screens and side-by-side comparison: every window opens full size and they overlap. Switch with the taskbar or Alt+Tab.",
 
       // Layout editor
       newLayoutTitle: "New window layout",
@@ -1887,8 +1895,10 @@ export const messages = {
       browserEmptyTitle: "No pages open yet",
       browserEmptyHint:
         "Open an identity in the built-in browser from a site or identity page, or start a blank one here.",
-      openFromSite: "Open from site",
       noMatchingSites: "No matching sites",
+      newPageAs: "New page as…",
+      openBlankPage: "Blank page",
+      openBlankPageHint: "No account; sign in yourself in the daily profile",
       openSiteDaily: "Open daily",
       openSiteDailyHint: "Uses the daily profile, so signed-in sites go straight in",
       openSiteClean: "Open clean",
@@ -1915,10 +1925,17 @@ export const messages = {
         "This page's zoom differs from the global default; click to reset (Ctrl + plus/minus to zoom, Ctrl + 0 to reset)",
       browserInstancePages: "Pages of the instance in this cell",
       browserNewTabHere: "New tab in this instance",
+      browserUnsplit: "Stop splitting; this cell follows the window again",
       browserCloseTab: "Close tab",
       browserCloseOtherTabs: "Close other tabs",
       viewportLabel: "Resolution",
+      viewportInherit: "Follow workspace default",
       viewportAdaptive: "Adaptive",
+      viewportDefaultLabel: "Default resolution",
+      viewportDefaultHint:
+        "New pages use this size; right-click a tab to set one page individually",
+      viewportGlobalOff: "Adaptive",
+      viewportApplyAll: "Apply to all",
       viewportWidth: "W",
       viewportHeight: "H",
       viewportApply: "Apply",

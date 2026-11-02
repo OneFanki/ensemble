@@ -124,5 +124,44 @@ describe("messages", () => {
     }
     expect([...new Set(missing)].sort()).toEqual([]);
   });
+
+  it("keeps user-facing copy free of design history and rationale", () => {
+    // The rule in AGENTS.md: copy answers "what is this / what happens if I
+    // click it", never "what it used to be" or "why we chose this". A line like
+    // "it no longer limits which accounts you see" shipped on the sites page and
+    // is meaningless to anyone who never saw the old behaviour — it reads as the
+    // product arguing with itself.
+    //
+    // Code comments and docs are the right home for both, so only the message
+    // table is checked. The patterns are deliberately narrow: "不再保存" or "no
+    // longer resolves" are legitimate *states*, and a check that flagged them
+    // would be switched off within a week. Each entry names a phrase that only
+    // makes sense when the reader remembers the old version.
+    const patterns: Array<{ re: RegExp; why: string }> = [
+      { re: /不再(是|限定|把|只看|需要)/, why: "「不再是/不再限定」在对比旧行为" },
+      { re: /(以前|原来|过去)(的|是|会)/, why: "「以前/原来…」讲述历史" },
+      { re: /而不是/, why: "「…而不是…」解释设计取舍" },
+      { re: /(已|被)废弃/, why: "「已废弃」是版本注记" },
+      { re: /迁移自|升级自/, why: "迁移说明属于 CHANGELOG" },
+      { re: /\bno longer (a|an|the) /i, why: "\"no longer a …\" compares against the old behaviour" },
+      { re: /\b(formerly|used to be|deprecated)\b/i, why: "version notes belong in CHANGELOG" },
+    ];
+    const offenders: string[] = [];
+    for (const locale of LOCALES) {
+      for (const key of leafKeys(messages[locale])) {
+        const value = key
+          .split(".")
+          .reduce<unknown>(
+            (node, part) => (node as Record<string, unknown>)?.[part],
+            messages[locale] as Record<string, unknown>,
+          );
+        const text = String(value ?? "");
+        for (const { re, why } of patterns) {
+          if (re.test(text)) offenders.push(`${locale}.${key}: ${why} — ${text}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
 

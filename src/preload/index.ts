@@ -162,9 +162,10 @@ const api: EnsembleApi = {
     ipcRenderer.send(IPC.embeddedStage, stage);
   },
   openEmbeddedTab: (input) => ipcRenderer.invoke(IPC.embeddedOpen, input),
-  openEmbeddedTabInView: (viewId) => ipcRenderer.invoke(IPC.embeddedOpenInView, viewId),
-  openEmbeddedTabInSlot: (viewId, slotIndex, identityId) =>
-    ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex, identityId),
+  openEmbeddedTabInView: (viewId, options) =>
+    ipcRenderer.invoke(IPC.embeddedOpenInView, viewId, options),
+  openEmbeddedTabInSlot: (viewId, slotIndex, options) =>
+    ipcRenderer.invoke(IPC.embeddedOpenInSlot, viewId, slotIndex, options),
   openEmbeddedTabInInstance: (instanceId) =>
     ipcRenderer.invoke(IPC.embeddedOpenInInstance, instanceId),
   duplicateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedDuplicate, tabId),
@@ -193,6 +194,10 @@ const api: EnsembleApi = {
   setEmbeddedViewSlots: (viewId, rects) => ipcRenderer.invoke(IPC.embeddedViewSlots, viewId, rects),
   pinEmbeddedTab: (viewId, slotIndex, tabId) =>
     ipcRenderer.invoke(IPC.embeddedViewPin, viewId, slotIndex, tabId),
+  splitEmbeddedTabIntoSlot: (viewId, slotIndex, pageId) =>
+    ipcRenderer.invoke(IPC.embeddedViewSplit, viewId, slotIndex, pageId),
+  unsplitEmbeddedSlot: (viewId, slotIndex) =>
+    ipcRenderer.invoke(IPC.embeddedViewUnsplit, viewId, slotIndex),
   renameEmbeddedView: (viewId, name) => ipcRenderer.invoke(IPC.embeddedViewRename, viewId, name),
   colorEmbeddedView: (viewId, color) => ipcRenderer.invoke(IPC.embeddedViewColor, viewId, color),
   collapseEmbeddedView: (viewId, collapsed) =>

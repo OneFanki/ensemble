@@ -233,6 +233,10 @@ export const IPC = {
   /** Hand-dragged slot geometry, in fractions of the stage. */
   embeddedViewSlots: "embedded:view-slots",
   embeddedViewPin: "embedded:view-pin",
+  /** Puts one page into a cell, letting an instance appear in two cells. */
+  embeddedViewSplit: "embedded:view-split",
+  /** Ends a split: the instance's cells go back to following it. */
+  embeddedViewUnsplit: "embedded:view-unsplit",
   embeddedViewRename: "embedded:view-rename",
   embeddedViewColor: "embedded:view-color",
   embeddedViewCollapse: "embedded:view-collapse",
@@ -502,20 +506,32 @@ export interface EnsembleApi {
      */
     clean?: boolean;
   }): Promise<EmbeddedTab>;
-  /** Opens a blank tab into a specific view and returns the new state. */
-  openEmbeddedTabInView(viewId: string): Promise<EmbeddedState>;
   /**
-   * Opens a blank tab and pins it to `slotIndex`, then focuses it.
+   * Opens a page in a specific view and returns the new state.
+   *
+   * The view header's "+" now asks which account first, so the same channel
+   * carries the answer: `identityId` opens in that account's partition at its
+   * start page (with the usual autofill), while `url`/`clean` cover the site's
+   * daily and throwaway openings. Omitted entirely, the page is a blank tab in
+   * the daily profile, which is what the empty-slot button still asks for.
+   */
+  openEmbeddedTabInView(
+    viewId: string,
+    options?: { identityId?: string; url?: string; clean?: boolean },
+  ): Promise<EmbeddedState>;
+  /**
+   * Opens a page pinned to `slotIndex`, then focuses it.
    *
    * `identityId` is optional because an empty slot has two legitimate meanings:
    * "just put a page here" (the daily profile, as the address bar would) and
    * "this cell is this account". Without it, filling a grid meant adding a page
-   * and then going to find the account elsewhere.
+   * and then going to find the account elsewhere. `url`/`clean` carry the site's
+   * daily and throwaway openings, which belong in the same cell.
    */
   openEmbeddedTabInSlot(
     viewId: string,
     slotIndex: number,
-    identityId?: string,
+    options?: { identityId?: string; url?: string; clean?: boolean },
   ): Promise<EmbeddedState>;
   /**
    * Opens a blank page in an existing instance and shows it.
@@ -562,6 +578,20 @@ export interface EnsembleApi {
   setEmbeddedViewSlots(viewId: string, rects: SlotRect[]): Promise<EmbeddedState>;
   /** Binds a tab to one slot of a view; null empties the slot. */
   pinEmbeddedTab(viewId: string, slotIndex: number, tabId: string | null): Promise<EmbeddedState>;
+  /**
+   * Puts one page into a cell, even if its instance already holds another cell.
+   *
+   * This is the same-account split: two pages of one browser window side by side,
+   * sharing cookies because they share the instance. Distinct from
+   * {@link pinEmbeddedTab}, which moves an instance and refuses to show it twice.
+   */
+  splitEmbeddedTabIntoSlot(
+    viewId: string,
+    slotIndex: number,
+    pageId: string,
+  ): Promise<EmbeddedState>;
+  /** Ends a split: every cell of that instance goes back to following it. */
+  unsplitEmbeddedSlot(viewId: string, slotIndex: number): Promise<EmbeddedState>;
   renameEmbeddedView(viewId: string, name: string): Promise<EmbeddedState>;
   colorEmbeddedView(viewId: string, color: string | null): Promise<EmbeddedState>;
   collapseEmbeddedView(viewId: string, collapsed: boolean): Promise<EmbeddedState>;
@@ -591,7 +621,18 @@ export interface EnsembleApi {
    */
   zoomEmbeddedTab(tabId: string, direction: "in" | "out" | "reset"): Promise<number>;
   /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
-  setEmbeddedViewport(tabId: string, size: { width: number; height: number } | null): Promise<{ width: number; height: number } | null>;
+  /**
+   * Sets a page's fixed CSS viewport.
+   *
+   * Three answers, because a workspace default exists: `{width,height}` pins
+   * this page, `"adaptive"` opts it out of the default, `"inherit"` sends it
+   * back to following the default. `null` is accepted as a synonym for
+   * `"adaptive"` for older callers.
+   */
+  setEmbeddedViewport(
+    tabId: string,
+    mode: { width: number; height: number } | "adaptive" | "inherit" | null,
+  ): Promise<{ width: number; height: number } | null | undefined>;
   findInEmbeddedTab(
     tabId: string,
     text: string,

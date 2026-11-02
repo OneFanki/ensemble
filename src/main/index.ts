@@ -400,6 +400,7 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
   // Pages created later pick the default up in `createTab`; pages already open
   // (after the window was recreated) need it applied now.
   embedded.setDefaultZoom(settingsCache?.browserZoom ?? 100);
+  embedded.setDefaultViewport(settingsCache?.browserViewport ?? undefined);
   return embedded;
 }
 
@@ -2022,6 +2023,11 @@ function applySettingsPatch(patch: SettingsPatch): SettingsPatch {
   // The zoom setting reaches open pages only through this call: untouched
   // pages follow it, pages the user zoomed by hand keep their factor.
   if (parsed.browserZoom !== undefined) embedded?.setDefaultZoom(settings.browserZoom);
+  // Same rule for the viewport default: pages that never made their own choice
+  // follow it, and a page that picked a size (or opted out) stays as it is.
+  if ("browserViewport" in parsed) {
+    embedded?.setDefaultViewport(settings.browserViewport ?? undefined);
+  }
   // Proxy changes apply live: a download already failing behind Clash should
   // recover when the user fixes the setting, not on the next launch. Only the
   // default session is touched here; open pages keep the proxy they loaded
@@ -2832,20 +2838,49 @@ function registerIpc(workspace: WorkspaceService): void {
   );
 
   /**
-   * Opens a blank tab into a specific view.
+   * Opens a page in a specific view.
    *
    * The sidebar's "+" on a view header means "add a page here", not "add a page
    * to whatever is on stage", so it names the view explicitly. When every cell
    * is taken the page would otherwise be created off stage and the header's "+"
    * would look broken, so it swaps into the selected cell like the toolbar's "+".
+   *
+   * `identityId` is the account the user picked in the chooser: the page then
+   * opens in that identity's partition, lands on the site's start page and gets
+   * the same autofill a launch from anywhere else does. `url`/`clean` cover the
+   * daily and throwaway openings of one site into this view.
    */
-  handle(IPC.embeddedOpenInView, async (viewId: string) => {
-    const browser = ensureEmbeddedBrowser();
-    const tab = await browser.createTab({ viewId: String(viewId), origin: "manual" });
-    browser.activate(tab.id);
-    browser.focusPage();
-    return browser.state();
-  });
+  handle(
+    IPC.embeddedOpenInView,
+    async (
+      viewId: string,
+      options?: { identityId?: string; url?: string; clean?: boolean },
+    ) => {
+      const browser = ensureEmbeddedBrowser();
+      const identity =
+        typeof options?.identityId === "string" && options.identityId
+          ? service?.findIdentity(String(options.identityId))
+          : undefined;
+      // Without a URL an identity-born page would stay on about:blank while the
+      // renderer keeps drawing the new-tab surface — the dock says the account's
+      // name, the stage shows a search box, and nothing ever loads.
+      const resolvedUrl =
+        options?.url ??
+        (identity ? embeddedStartUrl(identity.id) : undefined);
+      const tab = await browser.createTab({
+        viewId: String(viewId),
+        origin: "manual",
+        ...(resolvedUrl ? { url: resolvedUrl } : {}),
+        ...(identity ? { identityId: identity.id, siteId: identity.siteId } : {}),
+        ...(identity ? { label: identity.name, color: identity.color } : {}),
+        ...(options?.clean ? { clean: true } : {}),
+      });
+      if (identity) scheduleEmbeddedLogin(tab.id, identity.id);
+      browser.activate(tab.id);
+      browser.focusPage();
+      return browser.state();
+    },
+  );
 
   /**
    * Opens a blank tab in one specific slot and focuses it.
@@ -2856,23 +2891,36 @@ function registerIpc(workspace: WorkspaceService): void {
    */
   handle(
     IPC.embeddedOpenInSlot,
-    async (viewId: string, slotIndex: number, identityId?: string) => {
+    async (
+      viewId: string,
+      slotIndex: number,
+      options?: { identityId?: string; url?: string; clean?: boolean },
+    ) => {
       const browser = ensureEmbeddedBrowser();
       // An identity-born cell: the page opens in that account's own partition,
       // so the slot's login state is the account the user picked, and the dock
       // already shows its name. Naming it after the identity means a grid of
       // six accounts reads as six accounts instead of six "新标签页".
       const identity =
-        typeof identityId === "string" && identityId
-          ? service?.findIdentity(String(identityId))
+        typeof options?.identityId === "string" && options.identityId
+          ? service?.findIdentity(String(options.identityId))
           : undefined;
+      // Same rule as the view header's chooser: an identity cell navigates to the
+      // account's start page and gets autofilled, otherwise the cell shows the
+      // app's new-tab surface forever while the dock already says the account's
+      // name.
+      const resolvedUrl =
+        options?.url ?? (identity ? embeddedStartUrl(identity.id) : undefined);
       const tab = await browser.createTab({
         viewId: String(viewId),
         origin: "manual",
+        ...(resolvedUrl ? { url: resolvedUrl } : {}),
         ...(identity ? { identityId: identity.id, siteId: identity.siteId } : {}),
         ...(identity ? { label: identity.name, color: identity.color } : {}),
+        ...(options?.clean ? { clean: true } : {}),
       });
       const pinned = browser.pinTab(String(viewId), Number(slotIndex), tab.id);
+      if (identity) scheduleEmbeddedLogin(tab.id, identity.id);
       browser.focusPage();
       return pinned;
     },
@@ -3054,6 +3102,12 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedViewPin, (viewId: string, slotIndex: number, tabId: string | null) =>
     ensureEmbeddedBrowser().pinTab(String(viewId), Number(slotIndex), tabId ? String(tabId) : null),
   );
+  handle(IPC.embeddedViewSplit, (viewId: string, slotIndex: number, pageId: string) =>
+    ensureEmbeddedBrowser().splitTabIntoSlot(String(viewId), Number(slotIndex), String(pageId)),
+  );
+  handle(IPC.embeddedViewUnsplit, (viewId: string, slotIndex: number) =>
+    ensureEmbeddedBrowser().unsplitSlot(String(viewId), Number(slotIndex)),
+  );
   handle(IPC.embeddedViewRename, (viewId: string, name: string) =>
     ensureEmbeddedBrowser().renameView(String(viewId), String(name ?? "")),
   );
@@ -3102,18 +3156,26 @@ function registerIpc(workspace: WorkspaceService): void {
   );
   handle(
     IPC.embeddedViewport,
-    (tabId: string, size: { width: number; height: number } | null) => {
+    (
+      tabId: string,
+      mode: "adaptive" | "inherit" | { width: number; height: number } | null,
+    ) => {
+      // Three answers, not two: pin this page, explicitly opt out of the
+      // workspace default, or go back to following it. `null` used to mean both
+      // "adaptive" and "inherit", which is why a global default could not exist.
+      if (mode === "inherit") return ensureEmbeddedBrowser().setViewport(String(tabId), undefined);
+      if (mode === null || mode === "adaptive") {
+        return ensureEmbeddedBrowser().setViewport(String(tabId), null);
+      }
       // Round-tripped through the renderer as plain data; re-validate here
       // rather than trusting whatever shape arrived over IPC.
-      const viewport = size
-        ? normalizeViewportSize(Number(size.width), Number(size.height))
-        : null;
-      if (size && !viewport) {
+      const viewport = normalizeViewportSize(Number(mode.width), Number(mode.height));
+      if (!viewport) {
         throw new Error(
           `分辨率必须在 ${VIEWPORT_MIN}–${VIEWPORT_MAX_WIDTH} × ${VIEWPORT_MIN}–${VIEWPORT_MAX_HEIGHT} 之间`,
         );
       }
-      return ensureEmbeddedBrowser().setViewport(String(tabId), viewport ?? null);
+      return ensureEmbeddedBrowser().setViewport(String(tabId), viewport);
     },
   );
   handle(

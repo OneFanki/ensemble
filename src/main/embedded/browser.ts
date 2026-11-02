@@ -46,6 +46,7 @@ import {
   normalizeEmbeddedUrl,
   parkedViewBounds,
   planTabClick,
+  resolveSlotPages,
   resolveSlotTabs,
   type EmbeddedViewport,
   type StageRect,
@@ -114,14 +115,14 @@ interface TabRecord {
    */
   zoomOverride?: number;
   /**
-   * Fixed CSS viewport this page renders at, when set.
+   * The page's own viewport choice.
    *
-   * While set, the page lays out at exactly this size (media queries and
-   * scripts see it) and the view shows a scaled-down preview fitted to its
-   * cell. `zoomOverride` is untouched so leaving viewport mode restores the
-   * zoom the page had before. Absent means adaptive: fill the cell.
+   * Absent means "inherit the workspace default" — the common case, and what
+   * makes one global size reach every page. `null` is an explicit "adaptive,
+   * even when a default exists"; an object pins this page alone. The page's
+   * effective size is {@link viewportOf}, never this field directly.
    */
-  viewport?: EmbeddedViewport;
+  viewportOverride?: EmbeddedViewport | null;
   /** Zoom factor the current viewport fit resolved to; drives `applyZoom`. */
   viewportScale?: number;
   /**
@@ -312,6 +313,14 @@ export class EmbeddedBrowser {
   /** Default zoom for pages that have not been adjusted by hand. */
   private defaultZoom = 100;
   /**
+   * Workspace default fixed viewport, mirrored from settings.
+   *
+   * `undefined` means adaptive. Kept here rather than read from settings on
+   * demand because `applyLayout` runs on every geometry change and must not
+   * touch the workspace store.
+   */
+  private defaultViewport: EmbeddedViewport | undefined;
+  /**
    * Downloaded icons, keyed by source URL.
    *
    * Many pages of one site share an icon and a site re-reports it on every
@@ -362,6 +371,53 @@ export class EmbeddedBrowser {
     this.emitState();
   }
 
+  /**
+   * Sets the workspace default fixed viewport.
+   *
+   * Pages that made no viewport choice of their own follow it — that is the
+   * whole point of having a default, and it is what makes "set it once, look at
+   * four accounts at 390×844" one action instead of four. Pages that pinned
+   * their own size (`viewportOverride` is an object) or explicitly opted out
+   * (`null`) are left alone.
+   *
+   * Clearing it has to hand the zoom factor back. While a viewport is active the
+   * fit scale *owns* `webContents` zoom, so a page that stops having a fixed size
+   * keeps rendering at that scale unless it is reset here — and the chrome, which
+   * reads `zoomOverride ?? defaultZoom`, would truthfully report 100% while the
+   * page was still shrunk. Reported as "the zoom says 100% but it is not".
+   */
+  setDefaultViewport(size: EmbeddedViewport | undefined): void {
+    if (
+      this.defaultViewport?.width === size?.width &&
+      this.defaultViewport?.height === size?.height
+    ) {
+      return;
+    }
+    this.defaultViewport = size;
+    for (const tab of this.tabs) {
+      // A page that made its own choice does not follow the default either way.
+      if (tab.viewportOverride !== undefined) continue;
+      if (this.viewportOf(tab)) continue;
+      delete tab.viewportScale;
+      this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
+    }
+    this.applyLayout();
+    this.emitState();
+  }
+
+  /**
+   * The size a page actually renders at.
+   *
+   * One resolution order for the whole surface: an explicit page choice wins,
+   * otherwise the workspace default applies, otherwise the page fills its cell.
+   * Every reader (`describe`, `placePageSurface`, `applyZoom`, `zoomBy`) goes
+   * through this so the chrome and the native geometry can never disagree.
+   */
+  private viewportOf(tab: TabRecord): EmbeddedViewport | undefined {
+    if (tab.viewportOverride !== undefined) return tab.viewportOverride ?? undefined;
+    return this.defaultViewport;
+  }
+
   /** Binds the surface to the main window; safe to call again on recreation. */
   attach(win: BrowserWindow): void {
     if (this.host === win) return;
@@ -406,6 +462,7 @@ export class EmbeddedBrowser {
 
   private describe(tab: TabRecord): EmbeddedTab {
     const contents = tab.view.webContents;
+    const effectiveViewport = this.viewportOf(tab);
     return {
       id: tab.id,
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
@@ -426,11 +483,16 @@ export class EmbeddedBrowser {
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       // In viewport mode the fit scale *is* the effective zoom; reporting the
       // untouched override here would make the chrome claim 100% while the
-      // page actually renders at the fit factor.
-      zoom: tab.viewport
+      // page actually renders at the fit factor. `viewport` is the *effective*
+      // size so the menu can mark the active row; `viewportOverride` is what
+      // the page itself chose, which the menu needs to show "inherit".
+      zoom: effectiveViewport
         ? Math.round((tab.viewportScale ?? 1) * 100)
         : (tab.zoomOverride ?? this.defaultZoom),
-      ...(tab.viewport ? { viewport: tab.viewport } : {}),
+      ...(effectiveViewport ? { viewport: effectiveViewport } : {}),
+      ...(tab.viewportOverride === undefined
+        ? {}
+        : { viewportOverride: tab.viewportOverride ?? null }),
       devtoolsOpen: this.devtoolsOpen(tab),
       ...(tab.devtools?.mode === "docked" ? { devtoolsWidth: tab.devtools.width } : {}),
       ...(contents.isDestroyed()
@@ -472,6 +534,7 @@ export class EmbeddedBrowser {
       layoutId: view.layoutId,
       ...(view.slotRects?.length ? { slotRects: view.slotRects.map((rect) => ({ ...rect })) } : {}),
       slotTabs: [...view.slotTabs],
+      ...(view.slotPages?.some(Boolean) ? { slotPages: [...view.slotPages] } : {}),
       collapsed: view.collapsed,
       ...(view.focusedTabId ? { focusedTabId: view.focusedTabId } : {}),
     };
@@ -546,6 +609,31 @@ export class EmbeddedBrowser {
       (activeId ? this.tabs.find((tab) => tab.id === activeId) : undefined) ??
       this.instanceRoot(instanceId)
     );
+  }
+
+  /**
+   * Page a slot actually shows.
+   *
+   * `slotTabs` names the instance; `slotPages` pins which of its pages that cell
+   * displays. A pin is what makes side-by-side comparison of one account work:
+   * the same instance in two cells, each showing a different page. Without a pin
+   * the cell follows the instance's active page, which is right for the ordinary
+   * one-cell-per-instance case.
+   *
+   * The pin is validated against the instance in that slot, so a closed page or
+   * a reshuffled instance cannot leave a cell pointing at a stranger.
+   */
+  private pageForSlot(view: ViewRecord, index: number): TabRecord | undefined {
+    const rootId = view.slotTabs[index];
+    if (!rootId) return undefined;
+    const root = this.findTab(rootId);
+    const instanceId = root?.instanceId ?? rootId;
+    const pinnedId = view.slotPages?.[index];
+    if (pinnedId) {
+      const pinned = this.findTab(pinnedId);
+      if (pinned && pinned.instanceId === instanceId) return pinned;
+    }
+    return this.activePageOf(instanceId);
   }
 
   /** One representative (the root) per instance inside a view. */
@@ -756,6 +844,108 @@ export class EmbeddedBrowser {
     this.applyLayout();
     this.emitState();
     return this.state();
+  }
+
+  /**
+   * Puts one *page* into a slot, splitting an instance across two cells.
+   *
+   * This is the drag-a-tab-onto-a-cell gesture inside a single browser window:
+   * two pages of the same account side by side. The instance is not duplicated —
+   * both cells name the same instance, and `slotPages` says which page each one
+   * shows. Cookies, storage and the session partition stay shared, which is the
+   * entire point; a second instance would be a second login.
+   *
+   * The instance is pinned into the target slot even when it already occupies
+   * another one: the same instance appearing twice is the feature here, and
+   * `resolveSlotTabs` is told so explicitly for this call.
+   */
+  splitTabIntoSlot(viewId: string, slotIndex: number, pageId: string): EmbeddedState {
+    const view = this.requireView(viewId);
+    const slotCount = embeddedSlotRects(
+      view.layoutId,
+      { x: 0, y: 0, width: 1, height: 1 },
+      view.slotRects,
+    ).length;
+    if (slotIndex < 0 || slotIndex >= slotCount) throw new Error("槽位不存在");
+    const page = this.requireTab(pageId);
+    const root = this.instanceRoot(page.instanceId) ?? page;
+    if (root.viewId && root.viewId !== view.id) {
+      // A page from another view joins this one whole; there is no half-move.
+      this.detachFromView(root);
+    }
+    for (const item of this.instanceTabs(root.instanceId)) item.viewId = view.id;
+
+    const next = [...view.slotTabs];
+    while (next.length < slotCount) next.push(null);
+    // The slot assignment itself may already hold this instance in another cell;
+    // that is allowed here and is what makes the split work.
+    next[slotIndex] = root.id;
+    const pages = this.normalizeSlotPages(view);
+    /**
+     * Freeze what the other cells are showing *before* the new page becomes the
+     * instance's active one.
+     *
+     * Every cell without a pin follows the instance's active page. Dropping a
+     * page here is about to make that page active, so each sibling cell would
+     * silently switch to it — both halves would show the same thing, which is
+     * exactly what the split was meant to avoid. Writing today's page into each
+     * sibling's pin keeps the picture stable, and clicking a cell's own strip can
+     * still change it, one cell at a time.
+     */
+    for (let index = 0; index < next.length; index += 1) {
+      if (index === slotIndex || pages[index]) continue;
+      if (view.slotTabs[index] !== root.id) continue;
+      const showing = this.pageForSlot(view, index);
+      if (showing) pages[index] = showing.id;
+    }
+    view.slotTabs = resolveSlotTabs(
+      this.viewRoots(view.id).map((item) => item.id),
+      next,
+      slotCount,
+      { allowDuplicates: true },
+    );
+    pages[slotIndex] = page.id;
+    view.slotPages = pages;
+
+    view.focusedTabId = root.id;
+    this.activeTabId = page.id;
+    this.activeViewId = view.id;
+    this.applyLayout();
+    this.emitState();
+    return this.state();
+  }
+
+  /**
+   * Ends a split: every cell of that instance goes back to following it.
+   *
+   * "Un-split" has to clear all of the instance's pins, not just the clicked
+   * cell's. One cell following the window while its sibling still pins a page is
+   * the same confusion in a smaller dose — both cells would still be showing
+   * different pages, just without a visible reason.
+   *
+   * The duplicate slot entry itself stays: the user may still want the same
+   * instance visible in two cells after a merge (a console and a page, say), and
+   * the merge control is about "this cell shows what the window shows", not about
+   * destroying the second cell.
+   */
+  unsplitSlot(viewId: string, slotIndex: number): EmbeddedState {
+    const view = this.requireView(viewId);
+    const rootId = view.slotTabs[slotIndex];
+    if (!rootId) return this.state();
+    if (view.slotPages) {
+      view.slotPages = view.slotPages.map((id, index) =>
+        view.slotTabs[index] === rootId ? null : id,
+      );
+      this.dropOrphanPins(view);
+    }
+    this.applyLayout();
+    this.emitState();
+    return this.state();
+  }
+  private normalizeSlotPages(view: ViewRecord): (string | null)[] {
+    return resolveSlotPages(view.slotTabs, view.slotPages, (tabId) =>
+      this.findTab(tabId)?.instanceId,
+    );
   }
 
   /**
@@ -1641,6 +1831,28 @@ export class EmbeddedBrowser {
     const tab = this.findTab(tabId);
     if (!tab) return this.state();
     const view = tab.viewId ? this.findView(tab.viewId) : undefined;
+    // A split cell that was showing this exact page loses its pin first, so the
+    // cell falls back to the instance's active page instead of pointing at a
+    // closed one. `normalizeSlotPages` would catch it later, but the cell would
+    // be blank for one broadcast before that runs.
+    //
+    // The cell itself goes too when the instance still holds another cell: with
+    // no page of its own it would draw the same window as its sibling, which is
+    // the duplicate the pinning exists to avoid.
+    if (view?.slotPages) {
+      const released: number[] = [];
+      view.slotPages = view.slotPages.map((id, index) => {
+        if (id !== tabId) return id;
+        const rootId = view.slotTabs[index];
+        if (rootId && view.slotTabs.some((other, at) => at !== index && other === rootId)) {
+          released.push(index);
+        }
+        return null;
+      });
+      if (!view.slotPages.some(Boolean)) delete view.slotPages;
+      for (const index of released) view.slotTabs[index] = null;
+      this.dropOrphanPins(view);
+    }
     const instanceId = tab.instanceId;
     const wasActive = this.instanceActive.get(instanceId) === tabId;
     const siblings = this.instanceTabs(instanceId).filter((item) => item.id !== tabId);
@@ -1793,7 +2005,15 @@ export class EmbeddedBrowser {
       this.viewRoots(view.id).map((tab) => tab.id),
       view.slotTabs,
       count,
+      // A slot table that already repeats an instance is a deliberate split;
+      // re-resolving must not collapse it back to one cell.
+      { allowDuplicates: this.viewHasSplit(view) },
     );
+    // Page pins follow the slots they belong to: a reshuffle that moved a cell
+    // to another instance, or a trimmed tail, must not leave a stale pin.
+    const pages = this.normalizeSlotPages(view);
+    if (pages.some(Boolean)) view.slotPages = pages;
+    else delete view.slotPages;
     if (view.focusedTabId && !view.slotTabs.includes(view.focusedTabId)) {
       // The focused page may sit in a trimmed slot; keep the marker honest
       // instead of leaving it on a cell that no longer exists.
@@ -1801,6 +2021,33 @@ export class EmbeddedBrowser {
       if (first) view.focusedTabId = first;
       else delete view.focusedTabId;
     }
+  }
+
+  /** True while two slots of this view hold the same instance on purpose. */
+  private viewHasSplit(view: ViewRecord): boolean {
+    const seen = new Set<string>();
+    for (const id of view.slotTabs) {
+      if (!id) continue;
+      if (seen.has(id)) return true;
+      seen.add(id);
+    }
+    return false;
+  }
+
+  /**
+   * Drops pins whose cell no longer repeats another cell's instance.
+   *
+   * A pin is only meaningful while its instance fills at least two cells. Once a
+   * split collapses — the pinned page closed, the duplicate cell cleared — any pin
+   * left behind would silently freeze the surviving cell on whatever page it was
+   * showing, and the strip would look like it could still switch pages but could
+   * not.
+   */
+  private dropOrphanPins(view: ViewRecord): void {
+    if (!view.slotPages) return;
+    const pages = this.normalizeSlotPages(view);
+    if (pages.some(Boolean)) view.slotPages = pages;
+    else delete view.slotPages;
   }
 
   /**
@@ -1813,11 +2060,12 @@ export class EmbeddedBrowser {
    * `applyZoom` honest from wherever layout next touches the page.
    */
   private placePageSurface(tab: TabRecord, cell: StageRect): StageRect {
-    if (!tab.viewport) {
+    const viewport = this.viewportOf(tab);
+    if (!viewport) {
       delete tab.viewportScale;
       return cell;
     }
-    const { rect, scale } = viewportFitRect(cell, tab.viewport);
+    const { rect, scale } = viewportFitRect(cell, viewport);
     tab.viewportScale = scale;
     tab.view.webContents.setZoomFactor(scale);
     return rect;
@@ -1870,8 +2118,10 @@ export class EmbeddedBrowser {
       const rootId = view.slotTabs[index];
       if (!rootId) return;
       // A slot shows one instance; which page of it is on screen is decided by
-      // `instanceActive`, so popups reuse the slot instead of adding a cell.
-      const page = this.activePageOf(rootId);
+      // `slotPages` when the cell pinned one (same-account side by side), and by
+      // `instanceActive` otherwise, so popups reuse the slot instead of adding a
+      // cell.
+      const page = this.pageForSlot(view, index);
       if (!page || page.view.webContents.isDestroyed()) return;
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
@@ -2868,12 +3118,15 @@ export class EmbeddedBrowser {
     // the fit scale there, and stepping it would silently change the CSS
     // viewport size the mode promised. Reset exits viewport mode too, which is
     // the natural way back from the keyboard.
-    if (tab.viewport && direction !== "reset") {
+    const viewport = this.viewportOf(tab);
+    if (viewport && direction !== "reset") {
       return Math.round((tab.viewportScale ?? 1) * 100);
     }
-    if (tab.viewport) {
-      this.setViewport(tabId, null);
-    }
+    // Reset clears the page's own choice, not the viewport feature as a whole:
+    // with a workspace default in effect, "reset" means "back to what everything
+    // else uses", which is the only reading that does not silently switch off a
+    // global setting from one page's keyboard shortcut.
+    if (viewport) this.setViewport(tabId, undefined);
     const current = tab.zoomOverride ?? this.defaultZoom;
     const next =
       direction === "reset"
@@ -2888,25 +3141,33 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Pins a page to a fixed CSS viewport, or returns it to adaptive fill.
+   * Sets this page's own viewport, or clears the override.
    *
-   * The zoom override survives the trip: while the viewport is active the fit
-   * scale owns the zoom factor, and clearing the viewport re-applies whatever
+   * `size` pins the page; `null` is an explicit "adaptive even though a default
+   * exists"; `undefined` returns it to following the workspace default. Those
+   * three answers are the menu's three rows, and the difference between null and
+   * undefined is visible in the chrome: "自适应" on this page while others still
+   * follow the workspace default.
+   *
+   * The zoom override survives the trip: while a viewport is active the fit
+   * scale owns the zoom factor, and going back to adaptive re-applies whatever
    * the page was zoomed to before, so the mode feels like a lens you put on and
    * take off rather than a setting that resets your zoom.
    */
-  setViewport(tabId: string, size: EmbeddedViewport | null): EmbeddedViewport | null {
+  setViewport(
+    tabId: string,
+    size: EmbeddedViewport | null | undefined,
+  ): EmbeddedViewport | null | undefined {
     const tab = this.requireTab(tabId);
-    if (size) {
-      tab.viewport = size;
-    } else {
-      delete tab.viewport;
+    if (size === undefined) delete tab.viewportOverride;
+    else tab.viewportOverride = size;
+    if (!this.viewportOf(tab)) {
       delete tab.viewportScale;
       this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
     }
     this.applyLayout();
     this.emitState();
-    return tab.viewport ?? null;
+    return size;
   }
 
   private applyZoom(tab: TabRecord, percent: number): void {
@@ -2915,7 +3176,7 @@ export class EmbeddedBrowser {
     // A fixed viewport owns the zoom factor: it *is* the fit scale that keeps
     // the CSS viewport at the requested size. The percent is remembered on the
     // tab (`zoomOverride`) so leaving viewport mode restores it.
-    if (tab.viewport) {
+    if (this.viewportOf(tab)) {
       contents.setZoomFactor(tab.viewportScale ?? 1);
       return;
     }

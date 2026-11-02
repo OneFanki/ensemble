@@ -237,7 +237,10 @@ function toggleExpanded(): void {
   gap: 9px;
   padding: 8px;
   border-radius: var(--radius);
-  border: 1px solid transparent;
+  /* No border in any state: collapsed the rail is 52px wide, so an outlined
+     active row reads as a small rounded box drawn around the icon rather than as
+     a selection. Selection is carried by fill and colour only. */
+  border: none;
   color: var(--muted);
   font-size: 12.5px;
   text-align: left;
@@ -255,9 +258,12 @@ function toggleExpanded(): void {
 }
 
 .nav-item.active {
-  background: var(--surface-3);
-  border-color: var(--line);
+  background: var(--surface-2);
   color: var(--text);
+}
+
+.nav-item.active .nav-icon {
+  color: var(--accent);
 }
 
 .nav-icon {

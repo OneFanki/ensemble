@@ -110,6 +110,76 @@ function activePageOf(root: EmbeddedTab): EmbeddedTab {
   return pagesOf(root).find((page) => page.active) ?? root;
 }
 
+/**
+ * One row of the dock's view block.
+ *
+ * The dock used to draw exactly one row per instance, with its pages nested
+ * underneath. A split breaks that: one instance now occupies two cells showing
+ * two different pages, so "one row per instance" had to either repeat the page
+ * list twice or list an instance that visibly holds two cells as a single row —
+ * the header then said 1/2 while both cells were full, and the nesting repeated
+ * the same page under itself.
+ *
+ * So a row is now a *cell* when the instance is split, and an *instance* when it
+ * is not. `nested` carries the pages to indent under the row and is empty for a
+ * split row: there is nothing below a cell that shows exactly one page.
+ */
+interface DockRow {
+  root: EmbeddedTab;
+  /** Page this row stands for: the pinned page in a split, else the active one. */
+  page: EmbeddedTab;
+  /** Zero-based slot this row occupies; absent when the instance is off stage. */
+  slot?: number;
+  /** Pages to list under the row; empty for a split row. */
+  nested: EmbeddedTab[];
+}
+
+/**
+ * Rows for one view block, in slot order then off-stage order.
+ *
+ * Off-stage instances still deserve a row — they are running, and that is how the
+ * user finds and drags them back. They are never split (a split needs two cells),
+ * so they keep the nested-pages shape.
+ */
+function dockRows(view: EmbeddedView): DockRow[] {
+  const rows: DockRow[] = [];
+  const slotCounts = new Map<string, number>();
+  for (const rootId of view.slotTabs) {
+    const root = rootId ? embedded.state.tabs.find((tab) => tab.id === rootId) : undefined;
+    if (!root) continue;
+    slotCounts.set(root.instanceId, (slotCounts.get(root.instanceId) ?? 0) + 1);
+  }
+
+  const placed = new Set<string>();
+  view.slotTabs.forEach((rootId, index) => {
+    const root = rootId ? embedded.state.tabs.find((tab) => tab.id === rootId) : undefined;
+    if (!root) return;
+    placed.add(root.instanceId);
+    const pages = pagesOf(root);
+    if ((slotCounts.get(root.instanceId) ?? 1) > 1) {
+      const pinnedId = view.slotPages?.[index] ?? null;
+      const pinned = pinnedId ? pages.find((page) => page.id === pinnedId) : undefined;
+      rows.push({
+        root,
+        page: pinned ?? activePageOf(root),
+        slot: index,
+        nested: [],
+      });
+      return;
+    }
+    // One cell: a single row for the instance, in slot order.
+    if (rows.some((row) => row.root.id === root.id)) return;
+    rows.push({ root, page: activePageOf(root), slot: index, nested: pages.length > 1 ? pages : [] });
+  });
+
+  for (const root of embedded.viewInstances(view.id)) {
+    if (placed.has(root.instanceId)) continue;
+    const pages = pagesOf(root);
+    rows.push({ root, page: activePageOf(root), nested: pages.length > 1 ? pages : [] });
+  }
+  return rows;
+}
+
 function titleOf(root: EmbeddedTab): string {
   return embedded.titleOf(activePageOf(root));
 }
@@ -250,10 +320,6 @@ function rowDropClass(root: EmbeddedTab): Record<string, boolean> {
 function viewDropClass(viewId: string): Record<string, boolean> {
   const hint = dropHint.value;
   return hint?.kind === "view" && hint.viewId === viewId ? { "drop-into": true } : {};
-}
-
-function slotNumber(root: EmbeddedTab): number | undefined {
-  return embedded.slotOf(root);
 }
 
 function isOnStage(root: EmbeddedTab): boolean {
@@ -406,6 +472,41 @@ async function openSiteBookmark(siteId: string, options?: { clean?: boolean }): 
 /** Site bookmark as one account: own profile, own login state. */
 async function openIdentityBookmark(identityId: string): Promise<void> {
   await embedded.openIdentity(identityId);
+}
+
+/**
+ * The view header's "+": the same chooser as everywhere else, but every answer
+ * lands inside *this* view.
+ *
+ * The container already names the system, so the chooser is locked to that site
+ * and lists its accounts. Opening these as loose pages — what the header used to
+ * do — put them in the flat strip while the user was looking at a grid, and a
+ * blank daily page was the only thing the button could produce on its own.
+ */
+async function openSiteInView(
+  view: EmbeddedView,
+  siteId: string,
+  options?: { clean?: boolean },
+): Promise<void> {
+  const site = workspace.sites.find((item) => item.id === siteId);
+  if (!site) return;
+  let url: string;
+  try {
+    url = new URL(site.loginPath || "/", site.baseUrl).toString();
+  } catch {
+    workspace.notify(t("app.errSiteUrl"), "error");
+    return;
+  }
+  workspace.markSiteUsed(site.id);
+  await embedded.openTabInto(view.id, { url, ...(options?.clean ? { clean: true } : {}) });
+}
+
+async function openIdentityInView(view: EmbeddedView, identityId: string): Promise<void> {
+  await embedded.openTabInto(view.id, { identityId });
+}
+
+async function openBlankInView(view: EmbeddedView): Promise<void> {
+  await embedded.openTabInto(view.id);
 }
 </script>
 
@@ -563,7 +664,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 {{ view.name }}
               </span>
               <span class="view-count mono">
-                {{ embedded.viewInstances(view.id).length }}/{{ embedded.slots(view) }}
+                {{ dockRows(view).length }}/{{ embedded.slots(view) }}
               </span>
             </template>
             <span class="grow"></span>
@@ -575,15 +676,20 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
               :aria-label="t('app.browserLayout')"
               @update:model-value="changeLayout(view, $event)"
             />
-            <button
-              type="button"
-              class="icon-btn"
-              :title="t('app.browserAddTab')"
-              :aria-label="t('app.browserAddTab')"
-              @click.stop="embedded.openTabInto(view.id)"
-            >
-              <Plus :size="12" />
-            </button>
+            <!--
+              The view's own "+". It is a chooser rather than a one-click blank
+              page: the container already says which system this is, so the only
+              open question is which account — and a daily-profile page in a grid
+              of accounts answers a question nobody asked.
+            -->
+            <OpenSiteButton
+              compact
+              :locked-site-id="embedded.viewSiteId(view.id)"
+              @open-blank="openBlankInView(view)"
+              @open-daily="openSiteInView(view, $event)"
+              @open-clean="openSiteInView(view, $event, { clean: true })"
+              @open-identity="openIdentityInView(view, $event)"
+            />
             <button
               type="button"
               class="icon-btn"
@@ -597,83 +703,90 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
 
           <div v-if="!view.collapsed" class="rows">
             <div
-              v-for="root in embedded.viewInstances(view.id)"
-              :key="root.id"
+              v-for="row in dockRows(view)"
+              :key="`${row.root.id}-${row.slot ?? 'off'}`"
               class="instance"
             >
               <div
                 class="tab-row"
                 :class="[
-                  rowDropClass(root),
+                  rowDropClass(row.root),
                   {
-                    offstage: view.id === embedded.state.activeViewId && !isOnStage(root),
-                    focused: isFocused(root),
+                    offstage: view.id === embedded.state.activeViewId && !isOnStage(row.root),
+                    focused: row.page.id === embedded.state.activeTabId,
                     dim: view.id !== embedded.state.activeViewId,
                   },
                 ]"
                 draggable="true"
                 role="button"
                 tabindex="0"
-                :data-tab-id="activePageOf(root).id"
-                @dragstart="onDragStart(root, $event)"
+                :data-tab-id="row.page.id"
+                @dragstart="onDragStart(row.root, $event)"
                 @dragend="onDragEnd"
-                @dragover.stop="onRowDragOver(root, $event)"
+                @dragover.stop="onRowDragOver(row.root, $event)"
                 @drop.stop="onDrop"
-                @click="embedded.activate(activePageOf(root).id)"
-                @keydown.enter="embedded.activate(activePageOf(root).id)"
+                @click="embedded.activate(row.page.id)"
+                @keydown.enter="embedded.activate(row.page.id)"
               >
-                <span v-if="embedded.slots(view) > 1" class="slot-no mono">{{ slotNumber(root) ?? "·" }}</span>
+                <!-- The slot number comes from the row, not from the instance:
+                     two cells of one split instance both need their own number,
+                     and asking the instance would answer with the first one. -->
+                <span v-if="embedded.slots(view) > 1" class="slot-no mono">{{ row.slot === undefined ? "·" : row.slot + 1 }}</span>
                 <!-- Identity colour rides the icon's corner (same mark as the
                      collapsed strip): a 5px free-standing dot spent 11px of
                      every row pushing the icon right, and with same-coloured
                      identities it read as pure noise between the levels. -->
                 <span class="tab-icon-wrap">
-                  <TabIcon :src="faviconOf(root)" :size="12" />
+                  <!-- The row's page, not the instance root: a split cell shows
+                       a different page, so its icon has to say which. -->
+                  <TabIcon :src="row.page.favicon ?? faviconOf(row.root)" :size="12" />
                   <span
                     class="row-role"
-                    :style="{ background: `var(--role-${root.color ?? 'amber'})` }"
+                    :style="{ background: `var(--role-${row.root.color ?? 'amber'})` }"
                   ></span>
                 </span>
                 <!-- The full URL lives on the label rather than the row: the
                      badge at the row's end answers to its own drawn hint, and a
                      native title on an ancestor would pop up over it anyway. -->
-                <span class="tab-label" :title="activePageOf(root).url">{{ titleOf(root) }}</span>
-                <span class="tab-account">{{ accountOf(root) }}</span>
+                <span class="tab-label" :title="row.page.url">{{ embedded.titleOf(row.page) }}</span>
+                <span class="tab-account">{{ accountOf(row.root) }}</span>
                 <!-- How many AI operations this page has seen in this session.
                      Per page, because a row is a page: keying it by site made
                      two rows of one site show the same number. -->
                 <span
-                  v-if="aiCountOf(root)"
+                  v-if="aiCountOf(row.root)"
                   class="ai-badge mono"
-                  @mouseenter="showAiTip(root)"
+                  @mouseenter="showAiTip(row.root)"
                   @mouseleave="hideAiTip"
                 >
-                  {{ aiCountOf(root) }}
-                  <span v-if="aiTip === root.id" class="ai-tip" role="tooltip">
+                  {{ aiCountOf(row.root) }}
+                  <span v-if="aiTip === row.root.id" class="ai-tip" role="tooltip">
                     {{ t("app.aiActionCount") }}
                   </span>
                 </span>
-                <span v-if="pagesOf(root).length > 1" class="pages-badge mono">
-                  {{ pagesOf(root).length }}
+                <!-- A split row stands for one page of a two-cell instance, so the
+                     "this window has N pages" badge would contradict the row. -->
+                <span v-if="row.nested.length > 1" class="pages-badge mono">
+                  {{ row.nested.length }}
                 </span>
-                <span v-if="activePageOf(root).loading" class="spinner"></span>
+                <span v-if="row.page.loading" class="spinner"></span>
                 <button
                   type="button"
                   class="row-close"
                   :aria-label="t('app.stop')"
-                  @click.stop="closeInstance(root)"
+                  @click.stop="closeInstance(row.root)"
                 >
                   <X :size="10" />
                 </button>
               </div>
               <!-- Pages opened by the page itself stay inside the instance. -->
-              <div v-if="pagesOf(root).length > 1" class="pages">
+              <div v-if="row.nested.length > 1" class="pages">
                 <button
-                  v-for="page in pagesOf(root)"
+                  v-for="page in row.nested"
                   :key="page.id"
                   type="button"
                   class="page-row"
-                  :class="{ current: page.id === activePageOf(root).id }"
+                  :class="{ current: page.id === row.page.id }"
                   :data-page-id="page.id"
                   :title="page.url"
                   @click="embedded.activate(page.id)"
@@ -686,7 +799,7 @@ async function openIdentityBookmark(identityId: string): Promise<void> {
                 </button>
               </div>
             </div>
-            <p v-if="embedded.viewInstances(view.id).length === 0" class="row-empty">
+            <p v-if="dockRows(view).length === 0" class="row-empty">
               {{ t("app.browserNoTabs") }}
             </p>
           </div>

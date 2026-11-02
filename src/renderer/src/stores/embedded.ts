@@ -247,25 +247,60 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     });
   }
 
-  /** Opens a blank tab straight into a view, so it lands on stage. */
-  async function openTabInto(viewId: string): Promise<void> {
-    state.value = await window.ensemble.openEmbeddedTabInView(viewId);
+  /**
+   * Opens a page straight into a view, so it lands on stage.
+   *
+   * Every "+" that names a view asks which account first, so the same call
+   * carries the answer: an identity opens at its start page and gets filled,
+   * `url`/`clean` cover a site's daily and throwaway openings, and omitting both
+   * is the explicit blank-page choice.
+   */
+  async function openTabInto(
+    viewId: string,
+    options?: { identityId?: string; url?: string; clean?: boolean },
+  ): Promise<void> {
+    state.value = await window.ensemble.openEmbeddedTabInView(viewId, options);
   }
 
   /**
-   * Opens a blank tab pinned to one slot of a view and focuses it.
+   * The site a view belongs to, if it can be known.
+   *
+   * Two sources, tried in order: the saved view definition this container was
+   * opened from (the only one that works for an empty view), then a page already
+   * in it (a container assembled by hand has no definition but its pages carry
+   * their site). The account choosers use this to list "the accounts of this
+   * system" instead of every account in the workspace.
+   */
+  function viewSiteId(viewId: string): string | undefined {
+    const view = views.value.find((item) => item.id === viewId);
+    if (!view) return undefined;
+    if (view.viewDefinitionId) {
+      const definition = useWorkspaceStore().views.find(
+        (item) => item.id === view.viewDefinitionId,
+      );
+      if (definition?.siteId) return definition.siteId;
+    }
+    for (const tab of viewInstances(viewId)) {
+      if (tab.siteId) return tab.siteId;
+    }
+    return undefined;
+  }
+
+  /**
+   * Opens a page pinned to one slot of a view and focuses it.
    *
    * `identityId` fills the slot as that account, in its own session partition.
    * An empty slot used to mean "any page", which in practice meant a daily-profile
    * page — so building a grid of six accounts required opening six blank pages
-   * and then hunting each account down elsewhere.
+   * and then hunting each account down elsewhere. `url`/`clean` are the site's
+   * anonymous openings, which belong in the same cell.
    */
   async function openTabInSlot(
     viewId: string,
     slotIndex: number,
-    identityId?: string,
+    options?: { identityId?: string; url?: string; clean?: boolean },
   ): Promise<void> {
-    state.value = await window.ensemble.openEmbeddedTabInSlot(viewId, slotIndex, identityId);
+    state.value = await window.ensemble.openEmbeddedTabInSlot(viewId, slotIndex, options);
   }
 
   /** One more page in an existing instance; same session, same window. */
@@ -354,9 +389,27 @@ export const useEmbeddedStore = defineStore("embedded", () => {
    */
   async function setViewport(
     tabId: string,
-    size: { width: number; height: number } | null,
+    mode: { width: number; height: number } | "adaptive" | "inherit" | null,
   ): Promise<void> {
-    await window.ensemble.setEmbeddedViewport(tabId, size);
+    await window.ensemble.setEmbeddedViewport(tabId, mode);
+  }
+
+  /**
+   * Sets the workspace default viewport, or clears it with `null`.
+   *
+   * Stored as a setting rather than broadcast state: it survives a restart, it
+   * rides along with the workspace file, and pages that inherit it pick it up
+   * through the main process on the next layout pass.
+   *
+   * `null`, not `undefined`: settings travel to the main process through
+   * `JSON.stringify`, which drops keys whose value is `undefined`. Sending
+   * `{ browserViewport: undefined }` arrived as `{}`, so the main process saw no
+   * key at all and the change was silently discarded — picking "adaptive" after
+   * a fixed size did nothing. `null` survives the round trip and is what the
+   * schema accepts.
+   */
+  async function setDefaultViewport(size: { width: number; height: number } | null): Promise<void> {
+    await useWorkspaceStore().saveSettings({ browserViewport: size });
   }
 
   /**
@@ -379,6 +432,26 @@ export const useEmbeddedStore = defineStore("embedded", () => {
 
   async function pin(viewId: string, slotIndex: number, tabId: string | null): Promise<void> {
     state.value = await window.ensemble.pinEmbeddedTab(viewId, slotIndex, tabId);
+  }
+
+  /**
+   * Puts one page into a cell, splitting its instance across two cells.
+   *
+   * Dragging a page tab onto another cell of the same view means "show me these
+   * two pages of this account side by side" — not "open a second browser", which
+   * would start a second session and split the login.
+   */
+  async function splitPageIntoSlot(
+    viewId: string,
+    slotIndex: number,
+    pageId: string,
+  ): Promise<void> {
+    state.value = await window.ensemble.splitEmbeddedTabIntoSlot(viewId, slotIndex, pageId);
+  }
+
+  /** Ends a split: the instance's cells go back to following it. */
+  async function unsplitSlot(viewId: string, slotIndex: number): Promise<void> {
+    state.value = await window.ensemble.unsplitEmbeddedSlot(viewId, slotIndex);
   }
 
   async function renameView(viewId: string, name: string): Promise<void> {
@@ -457,6 +530,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     openTabInto,
     openTabInSlot,
     openTabInInstance,
+    viewSiteId,
     duplicateTab,
     closeOtherTabs,
     openIdentity,
@@ -468,9 +542,12 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     createView,
     setLayout,
     setViewport,
+    setDefaultViewport,
     groupIntoLooseView,
     setSlotRects,
     pin,
+    splitPageIntoSlot,
+    unsplitSlot,
     renameView,
     closeView,
     collapseView,

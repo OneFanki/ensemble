@@ -66,10 +66,23 @@ export interface EmbeddedTab {
   /** Effective zoom in percent; `100` means the page renders at its natural size. */
   zoom: number;
   /**
-   * Fixed CSS viewport this page renders at, when set. The view shows a
-   * scaled-down preview; `bounds` holds the fitted rect it actually occupies.
+   * Fixed CSS viewport this page renders at, when set.
+   *
+   * This is the *effective* size: the page's own override when it has one,
+   * otherwise the workspace default. The view shows a scaled-down preview, and
+   * `bounds` holds the fitted rect it actually occupies.
    */
   viewport?: EmbeddedViewport;
+  /**
+   * The page's own viewport choice, when it made one.
+   *
+   * Absent means "inherit the workspace default", which is what lets one global
+   * size apply to every page the user has not touched. `null` is an explicit
+   * "adaptive, even though a default exists"; an object pins this page alone.
+   * The distinction between absent and null is the point: only a page that made
+   * an explicit choice may disagree with the default.
+   */
+  viewportOverride?: EmbeddedViewport | null;
   /** True while this page's DevTools are open (docked by default). */
   devtoolsOpen: boolean;
   /**
@@ -111,6 +124,16 @@ export interface EmbeddedView {
   slotRects?: SlotRect[];
   /** Tab id per slot; null for an empty slot. Length always equals the slot count. */
   slotTabs: (string | null)[];
+  /**
+   * Page each slot displays, when it differs from the instance's active page.
+   *
+   * A slot names an *instance*, and normally the instance has one cell and shows
+   * whichever of its pages is active. Side-by-side comparison of one account
+   * needs two cells of the same instance showing two different pages, and then
+   * "the active page" cannot answer for both — so a slot may pin a page here.
+   * `null`/absent means "follow the instance", which is the ordinary case.
+   */
+  slotPages?: (string | null)[];
   collapsed: boolean;
   /** Tab that owns the keyboard and receives replacements. */
   focusedTabId?: string;
@@ -490,20 +513,30 @@ export function viewportFitRect(
  * Fills `slotTabs` from the tab order: explicit pins win, duplicates and unknown
  * ids are dropped, and the remaining slots take the remaining tabs in order. The
  * result always has exactly `slotCount` entries so callers can index it safely.
+ *
+ * `allowDuplicates` exists for one gesture: dropping two pages of the same
+ * instance into two cells, which is how one account gets compared side by side.
+ * The default stays strict because a slot table that silently repeats an
+ * instance from a stale pin would show the same page twice with no way to tell
+ * why.
  */
 export function resolveSlotTabs(
   tabIds: string[],
   current: (string | null)[] | undefined,
   slotCount: number,
+  options?: { allowDuplicates?: boolean },
 ): (string | null)[] {
   const known = new Set(tabIds);
   const taken = new Set<string>();
   const slots: (string | null)[] = [];
   for (let index = 0; index < slotCount; index += 1) {
     const pinned = current?.[index];
-    if (pinned && known.has(pinned) && !taken.has(pinned)) {
-      slots.push(pinned);
-      taken.add(pinned);
+    const usable = Boolean(pinned) && known.has(pinned as string) && (
+      options?.allowDuplicates || !taken.has(pinned as string)
+    );
+    if (usable) {
+      slots.push(pinned as string);
+      taken.add(pinned as string);
     } else {
       slots.push(null);
     }
@@ -514,6 +547,39 @@ export function resolveSlotTabs(
     slots[index] = remaining.shift() ?? null;
   }
   return slots;
+}
+
+/**
+ * Keeps only the page pins that still mean something.
+ *
+ * `slotPages[i]` says "this cell shows *that* page of the instance in
+ * `slotTabs[i]`". Two conditions make a pin meaningless, and both have bitten:
+ *
+ * 1. The page is gone (closed) or belongs to a different instance.
+ * 2. The instance no longer fills more than one cell. A pin left behind in a
+ *    single cell freezes it: the strip lists every page, clicking one moves the
+ *    window's active page, and the picture does not change.
+ *
+ * Pure so the rule can be tested without Electron; the caller supplies the
+ * instance lookup.
+ */
+export function resolveSlotPages(
+  slotTabs: (string | null)[],
+  current: (string | null)[] | undefined,
+  instanceOf: (tabId: string) => string | undefined,
+): (string | null)[] {
+  const pages: (string | null)[] = new Array<string | null>(slotTabs.length).fill(null);
+  for (let index = 0; index < slotTabs.length; index += 1) {
+    const pinnedId = current?.[index];
+    const rootId = slotTabs[index];
+    if (!pinnedId || !rootId) continue;
+    const instance = instanceOf(pinnedId);
+    if (!instance || instance !== instanceOf(rootId)) continue;
+    const cells = slotTabs.filter((id) => id === rootId).length;
+    if (cells < 2) continue;
+    pages[index] = pinnedId;
+  }
+  return pages;
 }
 
 /**

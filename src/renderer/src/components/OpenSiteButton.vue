@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onClickOutside } from "@vueuse/core";
-import { ChevronDown, Plus } from "lucide-vue-next";
+import { Plus } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -8,18 +8,32 @@ import { useWorkspaceStore } from "../stores/workspace";
 import SiteOpenMenu from "./SiteOpenMenu.vue";
 
 /**
- * "New tab" with a site list beside it.
+ * The "+" that asks "as whom?" before it creates anything.
  *
- * Browsers put bookmarks next to the address bar; here the bookmarks are sites.
- * The main button still does the obvious thing (a blank tab), and the chevron
- * opens a site — daily, clean, or as one of its accounts.
+ * A page in this app is almost never just a page: it belongs to a system and
+ * usually to an account, and which account decides the session partition. A
+ * one-click "+" therefore had to guess, and the guess was the daily profile — so
+ * a view built to compare accounts got an anonymous page in a cell instead. Now
+ * the click is a question: pick an account (opened at its start page and filled),
+ * open the site daily or clean, or explicitly ask for a blank page.
+ *
+ * `lockedSiteId` is set where the surrounding container already names the
+ * system — a view's own "+" — so the chooser lists that site's accounts and
+ * nothing else.
+ *
+ * A page strip's "+" is deliberately *not* this component: adding a tab to a
+ * running browser instance inherits that instance's session, so there is nothing
+ * to ask.
  */
 const props = defineProps<{
   /** Compact variant for headers and empty slots. */
   compact?: boolean;
+  /** Narrow the chooser to one site; its columns collapse to the account list. */
+  lockedSiteId?: string;
 }>();
 
 const emit = defineEmits<{
+  /** A blank page in the daily profile was asked for by name. */
   openBlank: [];
   openDaily: [siteId: string];
   openClean: [siteId: string];
@@ -47,10 +61,6 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
 });
 
-// One handler for both parts. Two `onClickOutside` calls — one for the trigger,
-// one for the panel — do not work here: the panel is teleported to `body`, so
-// it is outside the trigger, and every click inside the panel closed it before
-// the click could select a site.
 onClickOutside(root, (event) => {
   const target = event.target as Node | null;
   if (target && panel.value?.contains(target)) return;
@@ -61,7 +71,21 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") open.value = false;
 }
 
-const label = computed(() => t("app.browserNewTab"));
+const label = computed(() =>
+  props.lockedSiteId ? t("app.browserAddTab") : t("app.browserNewTab"),
+);
+/**
+ * The lock only counts when the site still exists.
+ *
+ * A view can outlive the site it was built from (the definition is deleted, or
+ * the container was assembled by hand). Falling back to the full chooser beats
+ * opening a 250px panel with an empty account column.
+ */
+const effectiveLock = computed(() =>
+  props.lockedSiteId && store.sites.some((site) => site.id === props.lockedSiteId)
+    ? props.lockedSiteId
+    : undefined,
+);
 /** True while the stage is being captured for this menu. */
 const parking = ref(false);
 
@@ -81,19 +105,40 @@ async function toggle(): Promise<void> {
     parking.value = false;
   }
   open.value = true;
-  void nextTick(() => {
-    const trigger = root.value?.querySelector<HTMLElement>(".split-main");
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = 400;
-    const margin = 8;
-    const left = Math.min(Math.max(margin, rect.right - width), window.innerWidth - width - margin);
-    panelStyle.value = {
-      left: `${left}px`,
-      top: `${rect.bottom + 6}px`,
-      width: `${width}px`,
-    };
-  });
+  void nextTick(placePanel);
+}
+
+/**
+ * Puts the panel next to its trigger, inside the viewport.
+ *
+ * The trigger lives in the dock as well as in the toolbar, and the dock is a
+ * scroll container with its own stacking context — the panel is teleported to
+ * body, so it can only be placed from the trigger's viewport rect. It flips
+ * above the trigger when there is no room below, which is the common case for a
+ * view header near the bottom of the dock.
+ */
+function placePanel(): void {
+  const trigger = root.value?.querySelector<HTMLElement>(".split-main");
+  if (!trigger) return;
+  const rect = trigger.getBoundingClientRect();
+  const width = effectiveLock.value ? 250 : 400;
+  const margin = 8;
+  const estimate = effectiveLock.value ? 300 : 380;
+  const roomBelow = window.innerHeight - rect.bottom - margin;
+  const above = roomBelow < estimate && rect.top > roomBelow;
+  const left = Math.min(Math.max(margin, rect.right - width), window.innerWidth - width - margin);
+  panelStyle.value = {
+    left: `${left}px`,
+    ...(above
+      ? { bottom: `${window.innerHeight - rect.top + 6}px` }
+      : { top: `${rect.bottom + 6}px` }),
+    width: `${width}px`,
+  };
+}
+
+function chooseBlank(): void {
+  open.value = false;
+  emit("openBlank");
 }
 
 function chooseDaily(siteId: string): void {
@@ -119,32 +164,20 @@ function chooseIdentity(identityId: string): void {
       class="split-main"
       :title="label"
       :aria-label="label"
-      @click="emit('openBlank')"
+      :aria-expanded="open"
+      @click.stop="toggle"
     >
       <Plus :size="compact ? 11 : 14" />
-    </button>
-    <button
-      type="button"
-      class="split-more"
-      :title="t('app.openFromSite')"
-      :aria-label="t('app.openFromSite')"
-      :aria-expanded="open"
-      @click="toggle"
-    >
-      <ChevronDown :size="compact ? 9 : 11" />
     </button>
   </span>
 
   <Teleport to="body">
-    <div
-      v-if="open"
-      ref="panel"
-      class="open-panel"
-      :style="panelStyle"
-    >
+    <div v-if="open" ref="panel" class="open-panel" :style="panelStyle">
       <SiteOpenMenu
         :sites="store.sites"
         :identities="store.identities"
+        :locked-site-id="effectiveLock"
+        @open-blank="chooseBlank"
         @open-daily="chooseDaily"
         @open-clean="chooseClean"
         @open-identity="chooseIdentity"
@@ -165,25 +198,16 @@ function chooseIdentity(identityId: string): void {
   height: 30px;
 }
 
-.split-main,
-.split-more {
+.split-main {
   display: grid;
   place-items: center;
+  width: 32px;
   color: var(--faint);
   background: transparent;
+  cursor: pointer;
 }
 
-.split-main {
-  width: 32px;
-}
-
-.split-more {
-  width: 20px;
-  border-left: 1px solid var(--line-soft);
-}
-
-.split-main:hover,
-.split-more:hover {
+.split-main:hover {
   color: var(--text);
   background: var(--surface-2);
 }
@@ -191,15 +215,10 @@ function chooseIdentity(identityId: string): void {
 /* Dock headers and empty cells are denser than the toolbar. */
 .split.compact {
   height: 20px;
-  border-color: var(--line-soft);
 }
 
 .split.compact .split-main {
   width: 22px;
-}
-
-.split.compact .split-more {
-  width: 15px;
 }
 
 .open-panel {
@@ -214,11 +233,11 @@ function chooseIdentity(identityId: string): void {
 @keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-3px);
   }
   to {
     opacity: 1;
-    transform: none;
+    transform: translateY(0);
   }
 }
 </style>

@@ -1,3 +1,4 @@
+import type { EmbeddedViewport } from "./embedded";
 import type { Flow } from "./flows";
 import type { LocaleSetting } from "./locale";
 import type { SearchEngine } from "./search";
@@ -501,6 +502,18 @@ export interface AppSettings {
    */
   browserZoom: number;
   /**
+   * Default fixed CSS viewport for pages in the built-in browser.
+   *
+   * The workspace-wide answer to "what size should pages render at?". A page
+   * follows it until the user pins its own size from that tab's context menu,
+   * and can be sent back to following it from the same menu. `null` means
+   * adaptive: every page fills its cell.
+   *
+   * Separate axis from {@link browserZoom}: zoom scales a page at its own layout
+   * size, a fixed viewport changes the layout size itself.
+   */
+  browserViewport: EmbeddedViewport | null;
+  /**
    * Engine a blank tab searches with, and the one the address bar falls back to
    * for text that is not an address.
    *
@@ -757,6 +770,7 @@ export type SettingsPatch = Partial<
     | "autoFillOnLaunch"
     | "autoSubmitLogin"
     | "browserZoom"
+    | "browserViewport"
     | "searchEngineId"
     | "customSearchEngines"
     | "newTabBackground"

@@ -13,7 +13,7 @@
  * vocabulary for it.
  */
 import type { EmbeddedTab } from "@shared/embedded";
-import { Plus, X } from "lucide-vue-next";
+import { Minimize2, Plus, X } from "lucide-vue-next";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -26,6 +26,17 @@ const props = defineProps<{
    * caller and the strip cannot disagree while the state is being replaced.
    */
   currentId?: string | undefined;
+  /**
+   * True when this instance occupies more than one cell of the view.
+   *
+   * Then the strip stops being a page switcher and becomes a label: the cell is
+   * already pinned to one page, and showing the full page list in both cells made
+   * the two strips identical — the user could not tell which page each cell was
+   * actually displaying, and clicking a pill in one cell looked like it changed
+   * both. The remaining controls are the current page and a way back to
+   * "un-split, one cell follows the instance".
+   */
+  split?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -33,14 +44,53 @@ const emit = defineEmits<{
   select: [pageId: string];
   /** Right-clicked a page; the caller freezes the stage and opens its menu. */
   menu: [page: EmbeddedTab, event: MouseEvent];
+  /** This split cell should go back to following the instance. */
+  merge: [];
 }>();
 
 const store = useEmbeddedStore();
 const { t } = useI18n();
 
-const pages = computed<EmbeddedTab[]>(() =>
+const allPages = computed<EmbeddedTab[]>(() =>
   props.instanceId ? store.instancePages(props.instanceId) : [],
 );
+
+/**
+ * Pills to draw.
+ *
+ * Normally every page of the instance, because the strip is how a window's tabs
+ * are switched. In a split the cell is already committed to one page, so only
+ * that page is shown: two identical full strips were the visible symptom of the
+ * split being invisible in the chrome.
+ */
+const pages = computed<EmbeddedTab[]>(() => {
+  if (!props.split) return allPages.value;
+  return allPages.value.filter((page) => page.id === props.currentId);
+});
+
+/**
+ * A page can be dragged onto another cell.
+ *
+ * Dropping it there splits the instance: two cells of the same browser window
+ * showing two different pages, which is how one account gets compared side by
+ * side. The drag carries the *page* id, not the instance id — that difference is
+ * what the drop handler reads to decide between "move this window here" (dock
+ * rows drag instance roots) and "show this page in that cell".
+ *
+ * `dragTab` freezes the stage for the same reason the dock's drag does: native
+ * pages swallow every drag event, so a cell only becomes a drop target while its
+ * view is parked.
+ */
+function onDragStart(page: EmbeddedTab, event: DragEvent): void {
+  store.dragTab(page.id);
+  event.dataTransfer?.setData("text/plain", page.id);
+  event.dataTransfer?.setData("application/x-ensemble-page", page.id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onDragEnd(): void {
+  store.dragTab(null);
+}
 
 /** "+" adds a page to this instance; it must never open a second window. */
 function addPage(): void {
@@ -59,8 +109,11 @@ function addPage(): void {
       :aria-selected="page.id === currentId"
       :data-tab-id="page.id"
       :title="page.url"
+      draggable="true"
       @click.stop="emit('select', page.id)"
       @mousedown.stop
+      @dragstart="onDragStart(page, $event)"
+      @dragend="onDragEnd"
       @contextmenu.prevent.stop="emit('menu', page, $event)"
     >
       <img
@@ -82,7 +135,26 @@ function addPage(): void {
         <X :size="9" />
       </button>
     </div>
+    <!--
+      In a split the strip is a label, not a switcher: this cell shows exactly
+      one page, and the way out is to give the cell back to the instance. A "+"
+      here would add a page the cell cannot show, so it gives way to the merge
+      control instead of sitting next to it doing something different.
+    -->
     <button
+      v-if="split"
+      type="button"
+      class="slot-tab-merge"
+      :title="t('app.browserUnsplit')"
+      :aria-label="t('app.browserUnsplit')"
+      data-unsplit
+      @click.stop="emit('merge')"
+      @mousedown.stop
+    >
+      <Minimize2 :size="10" />
+    </button>
+    <button
+      v-else
       type="button"
       class="slot-tab-add"
       :aria-label="t('app.browserNewTabHere')"
@@ -198,6 +270,23 @@ function addPage(): void {
 }
 
 .slot-tab-add:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Same footprint as the "+" it replaces, so a split cell's strip does not
+   reflow when the instance is split or merged. */
+.slot-tab-merge {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--faint);
+  flex: 0 0 18px;
+}
+
+.slot-tab-merge:hover {
   background: var(--surface-3);
   color: var(--text);
 }

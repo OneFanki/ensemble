@@ -30,6 +30,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 100% is what a site expects; the setting exists for high-DPI screens and
   // small laptops, not as something to tune up front.
   browserZoom: 100,
+  // Adaptive: pages fill their cell. A fixed default would be a layout opinion
+  // applied to every account at once, which is exactly what a first launch
+  // cannot know.
+  browserViewport: null,
   // Bing by default: reachable from networks where Google is not, which for a
   // work tool matters more than index quality.
   searchEngineId: DEFAULT_SEARCH_ENGINE_ID,

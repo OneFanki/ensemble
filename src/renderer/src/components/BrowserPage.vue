@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EmbeddedTab, FrozenSlot, StageRect } from "@shared/embedded";
+import type { EmbeddedTab, EmbeddedView, FrozenSlot, StageRect } from "@shared/embedded";
 import {
   DEVTOOLS_GRIP_WIDTH,
   EMBEDDED_DIVIDER,
@@ -247,13 +247,30 @@ function tabById(id: string | null): EmbeddedTab | undefined {
  * Page a slot is currently showing.
  *
  * `slotTabs` stores browser-instance ids; the instance may have several pages
- * after a `target="_blank"` link, and the slot always shows the active one.
+ * after a `target="_blank"` link, and normally the slot shows the active one.
+ * A slot that pinned a page (`slotPages`, the same-account split) shows that
+ * page instead — otherwise the two cells would show the same thing.
  */
-function slotPage(rootId: string | null): EmbeddedTab | undefined {
+function slotPage(rootId: string | null, index?: number): EmbeddedTab | undefined {
   const root = tabById(rootId);
   if (!root) return undefined;
+  const pinnedId = index === undefined ? null : (activeView.value?.slotPages?.[index] ?? null);
+  const pinned = pinnedId ? tabById(pinnedId) : undefined;
+  if (pinned && pinned.instanceId === root.instanceId) return pinned;
   const pages = store.instancePages(root.instanceId);
   return pages.find((page) => page.active) ?? root;
+}
+
+/**
+ * Index of the slot that currently shows this page, if any.
+ *
+ * With a split, one instance occupies two cells showing two different pages; the
+ * strip in each cell must mark *its own* page as current, so the caller passes
+ * the slot index it is drawing for.
+ */
+function slotShowingPage(pageId: string | undefined): number | undefined {
+  if (!pageId) return undefined;
+  return slotChrome.value.find((slot) => slotPage(slot.tabId, slot.index)?.id === pageId)?.index;
 }
 
 /**
@@ -278,13 +295,45 @@ function slotAccount(rootId: string | null): string {
   return workspace.identities.find((item) => item.id === root.identityId)?.name ?? "";
 }
 
+/** How many cells of the active view hold the instance behind this slot entry. */
+function viewSlotCount(rootId: string | null): number {
+  const view = activeView.value;
+  if (!view || !rootId) return 0;
+  return view.slotTabs.filter((id) => id === rootId).length;
+}
+
+/**
+ * Gives a split cell back to the instance.
+ *
+ * A split is two cells showing two pages of one window; "un-split" means this
+ * cell stops pinning a page, so it follows the instance again. If the instance
+ * still holds another cell the pins there are dropped too — otherwise "one cell
+ * follows the window" would sit next to a cell that still pins a page, which is
+ * the same confusion in a smaller dose.
+ */
+async function unsplitSlot(slotIndex: number): Promise<void> {
+  const view = activeView.value;
+  if (!view) return;
+  await store.unsplitSlot(view.id, slotIndex);
+}
+
 /**
  * Switching pages inside a slot.
  *
  * The instance stays in the same cell — only which of its pages is on screen
  * changes — so this must not bubble up to the header's "select this slot".
+ *
+ * When the same instance occupies two cells (a split), the click also pins the
+ * page to *this* cell. Without that, `activate` would move the instance's global
+ * active page and the other cell would silently switch to the same page — the
+ * two-cell comparison would collapse into two identical pictures.
  */
-function selectPage(pageId: string): void {
+function selectPage(pageId: string, slotIndex?: number): void {
+  const view = activeView.value;
+  if (view && slotIndex !== undefined && viewSlotCount(view.slotTabs[slotIndex] ?? null) > 1) {
+    void store.splitPageIntoSlot(view.id, slotIndex, pageId);
+    return;
+  }
   void store.activate(pageId);
 }
 
@@ -364,19 +413,82 @@ const menuViewport = computed(() => {
   return id ? store.state.tabs.find((tab) => tab.id === id)?.viewport : undefined;
 });
 
+/** What the page itself chose: absent means "inherit the workspace default". */
+const menuViewportOverride = computed(() => {
+  const id = tabMenu.value?.page.id;
+  return id ? store.state.tabs.find((tab) => tab.id === id)?.viewportOverride : undefined;
+});
+
 const customWidth = ref("");
 const customHeight = ref("");
 const viewportError = ref<string | null>(null);
 
-async function applyViewport(size: { width: number; height: number } | null): Promise<void> {
+/**
+ * Workspace-wide resolution, and the toolbar menu that sets it.
+ *
+ * Kept out of the tab menu on purpose: this is the answer for "how big should
+ * pages be by default", which is a setting, while the tab menu answers "how big
+ * should *this* page be". Putting both in the tab menu made one of them look
+ * like a bug — a control that silently changed four pages at once.
+ */
+const globalViewport = computed(() => workspace.settings.browserViewport);
+const globalViewportOpen = ref(false);
+
+function toggleGlobalViewport(): void {
+  globalViewportOpen.value = !globalViewportOpen.value;
+}
+
+// One click anywhere else closes it, like the toolbar's other dropdowns. The
+// handler is capture-phase so a click on a menu row still selects before this
+// runs, and pointer-down on the menu itself is exempt.
+watch(globalViewportOpen, (open) => {
+  if (open) window.addEventListener("pointerdown", onGlobalViewportOutside, true);
+  else window.removeEventListener("pointerdown", onGlobalViewportOutside, true);
+});
+
+function onGlobalViewportOutside(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest(".global-viewport")) return;
+  globalViewportOpen.value = false;
+}
+
+onBeforeUnmount(() => {
+  window.removeEventListener("pointerdown", onGlobalViewportOutside, true);
+});
+
+async function applyGlobalViewport(
+  size: { width: number; height: number } | null,
+): Promise<void> {
+  globalViewportOpen.value = false;
+  await store.setDefaultViewport(size);
+}
+
+/**
+ * Applies a viewport choice to the menu's page, then closes the menu.
+ *
+ * Closing is part of the behaviour, not an afterthought. The menu floats over a
+ * frozen picture of the stage, and the views are parked while it is open — so
+ * the re-layout this call causes cannot be seen until the stage comes back. A
+ * menu that stays open after the click therefore looks like a menu that ignored
+ * it: the row highlights, the page behind does not change, and the result only
+ * appears once the user dismisses it. Picking a size is "show me this page at
+ * that size", so the answer has to be on screen immediately.
+ */
+async function applyViewport(
+  size: { width: number; height: number } | "adaptive" | "inherit",
+): Promise<void> {
   const page = tabMenu.value?.page;
   if (!page) return;
   viewportError.value = null;
   try {
     await store.setViewport(page.id, size);
   } catch (error) {
+    // A rejected size keeps the menu open: the message belongs next to the
+    // control that produced it.
     viewportError.value = (error as Error).message;
+    return;
   }
+  closeTabMenu();
 }
 
 async function applyCustomViewport(): Promise<void> {
@@ -398,10 +510,11 @@ async function applyCustomViewport(): Promise<void> {
     return;
   }
   await applyViewport({ width, height });
+  // `applyViewport` already closed the menu on success; clearing the inputs is
+  // only useful when the menu is still open with an error under it.
   if (!viewportError.value) {
     customWidth.value = "";
     customHeight.value = "";
-    closeTabMenu();
   }
 }
 
@@ -436,7 +549,7 @@ const blankSurfaces = computed(() => {
   return slotChrome.value
     .map((slot, index) => ({ slot, index }))
     .flatMap(({ slot, index }) => {
-      const page = slotPage(slot.tabId);
+      const page = slotPage(slot.tabId, index);
       if (!page || !isBlankTab(page)) return [];
       const rect = embeddedSlotRectsForSlot(index);
       return rect ? [{ tab: page, slot: rect }] : [];
@@ -476,7 +589,7 @@ const devtoolsGrips = computed(() => {
     });
   };
   for (const slot of slotChrome.value) {
-    push(slotPage(slot.tabId), embeddedSlotRectsForSlot(slot.index));
+    push(slotPage(slot.tabId, slot.index), embeddedSlotRectsForSlot(slot.index));
   }
   const tab = activeTab.value;
   if (!activeView.value && tab && !tab.viewId) {
@@ -516,8 +629,8 @@ function onGripKey(tabId: string, event: KeyboardEvent): void {
   void window.ensemble.setEmbeddedDevToolsWidth(tabId, page.devtoolsWidth + step);
 }
 
-function activateSlot(rootId: string | null): void {
-  const page = slotPage(rootId);
+function activateSlot(rootId: string | null, index?: number): void {
+  const page = slotPage(rootId, index);
   if (page) void store.activate(page.id);
 }
 
@@ -539,15 +652,30 @@ function onSlotDragOver(slotIndex: number, event: DragEvent): void {
   dropSlot.value = slotIndex;
 }
 
+/**
+ * Two kinds of drag land on a cell, and they mean different things.
+ *
+ * A dock row drags an *instance root*: "put this browser window in that cell".
+ * A page tab drags one *page* (it also sets `application/x-ensemble-page`):
+ * "show this page in that cell". The second is what makes one account split
+ * across two cells — the instance stays the same, only the visible page differs,
+ * so cookies and the login stay shared.
+ */
 async function onSlotDrop(slotIndex: number, event: DragEvent): Promise<void> {
   event.preventDefault();
+  const pageId = event.dataTransfer?.getData("application/x-ensemble-page") ?? "";
   const tabId = event.dataTransfer?.getData("text/plain");
   dropSlot.value = null;
   // Clearing the drag signal restores the live pages; do it before the IPC so the
   // re-layout lands on a stage that is already visible again.
   store.dragTab(null);
   const view = activeView.value;
-  if (!tabId || !view) return;
+  if (!view) return;
+  if (pageId) {
+    await store.splitPageIntoSlot(view.id, slotIndex, pageId);
+    return;
+  }
+  if (!tabId) return;
   // pinTab joins the view when needed and focuses the page it pinned.
   await store.pin(view.id, slotIndex, tabId);
 }
@@ -578,6 +706,12 @@ const emptySlots = computed(() =>
  * Native pages are inset by `EMBEDDED_DIVIDER` on every internal edge, which
  * leaves a real gap for the handle: a divider drawn on the exact boundary would
  * be painted over by the page itself.
+ *
+ * Handles are grouped by *boundary*, not by slot. In a 2×2, both bottom cells
+ * end at the same y — a per-rect map keyed by that y ended up keeping only the
+ * last one, so the horizontal handle covered the right half of the stage and
+ * the left half was unreachable (dragging there hit the stage itself). Each
+ * boundary here spans every cell that touches it.
  */
 interface Divider {
   key: string;
@@ -588,6 +722,11 @@ interface Divider {
   top: number;
   width: number;
   height: number;
+}
+
+/** Rounds a fraction to the precision boundaries are compared at. */
+function boundary(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 const dividers = computed<Divider[]>(() => {
@@ -602,37 +741,65 @@ const dividers = computed<Divider[]>(() => {
   const height = element.clientHeight;
   if (width <= 0 || height <= 0) return [];
 
-  const vertical = new Map<number, SlotRect>();
-  const horizontal = new Map<number, SlotRect>();
+  /** One boundary per position, with the extent of every cell touching it. */
+  const collect = (positions: Array<{ at: number; from: number; to: number }>) => {
+    const byAt = new Map<number, { from: number; to: number }>();
+    for (const edge of positions) {
+      const prev = byAt.get(edge.at);
+      if (!prev) {
+        byAt.set(edge.at, { from: edge.from, to: edge.to });
+        continue;
+      }
+      byAt.set(edge.at, {
+        from: Math.min(prev.from, edge.from),
+        to: Math.max(prev.to, edge.to),
+      });
+    }
+    return byAt;
+  };
+
+  const verticals: Array<{ at: number; from: number; to: number }> = [];
+  const horizontals: Array<{ at: number; from: number; to: number }> = [];
   for (const rect of rects) {
-    const right = Math.round((rect.x + rect.width) * 1000) / 1000;
-    const bottom = Math.round((rect.y + rect.height) * 1000) / 1000;
-    // The right-most / bottom-most edges are the stage border, not boundaries.
-    if (right > 0.001 && right < 0.999) vertical.set(right, rect);
-    if (bottom > 0.001 && bottom < 0.999) horizontal.set(bottom, rect);
+    const right = boundary(rect.x + rect.width);
+    const bottom = boundary(rect.y + rect.height);
+    const left = boundary(rect.x);
+    const top = boundary(rect.y);
+    // The stage border is not a boundary between cells.
+    if (left > 0.001 && left < 0.999) {
+      verticals.push({ at: left, from: rect.y, to: rect.y + rect.height });
+    }
+    if (right > 0.001 && right < 0.999) {
+      verticals.push({ at: right, from: rect.y, to: rect.y + rect.height });
+    }
+    if (top > 0.001 && top < 0.999) {
+      horizontals.push({ at: top, from: rect.x, to: rect.x + rect.width });
+    }
+    if (bottom > 0.001 && bottom < 0.999) {
+      horizontals.push({ at: bottom, from: rect.x, to: rect.x + rect.width });
+    }
   }
 
   const handles: Divider[] = [];
-  for (const [at, rect] of vertical) {
+  for (const [at, span] of collect(verticals)) {
     handles.push({
       key: `v-${at}`,
       axis: "x",
       at,
       left: Math.round(at * width) - EMBEDDED_DIVIDER,
-      top: 0,
+      top: Math.round(span.from * height),
       width: EMBEDDED_DIVIDER,
-      height: Math.round(height),
+      height: Math.max(1, Math.round((span.to - span.from) * height)),
     });
-    void rect;
   }
-  for (const [at, rect] of horizontal) {
+  for (const [at, span] of collect(horizontals)) {
     handles.push({
-      key: `h-${at}-${rect.x}`,
+      key: `h-${at}`,
       axis: "y",
       at,
-      left: Math.round(rect.x * width),
+      left: Math.round(span.from * width),
       top: Math.round(at * height) - EMBEDDED_DIVIDER,
-      width: Math.round(rect.width * width),
+      width: Math.max(1, Math.round((span.to - span.from) * width)),
       height: EMBEDDED_DIVIDER,
     });
   }
@@ -938,8 +1105,10 @@ async function syncStageCover(): Promise<void> {
     Boolean(store.draggingTabId) ||
     store.stageMenuOpen ||
     // Address-bar suggestions hang below the toolbar, over the stage; native
-    // pages would paint on top of them otherwise.
-    (suggestionsOpen.value && siteSuggestions.value.length > 0);
+    // pages would paint on top of them otherwise. The workspace-resolution
+    // dropdown is the same shape of overlay and needs the same treatment.
+    (suggestionsOpen.value && siteSuggestions.value.length > 0) ||
+    globalViewportOpen.value;
   const seq = ++freezeSeq;
   if (!covered) {
     frozenSlots.value = [];
@@ -964,6 +1133,7 @@ watch(
       store.draggingTabId,
       store.stageMenuOpen,
       suggestionsOpen.value && siteSuggestions.value.length > 0,
+      globalViewportOpen.value,
       // The stage size participates because a frozen frame is a picture placed
       // at the rect the main process reported when it captured. Collapsing the
       // run dock mid-overlay shrinks the stage by 46px; without re-capturing,
@@ -1095,45 +1265,26 @@ async function addToSlot(slotIndex: number, identityId?: string): Promise<void> 
   const view = activeView.value;
   if (!view) return;
   openSlotPicker.value = null;
-  await store.openTabInSlot(view.id, slotIndex, identityId);
+  await store.openTabInSlot(view.id, slotIndex, identityId ? { identityId } : undefined);
 }
 
 /**
  * Accounts offered for an empty cell: the site's own, in stored order.
  *
- * Two ways to know the site, tried in that order:
- *
- * 1. The view definition this container was opened from — the normal case, and
- *    the only one that works for an empty view. A saved view knows its site
- *    without needing a page in it.
- * 2. A page already in the container, for a view assembled by hand (dragged
- *    together, no definition). This is why the fallback stays: a hand-made
- *    container is exactly the one that most needs the picker.
- *
- * An empty container with no definition offers nothing: there is nothing to
- * infer from, and listing every identity in the workspace would turn the small
- * menu into a second identities page. Dragging one account in is what
- * establishes the site, which is the gesture that created this case.
+ * The site comes from `store.viewSiteId`, which knows both a saved view
+ * definition and a hand-assembled container. An empty container with no
+ * definition offers nothing: there is nothing to infer from, and listing every
+ * identity in the workspace would turn the small menu into a second identities
+ * page. Dragging one account in is what establishes the site.
  */
 function slotIdentities(slotIndex: number): Identity[] {
   void slotIndex;
-  const siteId = viewSiteId.value;
+  const view = activeView.value;
+  if (!view) return [];
+  const siteId = store.viewSiteId(view.id);
   if (!siteId) return [];
   return workspace.identities.filter((identity) => identity.siteId === siteId);
 }
-
-const viewSiteId = computed<string | undefined>(() => {
-  const view = activeView.value;
-  if (!view) return undefined;
-  if (view.viewDefinitionId) {
-    const definition = workspace.views.find((item) => item.id === view.viewDefinitionId);
-    if (definition?.siteId) return definition.siteId;
-  }
-  for (const tab of store.viewInstances(view.id)) {
-    if (tab.siteId) return tab.siteId;
-  }
-  return undefined;
-});
 
 function toggleSlotPicker(slotIndex: number): void {
   openSlotPicker.value = openSlotPicker.value === slotIndex ? null : slotIndex;
@@ -1191,8 +1342,19 @@ async function openBookmark(bookmark: Bookmark): Promise<void> {
   await window.ensemble.navigateEmbeddedTab(tab.id, bookmark.url);
 }
 
+/**
+ * The browser page's own chooser: "open this, as whom?".
+ *
+ * Every answer means "add the page where the user is looking". With a view on
+ * stage that is one of its cells; picking an account used to open a loose page
+ * in the flat strip instead, which for a grid of accounts is the one place the
+ * user is not looking. Without a view the flat strip is the stage, so a loose
+ * page is the same answer.
+ */
 async function openIdentityBookmark(identityId: string): Promise<void> {
-  await store.openIdentity(identityId);
+  const view = activeView.value;
+  if (view) await store.openTabInto(view.id, { identityId });
+  else await store.openIdentity(identityId);
 }
 
 function fillMessage(reason?: string): string {
@@ -1428,6 +1590,52 @@ function fillMessage(reason?: string): string {
         </div>
       </div>
       <!--
+        Workspace-wide resolution. It sits in the toolbar because it is a
+        setting, not a page action: the same size applies to every page until
+        one is given its own. Its menu says so in a line and points at the
+        per-page path (right-click the tab), because the two controls otherwise
+        look like the same feature in two places.
+      -->
+      <div class="global-viewport">
+        <button
+          type="button"
+          class="zoom-value mono"
+          :class="{ changed: Boolean(globalViewport) }"
+          :title="t('app.viewportDefaultHint')"
+          :aria-label="t('app.viewportDefaultLabel')"
+          :aria-expanded="globalViewportOpen"
+          @click="toggleGlobalViewport"
+        >
+          {{ globalViewport ? `${globalViewport.width}×${globalViewport.height}` : t("app.viewportGlobalOff") }}
+        </button>
+        <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
+          <p class="global-viewport-note">{{ t("app.viewportDefaultHint") }}</p>
+          <button
+            type="button"
+            role="menuitem"
+            class="tab-menu-item"
+            :class="{ checked: !globalViewport }"
+            @click="applyGlobalViewport(null)"
+          >
+            {{ t("app.viewportGlobalOff") }}
+          </button>
+          <button
+            v-for="preset in VIEWPORT_PRESETS"
+            :key="preset.name"
+            type="button"
+            role="menuitem"
+            class="tab-menu-item mono"
+            :class="{
+              checked:
+                globalViewport?.width === preset.width && globalViewport?.height === preset.height,
+            }"
+            @click="applyGlobalViewport({ width: preset.width, height: preset.height })"
+          >
+            {{ preset.name }}
+          </button>
+        </div>
+      </div>
+      <!--
         Zoom lives in the toolbar so it can be found without knowing the
         shortcut. It stays visible (a hidden control is a control nobody
         discovers) but is drawn quietly at the global default and takes the
@@ -1598,10 +1806,11 @@ function fillMessage(reason?: string): string {
           {{ slotAccount(flatInstance.instanceId) }}
         </span>
         <span v-if="activeTab?.loading" class="spinner"></span>
+        <!-- Flat stage: one instance, no cells to split across. -->
         <InstanceTabStrip
           :instance-id="flatInstance.instanceId"
           :current-id="flatInstance.currentId"
-          @select="selectPage"
+          @select="(pageId) => selectPage(pageId)"
           @menu="openTabMenu"
         />
       </div>
@@ -1621,34 +1830,40 @@ function fillMessage(reason?: string): string {
           width: `${slot.width}px`,
           height: `${EMBEDDED_SLOT_HEADER}px`,
         }"
-        @click="activateSlot(slot.tabId)"
+        @click="activateSlot(slot.tabId, slot.index)"
         @dragover="onSlotDragOver(slot.index, $event)"
         @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
         @drop="onSlotDrop(slot.index, $event)"
       >
         <span class="slot-index mono">{{ slot.index + 1 }}</span>
         <span
-          v-if="slotPage(slot.tabId)?.color"
+          v-if="slotPage(slot.tabId, slot.index)?.color"
           class="dot"
-          :style="{ background: `var(--role-${slotPage(slot.tabId)?.color})` }"
+          :style="{ background: `var(--role-${slotPage(slot.tabId, slot.index)?.color})` }"
         ></span>
         <!-- Which account this cell belongs to. Every cell of the same app shows
              the same page title, so without the account name the band cannot
              answer "who am I looking at" — which is the point of the grid. -->
         <span v-if="slotAccount(slot.tabId)" class="slot-account">{{ slotAccount(slot.tabId) }}</span>
-        <span v-if="slotPage(slot.tabId)?.loading" class="spinner"></span>
+        <span v-if="slotPage(slot.tabId, slot.index)?.loading" class="spinner"></span>
         <!--
           Pages of this instance. A slot holds an instance, so a popup it opened
           has no cell of its own; without a strip here the only way to switch
           back was the dock. The strip is drawn even for a single page: it is
           what says "this cell is a browser with tabs" and the only place the
           "+" for a second page can live.
+
+          A split cell gets `split` instead: there the cell is pinned to one page
+          and the strip must not offer the whole list, because the sibling cell
+          would draw the same list and the two would look identical.
         -->
         <InstanceTabStrip
           :instance-id="slotInstanceId(slot.tabId)"
-          :current-id="slotPage(slot.tabId)?.id"
-          @select="selectPage"
+          :current-id="slotPage(slot.tabId, slot.index)?.id"
+          :split="viewSlotCount(slot.tabId) > 1"
+          @select="(pageId) => selectPage(pageId, slot.index)"
           @menu="openTabMenu"
+          @merge="unsplitSlot(slot.index)"
         />
       </div>
 
@@ -1782,18 +1997,28 @@ function fillMessage(reason?: string): string {
         </button>
         <div class="tab-menu-sep"></div>
         <!--
-          Resolution. Adaptive is the normal state; a preset pins the page to a
-          fixed CSS viewport rendered scaled-to-fit, for checking how a layout
-          behaves at a phone or desktop size without a second window. The custom
-          row keeps the menu self-sufficient — two numbers, not a dialog.
+          Resolution, per page. "Follow the workspace default" comes first
+          because it is the resting state: a page inherits unless the user chose
+          something for it. "Adaptive" is a real choice too — it pins "fill the
+          cell" against a default that says otherwise — which is why the two are
+          separate rows instead of one "off" switch.
         -->
         <div class="menu-section-label">{{ t("app.viewportLabel") }}</div>
         <button
           type="button"
           role="menuitem"
           class="tab-menu-item"
-          :class="{ checked: !menuViewport }"
-          @click="applyViewport(null)"
+          :class="{ checked: menuViewportOverride === undefined }"
+          @click="applyViewport('inherit')"
+        >
+          {{ t("app.viewportInherit") }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :class="{ checked: menuViewportOverride === null }"
+          @click="applyViewport('adaptive')"
         >
           {{ t("app.viewportAdaptive") }}
         </button>
@@ -1803,7 +2028,11 @@ function fillMessage(reason?: string): string {
           type="button"
           role="menuitem"
           class="tab-menu-item mono"
-          :class="{ checked: menuViewport?.width === preset.width && menuViewport?.height === preset.height }"
+          :class="{
+            checked:
+              menuViewportOverride?.width === preset.width &&
+              menuViewportOverride?.height === preset.height,
+          }"
           @click="applyViewport({ width: preset.width, height: preset.height })"
         >
           {{ preset.name }}
@@ -1957,6 +2186,57 @@ function fillMessage(reason?: string): string {
 .zoom-value:hover {
   background: var(--surface-2);
   color: var(--text);
+}
+
+/* Workspace-wide resolution. Same shape as the zoom stepper because it is the
+   same kind of control — a small value with a menu — but it reads as a setting:
+   quiet until a size is actually pinned. */
+.global-viewport {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 30px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: visible;
+  flex: 0 0 auto;
+}
+
+.global-viewport .zoom-value {
+  min-width: 62px;
+  border: none;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.global-viewport .zoom-value.changed {
+  color: var(--accent);
+}
+
+.global-viewport-menu {
+  position: absolute;
+  z-index: 72;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 208px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+
+/* The line that separates "default for every page" from "set one page": without
+   it the two menus look like the same feature with two entrances. */
+.global-viewport-note {
+  margin: 2px 6px 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--faint);
 }
 
 .address {

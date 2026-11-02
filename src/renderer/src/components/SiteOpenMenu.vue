@@ -1,17 +1,22 @@
 <script setup lang="ts">
 import type { Identity, Site } from "@shared/types";
-import { ChevronRight, Globe, Plus } from "lucide-vue-next";
+import { ChevronRight, FilePlus, Globe, ShieldOff } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 /**
- * A bookmark-style "open from a site" menu.
+ * The account chooser: "new page, as whom?".
  *
  * Sites are the bookmarks: open one in the daily profile, open it clean, or open
- * it as one of its accounts. "Daily" is the default because that is what a
- * bookmark does in an ordinary browser — the login is already there. "Clean" is
- * the deliberate exception, and the account path lands in that identity's own
- * session partition.
+ * it as one of its accounts. "Daily" is the default *meaning* of a bookmark in an
+ * ordinary browser — the login is already there — but it is not the default
+ * *action* here: nothing is created until a row is picked. A bare "+" used to
+ * produce a daily-profile page every time, which inside a view meant an
+ * anonymous page in a grid of accounts.
+ *
+ * `lockedSiteId` narrows the chooser to one system, which is what a view's own
+ * "+" needs: the container already says which system this is, so offering every
+ * site in the workspace would be a second sites page inside a 260px dock.
  *
  * Tags are deliberately not shown here: a lone tag name at the bottom of the
  * account column reads as an empty section, and tags are for finding things on
@@ -20,9 +25,13 @@ import { useI18n } from "vue-i18n";
 const props = defineProps<{
   sites: Site[];
   identities: Identity[];
+  /** Show only this site's rows; the site column and the search box disappear. */
+  lockedSiteId?: string;
 }>();
 
 const emit = defineEmits<{
+  /** The explicit "no account" choice: a blank page in the daily profile. */
+  openBlank: [];
   /** Open the site in the daily profile, reusing whatever login it has. */
   openDaily: [siteId: string];
   /** Open the site in a throwaway session. */
@@ -35,10 +44,15 @@ const { t } = useI18n();
 const activeSiteId = ref<string | null>(null);
 const term = ref("");
 
+const locked = computed(() =>
+  props.lockedSiteId ? props.sites.find((site) => site.id === props.lockedSiteId) : undefined,
+);
+
 const filtered = computed(() => {
+  const available = locked.value ? [locked.value] : props.sites;
   const needle = term.value.trim().toLowerCase();
-  if (!needle) return props.sites;
-  return props.sites.filter(
+  if (!needle) return available;
+  return available.filter(
     (site) =>
       site.name.toLowerCase().includes(needle) || site.baseUrl.toLowerCase().includes(needle),
   );
@@ -68,16 +82,24 @@ function openIdentity(identity: Identity): void {
 </script>
 
 <template>
-  <div class="open-menu" role="menu" :aria-label="t('app.openFromSite')">
+  <div class="open-menu" :class="{ locked }" role="menu" :aria-label="t('app.newPageAs')">
     <div class="head">
-      <span class="title">{{ t("app.openFromSite") }}</span>
-      <input v-model="term" class="search" type="search" :placeholder="t('app.search')" />
+      <span class="title">{{ locked ? locked.name : t("app.newPageAs") }}</span>
+      <!-- A locked chooser has one system and a handful of accounts; a search
+           field there would be a control with nothing to filter. -->
+      <input
+        v-if="!locked"
+        v-model="term"
+        class="search"
+        type="search"
+        :placeholder="t('app.search')"
+      />
     </div>
 
-    <div v-if="!sites.length" class="empty">{{ t("app.emptySites") }}</div>
+    <div v-if="!filtered.length" class="empty">{{ t("app.emptySites") }}</div>
 
     <div v-else class="body">
-      <div class="sites">
+      <div v-if="!locked" class="sites">
         <button
           v-for="site in filtered"
           :key="site.id"
@@ -97,36 +119,57 @@ function openIdentity(identity: Identity): void {
       </div>
 
       <div v-if="activeSite" class="accounts">
-        <button type="button" class="account-row primary" @click="openDaily(activeSite)">
+        <!--
+          The site's own openings come first, accounts after.
+          
+          Accounts used to lead because "pick an account" is the reason this
+          window exists. But a site with thirty accounts pushed daily/clean/blank
+          past the fold, and those three are the answers that do not depend on
+          how many accounts exist — a user looking for "just open the site" had to
+          scroll past every account to find it. Fixed rows stay reachable; the
+          account list scrolls on its own below them.
+        -->
+        <button type="button" class="account-row anonymous" @click="openDaily(activeSite)">
           <Globe :size="11" />
           <span class="acc-copy">
             <span class="acc-name">{{ t("app.openSiteDaily") }}</span>
             <span class="acc-note">{{ t("app.openSiteDailyHint") }}</span>
           </span>
         </button>
-        <button type="button" class="account-row clean" @click="openClean(activeSite)">
-          <Plus :size="11" />
+        <button type="button" class="account-row anonymous dashed" @click="openClean(activeSite)">
+          <ShieldOff :size="11" />
           <span class="acc-copy">
             <span class="acc-name">{{ t("app.openSiteClean") }}</span>
             <span class="acc-note">{{ t("app.openSiteCleanHint") }}</span>
           </span>
         </button>
-        <p class="accounts-title">{{ t("app.openSiteAccounts") }}</p>
-        <button
-          v-for="identity in accounts"
-          :key="identity.id"
-          type="button"
-          class="account-row"
-          :style="{ '--role': `var(--role-${identity.color})` }"
-          @click="openIdentity(identity)"
-        >
-          <span class="acc-dot"></span>
+        <button type="button" class="account-row anonymous" @click="emit('openBlank')">
+          <FilePlus :size="11" />
           <span class="acc-copy">
-            <span class="acc-name">{{ identity.name }}</span>
-            <span class="acc-note mono">{{ identity.username }}</span>
+            <span class="acc-name">{{ t("app.openBlankPage") }}</span>
+            <span class="acc-note">{{ t("app.openBlankPageHint") }}</span>
           </span>
         </button>
-        <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
+
+        <div class="accounts-sep"></div>
+        <p class="accounts-title">{{ t("app.openSiteAccounts") }}</p>
+        <div class="accounts-list">
+          <button
+            v-for="identity in accounts"
+            :key="identity.id"
+            type="button"
+            class="account-row"
+            :style="{ '--role': `var(--role-${identity.color})` }"
+            @click="openIdentity(identity)"
+          >
+            <span class="acc-dot"></span>
+            <span class="acc-copy">
+              <span class="acc-name">{{ identity.name }}</span>
+              <span class="acc-note mono">{{ identity.username }}</span>
+            </span>
+          </button>
+          <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
+        </div>
       </div>
     </div>
   </div>
@@ -134,6 +177,8 @@ function openIdentity(identity: Identity): void {
 
 <style scoped>
 .open-menu {
+  /* Wide enough for the two-column chooser; a locked chooser drops the site
+     column, so it narrows with it instead of leaving an empty gutter. */
   width: 400px;
   max-height: 380px;
   display: flex;
@@ -143,6 +188,10 @@ function openIdentity(identity: Identity): void {
   background: var(--surface);
   box-shadow: var(--shadow-float);
   overflow: hidden;
+}
+
+.open-menu.locked {
+  width: 250px;
 }
 
 .head {
@@ -250,9 +299,18 @@ function openIdentity(identity: Identity): void {
 }
 
 .accounts {
-  overflow-y: auto;
+  /* Fixed rows above, scrolling accounts below: a site with thirty accounts must
+     not push "open daily" out of the panel. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 5px;
   min-width: 0;
+}
+
+.accounts-list {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .accounts-title {
@@ -279,27 +337,29 @@ function openIdentity(identity: Identity): void {
   color: var(--text-secondary);
 }
 
-/* Both open rows are actions rather than account picks, so they read as one
-   pair: solid for the ordinary daily open, dashed for the throwaway one. */
-.account-row.primary {
-  border: 1px solid var(--line);
-  margin-bottom: 2px;
+/* The anonymous rows are a different kind of answer from an account pick, so a
+   rule separates them. They keep a quiet shape: an account is the common case
+   and must stay the loudest row in this column. */
+.accounts-sep {
+  height: 1px;
+  margin: 6px 7px;
+  background: var(--line-soft);
+}
+
+.account-row.anonymous {
   color: var(--text-secondary);
 }
 
-.account-row.primary:hover,
-.account-row.clean:hover {
+.account-row.anonymous:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
-/* A clean open is a different kind of action from picking an account, so it is
-   drawn as one: dashed outline instead of a row in the same list. The daily row
-   above it is the plain action and keeps the solid shape. */
-.account-row.clean {
+/* A throwaway session is not the ordinary open, so it is drawn differently —
+   dashed instead of plain. Same distinction the two rows had before, now at the
+   bottom where they belong. */
+.account-row.dashed {
   border: 1px dashed var(--line);
-  margin-bottom: 2px;
-  color: var(--text-secondary);
 }
 
 .acc-dot {

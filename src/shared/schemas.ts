@@ -182,6 +182,21 @@ export const settingsPatchSchema = z.object({
   autoSubmitLogin: z.boolean().optional(),
   browserZoom: z.number().int().min(50).max(200).optional(),
   /**
+   * Workspace default for the built-in browser's fixed CSS viewport.
+   *
+   * `null` is the explicit "adaptive for everyone" answer and clears the field;
+   * omitting the key leaves it untouched. Width/height go through the same
+   * range check the page-level tool uses, so a stored default can never be a
+   * size the UI would refuse to apply.
+   */
+  browserViewport: z
+    .object({
+      width: z.number().int().min(320).max(3840),
+      height: z.number().int().min(320).max(2160),
+    })
+    .nullable()
+    .optional(),
+  /**
    * Only http(s) templates with `%s` are accepted. A custom engine is stored
    * data that later becomes a navigation target, so the shape is checked at the
    * write boundary rather than when it is used.

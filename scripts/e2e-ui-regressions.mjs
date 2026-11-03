@@ -794,6 +794,56 @@ try {
   })()`);
   check("Escape closes the site menu", menuEscaped === false, { menuEscaped });
 
+  /*
+   * The downloads panel is the same kind of overlay as the site menu: an HTML box
+   * anchored under the toolbar, hanging over the stage. It shipped without being
+   * registered as an overlay, so the native page painted straight over it — the
+   * trigger lit up and nothing appeared. The frozen frame is the observable proof
+   * that the page was parked before the panel is drawn.
+   */
+  const downloadsPanel = await client.evaluate(`(async () => {
+    const before = document.querySelectorAll('.stage .frozen').length;
+    const trigger = document.querySelector('.downloads-anchor .icon');
+    trigger?.click();
+    await new Promise((r) => setTimeout(r, 900));
+    const panel = document.querySelector('.downloads-panel');
+    const box = panel?.getBoundingClientRect();
+    const stage = document.querySelector('.stage')?.getBoundingClientRect();
+    return {
+      opened: Boolean(panel),
+      frozenBefore: before,
+      frozenAfter: document.querySelectorAll('.stage .frozen').length,
+      // The panel hangs over the stage, which is what makes parking mandatory.
+      overlapsStage: Boolean(box && stage && box.bottom > stage.top),
+      // A panel that is open but has no box was laid out behind the page.
+      width: box ? Math.round(box.width) : null,
+    };
+  })()`);
+  check(
+    "the downloads panel parks the live page before it shows",
+    downloadsPanel?.opened === true && downloadsPanel?.frozenAfter > 0,
+    downloadsPanel,
+  );
+  check(
+    "the downloads panel is drawn over the stage, not under it",
+    downloadsPanel?.overlapsStage === true && (downloadsPanel?.width ?? 0) > 100,
+    downloadsPanel,
+  );
+
+  const downloadsClosed = await client.evaluate(`(async () => {
+    document.querySelector('.downloads-anchor .icon')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    return {
+      open: Boolean(document.querySelector('.downloads-panel')),
+      frozen: document.querySelectorAll('.stage .frozen').length,
+    };
+  })()`);
+  check(
+    "closing the downloads panel gives the stage back",
+    downloadsClosed?.open === false && downloadsClosed?.frozen === 0,
+    downloadsClosed,
+  );
+
   const dockBefore = await client.evaluate(`(() => {    const dock = document.querySelector('.dock');
     return { width: dock ? Math.round(dock.getBoundingClientRect().width) : null };
   })()`);

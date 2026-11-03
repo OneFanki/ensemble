@@ -546,6 +546,11 @@ AI 完全无感，不需要知道自己处在哪个模式。
 标题栏站点菜单。判断依据是 `App.vue` 的 `overlayOpen`：任何一处漏掉，弹窗就会画在活的页面
 底下，看起来像坏了。
 
+工具栏自己的下拉（站点建议、工作区分辨率、下载面板）另由 `BrowserPage.vue` 的
+`syncStageCover` 判断，那边是手写条件，**新增一个就要同时加进 `covered` 和它上面 `watch`
+的依赖数组**。判定看几何而非外观：浮层矩形是否与舞台相交。漏掉是静默的——按钮照常亮起，
+面板照常渲染，只是被原生页完整盖住。
+
 截图本身走 CDP `Page.captureScreenshot`（带 4 秒超时回退），不再用 `capturePage`：
 Electron 44 上对 `WebContentsView` 调 `capturePage` 会抛 `UnknownVizError`，冻结会静默
 变成一张空白图。

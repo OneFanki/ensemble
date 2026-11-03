@@ -1106,9 +1106,13 @@ async function syncStageCover(): Promise<void> {
     store.stageMenuOpen ||
     // Address-bar suggestions hang below the toolbar, over the stage; native
     // pages would paint on top of them otherwise. The workspace-resolution
-    // dropdown is the same shape of overlay and needs the same treatment.
+    // dropdown and the downloads panel are the same shape of overlay and need
+    // the same treatment: every one of them is a plain HTML box anchored to the
+    // toolbar, and a native view is never behind HTML no matter what z-index it
+    // is given.
     (suggestionsOpen.value && siteSuggestions.value.length > 0) ||
-    globalViewportOpen.value;
+    globalViewportOpen.value ||
+    downloadsOpen.value;
   const seq = ++freezeSeq;
   if (!covered) {
     frozenSlots.value = [];
@@ -1134,6 +1138,7 @@ watch(
       store.stageMenuOpen,
       suggestionsOpen.value && siteSuggestions.value.length > 0,
       globalViewportOpen.value,
+      downloadsOpen.value,
       // The stage size participates because a frozen frame is a picture placed
       // at the rect the main process reported when it captured. Collapsing the
       // run dock mid-overlay shrinks the stage by 46px; without re-capturing,

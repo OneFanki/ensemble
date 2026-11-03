@@ -1,6 +1,15 @@
 ﻿<script setup lang="ts">
 import type { Bookmark, BookmarkDraft, BookmarkFolder, BookmarkFolderDraft } from "@shared/types";
-import { ChevronRight, Folder, Globe, Pencil, Plus, Star, Trash2 } from "lucide-vue-next";
+import {
+  Bookmark as BookmarkIcon,
+  ChevronRight,
+  Folder,
+  Globe,
+  Pencil,
+  Plus,
+  Star,
+  Trash2,
+} from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
@@ -10,6 +19,8 @@ import BookmarkFolderDialog from "./BookmarkFolderDialog.vue";
 import BookmarkImportDialog from "./BookmarkImportDialog.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import PageHeader from "./ui/PageHeader.vue";
+import SplitPane from "./ui/SplitPane.vue";
 
 /**
  * Bookmark management, away from the new-tab page.
@@ -47,7 +58,9 @@ function countOf(folderId: string): number {
 }
 
 /** Bookmarks that belong to no folder — the root row's count. */
-const unfiledCount = computed(() => bookmarks.value.filter((bookmark) => !bookmark.folderId).length);
+const unfiledCount = computed(
+  () => bookmarks.value.filter((bookmark) => !bookmark.folderId).length,
+);
 
 /**
  * Collapsed rather than expanded ids: a folder created after the page loaded is
@@ -128,7 +141,10 @@ const treeRows = computed(() => {
       if (children.length && !collapsed.value.has(folder.id)) walk(children, depth + 1);
     }
   };
-  walk(folders.value.filter((folder) => !folder.parentId), 0);
+  walk(
+    folders.value.filter((folder) => !folder.parentId),
+    0,
+  );
   return out;
 });
 
@@ -411,13 +427,9 @@ function onDropOnNothing(): void {
 </script>
 
 <template>
-  <section class="bookmarks-page" data-tour="bookmarks-page" @dragleave.self="onDropOnNothing">
-    <header class="page-head">
-      <div>
-        <h1>{{ t("app.bookmarksPageTitle") }}</h1>
-        <p class="hint">{{ t("app.bookmarksPageHint") }}</p>
-      </div>
-      <div class="head-actions">
+  <section class="page bookmarks-page" data-tour="bookmarks-page" @dragleave.self="onDropOnNothing">
+    <PageHeader :title="t('app.bookmarksPageTitle')" :note="t('app.bookmarksPageHint')">
+      <template #actions>
         <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
         <AppButton @click="openNewFolder(selected.kind === 'folder' ? selected.id : undefined)">
           <Folder :size="13" />
@@ -427,15 +439,31 @@ function onDropOnNothing(): void {
           <Plus :size="13" />
           {{ t("app.bookmarksPageNew") }}
         </AppButton>
+      </template>
+    </PageHeader>
+
+    <!--
+      The empty state carries the action, not just the explanation.
+      A bare sentence under the header left the page looking like it had failed
+      to load: the only two buttons that fix it are in the header, 200px above
+      and far to the right, so the sentence named a star button that was not on
+      screen.
+    -->
+    <div v-if="!bookmarks.length && !folders.length" class="empty">
+      <BookmarkIcon :size="22" />
+      <p>{{ t("app.bookmarksEmpty") }}</p>
+      <div class="empty-actions">
+        <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
+        <AppButton variant="primary" @click="openNewBookmark">
+          <Plus :size="13" />
+          {{ t("app.bookmarksPageNew") }}
+        </AppButton>
       </div>
-    </header>
+    </div>
 
-    <p v-if="!bookmarks.length && !folders.length" class="empty">
-      {{ t("app.bookmarksEmpty") }}
-    </p>
-
-    <div v-else class="layout">
-      <aside class="tree" @dragleave.self="onDropOnNothing">
+    <SplitPane v-else dense>
+      <template #list>
+        <aside class="tree" @dragleave.self="onDropOnNothing">
         <!-- The root is a real drop target: filing a bookmark onto it unfiles it. -->
         <button
           type="button"
@@ -514,8 +542,10 @@ function onDropOnNothing(): void {
           </span>
         </div>
       </aside>
+      </template>
 
-      <div class="list" @dragleave.self="onDropOnNothing">
+      <template #detail>
+        <div class="list" @dragleave.self="onDropOnNothing">
         <nav class="crumbs" :aria-label="t('app.bookmarks')">
           <template v-for="(crumb, index) in crumbs" :key="index">
             <span v-if="index > 0" class="crumb-sep">/</span>
@@ -629,8 +659,9 @@ function onDropOnNothing(): void {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+        </div>
+      </template>
+    </SplitPane>
 
     <BookmarkDialog
       v-if="bookmarkDialog"
@@ -653,58 +684,15 @@ function onDropOnNothing(): void {
 
 <style scoped>
 /*
- * Fixed frame, two independent scrollers.
+ * Two independent scrollers inside the shared page frame.
  *
- * The page used to scroll as one document, so the tree and the list moved
+ * The page once scrolled as one document, so the tree and the list moved
  * together and a long tree dragged the breadcrumb out of view. The header and
- * the breadcrumb now stay put; each column scrolls alone, like the two panes
- * of the file manager this page imitates.
+ * the list's breadcrumb stay put; the tree and the rows scroll alone, like the
+ * two panes of the file manager this page imitates.
  */
 .bookmarks-page {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px 22px 18px;
-  height: 100%;
-  min-height: 0;
-}
-
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.page-head h1 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.hint {
-  margin: 6px 0 0;
-  max-width: 62ch;
-  font-size: 11.5px;
-  line-height: 1.6;
-  color: var(--faint);
-}
-
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-
-.layout {
-  display: grid;
-  grid-template-columns: 235px minmax(0, 1fr);
-  gap: 14px;
-  flex: 1 1 auto;
-  min-height: 0;
-  align-items: stretch;
+  gap: 0;
 }
 
 .tree {
@@ -715,7 +703,6 @@ function onDropOnNothing(): void {
   border-radius: var(--radius);
   background: var(--bg);
   padding: 4px;
-  overflow-y: auto;
   min-height: 0;
 }
 
@@ -1013,14 +1000,20 @@ div.tree-row {
   color: var(--red);
 }
 
-.empty {
-  margin: 24px 0;
-  font-size: 12px;
-  color: var(--faint);
-}
-
+/* The page-level empty state: a bordered prompt with its two ways out. The
+   in-folder variant below stays a plain line — it is a row inside a list, not a
+   page waiting to be filled. */
+/* The page-level frame comes from the shared `.empty` rule; the in-folder
+   variant is this page's own, because there it is one row inside a list rather
+   than a page waiting to be filled. */
 .empty.in-folder {
-  margin: 18px 2px;
-  font-size: 11.5px;
+  border: none;
+  padding: 18px 2px;
+  align-items: flex-start;
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+  width: auto;
+  margin: 0;
 }
 </style>

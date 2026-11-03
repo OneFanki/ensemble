@@ -453,7 +453,16 @@ try {
   );
 
   // --- Management page: tree, dialogs, nesting ------------------------------
-  await client.evaluate(`document.querySelector('[data-nav="bookmarks"]')?.click()`);
+  // The console is a destination that covers the browser now, so the nav entry
+  // only exists once the console is open. Opening it is a step of its own.
+  await client.evaluate(`(async () => {
+    if (!document.querySelector('.console-nav')) {
+      document.querySelector('.console-btn')?.click();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    document.querySelector('[data-nav="bookmarks"]')?.click();
+    return true;
+  })()`);
   const pageReady = await waitFor(client, `Boolean(document.querySelector('.bookmarks-page .tree'))`);
   check("the management page opens with its folder tree", pageReady === true);
 
@@ -773,7 +782,7 @@ try {
   );
 
   // Back on a blank start page, the strip shows the surviving folder only.
-  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
+  await client.evaluate(`document.querySelector('.console-head .back')?.click()`);
   await client.evaluate(`window.ensemble.openEmbeddedTab({})`);
   // The start page navigates one level at a time: top-level folders appear as
   // tiles, the strip above them is the breadcrumb.

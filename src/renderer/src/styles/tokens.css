@@ -1,55 +1,133 @@
+/*
+ * Design tokens for the 2.0 shell.
+ *
+ * Two surfaces, not three. The window is a "frame" band (tab strip, cell
+ * headers, dock, console nav) with "chrome" laid on top of it (toolbar, active
+ * tab, selected rows). The active tab is painted in the chrome colour with no
+ * bottom edge, which is what makes the strip and the toolbar read as one
+ * continuous surface — the single detail that separates a browser window from a
+ * web app that happens to draw tabs.
+ *
+ * Dark is not a brightness inversion of light: the light theme is cool (grey-blue
+ * frame against white content) while the dark theme is neutral grey in three
+ * steps. Inverting a palette produces the halo that makes dark UIs look muddy.
+ */
 :root {
   color-scheme: dark;
 
-  --bg: #0b0d10;
-  --bg-elevated: #0d1014;
-  --surface: #12151a;
-  --surface-2: #171b21;
-  --surface-3: #1d232b;
-  --line: #303844;
-  --line-soft: #232a33;
+  --frame: #191d22;
+  --chrome: #262b31;
+  --content: #1e2227;
+  --field: #1b1f24;
+  --field-hover: #22272d;
+  --line: #363c44;
+  --line-soft: #2f353d;
 
-  /* Text scale: every level stays above 4.5:1 on --bg and --surface. */
-  --text: #eef0f3;
-  --text-secondary: #c9ced6;
-  --muted: #a3abb8;
-  --dim: #8b93a1;
-  --faint: #828c9a;
+  /*
+   * Legacy names, kept because ~40 components and every e2e selector already
+   * speak them. Each maps onto a surface above rather than carrying its own
+   * colour, so there is exactly one place to change a surface.
+   */
+  --bg: var(--frame);
+  --bg-elevated: var(--chrome);
+  --surface: var(--chrome);
+  --surface-2: var(--field);
+  --surface-3: #2b3138;
 
-  --accent: #e0a44e;
-  --accent-strong: #eab35f;
-  --accent-foreground: #1a1305;
-  --green: #6ccfae;
+  /* Text scale: every level clears 4.5:1 on --content. --faint is for icons and
+     hairline hints only, never for text that has to be read. */
+  --text: #e9edf2;
+  --text-secondary: #b0b9c4;
+  --muted: #8f99a6;
+  --dim: #7c8693;
+  --faint: #6b7582;
+
+  --accent: #e0a05a;
+  --accent-strong: #efb571;
+  --accent-foreground: #1a1206;
+  --accent-soft: rgb(224 160 90 / 14%);
+  --green: #4fc79b;
   --amber: #e0a44e;
-  --violet: #a396ff;
+  --violet: #9d8cf0;
   --rose: #e88a9d;
-  --blue: #85a8f0;
+  --blue: #7aa5ef;
   --red: #e37f76;
 
   --role-amber: #e0a44e;
-  --role-teal: #5cc8b6;
-  --role-violet: #a396ff;
+  --role-teal: #3fbfa8;
+  --role-violet: #9d8cf0;
   --role-rose: #e88a9d;
-  --role-blue: #85a8f0;
-  --role-slate: #98a2b0;
+  --role-blue: #7aa5ef;
+  --role-slate: #93a0b1;
 
-  --radius-sm: 5px;
-  --radius: 7px;
-  --radius-lg: 9px;
   /*
-   * Elevation is a theme token, not a literal in each component.
-   *
-   * A dark UI needs a deep black halo to lift a floating surface off the
-   * background. The same shadow over a warm light background reads as a dirty
-   * smudge — the new-tab search box was the clearest case. Each theme names its
-   * own elevation instead of every component guessing.
+   * Radii are small on purpose. A 10px radius on a 30px-tall control is a third
+   * of its height, and a page of those reads as a consumer mobile app pasted
+   * into a desktop window. These keep corners soft without becoming an outline
+   * feature of their own.
+   */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+
+  /*
+   * Elevation belongs to anything that floats over the page — menus, dialogs,
+   * popovers. It does not belong to selection: an active tab or a selected row
+   * is a filled surface, and a shadow under it is the "raised card" look this
+   * shell is deliberately not. The token stays so `box-shadow: var(--shadow-tab)`
+   * keeps resolving, but it lifts nothing.
    */
   --shadow-float: 0 18px 40px rgb(0 0 0 / 45%);
   --shadow-menu: 0 14px 30px rgb(0 0 0 / 45%);
   --shadow-dialog: 0 30px 80px rgb(0 0 0 / 55%);
-  --titlebar-height: 44px;
-  --rail-width: 206px;
-  --dock-width: 292px;
+  --shadow-tab: none;
+
+  /* Window geometry: strip + toolbar are the browser's own two rows. */
+  --titlebar-height: 34px;
+  --toolbar-height: 44px;
+  --rail-width: 196px;
+  --dock-width: 244px;
+
+  /* Spacing ladder. Anything that is not one of these should say why. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 26px;
+
+  /* Type scale. Sizes outside it are the exception, not the rule. */
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 11.5px;
+  --fs-base: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 16px;
+  --fs-xl: 19px;
+  --fs-2xl: 20px;
+
+  /* Control heights sit 3px apart on purpose: identical heights in a row read
+     as mechanical, and the 1–3px steps put visual weight on the address bar. */
+  --control-sm: 24px;
+  --control: 29px;
+  --control-md: 31px;
+  --control-lg: 32px;
+
+  /*
+   * Semantic z-index. Overlays that reach the stage must also register with
+   * `syncStageCover`; the number alone does not put HTML above a native view.
+   */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-inline-menu: 40;
+  --z-mask: 70;
+  --z-popover: 71;
+  --z-dropdown: 72;
+  --z-tooltip: 90;
+  --z-context-menu: 95;
+  --z-toast: 100;
 
   /*
    * CJK fallbacks come before the Latin-only faces so mixed strings pick a sans
@@ -70,43 +148,45 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #f3efe6;
-  --bg-elevated: #f7f3ea;
-  --surface: #faf7f0;
-  --surface-2: #f5f1e8;
-  --surface-3: #ebe4d6;
-  --line: #c9bfae;
-  --line-soft: #ddd4c4;
+  --frame: #dee2e7;
+  --chrome: #ffffff;
+  --content: #ffffff;
+  --field: #f1f3f5;
+  --field-hover: #e8ebef;
+  --line: #dfe4ea;
+  --line-soft: #eceff3;
+  --surface-3: #e9ecef;
 
-  --text: #1b1915;
-  --text-secondary: #38332b;
-  --muted: #565049;
-  --dim: #645d51;
-  --faint: #625a4d;
+  --text: #14181d;
+  --text-secondary: #4d5661;
+  --muted: #5f6975;
+  --dim: #6b7580;
+  --faint: #7c8691;
 
-  --accent: #b0472f;
-  --accent-strong: #c2543a;
-  --accent-foreground: #fff8f2;
-  --green: #2f7268;
-  --amber: #8a6720;
-  --violet: #5f4f9c;
-  --rose: #96394f;
-  --blue: #335c8f;
-  --red: #a8402c;
+  --accent: #b05a20;
+  --accent-strong: #984a15;
+  --accent-foreground: #fffaf5;
+  --accent-soft: rgb(176 90 32 / 10%);
+  --green: #0f7a57;
+  --amber: #95600f;
+  --violet: #5b46b0;
+  --rose: #b23f5c;
+  --blue: #2b5fb8;
+  --red: #b0342a;
 
-  --role-amber: #8a6720;
-  --role-teal: #2f7268;
-  --role-violet: #5f4f9c;
-  --role-rose: #96394f;
-  --role-blue: #335c8f;
-  --role-slate: #6b6459;
+  --role-amber: #a86512;
+  --role-teal: #0f7a6c;
+  --role-violet: #5b46b0;
+  --role-rose: #b23f5c;
+  --role-blue: #2b5fb8;
+  --role-slate: #5c6775;
 
   /*
-   * Warm-tinted and much lighter than the dark theme's halo: black at 45% over
-   * cream looks like soot. Two layers (a tight contact shadow plus a wide soft
-   * one) keep the edge defined without a grey box around the element.
+   * Two layers (a tight contact shadow plus a wide soft one) keep the edge
+   * defined without a grey box around the element.
    */
-  --shadow-float: 0 2px 6px rgb(74 58 33 / 10%), 0 12px 32px rgb(74 58 33 / 14%);
-  --shadow-menu: 0 2px 6px rgb(74 58 33 / 10%), 0 14px 30px rgb(74 58 33 / 16%);
-  --shadow-dialog: 0 4px 10px rgb(74 58 33 / 12%), 0 30px 70px rgb(74 58 33 / 22%);
+  --shadow-float: 0 2px 6px rgb(16 24 40 / 8%), 0 12px 32px rgb(16 24 40 / 12%);
+  --shadow-menu: 0 2px 6px rgb(16 24 40 / 8%), 0 14px 30px rgb(16 24 40 / 14%);
+  --shadow-dialog: 0 4px 10px rgb(16 24 40 / 10%), 0 30px 70px rgb(16 24 40 / 20%);
+  --shadow-tab: none;
 }

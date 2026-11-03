@@ -9,6 +9,12 @@
  * box on top of it is still the thing you look at. A photograph would not: it
  * competes with the text and has to be fetched, and this surface has to render
  * instantly, offline, before any network call.
+ *
+ * These are deliberately *very* faint. The earlier set put a teal glow at up to
+ * 16% and a violet one at 18% in opposite corners, which on a full-window
+ * surface read as a coloured wash — the first thing you noticed on a page whose
+ * only content is a search box. A backdrop competes with nothing if you have to
+ * look for it.
  */
 export interface NewTabBackdrop {
   id: string;
@@ -24,23 +30,22 @@ export const NEW_TAB_BACKDROPS: NewTabBackdrop[] = [
   {
     id: "aurora",
     labelKey: "app.newTabBgAurora",
-    // Two off-centre glows: teal toward the top left, violet toward the bottom
-    // right. Dashed out toward the edges so the middle stays a calm plateau for
-    // the search box.
-    css: "radial-gradient(90% 70% at 18% 8%, rgba(45, 212, 191, 0.16), transparent 62%), radial-gradient(80% 70% at 84% 92%, rgba(139, 92, 246, 0.18), transparent 60%), var(--bg)",
-    swatch: "linear-gradient(135deg, #0f2f2c 0%, #101317 45%, #241a3d 100%)",
+    // Two wide, low-contrast lights that only tint the far corners. Enough to
+    // stop the surface reading as a blank rectangle, not enough to be a colour.
+    css: "radial-gradient(70% 55% at 14% 6%, rgba(45, 212, 191, 0.055), transparent 70%), radial-gradient(65% 55% at 88% 94%, rgba(139, 92, 246, 0.06), transparent 70%), var(--bg)",
+    swatch: "linear-gradient(135deg, #20292b 0%, #1e2227 50%, #262233 100%)",
   },
   {
     id: "dusk",
     labelKey: "app.newTabBgDusk",
-    css: "radial-gradient(85% 65% at 78% 6%, rgba(251, 146, 60, 0.16), transparent 62%), radial-gradient(90% 75% at 12% 96%, rgba(244, 63, 94, 0.14), transparent 58%), var(--bg)",
-    swatch: "linear-gradient(135deg, #3a2416 0%, #101317 50%, #3a1620 100%)",
+    css: "radial-gradient(70% 55% at 82% 4%, rgba(251, 146, 60, 0.055), transparent 70%), radial-gradient(70% 60% at 10% 96%, rgba(244, 63, 94, 0.05), transparent 70%), var(--bg)",
+    swatch: "linear-gradient(135deg, #2b2420 0%, #1e2227 55%, #2b2022 100%)",
   },
   {
     id: "night",
     labelKey: "app.newTabBgNight",
-    css: "radial-gradient(95% 85% at 50% -10%, rgba(59, 130, 246, 0.20), transparent 65%), radial-gradient(70% 60% at 50% 110%, rgba(30, 64, 175, 0.22), transparent 60%), var(--bg)",
-    swatch: "linear-gradient(160deg, #16233d 0%, #0d1117 55%, #131c30 100%)",
+    css: "radial-gradient(80% 65% at 50% -8%, rgba(59, 130, 246, 0.07), transparent 70%), radial-gradient(60% 50% at 50% 108%, rgba(30, 64, 175, 0.07), transparent 70%), var(--bg)",
+    swatch: "linear-gradient(160deg, #1d2431 0%, #1b1f24 55%, #1b202b 100%)",
   },
   {
     id: "grid",

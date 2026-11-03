@@ -3,12 +3,22 @@ import type { EmbeddedTab } from "@shared/embedded";
 import { NEW_TAB_BACKDROPS, newTabBackdrop } from "@shared/newtab";
 import { enginePreview, isValidEngineTemplate, resolveBrowserInput } from "@shared/search";
 import type { Bookmark } from "@shared/types";
-import { Check, ChevronDown, Palette, Plus, Search, Star, X } from "lucide-vue-next";
+import {
+  Check,
+  ChevronDown,
+  CornerDownLeft,
+  Palette,
+  Plus,
+  Search,
+  Star,
+  X,
+} from "lucide-vue-next";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkGrid from "./BookmarkGrid.vue";
+import Logo from "./Logo.vue";
 import AppButton from "./ui/AppButton.vue";
 
 /**
@@ -216,39 +226,20 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   <div class="new-tab">
     <div class="nt-bg" :style="{ background: workspace.newTabBackdropStyle }"></div>
     <div class="nt-inner">
+      <!--
+        The product's own name, above the field.
+        A new-tab page with a lone search box reads as an error state: the
+        surface is empty, so nothing on it says "this is ready". The mark plus
+        the wordmark give the empty page a subject, and they are the only
+        content here that is not a control.
+      -->
+      <div class="nt-brand">
+        <Logo :size="28" />
+        <span class="nt-wordmark">Ensemble</span>
+      </div>
+
       <form class="nt-box" @submit.prevent="submit">
-        <div class="nt-engine">
-          <button
-            type="button"
-            class="nt-engine-btn"
-            :aria-label="t('app.newTabEngine')"
-            :aria-expanded="engineOpen"
-            @click="engineOpen = !engineOpen"
-          >
-            <span class="nt-engine-name">{{ engine.name }}</span>
-            <ChevronDown :size="12" class="chev" :class="{ flip: engineOpen }" />
-          </button>
-          <div v-if="engineOpen" class="nt-engine-menu" role="listbox">
-            <button
-              v-for="item in workspace.searchEngines"
-              :key="item.id"
-              type="button"
-              role="option"
-              class="nt-engine-item"
-              :class="{ active: item.id === engine.id }"
-              :aria-selected="item.id === engine.id"
-              @click="chooseEngine(item.id)"
-            >
-              <Check v-if="item.id === engine.id" :size="11" class="nt-check" />
-              <span v-else class="nt-check"></span>
-              {{ item.name }}
-            </button>
-            <button type="button" class="nt-engine-item add" @click="startAdding">
-              <Plus :size="11" />
-              {{ t("app.newTabEngineAdd") }}
-            </button>
-          </div>
-        </div>
+        <Search :size="15" class="nt-magnifier" aria-hidden="true" />
         <input
           v-model="query"
           class="nt-input"
@@ -284,8 +275,54 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
             <span class="nt-suggest-url mono">{{ hostOf(bookmark.url) }}</span>
           </button>
         </div>
-        <button type="submit" class="nt-go" :disabled="!input" :aria-label="t('app.newTabGo')">
-          <Search :size="15" />
+        <!--
+          The engine sits at the field's trailing edge, the way a browser puts
+          its search engine there: it is an attribute of the box, not a prefix
+          to the words being typed.
+        -->
+        <div class="nt-engine">
+          <button
+            type="button"
+            class="nt-engine-btn"
+            :aria-label="t('app.newTabEngine')"
+            :aria-expanded="engineOpen"
+            @click="engineOpen = !engineOpen"
+          >
+            <span class="nt-engine-name">{{ engine.name }}</span>
+            <ChevronDown :size="12" class="chev" :class="{ flip: engineOpen }" />
+          </button>
+          <div v-if="engineOpen" class="nt-engine-menu" role="listbox">
+            <button
+              v-for="item in workspace.searchEngines"
+              :key="item.id"
+              type="button"
+              role="option"
+              class="nt-engine-item"
+              :class="{ active: item.id === engine.id }"
+              :aria-selected="item.id === engine.id"
+              @click="chooseEngine(item.id)"
+            >
+              <Check v-if="item.id === engine.id" :size="11" class="nt-check" />
+              <span v-else class="nt-check"></span>
+              {{ item.name }}
+            </button>
+            <button type="button" class="nt-engine-item add" @click="startAdding">
+              <Plus :size="11" />
+              {{ t("app.newTabEngineAdd") }}
+            </button>
+          </div>
+        </div>
+        <!-- Only while there is something to submit. A permanently disabled
+             glyph is a control that never does anything, and the field already
+             submits on Enter. -->
+        <button
+          v-if="input"
+          type="submit"
+          class="nt-go"
+          :aria-label="t('app.newTabGo')"
+          :title="t('app.newTabGo')"
+        >
+          <CornerDownLeft :size="14" />
         </button>
       </form>
 
@@ -396,26 +433,55 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   width: min(560px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+}
+
+/* The mark and the wordmark, centred over the field: the one line on this
+   surface that names what the empty page is. */
+.nt-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding-bottom: 2px;
+}
+
+.nt-wordmark {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
 }
 
 .nt-box {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 44px;
-  padding: 0 6px 0 4px;
+  gap: 4px;
+  height: 46px;
+  padding: 0 6px 0 14px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  /* A rounded rectangle, not a pill. Height/2 radius on a 46px box is the
+     search pill of a phone home screen; on a desktop window it was the only
+     fully-round shape in the product. */
+  border-radius: var(--radius-lg);
   background: var(--surface);
-  /* A theme token rather than a literal black halo: the dark value looks like
-     soot on the light backdrop, which is what made this box look dirty there. */
-  box-shadow: var(--shadow-float);
+  /* No elevation: the border already separates the field from the backdrop, and
+     a drop shadow under a search box made this surface read as a floating
+     widget instead of part of the page. */
 }
 
 .nt-box:focus-within {
   border-color: color-mix(in srgb, var(--line) 45%, var(--accent));
+}
+
+/* The magnifier leads the field, as it does in every browser's omnibox; the
+   engine picker trails it, because the engine is a property of the search and
+   not a prefix to what is being typed. */
+.nt-magnifier {
+  flex: 0 0 15px;
+  color: var(--faint);
 }
 
 .nt-engine {
@@ -427,11 +493,11 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
-  padding: 0 10px;
+  height: 30px;
+  padding: 0 9px;
   border-radius: 999px;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
@@ -506,11 +572,11 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   flex: 1 1 auto;
   min-width: 0;
   height: 34px;
-  padding: 0 4px;
+  padding: 0 2px;
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--fs-md);
   outline: none;
 }
 
@@ -586,24 +652,21 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   color: var(--faint);
 }
 
+/* Appears only while there is input to submit, so it never renders as a
+   permanently disabled glyph with nothing to do. */
 .nt-go {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
-  flex: 0 0 32px;
+  flex: 0 0 34px;
 }
 
-.nt-go:hover:not(:disabled) {
+.nt-go:hover {
   background: color-mix(in srgb, var(--accent) 26%, transparent);
-}
-
-.nt-go:disabled {
-  background: transparent;
-  color: var(--faint);
 }
 
 .nt-custom {

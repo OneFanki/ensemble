@@ -50,28 +50,21 @@ withDefaults(
   color: var(--text);
 }
 
+/* Flat: one colour, no bevel. The hover step is the theme's own "more extreme"
+   accent, because lighter means more prominent in dark and darker does in light. */
 .btn.primary {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent);
+  border-color: var(--accent);
   color: var(--accent-foreground);
   font-weight: 500;
 }
 
-/* `.btn:hover` matches a primary button too; restate the gradient so it does
-   not turn gray under the cursor. */
+/* `.btn:hover` matches a primary button too; restate the fill so it does not
+   turn gray under the cursor. */
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: var(--accent-foreground);
-  filter: brightness(1.06);
 }
 
 .btn.ghost {
@@ -92,4 +85,23 @@ withDefaults(
   padding: 5px 9px;
   font-size: 11.5px;
 }
+
+/*
+ * A disabled control must not look like a dimmed copy of the enabled one.
+ *
+ * The global `opacity: 0.45` smears a filled accent button into the page and
+ * leaves a pale tint — in the light theme it reads as a broken brand colour,
+ * and in either theme it is easy to mistake for a hover state. Dropping the
+ * fill instead makes "this is unavailable" structural rather than a shade:
+ * same neutral surface as any other inert control, no accent, no weight.
+ */
+.btn:disabled {
+  background: var(--surface-2);
+  border-color: var(--line-soft);
+  color: var(--faint);
+  font-weight: 400;
+  opacity: 1;
+  cursor: not-allowed;
+}
+
 </style>

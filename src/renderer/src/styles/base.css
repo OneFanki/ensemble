@@ -103,6 +103,98 @@ a {
 }
 
 /*
+ * The console page frame.
+ *
+ * Seven pages each wrote their own version of this: two scrolled as a whole
+ * document (so the page title slid away under the console bar) and five pinned
+ * the header over an inner scroll region. Which one a page got was an accident
+ * of when it was written, and the difference is visible the moment you scroll a
+ * long list — the title either stays or it doesn't.
+ *
+ * The rule is now one: the header stays, exactly one region scrolls. `.page` is
+ * the frame, `.page-body` is the region. A page with a second pinned row (a
+ * filter bar, tabs, a breadcrumb) puts it between the two and keeps `flex: 0 0
+ * auto` on it.
+ */
+.page {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  /* The mockup's page padding: 24px above and below, 28px at the sides. The
+     narrower ladder values (`--space-6`/`--space-7` = 16/20) left the title
+     crowding the rail edge and the cards hugging the window. */
+  padding: 24px 28px;
+  overflow: hidden;
+}
+
+.page-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/*
+ * An empty list, as one shape.
+ *
+ * Four console pages drew their own: sites and flows centred a few lines of
+ * text, tags drew a full-width dashed table, bookmarks drew a single sentence.
+ * All four said the same thing — "there is nothing here yet, do this" — and
+ * three of them left the action in the page header, far from the message that
+ * explains it.
+ *
+ * The wrapper is `.empty`; `.empty-actions` holds the buttons. Being a global
+ * class rather than one component is deliberate: the slots differ (a list of
+ * sites has a button, a folder list does not), the frame does not.
+ *
+ * No frame at all: this began as a dashed rounded box, which turned "you have
+ * not made one yet" into a drawn container — an outline around content that does
+ * not exist. Centred icon, sentence and action say the same thing without
+ * drawing a box on an otherwise empty page.
+ */
+.empty {
+  margin: auto;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  color: var(--muted);
+  font-size: var(--fs-base);
+  text-align: center;
+  width: min(560px, 100%);
+}
+
+/*
+ * Balanced, not greedy. Chinese has no word breaks, so the default line breaker
+ * packs the first line to the last possible character and drops whatever is
+ * left onto the second — "…不必先 / 来这里。" and "…收藏当前 / 页。". The message
+ * reads as a sentence, so it should break like one.
+ */
+.empty > p {
+  margin: 0;
+  max-width: 340px;
+  line-height: 1.6;
+  text-wrap: balance;
+}
+
+.empty > svg {
+  color: var(--faint);
+}
+
+.empty-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+/*
  * The button and field vocabulary, in one place.
  *
  * Every component used to declare its own `.btn` inside a `scoped` block, so a
@@ -133,28 +225,33 @@ a {
   color: var(--text);
 }
 
+/*
+ * The primary button is one flat colour.
+ *
+ * It used to be a two-stop vertical gradient with a darkened bottom border and a
+ * brightness filter on hover — a bevel, in other words. On a window that is
+ * otherwise made of flat panels and hairlines, that one raised pill was the most
+ * three-dimensional thing on screen, and it read as a leftover from a toolbar
+ * aesthetic the rest of the shell had already dropped. Emphasis comes from the
+ * colour being the only filled thing on the row, not from pretending it has
+ * thickness.
+ *
+ * `--accent-strong` is the hover state rather than a computed shade: each theme
+ * defines it as the more extreme direction (lighter in dark, darker in light),
+ * which is exactly what a flat hover needs and what a single mix formula cannot
+ * do for both.
+ */
 .btn.primary {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent);
+  border-color: var(--accent);
   color: var(--accent-foreground);
   font-weight: 500;
 }
 
-/* `.btn:hover` also matches a primary button; restate the gradient so it does
-   not turn gray under the cursor. */
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: var(--accent-foreground);
-  filter: brightness(1.06);
 }
 
 .btn.ghost {

@@ -445,7 +445,7 @@ try {
         present: Boolean(section),
         heading: section?.querySelector('h1')?.textContent.trim() ?? "",
         rows: section?.querySelectorAll('.flow-row').length ?? 0,
-        navCount: document.querySelector('[data-nav="flows"] .nav-tail')?.textContent.trim() ?? "",
+        navCount: document.querySelector('[data-nav="flows"] .nav-count')?.textContent.trim() ?? "",
         // The detail pane's own counts; the editor must agree with them. Read
         // from the page rather than hard-coding the fixture, because an earlier
         // step rewrote this flow.

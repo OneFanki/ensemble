@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { ImportPreview, ImportResult } from "@shared/transfer";
 import type { BundleImportResult, BundlePreview } from "@shared/accounts-transfer";
 import type { LocaleSetting } from "@shared/locale";
 import type { ConnectivityProbeResult } from "@shared/proxy";
+import type { ImportPreview, ImportResult } from "@shared/transfer";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   Bot,
@@ -21,14 +21,15 @@ import {
   Upload,
   X,
 } from "lucide-vue-next";
+import { storeToRefs } from "pinia";
 import type { Component } from "vue";
 import { computed, onMounted, ref, watch } from "vue";
-import { storeToRefs } from "pinia";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import PageHeader from "./ui/PageHeader.vue";
 
 type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
 
@@ -397,13 +398,8 @@ async function submitMaster() {
 </script>
 
 <template>
-  <section class="settings">
-    <header class="head">
-      <div>
-        <h1>{{ $t("app.settings") }}</h1>
-        <p class="head-note">{{ $t("app.settingsSubtitle") }}</p>
-      </div>
-    </header>
+  <section class="page settings">
+    <PageHeader :title="$t('app.settings')" :note="$t('app.settingsSubtitle')" />
 
     <nav class="tabs" role="tablist" :aria-label="$t('app.settings')">
       <button
@@ -1367,28 +1363,6 @@ async function submitMaster() {
 </template>
 
 <style scoped>
-.settings {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 12px;
-  overflow: hidden;
-}
-
-.head h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-.head p {
-  margin: 6px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-}
-
 /*
  * No `overflow` here on purpose: `overflow-x: auto` also computes overflow-y to
  * auto, and the 1px negative margin used to overlap the active underline made
@@ -1399,7 +1373,6 @@ async function submitMaster() {
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
-  margin-top: 14px;
   border-bottom: 1px solid var(--line-soft);
   flex: 0 0 auto;
   overflow: visible;
@@ -1445,6 +1418,39 @@ async function submitMaster() {
   border-radius: var(--radius-lg);
   background: var(--surface);
   padding: 14px 16px;
+  /* One column, not the full window. A label column of 132px followed by a
+     170px control left roughly 1100px of nothing on every row, so the eye had to
+     cross the whole screen to pair a label with its value, and the hairline
+     dividers ran that far too. 820px fits label + control + a comment at a
+     readable measure. */
+  max-width: 820px;
+}
+
+/*
+ * Each setting is a row, and rows are separated by a hairline.
+ *
+ * Without one, the explanatory line under a control and the label of the next
+ * control sat at the same visual weight and the same distance, so a column of
+ * ten settings read as one paragraph with widgets in it. The rule states where
+ * one setting ends; the first row in a block sits directly under the block
+ * heading, which already does that job.
+ */
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+  min-width: 0;
+}
+
+/* The first row in a block follows the block's own heading, which already
+   separates it. */
+.block-head + .option-row,
+.block > .option-row:first-child {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .block-head {
@@ -1614,6 +1620,11 @@ async function submitMaster() {
   font-size: 11px;
   line-height: 1.6;
   color: var(--faint);
+  /* One measure for every explanatory line on this page. Unbounded, these ran
+     the full width of a maximised window — 150 characters on one line, which is
+     twice what reads comfortably and made the page look like an unformatted
+     document next to the aligned rows above. */
+  max-width: 620px;
 }
 
 /* A value that is accepted but cannot be used yet: warn without alarming. */
@@ -1671,13 +1682,6 @@ async function submitMaster() {
   white-space: nowrap;
 }
 
-.option-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-top: 12px;
-}
-
 .option-label {
   font-size: 11px;
   color: var(--muted);
@@ -1731,16 +1735,28 @@ async function submitMaster() {
   padding: 2px;
 }
 
+/*
+ * The chosen half is filled and the other is not.
+ *
+ * Both halves used to sit on `--surface-3`, which in the light theme is a barely
+ * tinted grey — so a row of these switches showed two identical pale chips and
+ * said nothing about which way it was set.
+ */
 .seg {
   padding: 5px 10px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 
+.seg:hover {
+  color: var(--text-secondary);
+}
+
 .seg.on {
-  background: var(--surface-3);
-  color: var(--text);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 500;
 }
 
 .vault-row {

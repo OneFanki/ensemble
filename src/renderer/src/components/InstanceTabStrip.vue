@@ -184,10 +184,13 @@ function addPage(): void {
 }
 
 /*
- * A page tab. Unselected tabs used to be transparent text on the header's own
- * background, which made the strip indistinguishable from the slot label. They
- * now sit in their own recessed pill, the current one is raised and lit, so the
- * band reads as "window title, then tabs" at a glance.
+ * A page tab: text on the strip, and a fill only when it is the current one.
+ *
+ * Every tab used to sit in its own recessed pill and the current one was a
+ * pill with a border — the raised/recessed pairing this shell is moving away
+ * from. Browser tabs are the same surface as their strip; the current one is
+ * simply brighter, which is how every browser does it and why this band now
+ * reads as tabs rather than as a row of chips.
  */
 .slot-tab {
   display: flex;
@@ -198,9 +201,9 @@ function addPage(): void {
   max-width: 170px;
   height: 20px;
   padding: 0 4px 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  background: transparent;
   font-size: 10px;
   line-height: 18px;
   color: var(--faint);
@@ -226,7 +229,7 @@ function addPage(): void {
 
 .slot-tab.current {
   background: var(--bg-elevated);
-  border-color: color-mix(in srgb, var(--line) 80%, var(--accent));
+  border-color: var(--line-soft);
   color: var(--text);
 }
 

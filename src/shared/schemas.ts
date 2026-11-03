@@ -169,6 +169,7 @@ export const settingsPatchSchema = z.object({
   locale: z.enum(LOCALE_SETTINGS).optional(),
   lastSiteId: z.string().optional(),
   lastView: z.enum(["browser", "sites", "identities", "views", "flows", "tags"]).optional(),
+  shellMode: z.enum(["browse", "bench"]).optional(),
   lastViewId: z.string().optional(),
   restoreLastView: z.boolean().optional(),
   overlayEnabled: z.boolean().optional(),

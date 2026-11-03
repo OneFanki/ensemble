@@ -181,7 +181,7 @@ const SHOTS = [
     name: "site-dialog",
     locale: "zh",
     view: "sites",
-    clicks: [".head-actions .btn.primary"],
+    clicks: [".page-head-actions .btn.primary"],
   },
   {
     name: "identity-dialog",

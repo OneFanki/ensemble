@@ -12,6 +12,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import ConsoleHeader from "./components/ConsoleHeader.vue";
+import ConsoleSidebar from "./components/ConsoleSidebar.vue";
 import FlowsPage from "./components/FlowsPage.vue";
 import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
@@ -21,7 +23,6 @@ import Logo from "./components/Logo.vue";
 import RunDock from "./components/RunDock.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
 import SettingsPage from "./components/SettingsPage.vue";
-import SideRail from "./components/SideRail.vue";
 import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import SpotlightTour from "./components/SpotlightTour.vue";
@@ -44,6 +45,7 @@ import {
 } from "./onboarding/tourSteps";
 import { useConfirmStore } from "./stores/confirm";
 import { useEmbeddedStore } from "./stores/embedded";
+import { useNavigationStore } from "./stores/navigation";
 import { useWorkspaceStore } from "./stores/workspace";
 
 type View =
@@ -56,10 +58,32 @@ type View =
   | "bookmarks"
   | "settings";
 
+/**
+ * Which of the two shells is on screen.
+ *
+ * 1.0 had one shell: a side rail, a stage, and a run dock, all permanent. That
+ * made every screen an admin console — the browser was one page among eight and
+ * the tools took the edges of the window even while someone was just reading a
+ * page. The model did not change; only its expression did. "Browse" is a
+ * browser, and a browser is exactly a 1x1 layout with one instance in it.
+ *
+ * Browse: tab strip, toolbar, page. No rail, no dock.
+ * Bench: the same chrome, plus the run dock and the cells of a multi-cell layout.
+ *
+ * The mode follows the layout unless the user pins it: entering a multi-cell
+ * layout is the act of asking for a workbench, and collapsing back to one cell
+ * is the act of leaving it. Persisted so a restart lands where the work was.
+ */
+type ShellMode = "browse" | "bench";
+
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
 const confirm = useConfirmStore();
+const navigation = useNavigationStore();
 const view = ref<View>("browser");
+const mode = ref<ShellMode>(store.settings.shellMode ?? "browse");
+/** True while the management console covers the browser. */
+const consoleOpen = computed(() => view.value !== "browser");
 const siteDraft = ref<SiteDraft | null>(null);
 const identityDraft = ref<IdentityDraft | null>(null);
 const viewDraft = ref<ViewDraft | null>(null);
@@ -80,6 +104,16 @@ const identitySiteSeed = ref<{ origin: string; path: string } | null>(null);
 const updatePrompt = ref<UpdateCheckResult | null>(null);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
+
+/**
+ * Whether the first-run tour starts by itself.
+ *
+ * Off during the 2.0 shell work: the tour points at live controls, and the
+ * controls are moving. It is a single flag rather than a deletion so the tour can
+ * come back without rebuilding it — the steps, the version bookkeeping and the
+ * Settings replay entry all stay in place.
+ */
+const AUTO_TOUR_ENABLED = false;
 
 /**
  * The language actually rendered: `settings.locale` with "system" resolved.
@@ -143,7 +177,16 @@ onMounted(async () => {
   window.ensemble.onEmbeddedPage(() => {
     if (view.value !== "browser") switchView("browser");
   });
-  if (shouldAutoStartTour(store.settings)) {
+  /*
+   * The first-run tour is deliberately off while 2.0 is in progress.
+   *
+   * The tour points at live controls, and the shell it was written against is
+   * being replaced — a spotlight on a moved button is worse than nothing. The
+   * code paths and the stored version stay untouched so the tour can be turned
+   * back on with this one flag once the interface settles, and the Settings entry
+   * that replays it still works for anyone who asks for it.
+   */
+  if (AUTO_TOUR_ENABLED && shouldAutoStartTour(store.settings)) {
     window.setTimeout(() => {
       tourOpen.value = true;
     }, 350);
@@ -200,6 +243,50 @@ function switchView(next: View) {
   }
 }
 
+/**
+ * The shell follows the layout.
+ *
+ * Only ever widens automatically: a multi-cell layout is the user asking for a
+ * workbench, so the dock appears. Narrowing back is left to the user — closing
+ * the last extra cell while the dock is open should not yank a panel away from
+ * under the pointer mid-task.
+ */
+watch(
+  () => {
+    const active = embedded.activeView;
+    return active ? embedded.slots(active) : 1;
+  },
+  (count) => {
+    if (count > 1 && mode.value !== "bench") setMode("bench");
+  },
+);
+
+function setMode(next: ShellMode): void {
+  if (mode.value === next) return;
+  mode.value = next;
+  void store.saveSettings({ shellMode: next });
+  if (next === "bench") void enterBenchLayout();
+}
+
+/**
+ * Give the focused view a multi-cell layout.
+ *
+ * The dock exists to show what is running across cells, so opening the workbench
+ * with a 1x1 layout would be a column of tool chrome beside a page with nothing
+ * to arrange. 2x1 is the smallest honest grid; the layout picker is right there
+ * for anything else.
+ */
+async function enterBenchLayout(): Promise<void> {
+  const active = embedded.activeView;
+  if (!active) return;
+  const slots = embedded.slots(active);
+  if (slots > 1) return;
+  await window.ensemble.setEmbeddedViewSlots(active.id, [
+    { x: 0, y: 0, width: 0.5, height: 1 },
+    { x: 0.5, y: 0, width: 0.5, height: 1 },
+  ]);
+}
+
 /** Which settings tab a status-bar entry point should land on. */
 const settingsTab = ref<"general" | "engines" | "vault" | "data" | "mcp" | "about">("general");
 /**
@@ -223,6 +310,16 @@ function openMcpSettings() {
   settingsTabSeq.value += 1;
   view.value = "settings";
 }
+
+// The toolbar's AI entry lives three components down; this is how it reaches
+// Settings without every layer in between having to forward a handler.
+navigation.bind((next, tab) => {
+  if (tab) {
+    settingsTab.value = tab as typeof settingsTab.value;
+    settingsTabSeq.value += 1;
+  }
+  switchView(next as View);
+});
 /**
  * Settings page from the native menu (Cmd+, on macOS).
  *
@@ -592,12 +689,6 @@ async function handleLocale(locale: LocaleSetting) {
 
 <template>
   <div class="app-shell" :data-platform="platform">
-    <TitleBar
-      @manage-sites="switchView('sites')"
-      @menu-open="(open) => (stageObscured = open)"
-      @open-guide="openGuide"
-    />
-
     <div v-if="store.loading" class="boot">
       <Logo :size="30" />
       <span class="boot-copy">
@@ -606,13 +697,48 @@ async function handleLocale(locale: LocaleSetting) {
       </span>
     </div>
 
-    <div v-else class="app-body" :class="{ 'settings-mode': view === 'settings' }">
-      <SideRail :view="view" @navigate="switchView" />
+    <!--
+      The browser, and only the browser.
 
-      <main class="main-pane">
-        <BrowserPage v-if="view === 'browser'" :obscured="overlayOpen" />
+      There is no rail and no dock here: a browser is a tab strip, a toolbar and
+      a page. Everything management-shaped lives in the console, which covers
+      this surface when opened. A single-cell layout with one instance *is* a
+      browser, so this mode needs no special case.
+    -->
+    <div v-else-if="!consoleOpen" class="workspace">
+      <BrowserPage
+        :obscured="overlayOpen"
+        :bench="mode === 'bench'"
+        @open-console="switchView('sites')"
+        @switch-mode="setMode"
+      />
+
+      <!--
+        The run dock appears only when a multi-cell layout is on stage. In a
+        1x1 layout it would be a column of tool chrome beside a page — which is
+        the admin-console look this shell exists to leave behind.
+      -->
+      <RunDock v-if="mode === 'bench'" class="shell-dock" />
+    </div>
+
+    <!--
+      The management console: a full-window destination, the way browser
+      settings are. The tabs it offers are the 1.0 navigation, unchanged — the
+      pages themselves did not need rewriting, only a home of their own.
+    -->
+    <div v-else class="console">
+      <ConsoleHeader @back="switchView('browser')" />
+      <!--
+        Title bar across the full width, then a rail and the page side by side.
+        The rail is the console's navigation; putting it in the same row as the
+        content is what lets the title bar stay a drag band shared with the
+        browser shell.
+      -->
+      <div class="console-body">
+        <ConsoleSidebar :view="view" @navigate="switchView" />
+        <main class="console-pane">
         <SitesPage
-          v-else-if="view === 'sites'"
+          v-if="view === 'sites'"
           @new-site="openNewSite"
           @edit-site="openEditSite"
           @open-site="openSite"
@@ -643,41 +769,9 @@ async function handleLocale(locale: LocaleSetting) {
           @start-tour="startTour"
           @update-found="(result) => (updatePrompt = result)"
         />
-      </main>
-
-      <RunDock v-if="view !== 'settings'" />
+        </main>
+      </div>
     </div>
-
-    <footer class="statusbar mono">
-      <span class="status-group">
-        <span class="led" :class="{ idle: !store.instances.length && !embedded.tabs.length }"></span>
-        {{
-          store.instances.length || embedded.tabs.length
-            ? $t("app.statusConnected")
-            : $t("app.statusReady")
-        }}
-      </span>
-      <span>{{ $t("app.instancesCount", { count: store.instances.length + embedded.tabs.length }) }}</span>
-      <span class="status-right">
-        <!-- Every screen needs the endpoint address, and copying it should not
-             mean hunting through settings. The dot carries the on/off state on
-             its own, so no extra words are needed when it is off; when it is on,
-             the label names the feature and the port says where. -->
-        <button
-          type="button"
-          class="status-mcp"
-          :class="{ on: store.mcp?.running }"
-          :title="$t('app.statusMcpHint')"
-          @click="openMcpSettings"
-        >
-          <Bot :size="12" />
-          <span class="mcp-led" :class="{ on: store.mcp?.running }"></span>
-          <span class="mcp-label">{{ $t("app.mcpAiAccess") }}</span>
-          <span v-if="store.mcp?.running" class="mcp-port">:{{ store.mcp.port }}</span>
-        </button>
-        <span>v{{ store.snapshot?.appVersion ?? "0.1.0" }}</span>
-      </span>
-    </footer>
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in
@@ -761,23 +855,29 @@ async function handleLocale(locale: LocaleSetting) {
 </template>
 
 <style scoped>
+/*
+ * Two rows, not three.
+ *
+ * 1.0 reserved a 30px status bar and drew a decorative radial gradient across
+ * the whole shell. A browser has neither: the chrome is flat, and the only
+ * status the user needs sits on the controls that own it (AI state on the AI
+ * button, instance count in the dock header, version in the console).
+ */
 .app-shell {
   height: 100%;
-  display: grid;
-  grid-template-rows: var(--titlebar-height) minmax(0, 1fr) 30px;
-  background:
-    radial-gradient(1100px 420px at 78% -12%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 62%),
-    radial-gradient(800px 380px at 12% 105%, color-mix(in srgb, var(--green) 5%, transparent), transparent 60%),
-    var(--bg);
+  display: flex;
+  flex-direction: column;
+  background: var(--content);
 }
 
 .boot {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-base);
 }
 
 .boot-copy {
@@ -787,46 +887,65 @@ async function handleLocale(locale: LocaleSetting) {
 }
 
 .boot-name {
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 500;
   color: var(--text);
 }
 
 .boot-hint {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   color: var(--faint);
 }
 
-.app-body {
+/*
+ * The browser and its dock, side by side.
+ *
+ * A row container rather than two children of the shell: the shell is a column,
+ * and putting the dock directly in it stacked the dock *under* the page instead
+ * of beside it — which also left the stage measuring the full window width while
+ * a dock column sat over nothing.
+ */
+.workspace {
+  flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  /* The rail collapses to an icon strip and the dock to a badge, so both sides
-     size to their own content instead of to a fixed column. */
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.app-body.settings-mode {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.main-pane {
   min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/*
+ * The run dock rides beside the stage, and only while a multi-cell layout is on
+ * stage. It is a sibling of the browser rather than a child because the browser
+ * measures its own stage from its own box: nesting the dock inside would make
+ * that measurement depend on the dock's existence.
+ */
+.shell-dock {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.console {
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
+  background: var(--content);
 }
 
-.statusbar {
+/* Rail and page share the row under the title bar. */
+.console-body {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 0 13px;
-  border-top: 1px solid var(--line-soft);  background: color-mix(in srgb, var(--bg) 88%, black);
-  color: var(--faint);
-  font-size: 10.5px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+  min-width: 0;
+}
+
+.console-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -839,99 +958,10 @@ async function handleLocale(locale: LocaleSetting) {
  */
 .capture-wrap {
   position: fixed;
-  z-index: 100;
+  z-index: var(--z-toast);
   left: 50%;
   bottom: 46px;
   transform: translateX(-50%);
   width: min(520px, calc(100vw - 48px));
-}
-
-.status-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.led {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 70%, transparent);
-}
-
-.led.idle {
-  background: var(--faint);
-  box-shadow: none;
-}
-
-/* AI access entry: one click to the endpoint address, the dot is live state. */
-.status-mcp {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin: 0;
-  padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--faint);
-  font: inherit;
-  font-size: 10.5px;
-  line-height: 16px;
-  cursor: pointer;
-}
-
-.status-mcp:hover {
-  background: var(--surface-2);
-  border-color: var(--line-soft);
-  color: var(--text-secondary);
-}
-
-.status-mcp:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.status-mcp.on {
-  color: var(--text-secondary);
-}
-
-.mcp-led {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.mcp-led.on {
-  background: var(--green);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 70%, transparent);
-}
-
-.mcp-port {
-  color: var(--faint);
-}
-
-.status-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  overflow: hidden;
-}
-
-@media (max-width: 1180px) {
-  /* Below this width the browser still needs room for two panes, so the dock
-     gives up its fixed width first. */
-  .app-body {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-}
-
-@media (max-width: 900px) {
-  .app-body {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
 }
 </style>

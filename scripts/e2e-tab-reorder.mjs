@@ -222,6 +222,23 @@ try {
   })()`);
 
   // Loose tabs first: the view is not on stage, so only the flat strip renders.
+  //
+  // The rows live in the run dock, and the dock belongs to the workbench — it is
+  // not on screen in browse mode. Enter that mode before reading any row.
+  await client.evaluate(`(async () => {
+    const btn = document.querySelector('.tabstrip .layout-btn');
+    if (btn && !btn.classList.contains('is-bench')) btn.click();
+    await new Promise((r) => setTimeout(r, 900));
+    return true;
+  })()`);
+  await client.evaluate(`(async () => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (document.querySelector('.dock .tab-row')) return true;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return false;
+  })()`);
+
   const loose = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const a = await api.openEmbeddedTab({ viewId: null });

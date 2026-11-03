@@ -424,6 +424,15 @@ export interface AppSettings {
   lastSiteId?: string;
   lastView: "browser" | "sites" | "identities" | "views" | "flows" | "tags";
   /**
+   * Which shell the window opens in.
+   *
+   * "browse" is the browser surface alone — tab strip, toolbar, page — and is
+   * what a single-cell layout means. "bench" adds the run dock and the cells of
+   * a multi-cell layout. The layout drives it automatically; this value is the
+   * last state, remembered so a restart lands where the work was.
+   */
+  shellMode?: "browse" | "bench";
+  /**
    * View launched most recently. Only used when {@link restoreLastView} is on;
    * it is not the "selected view in the UI" and may point at another site.
    */
@@ -758,6 +767,7 @@ export type SettingsPatch = Partial<
     | "locale"
     | "lastSiteId"
     | "lastView"
+    | "shellMode"
     | "lastViewId"
     | "restoreLastView"
     | "overlayEnabled"

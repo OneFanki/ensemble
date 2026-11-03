@@ -169,7 +169,12 @@ function dockRows(view: EmbeddedView): DockRow[] {
     }
     // One cell: a single row for the instance, in slot order.
     if (rows.some((row) => row.root.id === root.id)) return;
-    rows.push({ root, page: activePageOf(root), slot: index, nested: pages.length > 1 ? pages : [] });
+    rows.push({
+      root,
+      page: activePageOf(root),
+      slot: index,
+      nested: pages.length > 1 ? pages : [],
+    });
   });
 
   for (const root of embedded.viewInstances(view.id)) {
@@ -843,7 +848,6 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
               @open-clean="openSiteBookmark($event, { clean: true })"
               @open-identity="openIdentityBookmark"
             />
-            <span class="icon-spacer"></span>
           </header>
           <div v-if="embedded.looseInstances.length" class="rows">
             <div
@@ -1130,15 +1134,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   color: var(--text-secondary);
 }
 
-/* Current instance: the same tile tinted further with the accent, plus its
-   outline — exactly like the current page tab. Derived from `--accent` rather
-   than from a gray step, because a gray step means "raised" in one theme and
-   "recessed" in the other. The earlier version put a straight inset accent bar
-   on the rounded tile: a decorative line on a rounded surface, and two marks
-   for one fact. */
+/* Selected instance: accent tint and accent glyph, no outline. An outline around
+   a rounded tile is a raised-button cue, and the collapsed strip is a column of
+   flat targets. Derived from `--accent` rather than from a gray step, because a
+   gray step means "raised" in one theme and "recessed" in the other. */
 .mini-tab.current {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg));
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
   color: var(--text);
 }
 
@@ -1242,18 +1243,20 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 }
 
 /* The only way to create a view, so it gets a label instead of an icon shape
-   that has to be learned. */
+   that has to be learned. Filled, not outlined: on a dock of flat rows an
+   outlined button is the one box left, and the accent fill is what makes this
+   read as the action rather than as a chip. */
 .add-view {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 22px;
-  padding: 0 7px;
-  border-radius: 4px;
-  border: 1px solid var(--line-soft);
-  background: var(--surface);
-  color: var(--text-secondary);
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 0;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: 10.5px;
   white-space: nowrap;
   cursor: pointer;
@@ -1261,9 +1264,8 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 }
 
 .add-view:hover {
-  background: var(--surface-2);
-  border-color: var(--line);
-  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-strong);
 }
 
 .collapse-btn {
@@ -1280,38 +1282,56 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   scrollbar-width: thin;
 }
 
+/*
+ * A view block has no box of its own.
+ *
+ * The dock used to draw each group as a bordered, rounded container with a
+ * filled header band and a rule under every row — three nested frames inside a
+ * 244px column, which is the "card inside a card" look. What identifies a group
+ * is its header text and the fact that its rows sit under it; the staging
+ * colour already rides the row's own left edge.
+ */
 .view-block {
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
   flex: none;
-  background: var(--bg);
+  /* Rows draw their own leading rule; the block only supplies the gap. */
+  padding-bottom: 2px;
 }
 
-.view-block.loose {
-  border-style: dashed;
+/* Active is a filled header, not an outline: a 1px accent border around the
+   whole group drew a box around rows that are not themselves selected. */
+.view-block.active > .block-head {
+  color: var(--text);
 }
 
-.view-block.active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+.view-block.active > .block-head .view-name {
+  color: var(--text);
+}
+
+.view-block.active > .block-head .view-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .view-block.drop-into {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 /*
  * Every block header uses the same columns in the same order, so the layout
  * picker, "+" and "×" land on the same pixel in every group. Spacers keep the
  * loose block — which has no layout picker and no close button — aligned.
+ *
+ * A plain band, not a filled bar: the header is a label for the rows below it,
+ * and filling it made each group look like a window title inside the dock.
  */
 .block-head {
   display: flex;
   align-items: center;
   gap: 5px;
   padding: 5px 6px;
-  background: var(--surface-2);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   min-width: 0;
 }
@@ -1321,7 +1341,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 }
 
 .block-head:hover {
-  background: var(--surface-3);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .chevron {
@@ -1404,11 +1424,6 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   flex: none;
 }
 
-.icon-spacer {
-  width: 22px;
-  flex: none;
-}
-
 .rows {
   display: flex;
   flex-direction: column;
@@ -1425,18 +1440,24 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   gap: 6px;
   padding: 5px 7px 5px 5px;
   min-width: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  border-top: 1px solid var(--line-soft);
-  border-left: 2px solid transparent;
 }
 
 .tab-row:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+/* The selected row is a filled surface. Its left edge used to carry a 2px accent
+   bar, which on a rounded row is a straight line running into two rounded
+   corners — an ornament, not structure. The fill says the same thing, and the
+   row keeps the accent through its text colour instead. */
 .tab-row.focused {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.tab-row.focused .tab-label {
+  color: var(--text);
 }
 
 .tab-row.dim {
@@ -1688,11 +1709,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   flex: none;
 }
 
+/* Plain text, no dashed box: nothing is missing here, the panel is simply empty
+   until a page is opened. A dotted outline around a sentence is what an empty
+   *table* looks like, and it made the whole dock look unfinished. */
 .dock-empty {
   margin: 2px 2px;
   padding: 14px 10px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-sm);
   font-size: 10.5px;
   line-height: 1.6;
   color: var(--faint);

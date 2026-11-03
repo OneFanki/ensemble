@@ -427,17 +427,13 @@ function normalizePath(event: Event) {
   color: var(--red);
 }
 
-/* `.btn:hover` matches primary buttons too; restate the gradient so the button
-   does not turn gray while the cursor is over it. */
+/* `.btn:hover` matches primary buttons too; restate the fill so the button does
+   not turn gray while the cursor is over it. The shared sheet already does this —
+   the local copy exists only because a scoped block outranks it. */
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: var(--accent-foreground);
-  filter: brightness(1.07);
 }
 
 .spacer {

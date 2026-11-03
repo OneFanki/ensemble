@@ -5,6 +5,7 @@ import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
+import PageHeader from "./ui/PageHeader.vue";
 
 /**
  * Tag management.
@@ -170,161 +171,183 @@ import IconButton from "./ui/IconButton.vue";
 </script>
 
 <template>
-  <section class="tags">
-    <header class="head">
-      <div class="head-copy">
-        <h1>{{ $t("app.tags") }}</h1>
-        <p class="head-note">{{ $t("app.tagsSubtitle") }}</p>
-      </div>
-    </header>
+  <section class="page tags">
+    <PageHeader :title="$t('app.tags')" :note="$t('app.tagsSubtitle')" />
 
-    <div class="create">
-      <input
-        v-model="newTagName"
-        type="text"
-        :placeholder="$t('app.tagNamePlaceholder')"
-        @keydown.enter.prevent="createTag"
-      />
-      <span class="color-row">
-        <button
-          v-for="color in TAG_COLORS"
-          :key="color"
-          type="button"
-          class="color-dot"
-          :class="{ picked: newTagColor === color }"
-          :style="{ background: `var(--role-${color})` }"
-          :aria-label="color"
-          @click="newTagColor = color"
-        ></button>
-      </span>
-      <AppButton variant="primary" @click="createTag">
-        {{ $t("app.tagCreate") }}
-      </AppButton>
-    </div>
-    <p v-if="tagError" class="error">{{ tagError }}</p>
+    <div class="page-body">
+      <!--
+        Creating a tag is a form, and a form reads as one: a bounded box rather
+        than an input stretched across the full page width with its controls
+        scattered to the far edges. The old row also put the swatches and the
+        button on the same line as a 1000px-wide field, which made a one-word
+        action look like a toolbar.
+      -->
+      <form class="create" @submit.prevent="createTag">
+        <label class="create-field">
+          <span>{{ $t("app.tagName") }}</span>
+          <input
+            v-model="newTagName"
+            type="text"
+            :placeholder="$t('app.tagNamePlaceholder')"
+            @keydown.enter.prevent="createTag"
+          />
+        </label>
+        <div class="create-row">
+          <div class="create-colors">
+            <span class="create-label">{{ $t("app.tagColor") }}</span>
+            <span class="color-row">
+              <button
+                v-for="color in TAG_COLORS"
+                :key="color"
+                type="button"
+                class="color-dot"
+                :class="{ picked: newTagColor === color }"
+                :style="{ background: `var(--role-${color})` }"
+                :aria-label="color"
+                @click="newTagColor = color"
+              ></button>
+            </span>
+          </div>
+          <AppButton variant="primary" type="submit">
+            {{ $t("app.tagCreate") }}
+          </AppButton>
+        </div>
+      </form>
+      <p v-if="tagError" class="error">{{ tagError }}</p>
 
-    <!-- One row per tag: name, colour, where it is used. A chip list hides the
-         usage counts, and those are what make an unused tag worth deleting. -->
-    <div v-if="tags.length" class="list">
-      <div
-        v-for="tag in tags"
-        :key="tag.id"
-        class="row"
-        :class="{
-          editing: editingTagId === tag.id,
-          dragging: draggedTagId === tag.id,
-          drop: dropTagId === tag.id,
-        }"
-        :style="{ '--tag': `var(--role-${editingTagId === tag.id ? editTagColor : tag.color})` }"
-        @dragover="onTagDragOver(tag, $event)"
-        @dragleave="onTagDragLeave(tag)"
-        @drop.prevent="onTagDrop(tag)"
-      >
-        <span
-          class="grip"
-          draggable="true"
-          :title="$t('app.dragReorder')"
-          :aria-label="$t('app.dragReorder')"
-          @dragstart="onTagDragStart(tag, $event)"
-          @dragend="onTagDragEnd"
+      <!-- One row per tag: name, colour, where it is used. A chip list hides the
+           usage counts, and those are what make an unused tag worth deleting. -->
+      <div v-if="tags.length" class="list">
+        <div
+          v-for="tag in tags"
+          :key="tag.id"
+          class="row"
+          :class="{
+            editing: editingTagId === tag.id,
+            dragging: draggedTagId === tag.id,
+            drop: dropTagId === tag.id,
+          }"
+          :style="{ '--tag': `var(--role-${editingTagId === tag.id ? editTagColor : tag.color})` }"
+          @dragover="onTagDragOver(tag, $event)"
+          @dragleave="onTagDragLeave(tag)"
+          @drop.prevent="onTagDrop(tag)"
         >
-          <GripVertical :size="12" />
-        </span>
-        <span class="dot"></span>
-        <input
-          v-if="editingTagId === tag.id"
-          ref="editInput"
-          v-model="editTagName"
-          class="rename"
-          @keydown.enter.prevent="commitEditTag(tag)"
-          @keydown.esc.prevent="cancelEditTag"
-          @blur="commitEditTag(tag)"
-        />
-        <span v-else class="name">{{ tag.name }}</span>
-        <!--
-          The colour picker lives inside the edit mode rather than behind its own
-          popover: the row already owns a mode for the name, and a colour is part
-          of what the tag looks like, not a separate setting.
-          `mousedown.prevent` keeps the name input from losing focus — a blur
-          would commit the edit and unmount the swatches before the click lands.
-        -->
-        <span v-if="editingTagId === tag.id" class="color-row edit-colors">
-          <button
-            v-for="color in TAG_COLORS"
-            :key="color"
-            type="button"
-            class="color-dot"
-            :class="{ picked: editTagColor === color }"
-            :style="{ background: `var(--role-${color})` }"
-            :aria-label="color"
-            @mousedown.prevent
-            @click="editTagColor = color"
-          ></button>
-        </span>
-        <span class="usage mono" :class="{ unused: isUnused(tag) }">{{ usage(tag) }}</span>
-        <IconButton :ariaLabel="$t('app.edit')"
-          :title="$t('app.tagEdit')"
-          @click="startEditTag(tag)">
-          <Pencil :size="12" />
-        </IconButton>
-        <IconButton variant="danger" :ariaLabel="$t('app.delete')"
-          @click="removeTag(tag)">
-          <Trash2 :size="12" />
-        </IconButton>
+          <span
+            class="grip"
+            draggable="true"
+            :title="$t('app.dragReorder')"
+            :aria-label="$t('app.dragReorder')"
+            @dragstart="onTagDragStart(tag, $event)"
+            @dragend="onTagDragEnd"
+          >
+            <GripVertical :size="12" />
+          </span>
+          <span class="dot"></span>
+          <input
+            v-if="editingTagId === tag.id"
+            ref="editInput"
+            v-model="editTagName"
+            class="rename"
+            @keydown.enter.prevent="commitEditTag(tag)"
+            @keydown.esc.prevent="cancelEditTag"
+            @blur="commitEditTag(tag)"
+          />
+          <span v-else class="name">{{ tag.name }}</span>
+          <!--
+            The colour picker lives inside the edit mode rather than behind its own
+            popover: the row already owns a mode for the name, and a colour is part
+            of what the tag looks like, not a separate setting.
+            `mousedown.prevent` keeps the name input from losing focus — a blur
+            would commit the edit and unmount the swatches before the click lands.
+          -->
+          <span v-if="editingTagId === tag.id" class="color-row edit-colors">
+            <button
+              v-for="color in TAG_COLORS"
+              :key="color"
+              type="button"
+              class="color-dot"
+              :class="{ picked: editTagColor === color }"
+              :style="{ background: `var(--role-${color})` }"
+              :aria-label="color"
+              @mousedown.prevent
+              @click="editTagColor = color"
+            ></button>
+          </span>
+          <span class="usage mono" :class="{ unused: isUnused(tag) }">{{ usage(tag) }}</span>
+          <IconButton :ariaLabel="$t('app.edit')"
+            :title="$t('app.tagEdit')"
+            @click="startEditTag(tag)">
+            <Pencil :size="12" />
+          </IconButton>
+          <IconButton variant="danger" :ariaLabel="$t('app.delete')"
+            @click="removeTag(tag)">
+            <Trash2 :size="12" />
+          </IconButton>
+        </div>
       </div>
-    </div>
-    <div v-else class="empty">
-      <TagIcon :size="20" />
-      <p>{{ $t("app.noTags") }}</p>
-      <p class="note">{{ $t("app.tagsEmptyHint") }}</p>
+      <div v-else class="empty">
+        <TagIcon :size="20" />
+        <p>{{ $t("app.noTags") }}</p>
+        <p class="note">{{ $t("app.tagsEmptyHint") }}</p>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-/* Matches the other top-level pages: own scroll area, own header padding. */
-.tags {
-  min-height: 0;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 18px 20px 16px;
-  overflow-y: auto;
-}
-
-.head-copy h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-.head-note {
-  margin: 4px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  line-height: 1.55;
-  max-width: 620px;
-}
-
+/* One bounded form, not a stretched row: the name field keeps a readable
+   measure and the two controls below it are grouped by what they set. */
 .create {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: var(--space-5);
+  /* One measure shared with the list below: two shapes of different widths
+     stacked in the same column read as two unrelated pages. */
+  max-width: 720px;
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.create-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.create-field > span,
+.create-label {
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.create-row {
+  display: flex;
+  align-items: flex-end;
+  /* The create button follows the swatches, not the far edge of the card. Pushed
+     apart by `space-between`, a 40px action sat ~300px from the colour it acts
+     on and read as belonging to nothing. */
+  justify-content: flex-start;
+  gap: var(--space-6);
+}
+
+.create-colors {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .create input {
-  flex: 1 1 200px;
-  min-width: 140px;
-  padding: 6px 9px;
+  width: 100%;
+  height: var(--control-md);
+  padding: 0 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-base);
   outline: 0;
 }
 
@@ -334,7 +357,9 @@ import IconButton from "./ui/IconButton.vue";
 
 .color-row {
   display: flex;
-  gap: 4px;
+  /* Wide enough for the selected swatch's outer ring to sit clear of its
+     neighbours; at the old 4px the ring touched the next circle. */
+  gap: 8px;
   /* Never shrink the swatches: in the edit row they sit between the name input
      and the usage column, and squeezing them makes them unclickable. */
   flex: 0 0 auto;
@@ -345,12 +370,22 @@ import IconButton from "./ui/IconButton.vue";
   height: 15px;
   flex: 0 0 15px;
   border-radius: 50%;
-  border: 2px solid transparent;
+  border: 0;
   padding: 0;
 }
 
+/*
+ * The chosen swatch keeps its full colour and gets a ring outside it.
+ *
+ * A 2px border sat inside the 15px circle, so the selection turned the colour
+ * into a donut — the one thing you are picking was the one thing made smaller.
+ * The ring is drawn outside the fill, separated from it by a hairline of page
+ * background, which is legible on both themes without touching the colour.
+ */
 .color-dot.picked {
-  border-color: var(--text);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--text);
 }
 
 /* Edit mode: keep the usage column readable instead of letting it collapse
@@ -386,6 +421,9 @@ import IconButton from "./ui/IconButton.vue";
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   overflow: hidden;
+  /* Same measure as the form above it. A 420px create card followed by a
+     full-window list made the two look like they belonged to different pages. */
+  max-width: 720px;
 }
 
 .row {
@@ -461,25 +499,13 @@ import IconButton from "./ui/IconButton.vue";
   color: color-mix(in srgb, var(--accent) 62%, var(--faint));
 }
 
-.empty {
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  padding: 26px 18px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.empty p {
-  margin: 0;
-}
-
+/* An unused tag list is a prompt, not an empty table: the dashed box was drawn
+   at full page width and read like a broken surface. Centre the message in the
+   space the list would have taken. */
+/* Only the second line is this page's own: the frame comes from the shared
+   `.empty` rule. */
 .empty .note {
-  font-size: 11px;
+  font-size: var(--fs-sm);
   color: var(--faint);
   max-width: 420px;
   line-height: 1.6;

@@ -231,9 +231,8 @@ function subtreeIds(rootId: string): Set<string> {
 /** Bookmark count in a folder's subtree — what entering the folder yields. */
 function subtreeCount(folder: BookmarkFolder): number {
   const ids = subtreeIds(folder.id);
-  return props.bookmarks.filter(
-    (bookmark) => bookmark.folderId && ids.has(bookmark.folderId),
-  ).length;
+  return props.bookmarks.filter((bookmark) => bookmark.folderId && ids.has(bookmark.folderId))
+    .length;
 }
 
 const currentFolder = computed(() => path.value[path.value.length - 1] ?? null);
@@ -343,7 +342,18 @@ function onDropIntoFolder(id: string): void {
   <div v-if="count || folders.length" ref="root" class="bookmark-area">
     <!-- Breadcrumb of the open path; a dropped tile is filed into the crumb's
          folder (the root crumb unfiles). -->
-    <nav v-if="crumbs.length > 1 || levelFolders.length" class="folder-strip" :aria-label="t('app.bookmarks')">
+    <!--
+      Shown when it can actually be used as a path: inside a folder, or at the
+      root when some folder has children (the caret is then the only way to jump
+      two levels at once). At the root with a flat list it was a lone "All" pill
+      floating between the search box and the tiles — a control with nothing to
+      choose, since every folder was already a tile right below it.
+    -->
+    <nav
+      v-if="crumbs.length > 1 || levelFolders.some((folder) => (childrenMap.get(folder.id) ?? []).length)"
+      class="folder-strip"
+      :aria-label="t('app.bookmarks')"
+    >
       <template v-for="(crumb, index) in crumbs" :key="crumb.folder?.id ?? 'root'">
         <span v-if="index > 0" class="crumb-sep">/</span>
         <span class="crumb-wrap">
@@ -409,7 +419,9 @@ function onDropIntoFolder(id: string): void {
       >
         <span class="tile-icon folder"><Folder :size="16" /></span>
         <span class="tile-name">{{ folder.name }}</span>
-        <span class="tile-count mono">{{ subtreeCount(folder) }}</span>
+        <!-- Empty folders show no count: a "0" under every new folder is a row
+             of noise that says nothing, and the tile already says "folder". -->
+        <span v-if="subtreeCount(folder)" class="tile-count mono">{{ subtreeCount(folder) }}</span>
       </button>
 
       <button
@@ -681,8 +693,8 @@ function onDropIntoFolder(id: string): void {
    this many bookmarks across its whole subtree. */
 .tile-count {
   margin-top: -3px;
-  font-size: 9.5px;
-  color: var(--faint);
+  font-size: var(--fs-2xs);
+  color: var(--dim);
 }
 
 .tile-icon {
@@ -710,13 +722,15 @@ function onDropIntoFolder(id: string): void {
 
 .tile-name {
   max-width: 100%;
-  font-size: 11px;
-  line-height: 1.3;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  /* One line with an ellipsis, not two: at 92px a two-line clamp broke long
+     host names mid-syllable ("dev.example.tes" / "t"), which is worse than
+     truncating. The full URL is on the tile's native title. */
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .tile-rename {

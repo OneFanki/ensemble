@@ -1,16 +1,29 @@
 <script setup lang="ts">
 import type { Identity, RoleColor } from "@shared/types";
-import { Check, CheckSquare, Download, HeartPulse, LayoutGrid, Link2, Play, Plus, Search, Square } from "lucide-vue-next";
+import {
+  Check,
+  CheckSquare,
+  Download,
+  HeartPulse,
+  LayoutGrid,
+  Link2,
+  Play,
+  Plus,
+  Search,
+  Square,
+  Users,
+} from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
-import GroupChevron from "./GroupChevron.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import GroupHeader from "./ui/GroupHeader.vue";
+import PageHeader from "./ui/PageHeader.vue";
 
 const emit = defineEmits<{
   newIdentity: [siteId?: string];
@@ -367,28 +380,30 @@ function passwordLabel(identity: Identity): string {
 </script>
 
 <template>
-  <section class="identities">
-    <header class="head">
-      <div class="head-copy">
-        <h1>{{ $t("app.identities") }}</h1>
-        <p class="mono">
-          {{ $t("app.identityCount", { count: store.identities.length }) }}
-          <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
-        </p>
-      </div>
-      <div class="head-actions">
+  <section class="page identities">
+    <PageHeader :title="$t('app.identities')" numeric>
+      <template #note>
+        {{ $t("app.identityCount", { count: store.identities.length }) }}
+        <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
+      </template>
+      <template #actions>
         <AppButton variant="primary" data-tour="new-identity" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
         </AppButton>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <div v-if="store.credentials?.warning" class="vault-banner">
       {{ store.credentials.warning }}
     </div>
 
-    <div class="toolbar">
+    <!--
+      The whole bar is a set of filters and batch actions over a list. With no
+      accounts, "all 0 / running 0 / expired 0" is three ways to see nothing and
+      the batch buttons have nothing to act on, so the bar is not drawn at all.
+    -->
+    <div v-if="store.identities.length" class="toolbar">
       <div class="tabs" role="tablist" :aria-label="$t('app.identities')">
         <button
           type="button"
@@ -425,9 +440,7 @@ function passwordLabel(identity: Identity): string {
         <Search :size="12" />
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
-      <AppButton v-if="!selecting"
-        data-batch-select
-        :title="$t('app.batchSelectHint')"
+      <AppButton v-if="!selecting" data-batch-select :title="$t('app.batchSelectHint')"
         @click="startSelecting">
         <CheckSquare :size="12" />
         {{ $t("app.batchSelect") }}
@@ -576,39 +589,37 @@ function passwordLabel(identity: Identity): string {
       </div>
     </div>
 
-    <div class="cards">
+    <div class="page-body">
+      <div class="cards">
       <!-- Grouped by site; a view may span sites, so the account page no longer
            hides everything outside one global "current site". -->
       <template v-for="group in groups" :key="group.siteId">
         <!-- The whole header folds the group: the arrow alone is a 16px target,
-             and this row is what the eye is on when it wants the section gone. -->
-        <div
-          class="group-head"
-          :class="{ collapsed: groupCollapse.isCollapsed(group.siteId) }"
-          role="button"
-          tabindex="0"
-          :aria-expanded="!groupCollapse.isCollapsed(group.siteId)"
-          @click="groupCollapse.toggle(group.siteId)"
-          @keydown.enter.prevent="groupCollapse.toggle(group.siteId)"
+             and this row is what the eye is on when it wants the section gone.
+             The address and the add button ride in slots because they belong to
+             this page, not to every grouped list. -->
+        <GroupHeader
+          class="group-span"
+          :name="group.name"
+          :count="group.people.length"
+          :collapsed="groupCollapse.isCollapsed(group.siteId)"
+          @toggle="groupCollapse.toggle(group.siteId)"
         >
-          <GroupChevron
-            :collapsed="groupCollapse.isCollapsed(group.siteId)"
-            :name="group.name"
-            @toggle="groupCollapse.toggle(group.siteId)"
-          />
-          <span class="group-name">{{ group.name }}</span>
-          <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
-          <span class="group-count mono">{{ group.people.length }}</span>
-          <button
-            v-if="group.siteId !== '__orphan__'"
-            type="button"
-            class="group-add"
-            :title="$t('app.newIdentityHere')"
-            @click.stop="emit('newIdentity', group.siteId)"
-          >
-            <Plus :size="11" />
-          </button>
-        </div>
+          <template #meta>
+            <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
+          </template>
+          <template #actions>
+            <button
+              v-if="group.siteId !== '__orphan__'"
+              type="button"
+              class="group-add"
+              :title="$t('app.newIdentityHere')"
+              @click.stop="emit('newIdentity', group.siteId)"
+            >
+              <Plus :size="11" />
+            </button>
+          </template>
+        </GroupHeader>
         <template v-if="!groupCollapse.isCollapsed(group.siteId)">
           <button
             v-for="identity in group.people"
@@ -702,60 +713,21 @@ function passwordLabel(identity: Identity): string {
       </template>
 
       <div v-if="!visibleIdentities.length" class="empty">
+        <Users :size="22" />
         <p>{{ store.identities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
-        <AppButton variant="primary" @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ $t("app.newIdentity") }}
-        </AppButton>
+        <div class="empty-actions">
+          <AppButton variant="primary" @click="emit('newIdentity')">
+            <Plus :size="13" />
+            {{ $t("app.newIdentity") }}
+          </AppButton>
+        </div>
+      </div>
       </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.identities {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 12px;
-  overflow: hidden;
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  flex: 0 0 auto;
-}
-
-.head-copy {
-  min-width: 0;
-}
-
-h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-.head-copy p {
-  margin: 6px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.head-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
 .vault-banner {
   margin-top: 12px;
   padding: 8px 11px;
@@ -950,20 +922,22 @@ h1 {
 }
 
 .cards {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
   display: grid;
-  /* Column count follows the window: the whole point of this page is comparing
-     many accounts at once, so a fixed two columns wasted half the width on a
-     desktop screen. 264px is the narrowest a card reads at without truncating
-     the name and the status into each other. */
-  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
-  /* An explicit row floor: as an auto-sized grid item inside a scrolling flex
-     column, rows were compressed to the container's leftover height, and the
-     card's own `overflow: hidden` then clipped its action row. Rows must size to
-     their content — the grid scrolls, it does not shrink its cells. */
+  /* The mockup's minimum, 212px, so the grid packs the same number of columns it
+     draws. The card was briefly 264px to stop the name and the "unchecked" state
+     truncating into each other — that was before the name and the address moved
+     onto two stacked lines, which is what actually bought the width back. */
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+  /* Rows size to their content. As grid items in a scrolling container they were
+     being compressed to the leftover height, and the card's own `overflow: hidden`
+     then clipped its action row. */
   grid-auto-rows: min-content;
+  /* Grow to the body's height so a short list still starts at the top and the
+     empty state (below) has a full-height box to centre itself in. Without this
+     the grid is content-height and the placeholder lands under the header,
+     half a page away from where every other page centres the same box. */
+  flex: 1 1 auto;
+  align-content: start;
   gap: 7px;
   align-content: start;
   padding: 1px 2px 2px 1px;
@@ -971,50 +945,19 @@ h1 {
 
 /* Site group headers span the grid; they are the replacement for the old
    title-bar site switcher, so they carry the address and the count. */
-.group-head {
+/* A group header inside the cards grid spans every column, so the site name
+   sits above its own cards rather than in the first cell. */
+.group-span {
   grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 2px 2px;
-  border-bottom: 1px solid var(--line-soft);
-  cursor: pointer;
-}
-
-.group-head:first-child {
-  padding-top: 0;
-}
-
-.group-head:hover .group-name {
-  color: var(--text);
-}
-
-/* Folded: the name and count stay, the cards go. A dashed rule is the quiet
-   version of "this section is closed" — a solid rule with nothing under it reads
-   as a rendering bug. */
-.group-head.collapsed {
-  border-bottom-style: dashed;
-  padding-bottom: 6px;
-}
-
-.group-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
 }
 
 .group-url {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.group-count {
-  font-size: 10.5px;
-  color: var(--faint);
 }
 
 .group-add {
@@ -1095,9 +1038,16 @@ h1 {
   --role: var(--role-slate);
   position: relative;
   text-align: left;
-  border: 1px solid var(--line-soft);
+  /* Same reasoning as the sites card: the page and the card share a surface, so
+     the edge has to be the stronger hairline or the card disappears into the
+     background in the light theme. */
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, var(--surface), var(--bg-elevated));
+  /* One flat surface. The card used to fade from `--surface` to `--bg-elevated`
+     down its height, which on a grid of cards read as a sheen on each one; a
+     border and the identity's own left rule are enough to separate a card from
+     the page. */
+  background: var(--surface);
   /* Dense on purpose: the page's job is comparing many accounts at once, and a
      card that spends three rows on a password-dots decoration costs a visible
      slice of screen per account. One identity line plus one fact line is the
@@ -1108,7 +1058,7 @@ h1 {
   gap: 5px;
   overflow: hidden;
   min-width: 0;
-  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+  transition: border-color 0.16s ease, background 0.16s ease;
 }
 
 .id-card::before {
@@ -1120,14 +1070,15 @@ h1 {
   opacity: 0.9;
 }
 
+/* No lift on hover: a card that rises under the cursor makes a grid feel like a
+   stack of loose tiles. The border taking the identity colour is the response. */
 .id-card:hover {
   border-color: color-mix(in srgb, var(--role) 34%, var(--line));
-  transform: translateY(-1px);
 }
 
 .id-card.running {
   border-color: color-mix(in srgb, var(--role) 46%, var(--line));
-  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  background: var(--surface-2);
 }
 
 .id-card.picking {
@@ -1180,43 +1131,50 @@ h1 {
 }
 
 .avatar {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
-  border-radius: 7px;
+  /* 32px from the mockup, not 24. At 24 the initial was smaller than the card's
+     own name text and the card read as a list row; the mockup's card is built
+     around a square avatar as the anchor, with the name and address beside it. */
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  border-radius: var(--radius-lg);
   display: grid;
   place-items: center;
   background: color-mix(in srgb, var(--role) 15%, var(--surface));
   color: color-mix(in srgb, var(--role) 82%, var(--text));
-  font-size: 11px;
+  font-size: var(--fs-base);
   font-weight: 500;
 }
 
+/* Name over account, not beside it.
+   Side by side, the two shared a card that is only 264px wide at its narrowest:
+   once the status label and the avatar took their width, every account name
+   collapsed to "管理员 · 主..." and every address to the same handful of
+   characters. Stacked, each gets the full remaining width and both usually fit. */
 .who {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
-  align-items: baseline;
-  gap: 7px;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .name {
-  font-size: 12px;
+  font-size: var(--fs-base);
   font-weight: 500;
   letter-spacing: 0.005em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 0 1 auto;
 }
 
 .acct {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
+  line-height: 1.35;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .state {
@@ -1342,22 +1300,20 @@ h1 {
   color: var(--faint);
 }
 
-.empty {
-  grid-column: 1 / -1;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-lg);
-  padding: 32px 20px;
+/* The frame comes from the shared `.empty` rule; only the placement is this
+   page's own. The response is normally a grid, but the shared `.empty` centres
+   itself with `margin: auto`, which does nothing inside a grid whose rows are
+   content-height — so when the grid holds nothing but the placeholder, it
+   becomes a one-item flex column and the shared centring works as written.
+   The width override stays: the shared cap is a measure for prose, and without
+   it the box shrank to a 264px column and the button label wrapped. */
+.cards:has(> .empty) {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
 }
 
-.empty p {
-  margin: 0;
+.empty {
+  justify-self: center;
 }
 
 @media (max-width: 820px) {
@@ -1369,10 +1325,6 @@ h1 {
 @media (max-width: 900px) {
   .identities {
     padding: 14px;
-  }
-
-  .head {
-    flex-wrap: wrap;
   }
 
   .search {

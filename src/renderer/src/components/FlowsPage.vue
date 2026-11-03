@@ -16,13 +16,16 @@ import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useConfirmStore } from "../stores/confirm";
+import { useNavigationStore } from "../stores/navigation";
 import { useWorkspaceStore } from "../stores/workspace";
-import GroupChevron from "./GroupChevron.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import GroupHeader from "./ui/GroupHeader.vue";
 import IconButton from "./ui/IconButton.vue";
+import PageHeader from "./ui/PageHeader.vue";
+import SplitPane from "./ui/SplitPane.vue";
 
 /**
  * Flows: the fourth kind of asset, next to sites, accounts and views.
@@ -38,6 +41,7 @@ import IconButton from "./ui/IconButton.vue";
  */
 const store = useWorkspaceStore();
 const confirm = useConfirmStore();
+const navigation = useNavigationStore();
 const { t } = useI18n();
 
 const selectedId = ref("");
@@ -269,13 +273,9 @@ async function saveDraft() {
 </script>
 
 <template>
-  <section class="flows">
-    <header class="head">
-      <div class="head-copy">
-        <h1>{{ $t("app.flows") }}</h1>
-        <p class="head-note">{{ $t("app.flowsSubtitle") }}</p>
-      </div>
-      <div class="head-actions">
+  <section class="page flows">
+    <PageHeader :title="$t('app.flows')" :note="$t('app.flowsSubtitle')">
+      <template #actions>
         <GroupCollapseAll
           v-if="groups.length > 1"
           :all-collapsed="allCollapsed"
@@ -287,38 +287,42 @@ async function saveDraft() {
           <Plus :size="13" />
           {{ $t("app.newFlow") }}
         </AppButton>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
+    <!--
+      With no site, "new flow" cannot be the suggestion: a flow has to belong to
+      one, so the button would only ever be inert. Point at the thing that is
+      actually missing instead, and give the header's button the reason it is
+      disabled as its tooltip.
+    -->
     <div v-if="!flows.length" class="empty">
       <ListChecks :size="22" />
-      <p>{{ $t("app.flowsEmpty") }}</p>
-      <AppButton variant="primary" :disabled="!store.sites.length" @click="openEditor()">
-        <Plus :size="13" />
-        {{ $t("app.newFlow") }}
-      </AppButton>
+      <p>{{ store.sites.length ? $t("app.flowsEmpty") : $t("app.flowsEmptyNoSite") }}</p>
+      <div class="empty-actions">
+        <AppButton
+          v-if="store.sites.length"
+          variant="primary"
+          @click="openEditor()">
+          <Plus :size="13" />
+          {{ $t("app.newFlow") }}
+        </AppButton>
+        <AppButton v-else variant="primary" @click="navigation.navigate('sites')">
+          {{ $t("app.flowGoToSites") }}
+        </AppButton>
+      </div>
     </div>
 
-    <div v-else class="workspace">
-      <div class="flow-list" role="listbox" :aria-label="$t('app.flows')">
+    <SplitPane v-else dense>
+      <template #list>
+        <div class="flow-list" role="listbox" :aria-label="$t('app.flows')">
         <template v-for="group in groups" :key="group.siteId">
-          <div
-            class="group-head"
-            :class="{ collapsed: groupCollapse.isCollapsed(group.siteId) }"
-            role="button"
-            tabindex="0"
-            :aria-expanded="!groupCollapse.isCollapsed(group.siteId)"
-            @click="groupCollapse.toggle(group.siteId)"
-            @keydown.enter.prevent="groupCollapse.toggle(group.siteId)"
-          >
-            <GroupChevron
-              :collapsed="groupCollapse.isCollapsed(group.siteId)"
-              :name="group.name"
-              @toggle="groupCollapse.toggle(group.siteId)"
-            />
-            <span class="group-name">{{ group.name }}</span>
-            <span class="group-count mono">{{ group.flows.length }}</span>
-          </div>
+          <GroupHeader
+            :name="group.name"
+            :count="group.flows.length"
+            :collapsed="groupCollapse.isCollapsed(group.siteId)"
+            @toggle="groupCollapse.toggle(group.siteId)"
+          />
           <button
             v-for="flow in groupCollapse.isCollapsed(group.siteId) ? [] : group.flows"
             :key="flow.id"
@@ -340,9 +344,11 @@ async function saveDraft() {
             </span>
           </button>
         </template>
-      </div>
+        </div>
+      </template>
 
-      <div v-if="selected" class="detail">
+      <template #detail>
+        <div v-if="selected" class="detail">
         <div class="detail-head">
           <div class="detail-copy">
             <h2>{{ selected.name }}</h2>
@@ -398,8 +404,9 @@ async function saveDraft() {
             </li>
           </ol>
         </div>
-      </div>
-    </div>
+        </div>
+      </template>
+    </SplitPane>
 
     <!-- Run: parameters first, because a flow is a template rather than a macro
          with hard-coded values. -->
@@ -666,117 +673,12 @@ async function saveDraft() {
 </template>
 
 <style scoped>
-.flows {
-  min-height: 0;
-  /* Fills the pane so the empty state has free space to sit in the middle of.
-     Without it the section is only as tall as its contents and `margin: auto`
-     on `.empty` has nothing to distribute — which is why the block hugged the
-     header. */
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 14px;
-  overflow: hidden;
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  flex: 0 0 auto;
-}
-
-.head-copy h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-.head-note {
-  margin: 4px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  line-height: 1.55;
-  max-width: 640px;
-}
-
-.head-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
-}
-
-.empty {
-  margin: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  color: var(--faint);
-  font-size: 12px;
-}
-
-/* The user agent's paragraph margins would double the flex gap above and below
-   the line, so the three parts of the block would not read as evenly spaced. */
-.empty p {
-  margin: 0;
-  max-width: 320px;
-  line-height: 1.6;
-  text-align: center;
-}
-
-.workspace {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-  gap: 14px;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
 .flow-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  overflow-y: auto;
   min-height: 0;
   padding-right: 2px;
-}
-
-.group-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 6px 4px;
-  font-size: 10.5px;
-  color: var(--faint);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  /* The arrow is pulled into the row's own padding, so the group label keeps the
-     left edge the flow rows below it have. */
-  margin-left: -4px;
-}
-
-.group-head:hover .group-name {
-  color: var(--text-secondary);
-}
-
-/* Folded: the label and its count remain, the rows go. */
-.group-head.collapsed {
-  padding-bottom: 8px;
-}
-
-.group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.group-count {
-  margin-left: auto;
 }
 
 .flow-row {

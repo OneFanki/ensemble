@@ -190,35 +190,52 @@ function chooseIdentity(identityId: string): void {
 .split {
   display: inline-flex;
   align-items: stretch;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: var(--radius);
   overflow: hidden;
-  /* Level with the 30px toolbar controls: a shorter control reads as secondary,
-     and "+" is the primary action on this row. */
-  height: 30px;
+  /* Level with every other toolbar control (--control-lg): a shorter control
+     reads as secondary. */
+  height: var(--control-lg);
 }
 
+/*
+ * Tinted, unlike every other control on this row.
+ *
+ * Its "+" is not "another tab" — it asks which account the page should open as,
+ * which is the one thing this browser does that a browser does not. A plain
+ * glyph here sat 34px below the tab strip's own "+" and looked interchangeable
+ * with it; the tint says "this one creates something" without a label.
+ */
 .split-main {
   display: grid;
   place-items: center;
   width: 32px;
-  color: var(--faint);
-  background: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
   cursor: pointer;
+  border-radius: var(--radius);
 }
 
 .split-main:hover {
-  color: var(--text);
-  background: var(--surface-2);
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Dock headers and empty cells are denser than the toolbar. */
-.split.compact {
-  height: 20px;
-}
-
+/* Dock headers and empty cells are denser than the toolbar, and the tint would
+   make a small "+" shout inside a cell. */
 .split.compact .split-main {
   width: 22px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.split.compact .split-main:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.split.compact {
+  height: 20px;
 }
 
 .open-panel {

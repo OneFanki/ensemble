@@ -437,6 +437,20 @@ try {
 
   // --- The dock reports the count, so the user sees it without the log ---
   //
+  // The dock belongs to the workbench, so this part of the check has to be in
+  // that mode: in browse mode the rows do not exist and every reading below
+  // would come back empty for a reason that has nothing to do with the badge.
+  await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const btn = document.querySelector('.tabstrip .layout-btn');
+    if (btn && !btn.classList.contains('is-bench')) btn.click();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (document.querySelector('.dock .tab-row')) return true;
+      await wait(200);
+    }
+    return false;
+  })()`);
+  //
   // Two claims, not one: the number is there, and its explanation is drawn by
   // the app rather than being a native `title`. The second claim has a hard
   // constraint behind it — the dock and each view block clip their overflow,

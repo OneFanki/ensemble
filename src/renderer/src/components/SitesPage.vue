@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import type { Site, Tag as WorkspaceTag } from "@shared/types";
-import { Globe, GripVertical, Pencil, Plus, Trash2, Waypoints } from "lucide-vue-next";
+import { Globe, GripVertical, Pencil, Plus, Trash2 } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
-import GroupChevron from "./GroupChevron.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
+import GroupHeader from "./ui/GroupHeader.vue";
+import PageHeader from "./ui/PageHeader.vue";
 
 const emit = defineEmits<{
   newSite: [];
@@ -107,19 +108,14 @@ async function remove(site: Site) {
   await store.deleteSite(site.id);
 }
 
-
 import AppButton from "./ui/AppButton.vue";
 import IconButton from "./ui/IconButton.vue";
 </script>
 
 <template>
-  <section class="sites">
-    <header class="head">
-      <div class="head-copy">
-        <h1>{{ $t("app.sites") }}</h1>
-        <p class="head-note">{{ $t("app.sitesSubtitle") }}</p>
-      </div>
-      <div class="head-actions">
+  <section class="page sites">
+    <PageHeader :title="$t('app.sites')" :note="$t('app.sitesSubtitle')">
+      <template #actions>
         <GroupCollapseAll
           v-if="groups.length > 1"
           :all-collapsed="allCollapsed"
@@ -129,232 +125,149 @@ import IconButton from "./ui/IconButton.vue";
           <Plus :size="13" />
           {{ $t("app.newSite") }}
         </AppButton>
+      </template>
+    </PageHeader>
+
+    <div class="page-body">
+      <div v-if="!sites.length" class="empty">
+        <Globe :size="22" />
+        <p>{{ $t("app.emptySites") }}</p>
+        <div class="empty-actions">
+          <AppButton variant="primary" @click="emit('newSite')">
+            <Plus :size="13" />
+            {{ $t("app.newSite") }}
+          </AppButton>
+        </div>
       </div>
-    </header>
 
-    <div v-if="!sites.length" class="empty">
-      <Waypoints :size="22" />
-      <p>{{ $t("app.emptySites") }}</p>
-      <AppButton variant="primary" @click="emit('newSite')">
-        <Plus :size="13" />
-        {{ $t("app.newSite") }}
-      </AppButton>
-    </div>
-
-    <div v-else class="group-list">
-      <!--
-        Group headers are the fold control. The whole row is clickable rather
-        than only the arrow: a 16px arrow is a small target, and the header is
-        the line the eye is already on when it wants "hide this section".
-      -->
-      <section v-for="group in groups" :key="group.key" class="group">
-        <header
-          class="group-head"
-          :class="{ collapsed: groupCollapse.isCollapsed(group.key) }"
-          role="button"
-          tabindex="0"
-          :aria-expanded="!groupCollapse.isCollapsed(group.key)"
-          @click="groupCollapse.toggle(group.key)"
-          @keydown.enter.prevent="groupCollapse.toggle(group.key)"
-        >
-          <GroupChevron
-            :collapsed="groupCollapse.isCollapsed(group.key)"
+      <div v-else class="group-list">
+        <!--
+          Group headers are the fold control. The whole row is clickable rather
+          than only the arrow: a 16px arrow is a small target, and the header is
+          the line the eye is already on when it wants "hide this section".
+        -->
+        <section v-for="group in groups" :key="group.key" class="group">
+          <GroupHeader
             :name="group.tag?.name ?? t('app.untaggedSites')"
+            :count="group.sites.length"
+            :collapsed="groupCollapse.isCollapsed(group.key)"
+            :color="group.tag?.color"
             @toggle="groupCollapse.toggle(group.key)"
           />
-          <span
-            v-if="group.tag"
-            class="group-dot"
-            :style="{ background: `var(--role-${group.tag.color})` }"
-          ></span>
-          <span class="group-name">
-            {{ group.tag?.name ?? $t("app.untaggedSites") }}
-          </span>
-          <span class="group-count mono">{{ group.sites.length }}</span>
-        </header>
 
-        <div v-if="!groupCollapse.isCollapsed(group.key)" class="env-grid">
-          <article
-            v-for="site in group.sites"
-            :key="site.id"
-            class="env-card"
-            :class="{ dragging: draggedSiteId === site.id, drop: dropSiteId === site.id }"
-            @dragover="onSiteDragOver(site, $event)"
-            @dragleave="onSiteDragLeave(site)"
-            @drop.prevent="onSiteDrop(site)"
-          >
-            <div class="card-head">
-              <span
-                class="site-grip"
-                draggable="true"
-                :title="$t('app.dragReorder')"
-                :aria-label="$t('app.dragReorder')"
-                @dragstart="onSiteDragStart(site, $event)"
-                @dragend="onSiteDragEnd"
-              >
-                <GripVertical :size="12" />
-              </span>
-              <span class="env-dot"></span>
-              <h2 class="env-name">{{ site.name }}</h2>
-            </div>
-
-            <p class="env-url mono" :title="site.baseUrl">
-              <Globe :size="11" />
-              <span>{{ site.baseUrl }}</span>
-            </p>
-
-            <dl class="env-meta">
-              <div>
-                <dt>{{ $t("app.identities") }}</dt>
-                <dd class="mono">{{ identityCount(site) }}</dd>
+          <div v-if="!groupCollapse.isCollapsed(group.key)" class="env-grid">
+            <article
+              v-for="site in group.sites"
+              :key="site.id"
+              class="env-card"
+              :class="{ dragging: draggedSiteId === site.id, drop: dropSiteId === site.id }"
+              @dragover="onSiteDragOver(site, $event)"
+              @dragleave="onSiteDragLeave(site)"
+              @drop.prevent="onSiteDrop(site)"
+            >
+              <div class="card-head">
+                <span
+                  class="site-grip"
+                  draggable="true"
+                  :title="$t('app.dragReorder')"
+                  :aria-label="$t('app.dragReorder')"
+                  @dragstart="onSiteDragStart(site, $event)"
+                  @dragend="onSiteDragEnd"
+                >
+                  <GripVertical :size="12" />
+                </span>
+                <h2 class="env-name">{{ site.name }}</h2>
+                <span class="card-actions">
+                  <IconButton :ariaLabel="$t('app.edit')" @click="emit('editSite', site.id)">
+                    <Pencil :size="12" />
+                  </IconButton>
+                  <IconButton variant="danger" :ariaLabel="$t('app.delete')" @click="remove(site)">
+                    <Trash2 :size="12" />
+                  </IconButton>
+                </span>
               </div>
-              <div>
-                <dt>{{ $t("app.views") }}</dt>
-                <dd class="mono">{{ viewCount(site) }}</dd>
-              </div>
-              <div>
-                <dt>{{ $t("app.defaultPassword") }}</dt>
-                <dd>{{ passwordSet(site) ? $t("app.passwordSet") : $t("app.passwordNotSet") }}</dd>
-              </div>
-            </dl>
 
-            <div class="card-actions">
-              <AppButton size="sm" :title="$t('app.openSiteHint')"
-                @click="store.markSiteUsed(site.id); emit('openSite', site.id)">
-                <Globe :size="12" />
-                {{ $t("app.openSite") }}
-              </AppButton>
-              <IconButton :ariaLabel="$t('app.edit')" @click="emit('editSite', site.id)">
-                <Pencil :size="12" />
-              </IconButton>
-              <IconButton variant="danger" :ariaLabel="$t('app.delete')"
-                @click="remove(site)">
-                <Trash2 :size="12" />
-              </IconButton>
-            </div>
-          </article>
-        </div>
-      </section>
+              <p class="env-url mono" :title="site.baseUrl">
+                <Globe :size="11" />
+                <span>{{ site.baseUrl }}</span>
+              </p>
+
+              <!--
+                Facts as chips, the way the mockup draws them: each is a distinct
+                little statement, and separated by dots in running text they
+                collapsed into one grey line ("2 身份 1 视图 未设置" reads as a
+                sentence). The chip frame also gives "no password" somewhere to
+                be an accent without colouring three words mid-line.
+              -->
+              <div class="env-meta">
+                <span class="env-chip">
+                  <b class="mono">{{ identityCount(site) }}</b> {{ $t("app.identities") }}
+                </span>
+                <span class="env-chip">
+                  <b class="mono">{{ viewCount(site) }}</b> {{ $t("app.views") }}
+                </span>
+                <span class="env-chip" :class="{ missing: !passwordSet(site) }">
+                  {{ passwordSet(site) ? $t("app.passwordSet") : $t("app.passwordNotSet") }}
+                </span>
+              </div>
+
+              <div class="card-foot">
+                <AppButton size="sm" :title="$t('app.openSiteHint')"
+                  @click="store.markSiteUsed(site.id); emit('openSite', site.id)">
+                  <Globe :size="12" />
+                  {{ $t("app.openSite") }}
+                </AppButton>
+              </div>
+            </article>
+          </div>
+        </section>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
-.sites {
-  min-height: 0;
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 16px;
-  overflow-y: auto;
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  flex: 0 0 auto;
-}
-
-/* Let the copy shrink so the buttons keep their intrinsic width; without this the
-   flex item shrinks below the sum of both buttons and the inline-flex children
-   wrap onto two lines at the default window size. */
-.head-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-.head-copy p {
-  margin: 6px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  line-height: 1.55;
-  max-width: 640px;
-}
-
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  margin-left: auto;
-}
-
 .env-grid {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  /* The mockup's grid: `repeat(auto-fill, minmax(212px, 1fr))` with a 10px gap.
+     A wide minimum (300–460px) fitted two fat cards on a 1240px pane and left
+     most of the page empty; a site card holds a name, an address and three
+     facts, which is exactly what 212px is for. */
+  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
   /* Rows size to their card, never to leftover container height: the cards clip
      their own overflow, so a compressed row silently eats their footer. */
   grid-auto-rows: min-content;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
 }
 
 .group-list {
-  margin-top: 16px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
-.group-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line-soft);
-  cursor: pointer;
-  /* The 16px arrow is pulled left into the page's own padding so the group name
-     keeps the alignment the cards below it have. */
-  margin-left: -3px;
-}
-
-.group-head:hover .group-name {
-  color: var(--text);
-}
-
-/* A folded group still shows its name and count: what went away is the cards,
-   and a header that also loses its colour would read as an empty section. */
-.group-head.collapsed {
-  border-bottom-style: dashed;
-}
-
-.group-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 7px;
-}
-
-.group-name {
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
-.group-count {
-  font-size: 10px;
-  color: var(--faint);
-}
-
 .env-card {
-  border: 1px solid var(--line-soft);
+  /* A hairline that actually reads. With the card and the page both at
+     `--surface`, `--line-soft` sat at 1.15:1 against it — visible on a large
+     dark screenshot, invisible on a white page at 100%. The stronger step keeps
+     the flat look and still states the card's edge. */
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  padding: 14px 15px;
+  /* No internal rules: the card is one thought (name, address, three facts,
+     open), and a rule between each of those four made a 300px box look like a
+     small form. */
+  padding: 12px 13px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
   min-width: 0;
+}
+
+.env-card:hover {
+  border-color: color-mix(in srgb, var(--line) 55%, var(--muted));
 }
 
 .env-card.active {
@@ -392,14 +305,6 @@ h1 {
   min-width: 0;
 }
 
-.env-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 7px;
-}
-
 .env-name {
   margin: 0;
   font-size: 13.5px;
@@ -407,6 +312,7 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .active-chip {
@@ -440,76 +346,60 @@ h1 {
 
 .env-meta {
   margin: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px 10px;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 10px;
-}
-
-.env-meta div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.env-meta dt {
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.env-meta dd {
-  margin: 3px 0 0;
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* The mockup draws facts as 19px chips on the field colour. */
+.env-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
   white-space: nowrap;
 }
 
-.card-actions {
+.env-chip b {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* "No default password" is the one fact here that needs attention. */
+.env-chip.missing {
+  color: color-mix(in srgb, var(--accent) 82%, var(--text));
+  background: var(--accent-soft);
+}
+
+/* Pushed to the card's bottom edge without a rule above it: the card's own
+   border already separates it from the next one. */
+.card-foot {
   display: flex;
   align-items: center;
   gap: 6px;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 10px;
+  margin-top: auto;
+}
+
+.card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
 }
 
 .icon-btn + .icon-btn {
   margin-left: 0;
 }
 
-.empty {
-  margin-top: 28px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-lg);
-  padding: 40px 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.empty p {
-  margin: 0;
-}
-
 .btn.small {
   padding: 5px 10px;
-}
-
-/* Base `.btn:hover` also matches primary buttons and would turn them gray. */
-.btn.primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    var(--accent-strong),
-    color-mix(in srgb, var(--accent) 88%, black)
-  );
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
-  color: var(--accent-foreground);
-  filter: brightness(1.07);
 }
 </style>

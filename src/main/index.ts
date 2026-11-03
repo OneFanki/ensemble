@@ -261,10 +261,17 @@ const UPDATE_REPEAT_MS = 6 * 60 * 60 * 1_000;
  */
 const RENDERER_LOAD_TIMEOUT_MS = 15_000;
 
-/** Native window-control colors mirror the renderer tokens for each theme. */
+/**
+ * Native window-control colors mirror the renderer tokens for each theme.
+ *
+ * The colour has to be the *frame* token, not the toolbar's: the overlay is
+ * drawn over the tab strip band, and the active tab is the only thing there that
+ * takes the toolbar colour. Painting the overlay in the toolbar colour left a
+ * light rectangle beside a grey strip.
+ */
 const TITLEBAR_COLORS = {
-  dark: { color: "#12151a", symbolColor: "#a3abb8" },
-  light: { color: "#faf7f0", symbolColor: "#565049" },
+  dark: { color: "#191d22", symbolColor: "#b0b9c4" },
+  light: { color: "#dee2e7", symbolColor: "#4d5661" },
 } as const;
 
 function isDarkTheme(theme: AppSettings["theme"]): boolean {
@@ -273,8 +280,17 @@ function isDarkTheme(theme: AppSettings["theme"]): boolean {
   return nativeTheme.shouldUseDarkColors;
 }
 
+/**
+ * Height of the tab-strip band, which is also the drag region.
+ *
+ * Must match `--titlebar-height` in `tokens.css`: the overlay reserves this many
+ * pixels on the right of the strip, and a mismatch either leaves a gap under the
+ * buttons or has them overlap the tabs.
+ */
+const TITLEBAR_HEIGHT = 34;
+
 function titleBarOverlay(theme: AppSettings["theme"]): Electron.TitleBarOverlay {
-  return { ...TITLEBAR_COLORS[isDarkTheme(theme) ? "dark" : "light"], height: 44 };
+  return { ...TITLEBAR_COLORS[isDarkTheme(theme) ? "dark" : "light"], height: TITLEBAR_HEIGHT };
 }
 
 function userDataDir(): string {

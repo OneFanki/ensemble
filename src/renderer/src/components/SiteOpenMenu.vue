@@ -120,14 +120,8 @@ function openIdentity(identity: Identity): void {
 
       <div v-if="activeSite" class="accounts">
         <!--
-          The site's own openings come first, accounts after.
-          
-          Accounts used to lead because "pick an account" is the reason this
-          window exists. But a site with thirty accounts pushed daily/clean/blank
-          past the fold, and those three are the answers that do not depend on
-          how many accounts exist — a user looking for "just open the site" had to
-          scroll past every account to find it. Fixed rows stay reachable; the
-          account list scrolls on its own below them.
+          Opening the site itself: these two belong to the selected site, so they
+          stay at the top of its column.
         -->
         <button type="button" class="account-row anonymous" @click="openDaily(activeSite)">
           <Globe :size="11" />
@@ -141,13 +135,6 @@ function openIdentity(identity: Identity): void {
           <span class="acc-copy">
             <span class="acc-name">{{ t("app.openSiteClean") }}</span>
             <span class="acc-note">{{ t("app.openSiteCleanHint") }}</span>
-          </span>
-        </button>
-        <button type="button" class="account-row anonymous" @click="emit('openBlank')">
-          <FilePlus :size="11" />
-          <span class="acc-copy">
-            <span class="acc-name">{{ t("app.openBlankPage") }}</span>
-            <span class="acc-note">{{ t("app.openBlankPageHint") }}</span>
           </span>
         </button>
 
@@ -171,6 +158,22 @@ function openIdentity(identity: Identity): void {
           <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
         </div>
       </div>
+    </div>
+
+    <!--
+      A blank page belongs to no site, so it sits outside both columns, under its
+      own rule. Inside the account column it read as "the fourth thing you can
+      open in 后台管理", which is the one thing it is not — the empty page is what
+      you get when you want none of the above.
+    -->
+    <div class="foot">
+      <button type="button" class="account-row anonymous plain" @click="emit('openBlank')">
+        <FilePlus :size="11" />
+        <span class="acc-copy">
+          <span class="acc-name">{{ t("app.openBlankPage") }}</span>
+          <span class="acc-note">{{ t("app.openBlankPageHint") }}</span>
+        </span>
+      </button>
     </div>
   </div>
 </template>
@@ -233,6 +236,16 @@ function openIdentity(identity: Identity): void {
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr);
   min-height: 0;
+  /* Takes the height the footer leaves, so the account list is the only thing
+     that has to scroll. */
+  flex: 1 1 auto;
+}
+
+/* The blank-page row lives below both columns: it belongs to no site. */
+.foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line-soft);
+  padding: 5px;
 }
 
 .sites {
@@ -360,6 +373,17 @@ function openIdentity(identity: Identity): void {
    bottom where they belong. */
 .account-row.dashed {
   border: 1px dashed var(--line);
+}
+
+/* The blank page sits outside the site columns; it gets no dashed or tinted
+   treatment because it is not a special case of opening a site at all. */
+.account-row.plain {
+  color: var(--muted);
+}
+
+.account-row.plain:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .acc-dot {

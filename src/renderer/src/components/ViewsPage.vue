@@ -15,11 +15,14 @@ import {
 import { computed, ref, watchEffect } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
+import { useNavigationStore } from "../stores/navigation";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
 import IconButton from "./ui/IconButton.vue";
+import PageHeader from "./ui/PageHeader.vue";
+import SplitPane from "./ui/SplitPane.vue";
 
 const emit = defineEmits<{
   newView: [];
@@ -30,6 +33,7 @@ const emit = defineEmits<{
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
+const navigation = useNavigationStore();
 const { t } = useI18n();
 
 const selectedViewId = ref("");
@@ -331,31 +335,46 @@ async function confirmCopy(): Promise<void> {
 </script>
 
 <template>
-  <section class="views">
-    <header class="head">
-      <div class="head-copy">
-        <h1>{{ $t("app.views") }}</h1>
-        <p class="head-note">{{ $t("app.viewsSubtitle") }}</p>
-      </div>
-      <div class="head-actions">
-        <AppButton variant="primary" data-tour="new-view" @click="emit('newView')">
+  <section class="page views">
+    <PageHeader :title="$t('app.views')" :note="$t('app.viewsSubtitle')">
+      <template #actions>
+        <AppButton
+          variant="primary"
+          data-tour="new-view"
+          :disabled="!store.identities.length"
+          :title="store.identities.length ? '' : $t('app.emptyViewsNoIdentity')"
+          @click="emit('newView')">
           <Plus :size="13" />
           {{ $t("app.newView") }}
         </AppButton>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
+    <!--
+      A view is a set of identities on one stage, so with none the editor cannot
+      produce a savable view — it would open, reject the save, and send the user
+      looking for accounts anyway. Name the missing piece and link to it.
+    -->
     <div v-if="!store.views.length" class="empty">
       <Layers :size="22" />
-      <p>{{ $t("app.emptyViews") }}</p>
-      <AppButton variant="primary" @click="emit('newView')">
-        <Plus :size="13" />
-        {{ $t("app.newView") }}
-      </AppButton>
+      <p>{{ store.identities.length ? $t("app.emptyViews") : $t("app.emptyViewsNoIdentity") }}</p>
+      <div class="empty-actions">
+        <AppButton
+          v-if="store.identities.length"
+          variant="primary"
+          @click="emit('newView')">
+          <Plus :size="13" />
+          {{ $t("app.newView") }}
+        </AppButton>
+        <AppButton v-else variant="primary" @click="navigation.navigate('identities')">
+          {{ $t("app.viewGoToIdentities") }}
+        </AppButton>
+      </div>
     </div>
 
-    <div v-else class="workspace">
-      <div class="view-list" role="listbox" :aria-label="$t('app.viewColumnName')">
+    <SplitPane v-else class="workspace">
+      <template #list>
+        <div class="view-list" role="listbox" :aria-label="$t('app.viewColumnName')">
         <!-- Filters match members, not just the view's own tags: "show me the
              views that touch 生产" should not require tagging each view twice. -->
         <div v-if="filterSites.length || filterTags.length" class="filters">
@@ -413,9 +432,11 @@ async function confirmCopy(): Promise<void> {
           <span class="state mono">{{ viewStatus(view) }}</span>
         </button>
         <p v-if="!visibleViews.length" class="no-match">{{ $t("app.noMatchingViews") }}</p>
-      </div>
+        </div>
+      </template>
 
-      <div v-if="selectedView" class="detail">
+      <template #detail>
+        <div v-if="selectedView" class="detail">
         <div class="detail-head">
           <div class="detail-copy">
             <h2>{{ selectedView.name }}</h2>
@@ -547,8 +568,9 @@ async function confirmCopy(): Promise<void> {
 
           <p class="layout-note">{{ $t("app.viewOrderNote") }}</p>
         </div>
-      </div>
-    </div>
+        </div>
+      </template>
+    </SplitPane>
 
     <!-- Copying a view to another site is one explicit action: members are matched
          by username, and accounts that do not exist there become references. -->
@@ -587,55 +609,7 @@ async function confirmCopy(): Promise<void> {
 </template>
 
 <style scoped>
-.views {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px 14px;
-  overflow: hidden;
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  flex: 0 0 auto;
-}
-
-h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
-/* Same guard as the sites page: the copy shrinks, the buttons never do. */
-.head-copy {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.head-copy p {
-  margin: 6px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-}
-
-.head-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
 .workspace {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 14px;
-  min-height: 0;
   flex: 1 1 auto;
 }
 
@@ -643,7 +617,6 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  overflow-y: auto;
   min-height: 0;
   padding-right: 2px;
 }
@@ -978,10 +951,14 @@ h1 {
   overflow: hidden;
 }
 
+/* An empty cell is an outline, not a translucent pane. Filling it with a 55%
+   tint of `--surface-2` over the stage put a green-grey wash across the whole
+   preview — the largest coloured area in the product, on a diagram that only
+   needs to show where the borders fall. */
 .slot {
   position: absolute;
-  border: 1px dashed color-mix(in srgb, var(--line) 80%, transparent);
-  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  border: 1px dashed var(--line);
+  background: transparent;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -994,11 +971,14 @@ h1 {
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
+/* A filled cell is a solid outline with the member's text; the 5% green tint
+   was too weak to register as a state and still coloured the whole preview.
+   What says "this slot holds someone" is the solid border and the name. */
 .slot.filled {
   border-style: solid;
-  border-color: color-mix(in srgb, var(--green) 30%, var(--line));
+  border-color: color-mix(in srgb, var(--green) 34%, var(--line));
   color: var(--text-secondary);
-  background: color-mix(in srgb, var(--green) 5%, var(--bg-elevated));
+  background: transparent;
 }
 
 .slot.over {
@@ -1057,24 +1037,6 @@ h1 {
   color: var(--faint);
 }
 
-.empty {
-  margin-top: 28px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius-lg);
-  padding: 40px 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
-.empty p {
-  margin: 0;
-}
-
 .btn.small {
   padding: 6px 10px;
 }
@@ -1082,16 +1044,6 @@ h1 {
 .btn.running {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 35%, var(--line));
-}
-
-@media (max-width: 1080px) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .view-list {
-    max-height: 180px;
-  }
 }
 
 .copy-form {

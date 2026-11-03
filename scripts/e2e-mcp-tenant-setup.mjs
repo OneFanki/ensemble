@@ -305,20 +305,22 @@ try {
     !JSON.stringify(site.value).includes(SUPER.password),
   );
 
-  // The status bar is the everyday entry point into this endpoint, so it has to
-  // report the live port — not just "AI" with no address.
-  const mcpEntry = await client.evaluate(`(() => {
-    const button = document.querySelector('.status-mcp');
-    return button
-      ? {
-          text: button.textContent.replace(/\\s+/g, ' ').trim(),
-          running: button.classList.contains('on'),
-        }
-      : null;
+  // The toolbar's AI entry is the everyday way into this endpoint, so it has to
+  // report the live state — and the menu has to name the port, not just say "AI".
+  const mcpEntry = await client.evaluate(`(async () => {
+    const button = document.querySelector('.toolbar .ai-btn');
+    if (!button) return null;
+    const text = button.textContent.replace(/\\s+/g, ' ').trim();
+    button.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const head = document.querySelector('.ai-menu-head')?.textContent.replace(/\\s+/g, ' ').trim() ?? '';
+    document.querySelector('.toolbar .ai-btn')?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    return { text, running: button.classList.contains('on'), head };
   })()`);
   check(
-    "the status bar shows the running endpoint and its port",
-    mcpEntry?.running === true && mcpEntry?.text.includes(String(MCP_PORT)),
+    "the AI entry reports the running endpoint and its port",
+    mcpEntry?.running === true && mcpEntry?.head.includes(String(MCP_PORT)),
     mcpEntry,
   );
 
@@ -338,13 +340,17 @@ try {
   // The call must not steal the window either: an AI opening pages to work on
   // them should leave whatever the user is looking at alone, so park the UI on
   // the settings page first and check it is still in front afterwards.
-  await client.evaluate(`(() => {
+  await client.evaluate(`(async () => {
+    if (!document.querySelector('.console-nav')) {
+      document.querySelector('.console-btn')?.click();
+      await new Promise((r) => setTimeout(r, 500));
+    }
     document.querySelector('[data-nav="settings"]')?.click();
     return true;
   })()`);
   await wait(700);
   const viewBefore = await client.evaluate(`(() => ({
-    nav: document.querySelector('.rail .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
     settingsVisible: Boolean(document.querySelector('.settings')),
   }))()`);
 
@@ -359,7 +365,7 @@ try {
 
   await wait(1500);
   const viewAfter = await client.evaluate(`(() => ({
-    nav: document.querySelector('.rail .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
     settingsVisible: Boolean(document.querySelector('.settings')),
   }))()`);
   check(
@@ -579,9 +585,9 @@ try {
 
   // Same rule as `open_browser_tab`: opening a view is still a background
   // action. The cells are arranged on the stage, but the window is not raised
-  // and the rail does not jump to the browser page.
+  // and the console does not jump back to the browser.
   const beforeView = await client.evaluate(`(() => ({
-    nav: document.querySelector('.rail .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
   }))()`);
   const openedView = await tryCall("open_browser_view", { viewId: view.value?.id });
   check("open_browser_view puts them on stage", openedView.ok, {
@@ -589,14 +595,14 @@ try {
   });
   await wait(1200);
   const afterOpenView = await client.evaluate(`(() => ({
-    nav: document.querySelector('.rail .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
     visible: (() => {
       const state = document.querySelector('.stage');
       return Boolean(state && state.getBoundingClientRect().height > 0);
     })(),
   }))()`);
   check(
-    "open_browser_view leaves the rail where the user left it",
+    "open_browser_view leaves the console where the user left it",
     beforeView?.nav === "settings" && afterOpenView?.nav === "settings",
     { before: beforeView, after: afterOpenView },
   );

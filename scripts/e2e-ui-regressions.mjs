@@ -228,6 +228,42 @@ async function waitFor(client, expression, timeout = 4000) {
   return false;
 }
 
+/**
+ * Open a management page.
+ *
+ * 1.0 kept a permanent side rail, so a check could click `[data-nav]` from
+ * anywhere. The console is now a destination of its own, reached from the
+ * toolbar, and its navigation only exists while it is open — so every page
+ * switch has to go through this instead of a bare selector click.
+ */
+async function openConsolePage(client, view) {
+  await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    // The console button lives in the browser's tab strip.
+    if (!document.querySelector('.console-nav')) {
+      document.querySelector('.console-btn')?.click();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    const entry = document.querySelector('[data-nav="${view}"]');
+    if (entry && !entry.classList.contains('active')) {
+      entry.click();
+      await new Promise((r) => setTimeout(r, 350));
+    }
+    return Boolean(document.querySelector('.console-nav'));
+  })()`);
+  return waitFor(client, `Boolean(document.querySelector('.console-pane'))`, 5000);
+}
+
+/** Back to the browser surface. */
+async function backToBrowser(client) {
+  await client.evaluate(`(async () => {
+    document.querySelector('.console-head .back')?.click();
+    await new Promise((r) => setTimeout(r, 450));
+    return true;
+  })()`);
+  await waitFor(client, `Boolean(document.querySelector('.tabstrip'))`, 5000);
+}
+
 try {
   let target;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -310,7 +346,7 @@ try {
   );
 
   // --- Tag filter strip -----------------------------------------------------
-  await client.evaluate(`(() => { document.querySelector('[data-nav="identities"]')?.click(); return true; })()`);
+  await openConsolePage(client, "identities");
   await waitFor(client, `Boolean(document.querySelector('.tag-filters'))`);
 
   const strip = await client.evaluate(`(() => {
@@ -436,7 +472,7 @@ try {
     { rows: tagsPage?.rows, expected: tags.length },
   );
 
-  await client.evaluate(`(() => { document.querySelector('[data-nav="settings"]')?.click(); return true; })()`);
+  await openConsolePage(client, "settings");
   await waitFor(client, `Boolean(document.querySelector('[role="tab"]'))`);
   const settingsTabs = await client.evaluate(`(() =>
     [...document.querySelectorAll('[role="tab"]')].map((el) =>
@@ -448,7 +484,7 @@ try {
     !settingsTabs.some((label) => /标签|Tags/.test(label)),
     settingsTabs,
   );
-  await client.evaluate(`(() => { document.querySelector('[data-nav="identities"]')?.click(); return true; })()`);
+  await openConsolePage(client, "identities");
   await wait(400);
 
   // --- Dropdown inside a dialog --------------------------------------------
@@ -523,7 +559,7 @@ try {
   await waitFor(client, `!document.querySelector('[role="dialog"]')`);
 
   // --- Floating login-capture prompt ---------------------------------------
-  await client.evaluate(`(() => { document.querySelector('[data-nav="browser"]')?.click(); return true; })()`);
+  await backToBrowser(client);
   await waitFor(client, `Boolean(document.querySelector('.app-body'))`);
 
   // Cold start opens one blank page: switching to the browser page must land on
@@ -548,7 +584,6 @@ try {
     const shell = document.querySelector('.app-shell');
     return {
       bodyHeight: body ? Math.round(body.getBoundingClientRect().height) : null,
-      rows: shell ? getComputedStyle(shell).gridTemplateRows.split(' ').length : null,
       children: shell ? shell.children.length : null,
     };
   })()`);
@@ -599,7 +634,6 @@ try {
       zIndex: wrap ? getComputedStyle(wrap).zIndex : null,
       bottomGap: rect ? Math.round(window.innerHeight - rect.bottom) : null,
       bodyHeight: body ? Math.round(body.getBoundingClientRect().height) : null,
-      rows: shell ? getComputedStyle(shell).gridTemplateRows.split(' ').length : null,
       children: shell ? shell.children.length : null,
       barVisible: Boolean(bar),
     };
@@ -611,14 +645,34 @@ try {
     prompt?.bodyHeight === shellBefore?.bodyHeight,
     { before: shellBefore, after: prompt },
   );
+  // The shell is a flex column now, not a fixed-rows grid, and the status bar is
+  // gone — so "did it add a row" is no longer answerable that way. What the check
+  // is actually about is that the prompt is an overlay and does not take part in
+  // layout: fixed positioning plus the same measured height is that guarantee.
   check(
-    "the prompt does not add a row to the shell grid",
-    prompt?.rows === 3,
+    "the prompt does not take part in the shell's layout",
+    prompt?.position === "fixed" && prompt?.bodyHeight === shellBefore?.bodyHeight,
     { before: shellBefore, after: prompt },
   );
-  check("the prompt sits above the status bar", prompt?.bottomGap !== null && prompt.bottomGap >= 30, prompt);
+  check("the prompt floats above the page", prompt?.bottomGap !== null && prompt.bottomGap >= 20, prompt);
 
   // --- Toolbar "+" sizing, dock resize and collapse animation --------------
+  /*
+   * The run dock belongs to the workbench, not to the browser.
+   *
+   * 1.0 drew it permanently beside the stage; it now appears with a multi-cell
+   * layout. Everything about the dock — its handle, its animation, its collapsed
+   * strip — is only observable once that mode is on, so it is entered here,
+   * before any of those readings.
+   */
+  await client.evaluate(`(async () => {
+    const btn = document.querySelector('.tabstrip .layout-btn');
+    if (btn && !btn.classList.contains('is-bench')) btn.click();
+    await new Promise((r) => setTimeout(r, 900));
+    return true;
+  })()`);
+  await waitFor(client, `Boolean(document.querySelector('.dock'))`, 6000);
+
   // Read the animation intent before transitions are switched off below.
   const dockMotion = await client.evaluate(`(() => {
     const dock = document.querySelector('.dock');
@@ -657,6 +711,7 @@ try {
       stepper: rect(stepper),
       // Every control in the row must agree on one height; two heights is what
       // made the toolbar look assembled from different toolbars.
+      controlLg: Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-lg'))),
       heights: [...new Set([
         ...[...document.querySelectorAll('.toolbar .icon')].map(rect),
         rect(input),
@@ -677,12 +732,12 @@ try {
   );
   check(
     "every toolbar control shares one height",
-    sizing?.heights?.length === 1 && sizing.heights[0] === 30,
+    sizing?.heights?.length === 1 && sizing.heights[0] === sizing.controlLg,
     sizing,
   );
   check(
     "the toolbar carries a zoom stepper",
-    sizing?.stepper === 30,
+    sizing?.stepper === sizing?.controlLg,
     { stepper: sizing?.stepper },
   );
 
@@ -733,26 +788,37 @@ try {
     const anonymous = rows.filter((el) => el.classList.contains('anonymous'));
     const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
     const firstAccountIndex = rows.findIndex((el) => !el.classList.contains('anonymous'));
-    const lastAnonymousIndex = rows.map((el) => el.classList.contains('anonymous')).lastIndexOf(true);
+    // The blank page sits in the chooser's own footer, outside the site columns:
+    // it belongs to no site, so it must not read as that site's third opening.
+    const blankRow = rows.find((el) => el.textContent.includes('空白页'));
+    // Only the site's own fixed rows count for ordering; the blank page lives in
+    // the chooser's footer and is deliberately last.
+    const siteAnonymous = anonymous.filter((el) => !el.closest('.foot'));
     return {
       accounts: accounts.length,
       anonymous: anonymous.length,
-      // The three anonymous rows are the site's two openings plus a blank page.
-      names: anonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
-      blank: rows.some((el) => el.textContent.includes('空白页')),
-      // Fixed rows come first and stay put: a site with thirty accounts must not
-      // push "open daily" past the fold.
-      anonymousBeforeAccounts: lastAnonymousIndex < firstAccountIndex,
+      names: siteAnonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
+      blank: Boolean(blankRow),
+      blankInFooter: Boolean(blankRow?.closest('.foot')),
+      // The site's own openings are fixed above the scrolling account list: a
+      // site with thirty accounts must not push "open daily" past the fold.
+      anonymousBeforeAccounts:
+        rows.map((el) => siteAnonymous.includes(el)).lastIndexOf(true) < firstAccountIndex,
     };
   })()`);
   check(
-    "the chooser lists accounts plus the three non-account openings",
+    "the chooser lists accounts, the site's two openings and a separate blank page",
     menuShape?.accounts > 0 && menuShape?.anonymous === 3 && menuShape?.blank === true,
     menuShape,
   );
   check(
-    "the three fixed openings come before the account list",
+    "the site's fixed openings come before its account list",
     menuShape?.anonymousBeforeAccounts === true,
+    menuShape,
+  );
+  check(
+    "the blank page sits outside the site columns",
+    menuShape?.blankInFooter === true,
     menuShape,
   );
 
@@ -929,7 +995,6 @@ try {
       paneWidth: pane ? Math.round(pane.getBoundingClientRect().width) : null,
       stageWidth: stage ? Math.round(stage.getBoundingClientRect().width) : null,
       windowWidth: window.innerWidth,
-      railWidth: Math.round(document.querySelector('.rail')?.getBoundingClientRect().width ?? 0),
     };
   })()`);
   check(
@@ -939,8 +1004,12 @@ try {
   );
   check(
     "the stage takes back the width the dock gives up",
-    collapsed?.paneWidth ===
-      Math.round((collapsed?.windowWidth ?? 0) - (collapsed?.railWidth ?? 0) - (collapsed?.width ?? 0)),
+    // The console's side rail is gone, so the only thing sharing the window with
+    // the stage is the dock itself. The stage has to be exactly the remainder —
+    // a 46px strip beside a stage that kept the expanded layout leaves a dead
+    // band on screen.
+    collapsed?.stageWidth ===
+      Math.round((collapsed?.windowWidth ?? 0) - (collapsed?.width ?? 0)),
     collapsed,
   );
   check(
@@ -1122,6 +1191,11 @@ try {
   // The stage showed one page with no strip at all: an instance opened into the
   // default tab group could not reach its other pages, had no "+" and no page
   // menu. Same instance, same controls — only the number of cells differs.
+  // A flat stage shows one instance and no cell band at all: the window-level
+  // strip above the toolbar already lists that instance's pages, and drawing a
+  // band here as well produced two identical tab rows one under the other.
+  // What this asserts is the intent, not the carrier — the instance's pages are
+  // reachable, switchable, and can grow.
   const flatStrip = await client.evaluate(`(async () => {
     for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
       await window.ensemble.closeEmbeddedTab(tab.id);
@@ -1133,32 +1207,29 @@ try {
     await new Promise((r) => setTimeout(r, 900));
     const state = await window.ensemble.getEmbeddedState();
     const heads = () => document.querySelectorAll('.stage .slot-header').length;
-    const flatHeads = () => document.querySelectorAll('.stage .slot-header.flat').length;
-    const tabs = () => [...document.querySelectorAll('.stage .slot-tab')];
+    const tabs = () => [...document.querySelectorAll('.tabstrip .tab')];
     const before = {
       viewOnStage: state.activeViewId ?? null,
       heads: heads(),
-      flatHeads: flatHeads(),
       tabs: tabs().length,
-      hasAdd: Boolean(document.querySelector('.stage .slot-tab-add')),
-      current: tabs().findIndex((el) => el.classList.contains('current')),
+      hasAdd: Boolean(document.querySelector('.tabstrip .strip-add')),
+      current: tabs().findIndex((el) => el.classList.contains('active')),
     };
     // Switching pages from the strip must move the page, not the cell.
-    const other = tabs().find((el) => !el.classList.contains('current'));
+    const other = tabs().find((el) => !el.classList.contains('active'));
     other?.click();
     await new Promise((r) => setTimeout(r, 700));
     const switched = {
       activeTabId: (await window.ensemble.getEmbeddedState()).activeTabId,
       clickedId: other?.getAttribute('data-tab-id') ?? null,
-      current: tabs().findIndex((el) => el.classList.contains('current')),
+      current: tabs().findIndex((el) => el.classList.contains('active')),
     };
     return { before, switched };
   })()`);
   check(
-    "the flat stage carries a page strip for its instance",
+    "the flat stage lists its instance's pages in the window strip",
     flatStrip?.before.viewOnStage === null &&
-      flatStrip?.before.heads === 1 &&
-      flatStrip?.before.flatHeads === 1 &&
+      flatStrip?.before.heads === 0 &&
       flatStrip?.before.tabs === 2 &&
       flatStrip?.before.hasAdd === true &&
       flatStrip?.before.current >= 0,
@@ -1436,13 +1507,26 @@ try {
     const nextView = state.views.find((item) => item.id === state.activeViewId);
     const pages = state.tabs.filter((tab) => tab.instanceId === nextView?.slotTabs?.[0]);
     const active = state.tabs.find((tab) => tab.id === state.activeTabId);
+    // The surface has to fill the slot, not merely exist: a scoped parent rule
+    // once sized it to a 26px toolbar button, and an existence check stayed green
+    // while the whole new-tab page rendered as a thumbnail in the corner.
+    const slot = document.querySelector('.stage .blank-slot');
+    const surface = slot?.querySelector('.new-tab');
+    const slotBox = slot?.getBoundingClientRect();
+    const surfaceBox = surface?.getBoundingClientRect();
     return {
       beforePages,
       instancePages: pages.length,
       instances: new Set(state.tabs.map((tab) => tab.instanceId)).size,
       activeBlank: Boolean(active) && (!active.url || active.url === "about:blank"),
-      surface: Boolean(document.querySelector('.stage .blank-slot .new-tab')),
+      surface: Boolean(surface),
       hasInput: Boolean(document.querySelector('.stage .blank-slot .nt-input')),
+      surfaceFill: slotBox && surfaceBox
+        ? {
+            widthRatio: Math.round((surfaceBox.width / slotBox.width) * 100),
+            heightRatio: Math.round((surfaceBox.height / slotBox.height) * 100),
+          }
+        : null,
     };
   })()`);
   check(
@@ -1452,7 +1536,11 @@ try {
   );
   check(
     "a blank page draws the new-tab surface instead of an empty rectangle",
-    added?.activeBlank === true && added?.surface === true && added?.hasInput === true,
+    added?.activeBlank === true &&
+      added?.surface === true &&
+      added?.hasInput === true &&
+      added?.surfaceFill?.widthRatio === 100 &&
+      added?.surfaceFill?.heightRatio === 100,
     added,
   );
 
@@ -1774,7 +1862,7 @@ try {
   // --- The tab/window rows name their account ------------------------------
   // Four windows on the same admin console all show the same page title, so the
   // row has to say whose session it is.
-  await client.evaluate(`(() => { document.querySelector('[data-nav="browser"]')?.click(); return true; })()`);
+  await backToBrowser(client);
   await wait(400);
   const labelled = await client.evaluate(`(async () => {
     await window.ensemble.openEmbeddedTab({
@@ -1810,7 +1898,7 @@ try {
     return Boolean(tab);
   })()`);
   await client.evaluate(
-    `(() => { document.querySelector('[data-nav="identities"]')?.click(); return true; })()`,
+    `(async () => { if (!document.querySelector('.console-nav')) { document.querySelector('.console-btn')?.click(); await new Promise((r) => setTimeout(r, 500)); } document.querySelector('[data-nav="identities"]')?.click(); await new Promise((r) => setTimeout(r, 400)); return true; })()`,
   );
   await wait(1200);
 
@@ -1855,20 +1943,32 @@ try {
     parkedViewport,
   );
 
-  // --- Dock rows: a click brings the browser page forward -------------------
-  // The dock is on screen from every rail page, so clicking one of its rows has
-  // to show the page it selects. It used to switch the tab behind the accounts
-  // page and leave the user looking at account cards, which read as a dead click.
+  // --- Dock rows: a click selects the page that row stands for --------------
+  // The dock only exists in the workbench now (it used to be permanent beside
+  // every page), so the guarantee has changed shape: a row click must select its
+  // own page and leave the stage mounted. The 1.0 bug this grew from — clicking
+  // a row switched the tab behind another page and read as a dead click — cannot
+  // recur while the dock shares the screen with the stage, which is exactly what
+  // the `onBrowserAfter` half of this check pins down.
   const dockSwitch = await client.evaluate(`(async () => {
+    // The dock shares the screen with the stage, so this check starts from the
+    // browser in bench mode rather than from a console page.
+    if (document.querySelector('.console-nav')) {
+      document.querySelector('.console-head .back')?.click();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!document.querySelector('.dock')) {
+      document.querySelector('.tabstrip .layout-btn')?.click();
+      await new Promise((r) => setTimeout(r, 900));
+    }
     const row = document.querySelector('.dock .tab-row[data-tab-id]');
     const wanted = row?.getAttribute('data-tab-id') ?? null;
-    // Falsifiability: the assertion below is only meaningful from another page.
-    const elsewhereBefore = !document.querySelector('.stage') && Boolean(document.querySelector('.id-card'));
+    const onBrowserBefore = Boolean(document.querySelector('.stage'));
     row?.click();
     await new Promise((r) => setTimeout(r, 1000));
     const after = await window.ensemble.getEmbeddedState();
     return {
-      elsewhereBefore,
+      onBrowserBefore,
       clicked: Boolean(row),
       wanted,
       onBrowserAfter: Boolean(document.querySelector('.stage')),
@@ -1876,8 +1976,8 @@ try {
     };
   })()`);
   check(
-    "clicking a dock row from another page switches to the browser page",
-    dockSwitch?.elsewhereBefore === true &&
+    "clicking a dock row selects that page and keeps the stage on screen",
+    dockSwitch?.onBrowserBefore === true &&
       dockSwitch?.clicked === true &&
       dockSwitch?.onBrowserAfter === true &&
       dockSwitch?.activeTab === dockSwitch?.wanted,
@@ -1944,15 +2044,15 @@ try {
   // --- The flows empty state sits in the middle of the page ----------------
   // The section did not fill the pane, so `margin: auto` had no free space to
   // distribute and the block hugged the header instead of centring.
+  await openConsolePage(client, "flows");
   const flowsEmpty = await client.evaluate(`(async () => {
-    document.querySelector('[data-nav="flows"]')?.click();
     await new Promise((r) => setTimeout(r, 800));
     const page = document.querySelector('.flows');
     const empty = page?.querySelector('.empty');
     if (!page || !empty) return { present: false };
     const p = page.getBoundingClientRect();
     const e = empty.getBoundingClientRect();
-    const head = page.querySelector('.head')?.getBoundingClientRect();
+    const head = page.querySelector('.page-head')?.getBoundingClientRect();
     const padBottom = parseFloat(getComputedStyle(page).paddingBottom) || 0;
     return {
       present: true,
@@ -1975,7 +2075,7 @@ try {
   // --- Group headers fold, per group and all at once -----------------------
   // Every grouped list (sites by tag, accounts by site, flows by site) had fixed
   // headers: fifteen tags meant fifteen sections and no way to tidy up.
-  await client.evaluate(`(() => { document.querySelector('[data-nav="sites"]')?.click(); return true; })()`);
+  await openConsolePage(client, "sites");
   await waitFor(client, `document.querySelectorAll('.sites .group-head').length >= 2`);
 
   const sitesFold = await client.evaluate(`(async () => {
@@ -1999,7 +2099,7 @@ try {
     // One switch for the page. It lives in the header row and changes its own
     // label, so its direction is checkable from the DOM.
     const all = () => document.querySelector('.sites [data-group-collapse-all]');
-    const label = () => [...document.querySelectorAll('.sites .head-actions button')]
+    const label = () => [...document.querySelectorAll('.sites .page-head-actions button')]
       .map((el) => el.textContent.replace(/\\s+/g, ' ').trim());
     const beforeLabel = label();
     all()?.click();
@@ -2057,7 +2157,7 @@ try {
     const effective = () => dialog()?.querySelector('[data-submit-effective]')?.textContent.trim() ?? "";
     const trigger = () => dialog()?.querySelector('.select-trigger .select-value')?.textContent.trim() ?? "";
     const openForm = async () => {
-      document.querySelector('.sites .head-actions .btn.primary')?.click();
+      document.querySelector('.sites .page-head-actions .btn.primary')?.click();
       await new Promise((r) => setTimeout(r, 500));
       return dialog();
     };
@@ -2067,7 +2167,7 @@ try {
     };
 
     const before = await window.ensemble.getWorkspace();
-    document.querySelector('[data-nav="sites"]')?.click();
+    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="sites"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 400));
 
     await openForm();
@@ -2120,7 +2220,7 @@ try {
   );
 
   // --- Accounts: folding, and turning a selection into a saved view ---------
-  await client.evaluate(`(() => { document.querySelector('[data-nav="identities"]')?.click(); return true; })()`);
+  await openConsolePage(client, "identities");
   await waitFor(client, `document.querySelectorAll('.identities .group-head').length >= 2`);
 
   const accountsFold = await client.evaluate(`(async () => {
@@ -2326,7 +2426,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 400));
-    document.querySelector('[data-nav="views"]')?.click();
+    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="views"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 800));
     if (!document.querySelector('.views')) return { error: "views page did not open" };
 
@@ -2387,7 +2487,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 400));
-    document.querySelector('[data-nav="views"]')?.click();
+    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="views"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 800));
     const chip = [...document.querySelectorAll('.views .filters .filter-chip')].find(
       (el) => el.textContent.trim() === tagName,
@@ -2427,7 +2527,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 500));
-    document.querySelector('[data-nav="flows"]')?.click();
+    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="flows"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 700));
     const heads = () => [...document.querySelectorAll('.flows .group-head')];
     const rows = () => document.querySelectorAll('.flows .flow-row').length;
@@ -2459,52 +2559,62 @@ try {
     flowsFold,
   );
 
-  // --- AI entry in the status bar ------------------------------------------
-  // The endpoint is off in this profile's settings, so the entry must still be
-  // there and must say what it is: the button opens AI access, and an unlabelled
-  // robot icon made that a guess.
+  // --- AI entry in the toolbar ----------------------------------------------
+  // The endpoint used to be reported by a status bar across the bottom of every
+  // screen, which is the single clearest sign that a window is a console rather
+  // than a browser. It now rides the toolbar's AI button: the label says what the
+  // button opens, the dot says whether it is listening.
+  // The AI entry lives in the browser's toolbar, so this block starts there.
+  // Earlier checks leave the app on a console page; without this the toolbar is
+  // simply not mounted and every assertion below would read null.
+  await backToBrowser(client);
+  await waitFor(client, `Boolean(document.querySelector('.ai-btn'))`, 5000);
+
   const mcpEntry = await client.evaluate(`(() => {
-    const button = document.querySelector('.status-mcp');
+    const button = document.querySelector('.ai-btn');
     if (!button) return null;
     const rect = button.getBoundingClientRect();
     return {
       text: button.textContent.replace(/\\s+/g, ' ').trim(),
       hasIcon: Boolean(button.querySelector('svg')),
-      hasLed: Boolean(button.querySelector('.mcp-led')),
+      hasDot: Boolean(button.querySelector('.ai-dot')),
       height: Math.round(rect.height),
-      inFooter: button.closest('.statusbar') !== null,
+      inToolbar: button.closest('.toolbar') !== null,
     };
   })()`);
   check(
-    "the status bar carries an AI entry with an icon and a status light",
-    Boolean(mcpEntry?.inFooter && mcpEntry?.hasIcon && mcpEntry?.hasLed),
+    "the toolbar carries an AI entry with an icon",
+    Boolean(mcpEntry?.inToolbar && mcpEntry?.hasIcon),
     mcpEntry,
   );
-  // The label is the point: "AI 接入" says what the entry leads to, and it stays
-  // put whether the endpoint is on or off so the footer does not reflow.
   check(
     "the AI entry is labelled whether or not the endpoint is running",
-    typeof mcpEntry?.text === "string" && mcpEntry.text.includes("AI"),
+    typeof mcpEntry?.text === 'string' && mcpEntry.text.includes('AI'),
     { text: mcpEntry?.text },
   );
-  // The footer is one 30px row; an entry that overflows it would clip the version.
+  // Level with the other toolbar controls; the whole row shares --control-lg.
   check(
-    "the AI entry fits the status bar height",
-    Boolean(mcpEntry) && mcpEntry.height > 0 && mcpEntry.height <= 30,
-    { height: mcpEntry?.height },
+    "the AI entry matches the toolbar control height",
+    Boolean(mcpEntry) && mcpEntry.height === sizing?.controlLg,
+    { height: mcpEntry?.height, expected: sizing?.controlLg },
   );
 
-  const trimmed = await client.evaluate(`(() => {
-    const bar = document.querySelector('.statusbar');
-    return {
-      // The engine version list and the "single user" marker used to sit here.
-      hasEngines: Boolean(bar?.querySelector('.status-engines')),
-      text: bar?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
-    };
-  })()`);
-  check("the status bar dropped the engine list", trimmed?.hasEngines === false, trimmed);
+  // The status bar is gone: its 30px across every screen was the clearest sign
+  // that this was a console. Assert the removal, so it cannot creep back.
+  const noStatusBar = await client.evaluate(`(() => ({
+    statusbar: Boolean(document.querySelector('.statusbar')),
+    footer: Boolean(document.querySelector('.app-shell > footer')),
+  }))()`);
+  check("the window has no status bar", noStatusBar?.statusbar === false && noStatusBar?.footer === false, noStatusBar);
 
-  await client.evaluate(`(() => { document.querySelector('.status-mcp')?.click(); return true; })()`);
+  // The AI menu is the entry point now: state, address and the way to settings.
+  await client.evaluate(`(async () => {
+    document.querySelector('.ai-btn')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    document.querySelector('.ai-menu [role="menuitem"]')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    return true;
+  })()`);
   const landedOnMcp = await waitFor(
     client,
     `Boolean(document.querySelector('.mcp-endpoint'))`,
@@ -2582,7 +2692,17 @@ try {
     `(() => { document.querySelector('[role="tab"]:nth-child(1)')?.click(); return true; })()`,
   );
   await wait(400);
-  await client.evaluate(`(() => { document.querySelector('.status-mcp')?.click(); return true; })()`);
+  await client.evaluate(`(async () => {
+    // Back to the browser first: the AI entry is part of the browser's toolbar,
+    // so this also proves the console can be left and re-entered.
+    document.querySelector('.console-head .back')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    document.querySelector('.ai-btn')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    document.querySelector('.ai-menu [role="menuitem"]')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    return true;
+  })()`);
   const returned = await waitFor(client, `Boolean(document.querySelector('.mcp-endpoint'))`);
   check("the AI entry retargets the tab after a manual change", returned === true, {
     returned,

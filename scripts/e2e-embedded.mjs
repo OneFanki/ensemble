@@ -130,7 +130,16 @@ try {
   // Startup opens one blank page, so the browser page is never an empty stage.
   // What this protects is that a *fresh* workspace has nothing beyond it: a
   // restored tab or a stray view would mean the starter logic leaked.
-  const starter = await call("list_browser_tabs");
+  //
+  // The MCP endpoint starts listening before the window finishes booting and the
+  // starter tab opens at the end of the restore path, so the first call can land
+  // in between. Wait for the tab to appear, then assert on what came with it —
+  // this check is about the count, not about how fast boot is.
+  let starter = await call("list_browser_tabs");
+  for (let attempt = 0; attempt < 25 && starter.tabs.length === 0; attempt += 1) {
+    await wait(200);
+    starter = await call("list_browser_tabs");
+  }
   check(
     "only the starter tab exists",
     starter.tabs.length === 1 && starter.tabs[0].url === "about:blank",

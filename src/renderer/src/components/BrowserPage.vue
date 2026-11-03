@@ -14,7 +14,14 @@ import {
   viewSlotFractions,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
-import type { Bookmark, BookmarkDraft, DownloadAction, DownloadEntry, Identity, SlotRect } from "@shared/types";
+import type {
+  Bookmark,
+  BookmarkDraft,
+  DownloadAction,
+  DownloadEntry,
+  Identity,
+  SlotRect,
+} from "@shared/types";
 import {
   ArrowLeft,
   ArrowRight,
@@ -25,35 +32,57 @@ import {
   ExternalLink,
   FolderOpen,
   KeyRound,
+  LayoutGrid,
   Minus,
+  Monitor,
   Plus,
   RotateCw,
   Search,
   ShieldCheck,
+  Sparkles,
   Star,
+  Table2,
   Trash2,
   Users,
   X,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useStageGeometry } from "../composables/stageGeometry";
 import { useEmbeddedStore } from "../stores/embedded";
+import { useNavigationStore } from "../stores/navigation";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
+import TabIcon from "./TabIcon.vue";
 
 const store = useEmbeddedStore();
 const workspace = useWorkspaceStore();
+const navigation = useNavigationStore();
 const { t } = useI18n();
 
 const props = defineProps<{
   /** An HTML overlay (for example the site menu) covers the stage. */
   obscured?: boolean;
+  /**
+   * Multi-cell layout is on stage: the cell headers and the run dock are shown.
+   *
+   * The top tab strip is drawn either way — a browser always has one. In bench
+   * mode it names the focused cell's account, because every cell of the same
+   * app shows the same page titles.
+   */
+  bench?: boolean;
 }>();
 
-const stage = ref<HTMLElement | null>(null);
+const emit = defineEmits<{
+  /** Open the management console (the app's own pages). */
+  openConsole: [];
+  /** Single cell ↔ workbench. */
+  switchMode: [mode: "browse" | "bench"];
+}>();
+
 /**
  * The stage box in CSS pixels, kept reactive.
  *
@@ -62,39 +91,122 @@ const stage = ref<HTMLElement | null>(null);
  * Collapsing the dock or resizing the window then left the HTML bands at the old
  * width while the native pages had already moved to the new one, which reads as
  * a dead band beside the last cell.
+ *
+ * Measuring lives in `useStageGeometry`, which reports the rectangle to the main
+ * process: that call is the only contract with whatever draws pages inside the
+ * stage, so it stays in one place rather than being spelled out here.
  */
-const stageBox = ref({ width: 0, height: 0 });
+const geometry = useStageGeometry((rect) => store.setStage(rect));
+/** Template ref: `useStageGeometry` owns the measuring, so the ref comes from it. */
+const stage = geometry.stage;
+const stageBox = geometry.box;
+const stageOrigin = geometry.origin;
+const reportStage = geometry.report;
 const address = ref("");
 const findText = ref("");
 const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
 const findOpen = ref(false);
 /** Frozen frames shown while the native views are parked for an overlay. */
 const frozenSlots = ref<FrozenSlot[]>([]);
-/** Stage origin, so a frozen rect can be placed inside the stage. */
-const stageOrigin = ref({ x: 0, y: 0 });
+
+const platform = computed(() => workspace.snapshot?.platform ?? "win32");
+/** The AI endpoint menu: state, address and the way to settings. */
+const aiMenuOpen = ref(false);
+
+function openMcpSettings(): void {
+  aiMenuOpen.value = false;
+  navigation.navigate("settings", "mcp");
+}
+
+/**
+ * Whether the cell headers and the run dock are drawn.
+ *
+ * Read from the prop when the parent has an opinion, and from the layout
+ * otherwise: a multi-cell layout is on stage because someone opened a workbench,
+ * and a stale prop should not hide the cells of the layout it is showing.
+ */
+const bench = computed(() => {
+  if (props.bench !== undefined) return props.bench;
+  return (activeView.value ? store.slots(activeView.value) : 1) > 1;
+});
+
+/**
+ * Pages the window-level tab strip lists.
+ *
+ * The focused cell's instance when there is a view, the active instance when the
+ * stage is flat. One instance fills one cell, so "the window's tabs" always means
+ * one browser's pages — which is what a tab strip means.
+ */
+const windowInstanceId = computed<string | null>(() => {
+  const view = activeView.value;
+  if (view) {
+    const focused = view.focusedTabId ?? view.slotTabs.find(Boolean) ?? null;
+    return slotInstanceId(focused);
+  }
+  return activeTab.value?.instanceId ?? null;
+});
+
+const windowPages = computed<EmbeddedTab[]>(() =>
+  windowInstanceId.value ? store.instancePages(windowInstanceId.value) : [],
+);
+
+/** Which page the strip marks as current: the focused cell's own page. */
+const windowActivePageId = computed<string | null>(() => {
+  const view = activeView.value;
+  if (!view) return activeTab.value?.id ?? null;
+  const focused = view.focusedTabId ?? view.slotTabs.find(Boolean) ?? null;
+  const index = focused ? view.slotTabs.indexOf(focused) : -1;
+  return (index >= 0 ? slotPage(focused, index) : undefined)?.id ?? null;
+});
+
+/**
+ * Clicking a window-level tab shows that page in the focused cell.
+ *
+ * It goes through the same path as a click inside the cell's strip, so a split
+ * instance keeps pinning pages to cells instead of moving the whole window's
+ * active page.
+ */
+function activateWindowPage(pageId: string): void {
+  const view = activeView.value;
+  const focused = view?.focusedTabId ?? view?.slotTabs.find(Boolean) ?? null;
+  const index = view && focused ? view.slotTabs.indexOf(focused) : -1;
+  if (index >= 0) selectPage(pageId, index);
+  else selectPage(pageId);
+}
+
+function onWindowPageDragStart(page: EmbeddedTab, event: DragEvent): void {
+  store.dragTab(page.id);
+  event.dataTransfer?.setData("text/plain", page.id);
+  event.dataTransfer?.setData("application/x-ensemble-page", page.id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onWindowPageDragEnd(): void {
+  store.dragTab(null);
+}
+
+function openWindowPageMenu(page: EmbeddedTab, event: MouseEvent): void {
+  openTabMenu(page, event);
+}
+
+/** The strip's "+": another page in the same instance, asked as which account. */
+function addWindowPage(): void {
+  if (windowInstanceId.value) void store.openTabInInstance(windowInstanceId.value);
+}
+
+/**
+ * Single cell ↔ workbench.
+ *
+ * The parent owns the mode: the shell decides whether the run dock is on screen,
+ * and the browser only reports what was clicked. Shrinking does not close
+ * anything — every page keeps running and stays reachable from the run dock.
+ */
+function toggleBench(): void {
+  emit("switchMode", bench.value ? "browse" : "bench");
+}
 
 const activeTab = computed(() => store.activeTab);
 const activeView = computed(() => store.activeView);
-
-/**
- * The instance on the flat stage, when no view is on stage.
- *
- * Flat mode shows one instance filling the stage. It still gets a header band and
- * a page strip, exactly like a cell of a view: the difference between the two is
- * how many instances are on screen, not whether an instance has tabs. Leaving the
- * band out here is what made "a browser opened from the tab list" behave like a
- * different, lesser thing than the same browser inside a view.
- */
-const flatInstance = computed(() => {
-  if (activeView.value) return undefined;
-  const tab = activeTab.value;
-  if (!tab) return undefined;
-  const pages = store.instancePages(tab.instanceId);
-  return {
-    instanceId: tab.instanceId,
-    currentId: pages.find((page) => page.active)?.id ?? tab.id,
-  };
-});
 
 /**
  * Whether the active page is already a bookmark.
@@ -456,9 +568,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("pointerdown", onGlobalViewportOutside, true);
 });
 
-async function applyGlobalViewport(
-  size: { width: number; height: number } | null,
-): Promise<void> {
+async function applyGlobalViewport(size: { width: number; height: number } | null): Promise<void> {
   globalViewportOpen.value = false;
   await store.setDefaultViewport(size);
 }
@@ -531,20 +641,11 @@ const blankSurfaces = computed(() => {
   if (!view) {
     const tab = activeTab.value;
     if (!tab || tab.viewId || !isBlankTab(tab)) return [];
-    // Flat mode reserves the same header band as a view cell, so the search
-    // surface starts below it instead of underlapping the tab strip.
+    // A single cell has no header band any more (the window strip owns the tabs),
+    // so the blank surface fills the stage instead of starting below a band that
+    // is not drawn.
     const box = stageBox.value;
-    return [
-      {
-        tab,
-        slot: {
-          x: 0,
-          y: EMBEDDED_SLOT_HEADER,
-          width: box.width,
-          height: Math.max(1, box.height - EMBEDDED_SLOT_HEADER),
-        },
-      },
-    ];
+    return [{ tab, slot: { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) } }];
   }
   return slotChrome.value
     .map((slot, index) => ({ slot, index }))
@@ -894,37 +995,6 @@ function endResize(): void {
   pendingRects = null;
 }
 
-function reportStage(): void {
-  const element = stage.value;
-  if (!element) {
-    store.setStage(null);
-    return;
-  }
-  // Viewport coordinates are window content-area DIPs, which is exactly what
-  // WebContentsView.setBounds expects; offsetTop would be relative to whichever
-  // ancestor happens to be positioned.
-  const box = element.getBoundingClientRect();
-  if (box.width <= 0 || box.height <= 0) {
-    store.setStage(null);
-    return;
-  }
-  stageOrigin.value = { x: Math.round(box.left), y: Math.round(box.top) };
-  // Fed into `slotChrome` as well: the header bands are laid out from this box,
-  // so they have to follow every resize the native pages follow.
-  const width = element.clientWidth;
-  const height = element.clientHeight;
-  if (width !== stageBox.value.width || height !== stageBox.value.height) {
-    stageBox.value = { width, height };
-  }
-  store.setStage({
-    x: Math.round(box.left),
-    y: Math.round(box.top),
-    width: Math.floor(box.width),
-    height: Math.floor(box.height),
-  });
-}
-
-let resizeObserver: ResizeObserver | null = null;
 let offDownloads: (() => void) | undefined;
 
 /**
@@ -961,7 +1031,8 @@ function downloadStatus(entry: DownloadEntry): string {
       ? `${downloadPercent(entry)}% · ${formatBytes(entry.receivedBytes)} / ${formatBytes(entry.totalBytes)}`
       : formatBytes(entry.receivedBytes);
   }
-  if (entry.state === "completed") return t("app.downloadDone", { size: formatBytes(entry.receivedBytes) });
+  if (entry.state === "completed")
+    return t("app.downloadDone", { size: formatBytes(entry.receivedBytes) });
   return entry.state === "cancelled" ? t("app.downloadCancelled") : t("app.downloadInterrupted");
 }
 
@@ -991,21 +1062,17 @@ onMounted(async () => {
     if (activeDownloads.value > before) downloadsOpen.value = true;
   });
   document.addEventListener("pointerdown", onDocumentPointerDown);
-  if (stage.value) {
-    resizeObserver = new ResizeObserver(() => reportStage());
-    resizeObserver.observe(stage.value);
-  }
-  reportStage();
+  // The observer lives in the geometry composable: it owns the measuring and
+  // reports to the main process, so nothing here re-implements it.
+  geometry.observe();
   window.addEventListener("resize", reportStage);
   window.addEventListener("keydown", onKeydown);
 });
 
 onBeforeUnmount(() => {
   store.setStageMounted(false);
-  resizeObserver?.disconnect();
   offDownloads?.();
   document.removeEventListener("pointerdown", onDocumentPointerDown);
-  window.removeEventListener("resize", reportStage);
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("pointermove", onResizeMove);
   // Park the pages: another app page is taking the window, and WebContentsViews
@@ -1390,7 +1457,100 @@ function fillMessage(reason?: string): string {
 </script>
 
 <template>
-  <section class="browser">
+  <section class="browser" :class="{ bench }">
+    <!--
+      The tab strip, where every browser puts it.
+
+      1.0 drew the page list inside each cell's 26px header band, which meant a
+      single-cell layout had a tab strip in an unusual place and no strip at all
+      across the top — the one thing a browser is recognised by. The strip here
+      belongs to the window: it shows the focused cell's pages, and in a
+      multi-cell layout it also names which account that cell is, because every
+      cell of the same app shows the same page titles.
+
+      The active tab is painted in the toolbar's colour with no bottom edge, so
+      strip and toolbar read as one surface. That single detail is most of the
+      difference between a browser and a web app that draws tabs.
+    -->
+    <div class="tabstrip drag-region" :data-platform="platform">
+      <button
+        type="button"
+        class="layout-btn no-drag"
+        :class="{ 'is-bench': bench }"
+        :title="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
+        :aria-label="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
+        @click="toggleBench"
+      >
+        <LayoutGrid :size="14" />
+      </button>
+      <div class="tabs no-drag" role="tablist" :aria-label="t('app.browserTabs')">
+        <button
+          v-for="page in windowPages"
+          :key="page.id"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ active: page.id === windowActivePageId }"
+          :aria-selected="page.id === windowActivePageId"
+          :data-tab-id="page.id"
+          :title="page.url"
+          draggable="true"
+          @click="activateWindowPage(page.id)"
+          @dragstart="onWindowPageDragStart(page, $event)"
+          @dragend="onWindowPageDragEnd"
+          @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
+        >
+          <span class="tab-fav">
+            <TabIcon :src="page.favicon" :size="13" />
+          </span>
+          <span class="tab-label">{{ store.titleOf(page) }}</span>
+          <span
+            v-if="page.loading"
+            class="tab-loading"
+            :aria-label="t('app.browserLoading')"
+          ></span>
+          <span
+            v-else-if="page.id === windowActivePageId"
+            class="tab-close"
+            role="button"
+            tabindex="0"
+            :aria-label="t('app.browserCloseTab')"
+            :data-close-tab="page.id"
+            @click.stop="store.closeTab(page.id)"
+            @keydown.enter.stop="store.closeTab(page.id)"
+            @keydown.space.prevent.stop="store.closeTab(page.id)"
+          >
+            <X :size="10" />
+          </span>
+        </button>
+      </div>
+      <button
+        type="button"
+        class="strip-add no-drag"
+        :aria-label="t('app.browserNewTabHere')"
+        :title="t('app.browserNewTabHere')"
+        @click="addWindowPage"
+      >
+        <Plus :size="14" />
+      </button>
+      <div class="strip-drag drag-region"></div>
+      <!--
+        The console entry. `PanelLeft` drew a panel with a divider down its left
+        edge — the icon for "open a side rail", which is what this console used
+        to be and no longer is. A grid-of-records glyph says what the destination
+        actually is: the tables behind the browser.
+      -->
+      <button
+        type="button"
+        class="console-btn no-drag"
+        :aria-label="t('app.openConsole')"
+        :title="t('app.openConsole')"
+        @click="emit('openConsole')"
+      >
+        <Table2 :size="14" />
+      </button>
+    </div>
+
     <div class="toolbar">
       <button
         type="button"
@@ -1431,12 +1591,13 @@ function fillMessage(reason?: string): string {
           @blur="suggestionsOpen = false"
           @keydown.esc="suggestionsOpen = false"
         />
-        <!-- An explicit go button: Enter is invisible to a mouse user, and the
-             adjacent search icon is easy to mistake for "run this address". -->
+        <!-- An explicit go button: Enter is invisible to a mouse user. It only
+             appears once there is something to go to, so the field is quiet at
+             rest instead of carrying a permanently greyed-out arrow. -->
         <button
+          v-if="address.trim()"
           type="submit"
           class="go"
-          :disabled="!address.trim()"
           :aria-label="t('app.browserGo')"
           :title="t('app.browserGo')"
         >
@@ -1604,14 +1765,17 @@ function fillMessage(reason?: string): string {
       <div class="global-viewport">
         <button
           type="button"
-          class="zoom-value mono"
+          class="icon viewport-btn"
           :class="{ changed: Boolean(globalViewport) }"
           :title="t('app.viewportDefaultHint')"
           :aria-label="t('app.viewportDefaultLabel')"
           :aria-expanded="globalViewportOpen"
           @click="toggleGlobalViewport"
         >
-          {{ globalViewport ? `${globalViewport.width}×${globalViewport.height}` : t("app.viewportGlobalOff") }}
+          <Monitor :size="15" />
+          <span v-if="globalViewport" class="viewport-tag mono">
+            {{ globalViewport.width }}×{{ globalViewport.height }}
+          </span>
         </button>
         <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
           <p class="global-viewport-note">{{ t("app.viewportDefaultHint") }}</p>
@@ -1700,6 +1864,46 @@ function fillMessage(reason?: string): string {
       >
         <ExternalLink :size="15" />
       </button>
+      <!--
+        The AI entry, and the only place the endpoint's status is reported.
+        A browser has no status bar: putting "connected / port 8765" on a bar
+        across the bottom of every screen was the clearest single sign that this
+        was a console rather than a browser. The dot carries the state, the menu
+        carries the address.
+      -->
+      <div class="ai-entry">
+        <button
+          type="button"
+          class="ai-btn"
+          :class="{ on: workspace.mcp?.running }"
+          :aria-label="t('app.mcpAiAccess')"
+          :aria-expanded="aiMenuOpen"
+          :title="t('app.statusMcpHint')"
+          @click="aiMenuOpen = !aiMenuOpen"
+        >
+          <span class="ai-mark"><Sparkles :size="14" /></span>
+          <span class="ai-label">{{ t("app.aiEntryShort") }}</span>
+          <span
+            v-if="workspace.mcp?.running"
+            class="ai-dot"
+            :aria-label="t('app.statusConnected')"
+          ></span>
+        </button>
+        <div v-if="aiMenuOpen" class="ai-menu" role="menu">
+          <p class="ai-menu-head">
+            <span class="ai-led" :class="{ on: workspace.mcp?.running }"></span>
+            {{
+              workspace.mcp?.running
+                ? t("app.aiEndpointOn", { port: workspace.mcp.port })
+                : t("app.aiEndpointOff")
+            }}
+          </p>
+          <button type="button" role="menuitem" class="tab-menu-item" @click="openMcpSettings">
+            <Bot :size="13" />
+            {{ t("app.aiEndpointSettings") }}
+          </button>
+        </div>
+      </div>
       <OpenSiteButton
         @open-blank="store.openTab()"
         @open-daily="openSiteBookmark"
@@ -1788,37 +1992,15 @@ function fillMessage(reason?: string): string {
       ></div>
 
       <!--
-        Flat mode gets the same band a view cell has.
+        A flat stage gets no header band, in either mode.
 
-        Without it, an instance opened into the default tab group had no page
-        strip at all: no way to reach its other pages, nowhere for the "+" to
-        live, no right-click menu. The instance was not a lesser browser, only a
-        browser without its controls — so the band is drawn here too, with the
-        slot number and the layout picker omitted because there is exactly one
-        cell and no grid to arrange.
+        It used to carry one so that an instance opened into the default tab
+        group still had page tabs and a "+". The window-level strip above the
+        toolbar does that now, for every mode — and in the workbench the flat
+        stage drew both, two identical tab rows one under the other. The band
+        remains only for real cells, where it answers something the top strip
+        cannot: which account this particular cell is.
       -->
-      <div
-        v-if="flatInstance"
-        class="slot-header flat"
-        :style="{ left: '0px', top: '0px', width: '100%', height: `${EMBEDDED_SLOT_HEADER}px` }"
-      >
-        <span
-          v-if="activeTab?.color"
-          class="dot"
-          :style="{ background: `var(--role-${activeTab.color})` }"
-        ></span>
-        <span v-if="slotAccount(flatInstance.instanceId)" class="slot-account">
-          {{ slotAccount(flatInstance.instanceId) }}
-        </span>
-        <span v-if="activeTab?.loading" class="spinner"></span>
-        <!-- Flat stage: one instance, no cells to split across. -->
-        <InstanceTabStrip
-          :instance-id="flatInstance.instanceId"
-          :current-id="flatInstance.currentId"
-          @select="(pageId) => selectPage(pageId)"
-          @menu="openTabMenu"
-        />
-      </div>
 
       <!-- Native views paint over this area; only the slot headers stay visible. -->
       <div
@@ -2100,16 +2282,354 @@ function fillMessage(reason?: string): string {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* The dock is a flex sibling; without this the browser refuses to shrink below
+     its content's intrinsic width and the stage keeps the full window width even
+     though the dock took a column. */
+  min-width: 0;
   height: 100%;
+  flex: 1 1 auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tab strip
+ *
+ * The band is the frame colour; the active tab is the toolbar colour with no
+ * bottom edge. That is the whole trick, and it is what makes the strip read as
+ * part of the toolbar instead of as a row of pills sitting above it.
+ * ------------------------------------------------------------------------ */
+.tabstrip {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: var(--titlebar-height);
+  padding-left: 4px;
+  background: var(--frame);
+}
+
+/* The layout switch is the only way in and out of a multi-cell view, so it sits
+   at the strip's leading edge where every browser puts its tab-group controls. */
+.layout-btn {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  flex: 0 0 26px;
+  margin-right: 2px;
+}
+
+.layout-btn:hover {
+  background: var(--hover, color-mix(in srgb, var(--text) 7%, transparent));
+  color: var(--text);
+}
+
+.layout-btn.is-bench {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/*
+ * The tab row hugs its tabs and grows only as far as they need, so the "+"
+ * sits immediately after the last tab the way every browser draws it. It was
+ * `flex: 1 1 auto`, which stretched the row to the full window and left the "+"
+ * floating in the middle of the strip, far from the tab it belongs to.
+ * Overflowing rows still shrink: `min-width: 0` plus the tabs' own `min-width`.
+ */
+.tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+  height: 100%;
+}
+
+/*
+ * A tab is 30px tall inside a 34px band, so it sits on the toolbar's top edge.
+ * Width follows the title, capped at 184px; when the row runs out they all
+ * shrink together, which is the browser behaviour. `flex-basis: auto` is what
+ * makes a two-character title produce a narrow tab instead of a 184px slab.
+ */
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 6px 0 10px;
+  border-radius: 7px 7px 0 0;
+  min-width: 46px;
+  max-width: 184px;
+  flex: 0 1 auto;
+  font-size: var(--fs-base);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  position: relative;
+}
+
+.tab:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+
+/* Same colour as the toolbar, and deliberately no bottom border: the tab and the
+   toolbar form one continuous surface. */
+.tab.active {
+  background: var(--chrome);
+  color: var(--text);
+  box-shadow: 0 -1px 0 color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+/* Hairline separators between inactive neighbours, as every browser draws them. */
+.tab + .tab::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 9px;
+  bottom: 9px;
+  width: 1px;
+  background: var(--line);
+}
+
+.tab:hover::before,
+.tab.active::before,
+.tab.active + .tab::before {
+  display: none;
+}
+
+.tab-fav {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+}
+
+/* The close affordance appears on the current tab and on hover: always-on
+   crosses in a 30px pill eat the title. */
+.tab-close {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: var(--faint);
+  flex: 0 0 16px;
+  opacity: 0;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: color-mix(in srgb, var(--red) 20%, transparent);
+  color: var(--red);
+}
+
+/* A loading tab spends the close button's slot on a spinner, so the title does
+   not shift when the page finishes. */
+.tab-loading {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  margin-right: 2px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: tabspin 0.7s linear infinite;
+}
+
+@keyframes tabspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/*
+ * The strip's "add page" button.
+ *
+ * Not `.new-tab`: the new-tab *surface* is a child component whose root carries
+ * that class, and a scoped parent rule reaches a child's root element. The two
+ * were the same name, so this rule's 26×26 box sized the whole new-tab surface
+ * into a thumbnail in the stage's corner.
+ */
+.strip-add {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  flex: 0 0 26px;
+  margin: 0 2px;
+}
+
+.strip-add:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+/* Everything between the last tab and the window controls drags the window. */
+.strip-drag {
+  flex: 1 1 auto;
+  min-width: 12px;
+  height: 100%;
+}
+
+.console-btn {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  flex: 0 0 26px;
+  margin-right: 4px;
+}
+
+.console-btn:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+/* The native window controls are drawn over the strip's right end; that space is
+   reserved by the main process overlay, so the strip only has to keep clear. */
+.tabstrip[data-platform="win32"],
+.tabstrip[data-platform="linux"] {
+  padding-right: 140px;
+}
+
+.tabstrip[data-platform="darwin"] {
+  padding-left: 82px;
+}
+
+/* ---------------------------------------------------------------------------
+ * AI entry
+ *
+ * An icon, not an icon-plus-label: the toolbar's right end already carries the
+ * zoom stepper, downloads and two page actions, and "AI 接入" was the only
+ * multi-character control on the row — it read as a menu heading among buttons,
+ * and it pushed the "+" (which really is a menu) to the very edge where the two
+ * looked interchangeable. The label still names the button through `aria-label`
+ * and `title`; the menu names the endpoint.
+ * ------------------------------------------------------------------------ */
+.ai-entry {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.ai-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--control-lg);
+  padding: 0 9px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.ai-btn:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.ai-btn.on {
+  background: var(--accent-soft);
+}
+
+.ai-label {
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.ai-btn.on .ai-label {
+  color: var(--accent);
+}
+
+.ai-btn:hover .ai-label {
+  color: var(--text);
+}
+
+.ai-mark {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+/* The dot answers "is it listening" without a word, and it lives on the
+   button's corner rather than over the glyph: on the sparkle it read as part of
+   the icon, and the filled background alone says the same thing less precisely. */
+.ai-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.ai-menu {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 232px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+}
+
+.ai-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 6px 6px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.ai-led {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: 0 0 5px;
+}
+
+.ai-led.on {
+  background: var(--green);
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line-soft);
-  background: var(--bg);
+  gap: 2px;
+  height: var(--toolbar-height);
+  padding: 0 8px;
+  background: var(--chrome);
   flex: 0 0 auto;
 }
 
@@ -2118,13 +2638,14 @@ function fillMessage(reason?: string): string {
 .icon {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: var(--control-lg);
+  height: var(--control-lg);
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: transparent;
-  color: var(--muted);
+  color: var(--text-secondary);
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .icon:hover {
@@ -2145,20 +2666,32 @@ function fillMessage(reason?: string): string {
   color: var(--accent);
 }
 
+/*
+ * Zoom is the one toolbar control that is a *value*, not an action, so it needs
+ * a little structure — but not a permanently filled block. At rest it is as
+ * quiet as the icon buttons beside it; the fill appears on hover, and the accent
+ * only when this page differs from the default.
+ */
 .zoom-stepper {
   display: inline-flex;
   align-items: stretch;
-  height: 30px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
+  height: var(--control-lg);
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
   overflow: hidden;
   flex: 0 0 auto;
+  transition: background 0.14s ease;
+}
+
+.zoom-stepper:hover {
+  background: var(--field);
 }
 
 /* Quiet at the default; the accent only appears when this page is actually
    zoomed, so the toolbar does not shout "110%" at every normal page. */
 .zoom-stepper.changed {
-  border-color: color-mix(in srgb, var(--line) 40%, var(--accent));
+  background: var(--accent-soft);
 }
 
 .zoom-stepper.changed .zoom-value {
@@ -2169,11 +2702,11 @@ function fillMessage(reason?: string): string {
   display: grid;
   place-items: center;
   width: 24px;
-  color: var(--faint);
+  color: var(--text-secondary);
 }
 
 .zoom-step:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
 
@@ -2181,15 +2714,13 @@ function fillMessage(reason?: string): string {
 .zoom-value {
   min-width: 44px;
   padding: 0 6px;
-  border-right: 1px solid var(--line-soft);
-  border-left: 1px solid var(--line-soft);
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.02em;
   color: var(--text-secondary);
 }
 
 .zoom-value:hover {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
 
@@ -2199,23 +2730,27 @@ function fillMessage(reason?: string): string {
 .global-viewport {
   position: relative;
   display: inline-flex;
-  align-items: stretch;
-  height: 30px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  overflow: visible;
+  align-items: center;
   flex: 0 0 auto;
 }
 
-.global-viewport .zoom-value {
-  min-width: 62px;
-  border: none;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
+/* An icon, plus the size only once one is set: a permanently wide "自适应"
+   button in the toolbar draws more attention than the setting deserves, and the
+   toolbar has to survive a 960px window. */
+.viewport-btn {
+  position: relative;
+  gap: 5px;
+  width: auto;
+  padding: 0 8px;
 }
 
-.global-viewport .zoom-value.changed {
+.viewport-btn.changed {
   color: var(--accent);
+}
+
+.viewport-tag {
+  font-size: var(--fs-2xs);
+  line-height: 1;
 }
 
 .global-viewport-menu {
@@ -2451,13 +2986,13 @@ function fillMessage(reason?: string): string {
 .address input,
 .findbar input {
   width: 100%;
-  height: 30px;
-  padding: 0 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--surface);
+  height: var(--control-lg);
+  padding: 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: var(--field);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--fs-base);
   outline: none;
 }
 
@@ -2467,34 +3002,34 @@ function fillMessage(reason?: string): string {
 
 .address input:focus,
 .findbar input:focus {
-  border-color: color-mix(in srgb, var(--line) 50%, var(--accent));
+  background: var(--chrome);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* The go affordance lives inside the field so the toolbar stays one row. */
+/* The go affordance lives inside the field so the toolbar stays one row, and
+   appears only once there is something to go to: a permanently disabled arrow
+   at the field's edge is a control that never does anything, and Enter already
+   submits. */
 .go {
   position: absolute;
-  right: 3px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
   display: grid;
   place-items: center;
   width: 24px;
-  height: 22px;
+  height: 24px;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--faint);
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
-.go:hover:not(:disabled) {
+.go:hover {
   background: var(--surface-3);
   color: var(--text);
-}
-
-.go:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 .findbar {
@@ -2535,7 +3070,9 @@ function fillMessage(reason?: string): string {
    * here bounds every such child at once instead of trusting each one's rect.
    */
   overflow: hidden;
-  background: var(--bg);
+  /* The stage is content, not frame: a page sits on the same surface as a blank
+     tab, so the area behind it must match the page rather than the chrome. */
+  background: var(--content);
 }
 
 .frozen {
@@ -2601,14 +3138,6 @@ function fillMessage(reason?: string): string {
 /* The flat stage has one cell and no grid, so its band is a plain strip: no
    hover tint (clicking it selects nothing), no slot number, and no layout
    picker. What it does carry is the page tabs — that was the whole point. */
-.slot-header.flat {
-  cursor: default;
-}
-
-.slot-header.flat:hover {
-  background: var(--surface);
-}
-
 /* The selected cell is the keyboard target and the one a new page replaces, so
    it is marked structurally — an accent rail plus a lifted background — instead
    of spending band width on the word "selected". Tinted with the page colour

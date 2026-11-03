@@ -102,11 +102,13 @@ ad-hoc 不等于通过 Gatekeeper，首次打开仍需用户手动放行。
    tag 指向本次提交
 5. 需要补发或重跑时，推送同名 tag；此时 tag 必须与 `package.json` 一致，否则 workflow 失败
 
-主仓在云效时，需要额外配置一个 GitHub remote，并在发布时把 main 与 tag 一起推过去：
+仓库只维护 GitHub 一个远端（`github`），`main` 与 tag 直接推上去：
 
 ```bash
-git push github main --follow-tags
+git push --follow-tags
 ```
+
+2026-11-03 之前主仓在云效、另配一个 GitHub remote 双推；云效侧已停维护，`origin` 已移除。
 
 公开仓库使用标准 runner 构建三平台不产生费用；私有仓库的 macOS 分钟按约 10 倍计费。
 

@@ -1,13 +1,13 @@
 # 0010. 内置浏览器渲染载体维持 WebContentsView（webview 迁移暂缓，列为观察项）
 
 - 日期：2026-10-28
-- 状态：已采纳（2026-10-28 用户裁决：维持现状）
+- 状态：已被 [0011](./0011-webview-cdp-on-guest-pivot.md) 取代（2026-11-03 重启条件第一条成立，用户裁决迁移；本文的观察项与影响面清单继续有效）
 
 ## 背景
 
-ZCode 于 2026-07-08 把内置浏览器从 main 进程 `WebContentsView` 迁回 renderer `<webview>`
-（CDP-on-guest pivot），核心理由是：WebContentsView 是窗口 native 层，**永远合成在 renderer
-DOM 之上**，菜单/下拉/tooltip 碰到页面区域就被遮且 z-index 无法修复（本质缺陷），并连带
+把内置浏览器从 main 进程 `WebContentsView` 迁回 renderer `<webview>`（CDP-on-guest pivot）
+是可行路线，核心理由是：WebContentsView 是窗口 native 层，**永远合成在 renderer DOM
+之上**，菜单/下拉/tooltip 碰到页面区域就被遮且 z-index 无法修复（本质缺陷），并连带
 setBounds/setVisible 定位、DPR 换算等一串 bug。Ensemble 是否跟进迁移，在 2026-10-28 形成
 实际议题。
 
@@ -21,8 +21,8 @@ setBounds/setVisible 定位、DPR 换算等一串 bug。Ensemble 是否跟进迁
    遮挡开关（`CalculateNativeWinOcclusion`）/0×0 viewport 首布局，每一处都是
    踩坑库级的实测补丁（截图矩阵：停放窗外 CDP 截图挂起、`capturePage` 可用、窗口全隐藏
    两者皆失败）。webview 下截图合成行为完全不同，这张实测矩阵必须整表重测。
-3. **ZCode 接受了与 Ensemble 产品论点相反的安全权衡**：webview 方案里 agent 与 human 共用
-   `persist:zcode-embedded-browser` 单一分区（agent 复用 human 登录态）。Ensemble 的立身
+3. **webview 路线常见的简化与 Ensemble 产品论点相反**：agent 与 human 共用单一
+   `persist:` 分区（agent 复用 human 登录态）。Ensemble 的立身
    之本是按身份隔离（每身份独立 `persist:` 分区与 profile），且 AGENTS.md 强制约束 1 要求
    内置 view 必须 sandbox、无 preload；迁移把被测页面 view 的宿主从 main 挪进管理台
    renderer，`webviewTag: true` 需要在主窗口打开（当前显式 `false`），架构边界（ADR 0006
@@ -34,7 +34,7 @@ setBounds/setVisible 定位、DPR 换算等一串 bug。Ensemble 是否跟进迁
 
 1. 收益已大部分被现有回路覆盖（浮层可用，虽绕但稳）；
 2. 迁移需要整表重测截图/几何矩阵并重写五套机制，风险窗口长；
-3. ZCode 的 pivot 伴随的安全权衡（共用分区）不可接受，安全边界需要独立论证后才能重排。
+3. webview 路线伴随的安全权衡（共用分区）不可接受，安全边界需要独立论证后才能重排。
 
 **同时把迁移立为观察项**，满足任一条件时重启评估：
 
@@ -42,14 +42,14 @@ setBounds/setVisible 定位、DPR 换算等一串 bug。Ensemble 是否跟进迁
 - Electron 官方进一步弱化 `WebContentsView` 或 `<webview>` 反超为推荐方案；
 - 几何/遮挡类 bug 的修复成本累计明显超过一次迁移。
 
-若未来重启迁移，按 ZCode 验证过的五阶段走（P1 guest 底座 → P2 renderer webview 组件 →
-P3 握手 → P4 删定位资产 → P5 回归），每阶段独立提交、真机验证，且先解决第 3 点的安全
-边界并同步改写 ADR 0006。
+若未来重启迁移，按五阶段走（P1 guest 底座 → P2 renderer webview 组件 → P3 握手 →
+P4 删定位资产 → P5 回归），每阶段独立提交、真机验证，且先解决第 3 点的安全边界并同步
+改写 ADR 0006。
 
 ## 被否方案
 
 - **方案 A：立即迁移到 `<webview>` + CDP-on-guest**（本次被否）。理由见决策 1–3。被否的
-  不是方向本身——ZCode 的实践证明该架构长期更简洁（DOM 内合成、可删冻结/停放两套机制）——
+  不是方向本身——该架构长期更简洁（DOM 内合成、可删冻结/停放两套机制）——
   而是时机：在隔离边界未重新论证、测试矩阵未重测计划未落定时动手，会把已稳定的表面
   推进长风险窗口。
 - **方案 B：不迁移且不设观察项**（被否）。等于把「每加一个浮层需求都要先过冻结回路」
@@ -63,6 +63,6 @@ P3 握手 → P4 删定位资产 → P5 回归），每阶段独立提交、真�
 - DevTools：`mountDevTools`/`placeDevTools`/分离条 16ms 光标轮询/webview 下大多简化，但每处
   都是实测补丁，删除需逐条重验（F12、前端 reload 重建、语言提示条）。
 - 弹窗：`setWindowOpenHandler` 路由语义迁移到 webview 的创建期契约（`allowpopups` 必须在
-  React 创建节点时声明，后补无效——ZCode 实测踩坑）。
+  renderer 创建节点时声明，后补无效——已实测确认）。
 - 安全：`webviewTag` 开关、主窗口 webPreferences、被测页面 renderer 归属重述。
 - MCP 面绝缘：`EmbeddedSurface` 只传 tabId 与可序列化结果，迁移不影响 MCP 工具集。

@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const plainBox: SecretBox = {
   available: false,
   backend: "plain",
-  encrypt: (plain) => `plain:${Buffer.from(plain).toString("base64")}`,
-  decrypt: (payload) => Buffer.from(payload.slice(6), "base64").toString("utf8"),
+  encrypt: async (plain) => `plain:${Buffer.from(plain).toString("base64")}`,
+  decrypt: async (payload) => Buffer.from(payload.slice(6), "base64").toString("utf8"),
 };
 
 const created: string[] = [];
@@ -59,10 +59,10 @@ const identityDraft = (siteId: string, name: string): IdentityDraft => ({
   passwordMode: "inherit",
 });
 
-function seedIdentities(service: WorkspaceService, count: number): string {
-  const site = service.saveSite(siteDraft());
+async function seedIdentities(service: WorkspaceService, count: number): Promise<string> {
+  const site = await service.saveSite(siteDraft());
   for (let index = 0; index < count; index += 1) {
-    service.saveIdentity(identityDraft(site.id, `账号${index + 1}`));
+    await service.saveIdentity(identityDraft(site.id, `账号${index + 1}`));
   }
   return site.id;
 }
@@ -74,7 +74,7 @@ afterEach(async () => {
 describe("session health", () => {
   it("reports identities without a window as unknown and writes nothing", async () => {
     const { service, changes } = await makeService();
-    const siteId = seedIdentities(service, 8);
+    const siteId = await seedIdentities(service, 8);
     const before = changes();
 
     const batch = await service.checkAllAuth(siteId);
@@ -89,8 +89,8 @@ describe("session health", () => {
 
   it("aggregates only the requested site", async () => {
     const { service } = await makeService();
-    const first = seedIdentities(service, 2);
-    seedIdentities(service, 3);
+    const first = await seedIdentities(service, 2);
+    await seedIdentities(service, 3);
 
     const batch = await service.checkAllAuth(first);
 
@@ -100,7 +100,7 @@ describe("session health", () => {
 
   it("reports a failed relogin instead of aborting the batch", async () => {
     const { service } = await makeService();
-    const siteId = seedIdentities(service, 2);
+    const siteId = await seedIdentities(service, 2);
     const [, second] = service.snapshot().identities;
     if (!second) throw new Error("missing identity");
     // No saved password: the fill must fail, and the batch must say so.
@@ -118,14 +118,14 @@ describe("session health", () => {
 describe("restore last view", () => {
   it("does nothing when the setting is off", async () => {
     const { service } = await makeService();
-    seedIdentities(service, 1);
+    await seedIdentities(service, 1);
 
     expect(await service.restoreLastView()).toEqual({ restored: false, reason: "disabled" });
   });
 
   it("drops a view id that no longer exists", async () => {
     const { service } = await makeService();
-    const siteId = seedIdentities(service, 1);
+    const siteId = await seedIdentities(service, 1);
     service.saveView({
       siteId,
       name: "场景",
@@ -154,7 +154,7 @@ describe("restore last view", () => {
 
   it("forgets which view was last when that view is deleted", async () => {
     const { service } = await makeService();
-    const siteId = seedIdentities(service, 1);
+    const siteId = await seedIdentities(service, 1);
     const view = service.saveView({
       siteId,
       name: "场景",

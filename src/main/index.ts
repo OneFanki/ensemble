@@ -146,45 +146,66 @@ try {
   // No settings yet (first run): Chromium picks the system language.
 }
 
+/**
+ * `safeStorage` adapter. Electron 45 deprecated the synchronous
+ * `isEncryptionAvailable`/`encryptString`/`decryptString` (removal in 46), so
+ * this box speaks the async API only.
+ *
+ * `available` stays a synchronous property because the vault reads it from
+ * synchronous getters (`secure`). It is a snapshot taken once by `init()`,
+ * which the app awaits before any window exists — OS-keychain availability does
+ * not change over a session, so a snapshot is not a lie.
+ */
 class SafeStorageBox implements SecretBox {
-  get available(): boolean {
-    try {
-      return safeStorage.isEncryptionAvailable();
-    } catch {
-      return false;
-    }
-  }
+  private availableSnapshot = false;
+  private initialised = false;
 
   get backend(): string {
     if (process.platform === "linux") {
       const backend = safeStorage.getSelectedStorageBackend?.();
       return backend ?? "unknown";
     }
-    return process.platform === "win32"
-      ? "dpapi"
-      : process.platform === "darwin"
-        ? "keychain"
-        : "unknown";
+    return process.platform === "win32" ? "dpapi" : process.platform === "darwin" ? "keychain" : "unknown";
   }
 
   get kind(): "os" {
     return "os";
   }
 
-  encrypt(plain: string): string {
-    // There is no plaintext fallback: a machine without a usable keychain must
-    // either install one or protect the vault with a master password.
-    if (!this.available) {
-      throw new Error("System credential storage is unavailable");
-    }
-    return `enc:${safeStorage.encryptString(plain).toString("base64")}`;
+  get available(): boolean {
+    return this.availableSnapshot;
   }
 
-  decrypt(payload: string): string {
-    if (payload.startsWith("enc:")) {
-      return safeStorage.decryptString(Buffer.from(payload.slice(4), "base64"));
+  async init(): Promise<void> {
+    this.availableSnapshot = await safeStorage.isAsyncEncryptionAvailable();
+    this.initialised = true;
+  }
+
+  private ensureReady(): void {
+    if (!this.initialised) {
+      throw new Error("System credential storage is not initialised");
     }
-    throw new Error("Unknown credential payload");
+  }
+
+  async encrypt(plain: string): Promise<string> {
+    // There is no plaintext fallback: a machine without a usable keychain must
+    // either install one or protect the vault with a master password.
+    this.ensureReady();
+    if (!this.availableSnapshot) {
+      throw new Error("System credential storage is unavailable");
+    }
+    const encrypted = await safeStorage.encryptStringAsync(plain);
+    return `enc:${encrypted.toString("base64")}`;
+  }
+
+  async decrypt(payload: string): Promise<string> {
+    this.ensureReady();
+    if (!payload.startsWith("enc:")) throw new Error("Unknown credential payload");
+    const decrypted = await safeStorage.decryptStringAsync(Buffer.from(payload.slice(4), "base64"));
+    // A rotated key signals `shouldReEncrypt`; re-sealing immediately would race
+    // the caller's write. The vault already rewrites on every save, so this
+    // passes the plaintext through and the next `set()` persists fresh ciphertext.
+    return decrypted.result;
   }
 }
 
@@ -343,7 +364,7 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       // The resolver mirrors the external launch path, including references.
       // It also reports *which* password is missing, so the toast can say "this
       // site has no default" instead of blaming an account that inherits one.
-      const resolution = service.resolvePasswordDetail(identityId);
+      const resolution = await service.resolvePasswordDetail(identityId);
       if (!resolution.password) {
         return { ok: false, missing: resolution.missing ?? "identity-empty" } as const;
       }
@@ -2339,8 +2360,8 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.credentialsSet, (owner: PasswordOwner, password: string) => {
-    workspace.setPassword(passwordOwnerSchema.parse(owner), String(password));
+  handle(IPC.credentialsSet, async (owner: PasswordOwner, password: string) => {
+    await workspace.setPassword(passwordOwnerSchema.parse(owner), String(password));
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -2351,8 +2372,8 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.credentialsCopy, (owner: PasswordOwner) => {
-    const password = workspace.copyPassword(passwordOwnerSchema.parse(owner));
+  handle(IPC.credentialsCopy, async (owner: PasswordOwner) => {
+    const password = await workspace.copyPassword(passwordOwnerSchema.parse(owner));
     if (!password) return false;
     clipboard.writeText(password);
     setTimeout(() => {
@@ -2370,20 +2391,20 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.credentialsSetMaster, (password: string) => {
-    workspace.setMasterPassword(String(password));
+  handle(IPC.credentialsSetMaster, async (password: string) => {
+    await workspace.setMasterPassword(String(password));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.credentialsRemoveMaster, () => {
-    workspace.removeMasterPassword();
+  handle(IPC.credentialsRemoveMaster, async () => {
+    await workspace.removeMasterPassword();
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.credentialsChangeMaster, (current: string, next: string) => {
-    const changed = workspace.changeMasterPassword(String(current), String(next));
+  handle(IPC.credentialsChangeMaster, async (current: string, next: string) => {
+    const changed = await workspace.changeMasterPassword(String(current), String(next));
     if (changed) broadcastWorkspace();
     return changed;
   });
@@ -2488,7 +2509,7 @@ function registerIpc(workspace: WorkspaceService): void {
     const outcome: ExportOutcome = { canceled: true };
     if (canceled || !filePath) return outcome;
     const passphrase = String(options?.passphrase ?? "");
-    const exported = workspace.exportWorkspace(options?.includeSecrets ? passphrase : undefined);
+    const exported = await workspace.exportWorkspace(options?.includeSecrets ? passphrase : undefined);
     writeFileSync(filePath, `${JSON.stringify(exported.file, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
@@ -2569,7 +2590,7 @@ function registerIpc(workspace: WorkspaceService): void {
       const outcome: AccountsExportOutcome = { canceled: true };
       if (canceled || !filePath) return outcome;
       const passphrase = String(options?.passphrase ?? "");
-      const exported = workspace.exportAccounts({
+      const exported = await workspace.exportAccounts({
         siteIds: Array.isArray(options?.siteIds) ? options.siteIds.map(String) : [],
         identityIds: Array.isArray(options?.identityIds) ? options.identityIds.map(String) : [],
         ...(passphrase ? { passphrase } : {}),
@@ -3295,11 +3316,16 @@ if (!gotLock) {
       });
     }
 
+    // Initialised before the service exists: the vault reads `available` from
+    // synchronous getters, so the keychain probe must already have settled.
+    const secretBox = new SafeStorageBox();
+    await secretBox.init();
+
     service = new WorkspaceService({
       userDataDir: userDataDir(),
       profileRoot: profileRoot(),
       platform: process.platform as "win32" | "darwin" | "linux",
-      secretBox: new SafeStorageBox(),
+      secretBox,
       appVersion: app.getVersion(),
       systemLocale: systemLocaleTag(),
       workArea: workAreaRect,
@@ -3458,9 +3484,9 @@ if (!gotLock) {
        * answer one, so bundles are read and written under a fixed directory and
        * the path travels in the tool call.
        */
-      exportAccounts: (input) => {
+      exportAccounts: async (input) => {
         if (!service) throw new Error("工作区未就绪");
-        const exported = service.exportAccounts(input);
+        const exported = await service.exportAccounts(input);
         const dir = join(userDataDir(), "accounts-export");
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `accounts-${dateStamp()}-${Date.now().toString(36)}.json`);

@@ -24,14 +24,14 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function makeSite(name: string, baseUrl: string) {
-  return service.saveSite({ name, baseUrl, loginPath: "/login", autoSubmit: false });
+async function makeSite(name: string, baseUrl: string) {
+  return await service.saveSite({ name, baseUrl, loginPath: "/login", autoSubmit: false });
 }
 
-describe("saved-login detection", () => {
-  it("recognises a username whose password the vault stores", () => {
-    const site = makeSite("本地", "http://localhost:3000");
-    service.saveIdentity(
+describe("saved-login detection", async () => {
+  it("recognises a username whose password the vault stores", async () => {
+    const site = await makeSite("本地", "http://localhost:3000");
+    await service.saveIdentity(
       {
         siteId: site.id,
         name: "管理员",
@@ -46,9 +46,9 @@ describe("saved-login detection", () => {
     expect(service.hasSavedLogin(site.id, "other@example.test")).toBe(false);
   });
 
-  it("does not treat an identity saved without a password as saved", () => {
-    const site = makeSite("本地", "http://localhost:3000");
-    service.saveIdentity({
+  it("does not treat an identity saved without a password as saved", async () => {
+    const site = await makeSite("本地", "http://localhost:3000");
+    await service.saveIdentity({
       siteId: site.id,
       name: "待补密码",
       username: "pending@example.test",
@@ -60,10 +60,10 @@ describe("saved-login detection", () => {
     expect(service.hasSavedLogin(site.id, "pending@example.test")).toBe(false);
   });
 
-  it("follows a reference to the source password", () => {
-    const source = makeSite("本地", "http://localhost:3000");
-    const other = makeSite("测试", "http://test.example.com");
-    const identity = service.saveIdentity(
+  it("follows a reference to the source password", async () => {
+    const source = await makeSite("本地", "http://localhost:3000");
+    const other = await makeSite("测试", "http://test.example.com");
+    const identity = await service.saveIdentity(
       {
         siteId: source.id,
         name: "管理员",
@@ -74,7 +74,7 @@ describe("saved-login detection", () => {
       },
       "secret",
     );
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: other.id,
       name: "ignored",
       username: "ignored",
@@ -87,11 +87,11 @@ describe("saved-login detection", () => {
   });
 });
 
-describe("credential references", () => {
-  it("copies the source's display fields onto the reference", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity(
+describe("credential references", async () => {
+  it("copies the source's display fields onto the reference", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity(
       {
         siteId: a.id,
         name: "管理员 · 主账号",
@@ -104,7 +104,7 @@ describe("credential references", () => {
       "secret",
     );
 
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "ignored",
       username: "ignored",
@@ -122,10 +122,10 @@ describe("credential references", () => {
     expect(reference.note).toBe("备注");
   });
 
-  it("resolves the source's password through the reference", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity(
+  it("resolves the source's password through the reference", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity(
       {
         siteId: a.id,
         name: "源",
@@ -136,7 +136,7 @@ describe("credential references", () => {
       },
       "shared-secret",
     );
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "引用",
       username: "admin",
@@ -146,7 +146,7 @@ describe("credential references", () => {
       credentialFrom: source.id,
     });
 
-    const resolved = resolvePassword(
+    const resolved = await resolvePassword(
       (service as unknown as { vault: unknown }).vault as never,
       reference,
       b.id,
@@ -155,9 +155,9 @@ describe("credential references", () => {
     expect(resolved.password).toBe("shared-secret");
   });
 
-  it("rejects a reference to a missing identity", () => {
-    const site = makeSite("测试", "http://test.example.com");
-    expect(() =>
+  it("rejects a reference to a missing identity", async () => {
+    const site = await makeSite("测试", "http://test.example.com");
+    await expect(
       service.saveIdentity({
         siteId: site.id,
         name: "x",
@@ -167,14 +167,14 @@ describe("credential references", () => {
         passwordMode: "reference",
         credentialFrom: "nope",
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
-  it("rejects a reference to another reference, so chains cannot form", () => {
-    const a = makeSite("A", "http://a.example.com");
-    const b = makeSite("B", "http://b.example.com");
-    const c = makeSite("C", "http://c.example.com");
-    const source = service.saveIdentity(
+  it("rejects a reference to another reference, so chains cannot form", async () => {
+    const a = await makeSite("A", "http://a.example.com");
+    const b = await makeSite("B", "http://b.example.com");
+    const c = await makeSite("C", "http://c.example.com");
+    const source = await service.saveIdentity(
       {
         siteId: a.id,
         name: "源",
@@ -185,7 +185,7 @@ describe("credential references", () => {
       },
       "p",
     );
-    const first = service.saveIdentity({
+    const first = await service.saveIdentity({
       siteId: b.id,
       name: "引用一",
       username: "u",
@@ -194,7 +194,7 @@ describe("credential references", () => {
       passwordMode: "reference",
       credentialFrom: source.id,
     });
-    expect(() =>
+    await expect(
       service.saveIdentity({
         siteId: c.id,
         name: "引用二",
@@ -204,12 +204,12 @@ describe("credential references", () => {
         passwordMode: "reference",
         credentialFrom: first.id,
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
-  it("rejects a reference to itself", () => {
-    const site = makeSite("A", "http://a.example.com");
-    expect(() =>
+  it("rejects a reference to itself", async () => {
+    const site = await makeSite("A", "http://a.example.com");
+    await expect(
       service.saveIdentity({
         id: "fixed-id",
         siteId: site.id,
@@ -220,13 +220,13 @@ describe("credential references", () => {
         passwordMode: "reference",
         credentialFrom: "fixed-id",
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 
-  it("detaching writes the resolved password as a local custom credential", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity(
+  it("detaching writes the resolved password as a local custom credential", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity(
       {
         siteId: a.id,
         name: "源",
@@ -237,7 +237,7 @@ describe("credential references", () => {
       },
       "shared-secret",
     );
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "引用",
       username: "admin",
@@ -247,12 +247,12 @@ describe("credential references", () => {
       credentialFrom: source.id,
     });
 
-    const detached = service.detachReference(reference.id);
+    const detached = await service.detachReference(reference.id);
     expect(detached.passwordMode).toBe("custom");
     expect(detached.credentialFrom).toBeUndefined();
 
     // Changing the source must no longer affect the detached copy.
-    service.saveIdentity(
+    await service.saveIdentity(
       {
         id: source.id,
         siteId: a.id,
@@ -267,13 +267,13 @@ describe("credential references", () => {
     const resolved = service.snapshot().credentials.identity[detached.id];
     expect(resolved).toBe(true);
     // The detached copy kept the value it had at detach time.
-    expect(service.detachReference(detached.id).passwordMode).toBe("custom");
+    expect((await service.detachReference(detached.id)).passwordMode).toBe("custom");
   });
 
-  it("deleting a source materialises its password into dependents", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity(
+  it("deleting a source materialises its password into dependents", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity(
       {
         siteId: a.id,
         name: "源",
@@ -284,7 +284,7 @@ describe("credential references", () => {
       },
       "shared-secret",
     );
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "引用",
       username: "admin",
@@ -294,7 +294,7 @@ describe("credential references", () => {
       credentialFrom: source.id,
     });
 
-    service.deleteIdentity(source.id);
+    await service.deleteIdentity(source.id);
 
     const survivor = service.snapshot().identities.find((item) => item.id === reference.id);
     expect(survivor).toBeDefined();
@@ -303,10 +303,10 @@ describe("credential references", () => {
     expect(survivor?.credentialFrom).toBeUndefined();
   });
 
-  it("refuses to turn a referenced identity into a reference itself", () => {
-    const a = makeSite("A", "http://a.example.com");
-    const b = makeSite("B", "http://b.example.com");
-    const target = service.saveIdentity(
+  it("refuses to turn a referenced identity into a reference itself", async () => {
+    const a = await makeSite("A", "http://a.example.com");
+    const b = await makeSite("B", "http://b.example.com");
+    const target = await service.saveIdentity(
       {
         siteId: a.id,
         name: "被引用者",
@@ -317,7 +317,7 @@ describe("credential references", () => {
       },
       "p",
     );
-    const other = service.saveIdentity(
+    const other = await service.saveIdentity(
       {
         siteId: a.id,
         name: "另一个",
@@ -328,7 +328,7 @@ describe("credential references", () => {
       },
       "q",
     );
-    service.saveIdentity({
+    await service.saveIdentity({
       siteId: b.id,
       name: "引用",
       username: "u",
@@ -338,7 +338,7 @@ describe("credential references", () => {
       credentialFrom: target.id,
     });
 
-    expect(() =>
+    await expect(
       service.saveIdentity({
         id: target.id,
         siteId: a.id,
@@ -349,13 +349,13 @@ describe("credential references", () => {
         passwordMode: "reference",
         credentialFrom: other.id,
       }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 });
 
-describe("origin change detection", () => {
+describe("origin change detection", async () => {
   it("records the origin once a fill succeeds", async () => {
-    const site = makeSite("本地", "http://localhost:3000");
+    const site = await makeSite("本地", "http://localhost:3000");
     expect(site.lastOrigin).toBeUndefined();
     // acceptSiteOrigin is what the UI calls after the user confirms a change; a
     // first-time record happens on the first successful fill.
@@ -363,10 +363,10 @@ describe("origin change detection", () => {
     expect(service.snapshot().sites[0]?.lastOrigin).toBe("http://localhost:3000");
   });
 
-  it("updates the recorded origin when the address changes and is accepted", () => {
-    const site = makeSite("本地", "http://localhost:3000");
+  it("updates the recorded origin when the address changes and is accepted", async () => {
+    const site = await makeSite("本地", "http://localhost:3000");
     service.acceptSiteOrigin(site.id);
-    service.saveSite({
+    await service.saveSite({
       id: site.id,
       name: "本地",
       baseUrl: "http://staging.example.com",
@@ -380,11 +380,11 @@ describe("origin change detection", () => {
   });
 });
 
-describe("reference consistency", () => {
-  it("propagates edits on the source to every reference", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity({
+describe("reference consistency", async () => {
+  it("propagates edits on the source to every reference", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity({
       siteId: a.id,
       name: "管理员",
       username: "admin",
@@ -392,7 +392,7 @@ describe("reference consistency", () => {
       color: "amber",
       passwordMode: "custom",
     });
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "ignored",
       username: "ignored",
@@ -402,7 +402,7 @@ describe("reference consistency", () => {
       credentialFrom: source.id,
     });
 
-    service.saveIdentity({
+    await service.saveIdentity({
       id: source.id,
       siteId: a.id,
       name: "管理员（改名）",
@@ -422,10 +422,10 @@ describe("reference consistency", () => {
     expect(after?.note).toBe("新备注");
   });
 
-  it("leaves local fields of the reference alone", () => {
-    const a = makeSite("本地", "http://localhost:3000");
-    const b = makeSite("测试", "http://test.example.com");
-    const source = service.saveIdentity({
+  it("leaves local fields of the reference alone", async () => {
+    const a = await makeSite("本地", "http://localhost:3000");
+    const b = await makeSite("测试", "http://test.example.com");
+    const source = await service.saveIdentity({
       siteId: a.id,
       name: "管理员",
       username: "admin",
@@ -434,7 +434,7 @@ describe("reference consistency", () => {
       passwordMode: "custom",
       startPath: "/admin",
     });
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "ignored",
       username: "ignored",
@@ -445,7 +445,7 @@ describe("reference consistency", () => {
       startPath: "/dashboard",
     });
 
-    service.saveIdentity({
+    await service.saveIdentity({
       id: source.id,
       siteId: a.id,
       name: "管理员",
@@ -479,8 +479,8 @@ describe("reference consistency", () => {
  * must never receive a credential — so the test goes through the same resolver
  * the fill path uses.
  */
-function siteDefault(siteId: string): string | undefined {
-  const probe = service.saveIdentity({
+async function siteDefault(siteId: string): Promise<string | undefined> {
+  const probe = await service.saveIdentity({
     siteId,
     name: "探针",
     username: `probe-${siteId}`,
@@ -489,23 +489,23 @@ function siteDefault(siteId: string): string | undefined {
     passwordMode: "inherit",
     startPath: "/",
   });
-  return service.resolvePasswordDetail(probe.id).password;
+  return (await service.resolvePasswordDetail(probe.id)).password;
 }
 
-describe("site default password", () => {
-  it("saves a password together with a new site, in one call", () => {
-    const site = service.saveSite({
+describe("site default password", async () => {
+  it("saves a password together with a new site, in one call", async () => {
+    const site = await service.saveSite({
       name: "带密码",
       baseUrl: "http://localhost:3100",
       loginPath: "/login",
       autoSubmit: false,
       password: "shared-secret",
     });
-    expect(siteDefault(site.id)).toBe("shared-secret");
+    expect(await siteDefault(site.id)).toBe("shared-secret");
   });
 
-  it("leaves the stored password alone when the draft does not carry one", () => {
-    const site = service.saveSite({
+  it("leaves the stored password alone when the draft does not carry one", async () => {
+    const site = await service.saveSite({
       name: "保留",
       baseUrl: "http://localhost:3101",
       loginPath: "/login",
@@ -514,25 +514,25 @@ describe("site default password", () => {
     });
     // The dialog sends no `password` for an untouched field; that must mean
     // "keep it", never "blank it".
-    service.saveSite({
+    await service.saveSite({
       id: site.id,
       name: "改名之后",
       baseUrl: "http://localhost:3101",
       loginPath: "/login",
       autoSubmit: false,
     });
-    expect(siteDefault(site.id)).toBe("shared-secret");
+    expect(await siteDefault(site.id)).toBe("shared-secret");
   });
 
-  it("replaces the password when a new one is given", () => {
-    const site = service.saveSite({
+  it("replaces the password when a new one is given", async () => {
+    const site = await service.saveSite({
       name: "替换",
       baseUrl: "http://localhost:3102",
       loginPath: "/login",
       autoSubmit: false,
       password: "old-secret",
     });
-    service.saveSite({
+    await service.saveSite({
       id: site.id,
       name: "替换",
       baseUrl: "http://localhost:3102",
@@ -540,18 +540,18 @@ describe("site default password", () => {
       autoSubmit: false,
       password: "new-secret",
     });
-    expect(siteDefault(site.id)).toBe("new-secret");
+    expect(await siteDefault(site.id)).toBe("new-secret");
   });
 
-  it("removes the password only when asked explicitly", () => {
-    const site = service.saveSite({
+  it("removes the password only when asked explicitly", async () => {
+    const site = await service.saveSite({
       name: "删除",
       baseUrl: "http://localhost:3103",
       loginPath: "/login",
       autoSubmit: false,
       password: "shared-secret",
     });
-    service.saveSite({
+    await service.saveSite({
       id: site.id,
       name: "删除",
       baseUrl: "http://localhost:3103",
@@ -559,19 +559,19 @@ describe("site default password", () => {
       autoSubmit: false,
       clearSitePassword: true,
     });
-    expect(siteDefault(site.id)).toBeUndefined();
+    expect(await siteDefault(site.id)).toBeUndefined();
   });
 
-  it("makes every inheriting account resolve the site default", () => {
+  it("makes every inheriting account resolve the site default", async () => {
     // The whole point of the feature: one write, every account on the site.
-    const site = service.saveSite({
+    const site = await service.saveSite({
       name: "共享",
       baseUrl: "http://localhost:3104",
       loginPath: "/login",
       autoSubmit: false,
       password: "shared-secret",
     });
-    const identity = service.saveIdentity({
+    const identity = await service.saveIdentity({
       siteId: site.id,
       name: "甲",
       username: "a",
@@ -580,7 +580,7 @@ describe("site default password", () => {
       passwordMode: "inherit",
       startPath: "/",
     });
-    expect(service.resolvePasswordDetail(identity.id)).toMatchObject({
+    expect(await service.resolvePasswordDetail(identity.id)).toMatchObject({
       password: "shared-secret",
       source: "site",
     });

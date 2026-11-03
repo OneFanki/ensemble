@@ -430,7 +430,7 @@ describe("MCP tools", () => {
     expect(created.json.result.isError).toBeUndefined();
     const tag = JSON.parse(created.json.result.content[0].text) as { id: string };
 
-    const site = service.saveSite({
+    const site = await service.saveSite({
       name: "本地站点",
       baseUrl: "http://localhost:3000",
       loginPath: "/login",
@@ -539,7 +539,7 @@ describe("MCP tools", () => {
   });
 });
 
-describe("account bundle tools", () => {
+describe("account bundle tools", async () => {
   /**
    * The bundle tools need file IO, which lives in the main process, so they are
    * injected. Rebuild the server with fakes to observe exactly what the tool
@@ -552,7 +552,7 @@ describe("account bundle tools", () => {
       identityIds: string[];
       passphrase?: string;
       note?: string;
-    }) => { path: string; counts: { sites: number; accounts: number; withPasswords: number } };
+    }) => Promise<{ path: string; counts: { sites: number; accounts: number; withPasswords: number } }>;
     previewAccounts: (path: string) => unknown;
     importAccounts: (path: string, passphrase?: string) => unknown;
   }): Promise<void> {
@@ -571,7 +571,7 @@ describe("account bundle tools", () => {
   it("passes the selection through and reports where the file landed", async () => {
     const seen: unknown[] = [];
     await restartWith({
-      exportAccounts: (input) => {
+      exportAccounts: async (input) => {
         seen.push(input);
         return {
           path: "C:\\temp\\accounts.json",
@@ -607,7 +607,7 @@ describe("account bundle tools", () => {
   it("imports a bundle without echoing its contents", async () => {
     const seen: Array<{ path: string; passphrase?: string }> = [];
     await restartWith({
-      exportAccounts: () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
+      exportAccounts: async () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
       previewAccounts: () => ({}),
       importAccounts: (path, passphrase) => {
         seen.push({ path, ...(passphrase ? { passphrase } : {}) });
@@ -633,7 +633,7 @@ describe("account bundle tools", () => {
   it("previews without needing the passphrase", async () => {
     let previewed = "";
     await restartWith({
-      exportAccounts: () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
+      exportAccounts: async () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
       previewAccounts: (path) => {
         previewed = path;
         return { sites: 1, accounts: 3, withPasswords: true, existingSites: [] };
@@ -647,7 +647,7 @@ describe("account bundle tools", () => {
 
   it("reports a missing path as an invalid call, not a crash", async () => {
     await restartWith({
-      exportAccounts: () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
+      exportAccounts: async () => ({ path: "", counts: { sites: 0, accounts: 0, withPasswords: 0 } }),
       previewAccounts: () => ({}),
       importAccounts: () => ({}),
     });
@@ -656,7 +656,7 @@ describe("account bundle tools", () => {
   });
 });
 
-describe("update_settings", () => {
+describe("update_settings", async () => {
   it("applies a whitelisted setting through the injected applier", async () => {
     // The applier is what carries the main-process side effects (theme, locale,
     // zoom, proxy, broadcast). A tool that wrote settings directly would return
@@ -727,7 +727,7 @@ describe("update_settings", () => {
   });
 });
 
-describe("compose_view", () => {
+describe("compose_view", async () => {
   const notUsed = () => {
     throw new Error("测试替身没有实现这个方法");
   };
@@ -860,29 +860,31 @@ describe("compose_view", () => {
   }
 
   /** A site with three identities, so every test starts from the same shape. */
-  function seedWorkspace() {
-    const site = service.saveSite({
+  async function seedWorkspace() {
+    const site = await service.saveSite({
       name: "本地环境",
       baseUrl: "http://localhost:3000",
       loginPath: "/login",
       autoSubmit: false,
     });
-    const identities = ["管理员", "审核员", "访客"].map((name, index) =>
-      service.saveIdentity({
-        siteId: site.id,
-        name,
-        username: `user-${index}`,
-        role: "member",
-        color: "teal",
-        passwordMode: "inherit",
-        startPath: "/",
-      }),
+    const identities = await Promise.all(
+      ["管理员", "审核员", "访客"].map(async (name, index) =>
+        service.saveIdentity({
+          siteId: site.id,
+          name,
+          username: `user-${index}`,
+          role: "member",
+          color: "teal",
+          passwordMode: "inherit",
+          startPath: "/",
+        }),
+      ),
     );
     return { site, identities };
   }
 
   it("combines two open tabs into a 2x1 view in argument order", async () => {
-    const { site, identities } = seedWorkspace();
+    const { site, identities } = await seedWorkspace();
     // Deliberately not the identity order, and given out of order: the slots
     // must follow `tabIds`, which is the order the caller asked for.
     const [first, second] = identities;
@@ -919,7 +921,7 @@ describe("compose_view", () => {
   });
 
   it("refuses fewer than two tabs and creates nothing", async () => {
-    const { site, identities } = seedWorkspace();
+    const { site, identities } = await seedWorkspace();
     const { surface } = fakeSurface([
       { id: "tab-a", identityId: identities[0]!.id, siteId: site.id },
     ]);
@@ -931,7 +933,7 @@ describe("compose_view", () => {
   });
 
   it("refuses a tab id that is not open and creates nothing", async () => {
-    const { site, identities } = seedWorkspace();
+    const { site, identities } = await seedWorkspace();
     const { surface } = fakeSurface([
       { id: "tab-a", identityId: identities[0]!.id, siteId: site.id },
       { id: "tab-b", identityId: identities[1]!.id, siteId: site.id },
@@ -951,22 +953,24 @@ describe("compose_view", () => {
     // A 2x2 has four cells; five pages cannot fit. Silently dropping the fifth
     // would look like the tab vanished, so it joins the view off stage and the
     // result states that.
-    const site = service.saveSite({
+    const site = await service.saveSite({
       name: "本地环境",
       baseUrl: "http://localhost:3000",
       loginPath: "/login",
       autoSubmit: false,
     });
-    const identities = Array.from({ length: 5 }, (_, index) =>
-      service.saveIdentity({
-        siteId: site.id,
-        name: `账号 ${index}`,
-        username: `user-${index}`,
-        role: "member",
-        color: "teal",
-        passwordMode: "inherit",
-        startPath: "/",
-      }),
+    const identities = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) =>
+        service.saveIdentity({
+          siteId: site.id,
+          name: `账号 ${index}`,
+          username: `user-${index}`,
+          role: "member",
+          color: "teal",
+          passwordMode: "inherit",
+          startPath: "/",
+        }),
+      ),
     );
     const tabIds = identities.map((_, index) => `tab-${index}`);
     const { surface, views } = fakeSurface(
@@ -1005,7 +1009,7 @@ describe("compose_view", () => {
     // The second pin fails: the first page is already in the new container and
     // the definition is already saved. What must not survive is a definition
     // that disagrees with the screen, or pages stranded in a half-built view.
-    const { site, identities } = seedWorkspace();
+    const { site, identities } = await seedWorkspace();
     const { surface, views, moves } = fakeSurface(
       [
         { id: "tab-a", identityId: identities[0]!.id, siteId: site.id },
@@ -1033,7 +1037,7 @@ describe("compose_view", () => {
     // A page that already sat in another view must return to that view *and*
     // that cell. Re-joining alone would land it in the first free cell, which is
     // a silent re-arrangement of a screen the person had set up.
-    const { site, identities } = seedWorkspace();
+    const { site, identities } = await seedWorkspace();
     const { surface, views, moves } = fakeSurface(
       [
         { id: "tab-a", identityId: identities[0]!.id, siteId: site.id, viewId: "container-old" },

@@ -236,9 +236,9 @@ describe("bookmark storage sanitising", () => {
 });
 
 describe("bookmarks in a workspace export", () => {
-  it("travels with the workspace and counts itself", () => {
+  it("travels with the workspace and counts itself", async () => {
     service.saveBookmark({ name: "带上我", url: "https://carry.example.com" });
-    const { file, counts } = service.exportWorkspace();
+    const { file, counts } = await service.exportWorkspace();
     expect(file.bookmarks).toHaveLength(1);
     expect(counts.bookmarks).toBe(1);
     const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
@@ -247,14 +247,14 @@ describe("bookmarks in a workspace export", () => {
 
   it("imports into a workspace with no sites at all", async () => {
     service.saveBookmark({ name: "不带站点", url: "https://lonely.example.com" });
-    const file = JSON.parse(JSON.stringify(service.exportWorkspace().file));
+    const file = JSON.parse(JSON.stringify((await service.exportWorkspace()).file));
 
     rmSync(dir, { recursive: true, force: true });
     dir = mkdtempSync(join(tmpdir(), "ensemble-bookmarks-target-"));
     service = makeService();
     await service.initialize();
 
-    const result = service.importWorkspace(parseExportFile(file));
+    const result = await service.importWorkspace(parseExportFile(file));
     expect(result.added).toBe(1);
     expect(result.skipped).toBe(0);
     expect(service.snapshot().bookmarks.map((item) => item.name)).toEqual(["不带站点"]);
@@ -294,7 +294,7 @@ describe("bookmarks in a workspace export", () => {
         },
       ],
     };
-    service.importWorkspace(parseExportFile(file));
+    await service.importWorkspace(parseExportFile(file));
     expect(service.snapshot().bookmarks.map((item) => item.name)).toEqual([
       "本地",
       "外来一",
@@ -330,14 +330,14 @@ describe("bookmarks in a workspace export", () => {
   it("carries the folder tree and keeps bookmarks filed after import", async () => {
     const folder = service.saveBookmarkFolder({ name: "工作" });
     service.saveBookmark({ name: "带上我", url: "https://carry.example.com", folderId: folder.id });
-    const file = JSON.parse(JSON.stringify(service.exportWorkspace().file));
+    const file = JSON.parse(JSON.stringify((await service.exportWorkspace()).file));
 
     rmSync(dir, { recursive: true, force: true });
     dir = mkdtempSync(join(tmpdir(), "ensemble-bookmarks-tree-"));
     service = makeService();
     await service.initialize();
 
-    service.importWorkspace(parseExportFile(file));
+    await service.importWorkspace(parseExportFile(file));
     const importedFolder = service.snapshot().bookmarkFolders[0];
     expect(importedFolder?.name).toBe("工作");
     expect(service.snapshot().bookmarks[0]?.folderId).toBe(importedFolder?.id);

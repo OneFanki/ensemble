@@ -32,8 +32,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 150 });
 });
 
-function site(autoSubmit?: boolean) {
-  return service.saveSite({
+async function site(autoSubmit?: boolean) {
+  return await service.saveSite({
     name: "提交检查",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/login",
@@ -46,26 +46,26 @@ describe("auto-submit resolution", () => {
     expect(service.settingsSnapshot().autoSubmitLogin).toBe(true);
   });
 
-  it("follows the global setting when the site has no opinion", () => {
-    const created = site(undefined);
+  it("follows the global setting when the site has no opinion", async () => {
+    const created = await site(undefined);
     expect(service.effectiveAutoSubmit(created)).toBe(true);
     service.saveSettings({ autoSubmitLogin: false });
     expect(service.effectiveAutoSubmit(created)).toBe(false);
   });
 
-  it("lets a site opt out even while the global default is on", () => {
-    const created = site(false);
+  it("lets a site opt out even while the global default is on", async () => {
+    const created = await site(false);
     expect(service.effectiveAutoSubmit(created)).toBe(false);
   });
 
-  it("lets a site opt in even while the global default is off", () => {
+  it("lets a site opt in even while the global default is off", async () => {
     service.saveSettings({ autoSubmitLogin: false });
-    const created = site(true);
+    const created = await site(true);
     expect(service.effectiveAutoSubmit(created)).toBe(true);
   });
 
-  it("does not store an opinion when the dialog leaves it on the default", () => {
-    const created = site(undefined);
+  it("does not store an opinion when the dialog leaves it on the default", async () => {
+    const created = await site(undefined);
     // The stored record must not carry a copy of the global answer: a `false`
     // sitting in a site would survive a later change to the global setting and
     // look like a deliberate choice nobody made.

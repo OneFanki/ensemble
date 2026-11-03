@@ -16,8 +16,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const plainBox: SecretBox = {
   available: false,
   backend: "plain",
-  encrypt: (plain) => `plain:${Buffer.from(plain).toString("base64")}`,
-  decrypt: (payload) => Buffer.from(payload.slice(6), "base64").toString("utf8"),
+  encrypt: async (plain) => `plain:${Buffer.from(plain).toString("base64")}`,
+  decrypt: async (payload) => Buffer.from(payload.slice(6), "base64").toString("utf8"),
 };
 
 const created: string[] = [];

@@ -312,7 +312,7 @@ describe("gate at the tool boundary", () => {
   });
 
   it("refuses a flow aimed at a daily page", async () => {
-    const site = service.saveSite({
+    const site = await service.saveSite({
       name: "站",
       baseUrl: "https://bank.example.com",
       loginPath: "/login",

@@ -104,14 +104,14 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const engine = await chromiumEngine(workspace);
     workspace.saveSettings({ defaultEngineId: engine.id });
 
-    const site = workspace.saveSite({
+    const site = await workspace.saveSite({
       name: "headless",
       baseUrl,
       loginPath: "/login",
       authCheckPath: "/api/session",
       autoSubmit: false,
     });
-    const identity = workspace.saveIdentity({
+    const identity = await workspace.saveIdentity({
       siteId: site.id,
       name: "后台检测",
       username: "worker",
@@ -154,14 +154,14 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const engine = await chromiumEngine(workspace);
     workspace.saveSettings({ defaultEngineId: engine.id });
 
-    const site = workspace.saveSite({
+    const site = await workspace.saveSite({
       name: "fresh",
       baseUrl,
       loginPath: "/login",
       authCheckPath: "/api/session",
       autoSubmit: false,
     });
-    const identity = workspace.saveIdentity({
+    const identity = await workspace.saveIdentity({
       siteId: site.id,
       name: "从未登录",
       username: "nobody",
@@ -185,7 +185,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
     const engine = await chromiumEngine(workspace);
     workspace.saveSettings({ defaultEngineId: engine.id });
 
-    const site = workspace.saveSite({
+    const site = await workspace.saveSite({
       name: "batch",
       baseUrl,
       loginPath: "/login",
@@ -193,7 +193,7 @@ describe.skipIf(!enabled)("headless session check (real browser)", () => {
       autoSubmit: false,
     });
     for (const name of ["a", "b", "c"]) {
-      workspace.saveIdentity({
+      await workspace.saveIdentity({
         siteId: site.id,
         name,
         username: name,

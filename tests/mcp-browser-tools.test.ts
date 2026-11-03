@@ -238,7 +238,7 @@ async function startServer(embedded?: EmbeddedSurface): Promise<void> {
 }
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "ensemble-browser-mcp-"));
+  dir = mkdtempSync(join(tmpdir(), "ensemble-browser-tools-"));
   calls = [];
   service = new WorkspaceService({
     userDataDir: dir,
@@ -306,7 +306,7 @@ describe("browser tools are advertised", () => {
 describe("browser tool calls", () => {
   it("opens a tab bound to an identity and returns its id", async () => {
     await startServer(fakeSurface());
-    const identity = service.saveIdentity({
+    const identity = await service.saveIdentity({
       siteId: (
         await service.saveSite({
           name: "本地开发环境",

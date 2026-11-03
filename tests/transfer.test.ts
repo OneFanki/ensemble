@@ -9,7 +9,7 @@ import { EXPORT_FORMAT, parseExportFile } from "@shared/transfer";
 let dir: string;
 let service: WorkspaceService;
 
-function makeService(): WorkspaceService {
+async function makeService(): Promise<WorkspaceService> {
   return new WorkspaceService({
     userDataDir: dir,
     profileRoot: join(dir, "profiles"),
@@ -21,7 +21,7 @@ function makeService(): WorkspaceService {
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "ensemble-transfer-"));
-  service = makeService();
+  service = await makeService();
   await service.initialize();
 });
 
@@ -29,15 +29,15 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function seed() {
-  const site = service.saveSite({
+async function seed() {
+  const site = await service.saveSite({
     name: "订单服务-测试环境",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
     autoSubmit: true,
   });
-  service.setPassword({ kind: "site", id: site.id }, "env-secret");
-  const identity = service.saveIdentity({
+  await service.setPassword({ kind: "site", id: site.id }, "env-secret");
+  const identity = await service.saveIdentity({
     siteId: site.id,
     name: "管理员 · 主账号",
     username: "admin",
@@ -65,10 +65,10 @@ function seed() {
   return { site, identity, view };
 }
 
-describe("workspace export", () => {
-  it("exports workspace data without secrets by default", () => {
-    const { identity } = seed();
-    const { file, counts, secretsIncluded } = service.exportWorkspace();
+describe("workspace export", async () => {
+  it("exports workspace data without secrets by default", async () => {
+    const { identity } = await seed();
+    const { file, counts, secretsIncluded } = await service.exportWorkspace();
     expect(file.format).toBe(EXPORT_FORMAT);
     expect(secretsIncluded).toBe(false);
     expect(file.secrets).toBeUndefined();
@@ -85,24 +85,24 @@ describe("workspace export", () => {
     expect(file.identities[0]?.id).toBe(identity.id);
   });
 
-  it("seals secrets with the supplied passphrase", () => {
-    seed();
-    const { file, secretsIncluded } = service.exportWorkspace("correct horse battery");
+  it("seals secrets with the supplied passphrase", async () => {
+    await seed();
+    const { file, secretsIncluded } = await service.exportWorkspace("correct horse battery");
     expect(secretsIncluded).toBe(true);
     expect(file.secrets?.payload.startsWith("gcm2:")).toBe(true);
     // The plaintext password must not appear anywhere in the exported document.
     expect(JSON.stringify(file)).not.toContain("env-secret");
   });
 
-  it("produces a file that parses back through the public validator", () => {
-    seed();
-    const { file } = service.exportWorkspace("correct horse battery");
+  it("produces a file that parses back through the public validator", async () => {
+    await seed();
+    const { file } = await service.exportWorkspace("correct horse battery");
     const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
     expect(parsed.identities).toHaveLength(1);
     expect(parsed.views[0]?.slotAssignments).toBeTruthy();
   });
 
-  it("moves a legacy export's site-level login fields onto its accounts", () => {
+  it("moves a legacy export's site-level login fields onto its accounts", async () => {
     // Exports written before sites stopped owning login fields put them on the
     // site. Reading one must not silently drop the tenant name: it is copied onto
     // every account of that site, and the site itself comes back clean.
@@ -170,17 +170,17 @@ describe("workspace export", () => {
   });
 });
 
-describe("workspace import", () => {
-  it("merges a file from another machine into an empty workspace", () => {
-    seed();
-    const { file } = service.exportWorkspace("correct horse battery");
+describe("workspace import", async () => {
+  it("merges a file from another machine into an empty workspace", async () => {
+    await seed();
+    const { file } = await service.exportWorkspace("correct horse battery");
 
     rmSync(dir, { recursive: true, force: true });
     dir = mkdtempSync(join(tmpdir(), "ensemble-transfer-target-"));
-    service = makeService();
+    service = await makeService();
     void service.initialize();
 
-    const result = service.importWorkspace(
+    const result = await service.importWorkspace(
       parseExportFile(JSON.parse(JSON.stringify(file))),
       "correct horse battery",
     );
@@ -193,50 +193,50 @@ describe("workspace import", () => {
     expect(snapshot.layoutPresets).toHaveLength(1);
   });
 
-  it("rejects a wrong passphrase instead of importing partial data", () => {
-    seed();
-    const { file } = service.exportWorkspace("correct horse battery");
+  it("rejects a wrong passphrase instead of importing partial data", async () => {
+    await seed();
+    const { file } = await service.exportWorkspace("correct horse battery");
     rmSync(dir, { recursive: true, force: true });
     dir = mkdtempSync(join(tmpdir(), "ensemble-transfer-wrong-"));
-    service = makeService();
+    service = await makeService();
     void service.initialize();
-    expect(() =>
+    await expect(
       service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(file))), "wrong"),
-    ).toThrow(/口令/);
+    ).rejects.toThrow(/口令/);
     expect(service.snapshot().sites).toHaveLength(0);
   });
 
-  it("can be retried with the right passphrase after a wrong one", () => {
-    seed();
-    const { file } = service.exportWorkspace("correct horse battery");
+  it("can be retried with the right passphrase after a wrong one", async () => {
+    await seed();
+    const { file } = await service.exportWorkspace("correct horse battery");
     rmSync(dir, { recursive: true, force: true });
     dir = mkdtempSync(join(tmpdir(), "ensemble-transfer-retry-"));
-    service = makeService();
+    service = await makeService();
     void service.initialize();
     const parsed = parseExportFile(JSON.parse(JSON.stringify(file)));
 
     // The caller keeps the parsed file between attempts, so a failed merge must
     // leave no state behind that blocks the retry.
-    expect(() => service.importWorkspace(parsed, "wrong")).toThrow(/口令/);
-    const result = service.importWorkspace(parsed, "correct horse battery");
+    await expect(service.importWorkspace(parsed, "wrong")).rejects.toThrow(/口令/);
+    const result = await service.importWorkspace(parsed, "correct horse battery");
     expect(result.importedSecrets).toBe(1);
     expect(service.snapshot().identities).toHaveLength(1);
   });
 
-  it("updates entries with the same id instead of duplicating them", () => {
-    const { site } = seed();
-    const { file } = service.exportWorkspace();
+  it("updates entries with the same id instead of duplicating them", async () => {
+    const { site } = await seed();
+    const { file } = await service.exportWorkspace();
     file.sites[0] = { ...file.sites[0]!, name: "改名后的环境" };
-    const result = service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(file))));
+    const result = await service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(file))));
     expect(result.updated).toBeGreaterThan(0);
     expect(service.snapshot().sites).toHaveLength(1);
     expect(service.snapshot().sites[0]?.name).toBe("改名后的环境");
     expect(service.snapshot().sites[0]?.id).toBe(site.id);
   });
 
-  it("skips identities whose site is missing from the file", () => {
-    seed();
-    const { file } = service.exportWorkspace();
+  it("skips identities whose site is missing from the file", async () => {
+    await seed();
+    const { file } = await service.exportWorkspace();
     const identity = file.identities[0]!;
     const orphan = {
       ...file,
@@ -244,7 +244,7 @@ describe("workspace import", () => {
       views: [],
       identities: [{ ...identity, id: "orphan", siteId: "missing-env" }],
     };
-    const result = service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(orphan))));
+    const result = await service.importWorkspace(parseExportFile(JSON.parse(JSON.stringify(orphan))));
     expect(result.skipped).toBe(1);
     expect(service.snapshot().identities.find((item) => item.id === "orphan")).toBeUndefined();
   });

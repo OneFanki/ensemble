@@ -225,7 +225,7 @@ export class WorkspaceService {
   async initialize(): Promise<void> {
     // Older builds could store `plain:` payloads when no keyring existed. Rewrite
     // them with OS protection before anything can read them.
-    this.vault.migrateLegacyPlaintext();
+    await this.vault.migrateLegacyPlaintext();
     // Anything recorded as running from a previous session is stale: the app owns
     // browser lifetimes, so no instance can survive a restart. A non-empty list
     // means the last shutdown was not graceful, so browsers may still be alive.
@@ -377,7 +377,7 @@ export class WorkspaceService {
    * common accident, and treating it as "delete the saved password" would lose
    * a secret the user never asked to lose.
    */
-  saveSite(draft: SiteDraft): Site {
+  async saveSite(draft: SiteDraft): Promise<Site> {
     const now = new Date().toISOString();
     const tagIds = this.resolveTagIds(draft.tagIds);
     const password = typeof draft.password === "string" ? draft.password : "";
@@ -421,7 +421,7 @@ export class WorkspaceService {
     }
     // Only what the user actually did. An empty input and an unfelt checkbox
     // both mean "leave the stored password alone".
-    if (password) this.vault.set({ kind: "site", id: site.id }, password);
+    if (password) await this.vault.set({ kind: "site", id: site.id }, password);
     else if (draft.clearSitePassword) this.vault.clear({ kind: "site", id: site.id });
 
     this.persist();
@@ -569,7 +569,7 @@ export class WorkspaceService {
 
   // ---------- identities ----------
 
-  saveIdentity(draft: IdentityDraft, password?: string): Identity {
+  async saveIdentity(draft: IdentityDraft, password?: string): Promise<Identity> {
     const site = this.data.sites.find((item) => item.id === draft.siteId);
     if (!site) throw new Error(t("error.siteMissing"));
     const now = new Date().toISOString();
@@ -633,7 +633,7 @@ export class WorkspaceService {
     }
 
     if (password) {
-      this.vault.set({ kind: "identity", id: identity.id }, password);
+      await this.vault.set({ kind: "identity", id: identity.id }, password);
     }
     if (draft.passwordMode === "inherit") {
       this.vault.clear({ kind: "identity", id: identity.id });
@@ -713,13 +713,13 @@ export class WorkspaceService {
    * detaching can never fall back to the site default and silently change which
    * password is used. Synced display fields keep their current values.
    */
-  detachReference(id: string): Identity {
+  async detachReference(id: string): Promise<Identity> {
     const identity = this.data.identities.find((item) => item.id === id);
     if (!identity) throw new Error(t("error.identityMissing"));
     if (identity.passwordMode !== "reference") return identity;
-    const resolved = resolvePassword(this.vault, identity, identity.siteId, this.data.identities);
+    const resolved = await resolvePassword(this.vault, identity, identity.siteId, this.data.identities);
     if (!resolved.password) throw new Error(t("error.referenceMissing"));
-    this.vault.set({ kind: "identity", id: identity.id }, resolved.password);
+    await this.vault.set({ kind: "identity", id: identity.id }, resolved.password);
     identity.passwordMode = "custom";
     identity.credentialFrom = undefined;
     identity.updatedAt = new Date().toISOString();
@@ -727,7 +727,7 @@ export class WorkspaceService {
     return identity;
   }
 
-  deleteIdentity(id: string): void {
+  async deleteIdentity(id: string): Promise<void> {
     for (const instance of [...this.liveInstances.values()]) {
       if (instance.identityId === id) void this.stopInstance(instance.id);
     }
@@ -735,7 +735,7 @@ export class WorkspaceService {
     // no visible reason why. Materialise the resolved password into each of them
     // before the source disappears.
     const dependents = this.data.identities.filter((item) => item.credentialFrom === id);
-    const resolved = resolvePassword(
+    const resolved = await resolvePassword(
       this.vault,
       { id, passwordMode: "custom" },
       "",
@@ -743,7 +743,7 @@ export class WorkspaceService {
     );
     for (const dependent of dependents) {
       if (resolved.password) {
-        this.vault.set({ kind: "identity", id: dependent.id }, resolved.password);
+        await this.vault.set({ kind: "identity", id: dependent.id }, resolved.password);
         dependent.passwordMode = "custom";
       } else {
         dependent.passwordMode = "inherit";
@@ -1485,11 +1485,11 @@ export class WorkspaceService {
    * Secrets are only included when a passphrase is supplied, sealed with the same
    * scrypt + AES-256-GCM construction as the vault.
    */
-  exportWorkspace(passphrase?: string): {
+  async exportWorkspace(passphrase?: string): Promise<{
     file: WorkspaceExportFile;
     counts: ReturnType<typeof exportCounts>;
     secretsIncluded: boolean;
-  } {
+  }> {
     const file: WorkspaceExportFile = {
       format: EXPORT_FORMAT,
       version: EXPORT_VERSION,
@@ -1525,11 +1525,11 @@ export class WorkspaceService {
         identity: {} as Record<string, string>,
       };
       for (const site of this.data.sites) {
-        const password = this.vault.get({ kind: "site", id: site.id });
+        const password = await this.vault.get({ kind: "site", id: site.id });
         if (password) secrets.site[site.id] = password;
       }
       for (const identity of this.data.identities) {
-        const password = this.vault.get({ kind: "identity", id: identity.id });
+        const password = await this.vault.get({ kind: "identity", id: identity.id });
         if (password) secrets.identity[identity.id] = password;
       }
       const kdf = createKdfParams();
@@ -1543,7 +1543,7 @@ export class WorkspaceService {
    * Merges a validated export into the current workspace. Entries whose
    * site is missing are skipped rather than attached to the wrong scope.
    */
-  importWorkspace(file: WorkspaceExportFile, passphrase?: string): ImportResult {
+  async importWorkspace(file: WorkspaceExportFile, passphrase?: string): Promise<ImportResult> {
     let secrets: { site: Record<string, string>; identity: Record<string, string> } | undefined;
     if (file.secrets) {
       if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
@@ -1710,12 +1710,12 @@ export class WorkspaceService {
     if (secrets) {
       for (const [id, password] of Object.entries(secrets.site)) {
         if (!siteIds.has(id)) continue;
-        this.vault.set({ kind: "site", id }, password);
+        await this.vault.set({ kind: "site", id }, password);
         importedSecrets += 1;
       }
       for (const [id, password] of Object.entries(secrets.identity)) {
         if (!identityIds.has(id)) continue;
-        this.vault.set({ kind: "identity", id }, password);
+        await this.vault.set({ kind: "identity", id }, password);
         importedSecrets += 1;
       }
     }
@@ -1740,12 +1740,12 @@ export class WorkspaceService {
    * leaves ids out of the matching path so it can land in someone else's
    * workspace, where the ids differ.
    */
-  exportAccounts(input: {
+  async exportAccounts(input: {
     siteIds: string[];
     identityIds: string[];
     passphrase?: string;
     note?: string;
-  }): { file: AccountBundleFile; counts: BundleCounts } {
+  }): Promise<{ file: AccountBundleFile; counts: BundleCounts }> {
     const wantedSites = new Set(input.siteIds);
     const wantedIdentities = new Set(input.identityIds);
     // An account selection implies its site, otherwise the account would have
@@ -1770,13 +1770,13 @@ export class WorkspaceService {
       if (this.vault.locked) throw new Error(t("vault.locked"));
       passwords = { site: {}, identity: {} };
       for (const site of sites) {
-        const password = this.vault.get({ kind: "site", id: site.id });
+        const password = await this.vault.get({ kind: "site", id: site.id });
         if (password) passwords.site[site.baseUrl] = password;
       }
       for (const identity of identities) {
         const site = sites.find((item) => item.id === identity.siteId);
         if (!site) continue;
-        const resolved = resolvePassword(
+        const resolved = await resolvePassword(
           this.vault,
           identity,
           identity.siteId,
@@ -1845,7 +1845,7 @@ export class WorkspaceService {
    * site: the sender's ids mean nothing here, and matching on them would either
    * overwrite an unrelated local account or create a duplicate of one.
    */
-  importAccountBundle(file: AccountBundleFile, passphrase?: string): BundleImportResult {
+  async importAccountBundle(file: AccountBundleFile, passphrase?: string): Promise<BundleImportResult> {
     let secrets: BundleSecrets | undefined;
     if (file.secrets) {
       if (!passphrase) throw new Error(t("error.importNeedsPassphrase"));
@@ -1880,7 +1880,7 @@ export class WorkspaceService {
       const targetSite = site;
       const sitePassword = secrets?.site[bundled.baseUrl];
       if (bundled.hasPassword && sitePassword) {
-        this.vault.set({ kind: "site", id: targetSite.id }, sitePassword);
+        await this.vault.set({ kind: "site", id: targetSite.id }, sitePassword);
         passwordsWritten += 1;
       }
 
@@ -1937,7 +1937,7 @@ export class WorkspaceService {
 
         const password = secrets?.identity[secretKey];
         if (account.hasPassword && password) {
-          this.vault.set({ kind: "identity", id: identity.id }, password);
+          await this.vault.set({ kind: "identity", id: identity.id }, password);
           passwordsWritten += 1;
         } else if (account.hasPassword) {
           // The bundle says it has a password but none decrypted: say so instead
@@ -1969,9 +1969,9 @@ export class WorkspaceService {
 
   // ---------- credentials ----------
 
-  setPassword(owner: PasswordOwner, password: string): void {
+  async setPassword(owner: PasswordOwner, password: string): Promise<void> {
     this.guardVaultUnlocked();
-    this.vault.set(owner, password);
+    await this.vault.set(owner, password);
     this.persist();
   }
 
@@ -1980,7 +1980,7 @@ export class WorkspaceService {
     this.persist();
   }
 
-  copyPassword(owner: PasswordOwner): string | undefined {
+  async copyPassword(owner: PasswordOwner): Promise<string | undefined> {
     this.guardVaultUnlocked();
     return this.vault.get(owner);
   }
@@ -1991,11 +1991,11 @@ export class WorkspaceService {
    * Kept in the main process: the embedded login resolver needs the resolved value
    * but the renderer must never see it.
    */
-  resolvedPassword(identityId: string): string | undefined {
+  async resolvedPassword(identityId: string): Promise<string | undefined> {
     this.guardVaultUnlocked();
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) return undefined;
-    return resolvePassword(this.vault, identity, identity.siteId, this.data.identities).password;
+    return (await resolvePassword(this.vault, identity, identity.siteId, this.data.identities)).password;
   }
 
   /**
@@ -2004,11 +2004,11 @@ export class WorkspaceService {
    * Used by the fill path: "no password" alone sends the user to the wrong
    * dialog when the account merely inherits a site default that was never set.
    */
-  resolvePasswordDetail(identityId: string): {
+  async resolvePasswordDetail(identityId: string): Promise<{
     password?: string;
     source: "identity" | "site" | "missing";
     missing?: MissingCredentialReason;
-  } {
+  }> {
     this.guardVaultUnlocked();
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) return { source: "missing", missing: "identity-empty" };
@@ -2026,21 +2026,21 @@ export class WorkspaceService {
     this.emit();
   }
 
-  setMasterPassword(password: string): void {
+  async setMasterPassword(password: string): Promise<void> {
     if (password.length < 8) throw new Error(t("vault.masterTooShort"));
     if (!this.vault.secure) throw new Error(t("vault.unavailable"));
-    this.vault.setMasterPassword(password);
+    await this.vault.setMasterPassword(password);
     this.emit();
   }
 
-  removeMasterPassword(): void {
-    this.vault.removeMasterPassword();
+  async removeMasterPassword(): Promise<void> {
+    await this.vault.removeMasterPassword();
     this.emit();
   }
 
-  changeMasterPassword(current: string, next: string): boolean {
+  async changeMasterPassword(current: string, next: string): Promise<boolean> {
     if (next.length < 8) throw new Error(t("vault.masterTooShort"));
-    const changed = this.vault.changeMasterPassword(current, next);
+    const changed = await this.vault.changeMasterPassword(current, next);
     this.emit();
     return changed;
   }
@@ -3104,7 +3104,7 @@ export class WorkspaceService {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
     const site = this.requireSite(identity);
-    const resolved = resolvePassword(this.vault, identity, site.id, this.data.identities);
+    const resolved = await resolvePassword(this.vault, identity, site.id, this.data.identities);
     if (!resolved.password) throw new Error(t("error.noPassword"));
 
     let instance = this.findInstance(identityId);
@@ -3177,7 +3177,7 @@ export class WorkspaceService {
     };
     const entry = cdpRegistry.get(instance.id);
     if (!entry) return { ...base, skipped: "external" };
-    const resolution = resolvePassword(this.vault, identity, site.id, this.data.identities);
+    const resolution = await resolvePassword(this.vault, identity, site.id, this.data.identities);
     if (!resolution.password) {
       return {
         ...base,
@@ -3227,7 +3227,7 @@ export class WorkspaceService {
     site: Site,
     page: Parameters<typeof evaluate>[0],
   ): Promise<FillOutcome> {
-    const resolved = resolvePassword(this.vault, identity, site.id, this.data.identities);
+    const resolved = await resolvePassword(this.vault, identity, site.id, this.data.identities);
     if (!resolved.password) {
       throw new Error(t("error.noPassword"));
     }
@@ -3362,6 +3362,12 @@ export class WorkspaceService {
    * offer a duplicate. An identity saved without a password does not count —
    * that is exactly the case worth capturing.
    */
+  /**
+   * Presence-only, deliberately: this answers "would saving this login create a
+   * duplicate" from a synchronous callback, and `vault.has` needs no key. A
+   * payload that fails to decrypt still counts as saved here — a broken secret
+   * needs the vault UI, not a re-save prompt.
+   */
   hasSavedLogin(siteId: string, username: string): boolean {
     const needle = username.trim().toLowerCase();
     if (!needle) return false;
@@ -3370,7 +3376,18 @@ export class WorkspaceService {
     );
     if (!identity) return false;
     try {
-      return Boolean(resolvePassword(this.vault, identity, siteId, this.data.identities).password);
+      if (identity.passwordMode === "custom") {
+        return this.vault.has({ kind: "identity", id: identity.id });
+      }
+      if (identity.passwordMode === "reference") {
+        const source = identity.credentialFrom
+          ? this.data.identities.find((item) => item.id === identity.credentialFrom)
+          : undefined;
+        return Boolean(
+          source && source.passwordMode !== "reference" && this.vault.has({ kind: "identity", id: source.id }),
+        );
+      }
+      return siteId ? this.vault.has({ kind: "site", id: siteId }) : false;
     } catch {
       // A locked vault cannot tell; prompting is the safer side of that doubt.
       return false;

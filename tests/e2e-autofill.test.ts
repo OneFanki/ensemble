@@ -104,15 +104,15 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     service = workspace;
     workspace.saveSettings({ defaultEngineId: engine.id });
 
-    const site = workspace.saveSite({
+    const site = await workspace.saveSite({
       name: "e2e",
       baseUrl,
       loginPath: "/login",
       autoSubmit: true,
     });
-    workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
+    await workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
 
-    const identity = workspace.saveIdentity({
+    const identity = await workspace.saveIdentity({
       siteId: site.id,
       name: "admin",
       username: "admin",
@@ -166,14 +166,14 @@ describe.skipIf(!enabled)("auto fill on launch (real browser)", () => {
     service = workspace;
     workspace.saveSettings({ defaultEngineId: engine.id });
 
-    const site = workspace.saveSite({
+    const site = await workspace.saveSite({
       name: "sso",
       baseUrl: entryUrl,
       loginPath: "/login",
       autoSubmit: false,
     });
-    workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
-    const identity = workspace.saveIdentity({
+    await workspace.setPassword({ kind: "site", id: site.id }, "s3cret!");
+    const identity = await workspace.saveIdentity({
       siteId: site.id,
       name: "leak",
       username: "admin",

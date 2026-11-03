@@ -38,13 +38,13 @@ async function makeService() {
   // says so once instead of pinning it onto a site.
   service.saveSettings({ defaultEngineId: engine.id });
 
-  const site = service.saveSite({
+  const site = await service.saveSite({
     name: "exit",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/",
     autoSubmit: false,
   });
-  const identity = service.saveIdentity({
+  const identity = await service.saveIdentity({
     siteId: site.id,
     name: "closer",
     username: "closer@example.test",
@@ -167,7 +167,7 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
     const { service, identity } = await makeService();
     const siteId = service.snapshot().sites[0]?.id;
     if (!siteId) throw new Error("缺少环境");
-    const other = service.saveIdentity({
+    const other = await service.saveIdentity({
       siteId,
       name: "other",
       username: "other@example.test",
@@ -207,7 +207,7 @@ describe.skipIf(!enabled)("browser closed outside the app", () => {
     const { service, identity } = await makeService();
     const siteId = service.snapshot().sites[0]?.id;
     if (!siteId) throw new Error("缺少环境");
-    const second = service.saveIdentity({
+    const second = await service.saveIdentity({
       siteId,
       name: "second",
       username: "second@example.test",

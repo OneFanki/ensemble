@@ -9,9 +9,17 @@ import {
   type KdfParams,
 } from "./crypto";
 
+/**
+ * The one shape a key provider must have.
+ *
+ * Async since Electron 45: the OS-keychain adapter is `safeStorage`, whose
+ * synchronous methods are deprecated there (removed in 46), so encrypting or
+ * decrypting is a promise even when the implementation is pure `node:crypto`.
+ * Callers throughout the service layer are `async` accordingly.
+ */
 export interface SecretBox {
-  encrypt(plain: string): string;
-  decrypt(payload: string): string;
+  encrypt(plain: string): Promise<string>;
+  decrypt(payload: string): Promise<string>;
   readonly backend: string;
   readonly available: boolean;
   readonly kind?: "os" | "master";
@@ -22,13 +30,13 @@ export class MemorySecretBox implements SecretBox {
   readonly available = true;
   readonly kind = "os" as const;
 
-  encrypt(plain: string): string {
-    return `mem:${Buffer.from(plain, "utf8").toString("base64")}`;
+  encrypt(plain: string): Promise<string> {
+    return Promise.resolve(`mem:${Buffer.from(plain, "utf8").toString("base64")}`);
   }
 
-  decrypt(payload: string): string {
-    if (!payload.startsWith("mem:")) throw new Error("Unsupported payload");
-    return Buffer.from(payload.slice(4), "base64").toString("utf8");
+  decrypt(payload: string): Promise<string> {
+    if (!payload.startsWith("mem:")) return Promise.reject(new Error("Unsupported payload"));
+    return Promise.resolve(Buffer.from(payload.slice(4), "base64").toString("utf8"));
   }
 }
 
@@ -80,12 +88,12 @@ export class MasterPasswordBox implements SecretBox {
     return new MasterPasswordBox(deriveKey(password, params));
   }
 
-  encrypt(plain: string): string {
-    return seal(this.key, plain);
+  encrypt(plain: string): Promise<string> {
+    return Promise.resolve(seal(this.key, plain));
   }
 
-  decrypt(payload: string): string {
-    return open(this.key, payload);
+  decrypt(payload: string): Promise<string> {
+    return Promise.resolve(open(this.key, payload));
   }
 }
 
@@ -158,22 +166,22 @@ export class CredentialVault {
     return Boolean(this.bucket(owner)[owner.id]);
   }
 
-  set(owner: PasswordOwner, password: string): void {
+  async set(owner: PasswordOwner, password: string): Promise<void> {
     if (!password) {
       this.clear(owner);
       return;
     }
     const box = this.activeBox();
-    this.bucket(owner)[owner.id] = box.encrypt(password);
+    this.bucket(owner)[owner.id] = await box.encrypt(password);
     this.persist();
   }
 
-  get(owner: PasswordOwner): string | undefined {
+  async get(owner: PasswordOwner): Promise<string | undefined> {
     const payload = this.bucket(owner)[owner.id];
     if (!payload) return undefined;
     const box = this.activeBox();
     try {
-      return box.decrypt(payload);
+      return await box.decrypt(payload);
     } catch {
       return undefined;
     }
@@ -207,20 +215,20 @@ export class CredentialVault {
    * decrypted with the current key and re-encrypted with the new one, so the
    * operation is atomic: either the whole vault moves or nothing changes.
    */
-  setMasterPassword(password: string): void {
+  async setMasterPassword(password: string): Promise<void> {
     if (password.length < MIN_MASTER_LENGTH) {
       throw new Error(`Master password must be at least ${MIN_MASTER_LENGTH} characters`);
     }
     const source = this.activeBox();
     const params = createKdfParams();
     const target = MasterPasswordBox.derive(password, params);
-    const reencrypted = this.reencryptAll(source, target);
+    const reencrypted = await this.reencryptAll(source, target);
 
     this.file = {
       version: 2,
       mode: "master",
       kdf: params,
-      check: target.encrypt(VAULT_CHECK),
+      check: await target.encrypt(VAULT_CHECK),
       ...reencrypted,
     };
     this.masterBox = target;
@@ -243,7 +251,10 @@ export class CredentialVault {
     const { kdf, check } = this.file;
     if (!kdf || !check) return false;
     try {
-      return timingSafeEqualText(MasterPasswordBox.derive(password, kdf).decrypt(check), VAULT_CHECK);
+      // The raw crypto rather than MasterPasswordBox: this is the one check that
+      // has to stay synchronous (unlock answers synchronously), and scrypt+AES
+      // are synchronous anyway — the box's promise would only add a wrapper.
+      return timingSafeEqualText(open(deriveKey(password, kdf), check), VAULT_CHECK);
     } catch {
       return false;
     }
@@ -253,7 +264,7 @@ export class CredentialVault {
     if (this.mode === "master") this.masterBox = null;
   }
 
-  changeMasterPassword(current: string, next: string): boolean {
+  async changeMasterPassword(current: string, next: string): Promise<boolean> {
     if (this.mode !== "master") return false;
     // Verify against the stored canary even while unlocked: holding an open app
     // must not be enough to rotate the password silently.
@@ -261,7 +272,7 @@ export class CredentialVault {
     if (next.length < MIN_MASTER_LENGTH) {
       throw new Error(`Master password must be at least ${MIN_MASTER_LENGTH} characters`);
     }
-    this.setMasterPassword(next);
+    await this.setMasterPassword(next);
     return true;
   }
 
@@ -269,11 +280,11 @@ export class CredentialVault {
    * Drops the master password and returns to OS-keychain protection. Refuses when
    * the OS keychain is unavailable, because that would weaken the vault.
    */
-  removeMasterPassword(): void {
+  async removeMasterPassword(): Promise<void> {
     if (this.mode !== "master") return;
     if (!this.options.osBox.available) throw new VaultUnavailableError();
     const source = this.activeBox();
-    const reencrypted = this.reencryptAll(source, this.options.osBox);
+    const reencrypted = await this.reencryptAll(source, this.options.osBox);
     this.file = { version: 2, mode: "os", ...reencrypted };
     this.masterBox = null;
     this.persist();
@@ -283,7 +294,7 @@ export class CredentialVault {
    * Rewrites legacy `plain:` payloads with the OS keychain. Called once at
    * startup; returns true when the file changed.
    */
-  migrateLegacyPlaintext(): boolean {
+  async migrateLegacyPlaintext(): Promise<boolean> {
     if (this.mode !== "os" || !this.options.osBox.available) return false;
     if (!this.containsLegacyPlaintext()) return false;
 
@@ -291,24 +302,29 @@ export class CredentialVault {
       for (const [key, payload] of Object.entries(bucket)) {
         if (!payload.startsWith("plain:")) continue;
         const plain = Buffer.from(payload.slice(6), "base64").toString("utf8");
-        bucket[key] = this.options.osBox.encrypt(plain);
+        bucket[key] = await this.options.osBox.encrypt(plain);
       }
     }
     this.persist();
     return true;
   }
 
-  private reencryptAll(
+  private async reencryptAll(
     source: SecretBox,
     target: SecretBox,
-  ): { site: Record<string, string>; identity: Record<string, string> } {
-    const move = (bucket: Record<string, string>) =>
-      Object.fromEntries(
-        Object.entries(bucket).map(([key, payload]) => [key, target.encrypt(source.decrypt(payload))]),
+  ): Promise<{ site: Record<string, string>; identity: Record<string, string> }> {
+    const move = async (bucket: Record<string, string>) => {
+      const entries = await Promise.all(
+        Object.entries(bucket).map(async ([key, payload]) => {
+          const plain = await source.decrypt(payload);
+          return [key, await target.encrypt(plain)] as const;
+        }),
       );
+      return Object.fromEntries(entries);
+    };
     return {
-      site: move(this.file.site),
-      identity: move(this.file.identity),
+      site: await move(this.file.site),
+      identity: await move(this.file.identity),
     };
   }
 
@@ -381,7 +397,7 @@ export type MissingCredentialReason =
   /** `reference`, but the source account is gone or is itself a reference. */
   | "reference-broken";
 
-export function resolvePassword(
+export async function resolvePassword(
   vault: CredentialVault,
   identity: {
     id: string;
@@ -390,13 +406,13 @@ export function resolvePassword(
   },
   siteId: string | undefined,
   identities?: Array<{ id: string; passwordMode: "inherit" | "custom" | "reference" }>,
-): {
+): Promise<{
   password?: string;
   source: "identity" | "site" | "missing";
   missing?: MissingCredentialReason;
-} {
+}> {
   if (identity.passwordMode === "custom") {
-    const password = vault.get({ kind: "identity", id: identity.id });
+    const password = await vault.get({ kind: "identity", id: identity.id });
     return password ? { password, source: "identity" } : { source: "missing", missing: "identity-empty" };
   }
   if (identity.passwordMode === "reference") {
@@ -408,10 +424,10 @@ export function resolvePassword(
     if (!source || source.passwordMode === "reference") {
       return { source: "missing", missing: "reference-broken" };
     }
-    const password = vault.get({ kind: "identity", id: sourceId });
+    const password = await vault.get({ kind: "identity", id: sourceId });
     return password ? { password, source: "identity" } : { source: "missing", missing: "identity-empty" };
   }
   if (!siteId) return { source: "missing", missing: "no-site" };
-  const password = vault.get({ kind: "site", id: siteId });
+  const password = await vault.get({ kind: "site", id: siteId });
   return password ? { password, source: "site" } : { source: "missing", missing: "site-empty" };
 }

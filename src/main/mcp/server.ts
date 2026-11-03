@@ -577,7 +577,7 @@ export class McpServer {
         identityIds: string[];
         passphrase?: string;
         note?: string;
-      }) => { path: string; counts: { sites: number; accounts: number; withPasswords: number } };
+      }) => Promise<{ path: string; counts: { sites: number; accounts: number; withPasswords: number } }>;
       previewAccounts?: (path: string) => unknown;
       importAccounts?: (path: string, passphrase?: string) => unknown;
       /**
@@ -1869,7 +1869,7 @@ export class McpServer {
           },
           ["name", "baseUrl"],
         ),
-        run: (args) => {
+        run: async (args) => {
           const password = typeof args["password"] === "string" ? args["password"] : "";
           // The password rides on the draft rather than a follow-up
           // `setPassword`: same write, and a locked vault fails before the site
@@ -1892,7 +1892,7 @@ export class McpServer {
             ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
             ...(password ? { password } : {}),
           });
-          return siteSummary(service.saveSite(draft));
+          return siteSummary(await service.saveSite(draft));
         },
       },
       {
@@ -1913,7 +1913,7 @@ export class McpServer {
           },
           ["id"],
         ),
-        run: (args) => {
+        run: async (args) => {
           const existing = findSite(args["id"]);
           const marker = args["authCheckSignedOut"];
           const tokenKey = args["authTokenKey"];
@@ -1942,7 +1942,7 @@ export class McpServer {
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
             tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,
           };
-          return siteSummary(service.saveSite(siteDraftSchema.parse(draft)));
+          return siteSummary(await service.saveSite(siteDraftSchema.parse(draft)));
         },
       },
       {
@@ -1955,11 +1955,11 @@ export class McpServer {
           "name",
           "username",
         ]),
-        run: (args) => {
+        run: async (args) => {
           const site = findSite(args["siteId"]);
           const draft = identityDraftFrom(site.id, args);
           const password = typeof args["password"] === "string" ? args["password"] : undefined;
-          const identity = service.saveIdentity(draft, password);
+          const identity = await service.saveIdentity(draft, password);
           return identitySummary(identity);
         },
       },
@@ -1979,7 +1979,7 @@ export class McpServer {
           },
           ["siteId", "identities"],
         ),
-        run: (args) => {
+        run: async (args) => {
           const site = findSite(args["siteId"]);
           const items = Array.isArray(args["identities"]) ? args["identities"] : [];
           if (items.length === 0) throw new Error("identities 不能为空");
@@ -1991,7 +1991,7 @@ export class McpServer {
               const draft = identityDraftFrom(site.id, record);
               const password =
                 typeof record["password"] === "string" ? record["password"] : undefined;
-              created.push(identitySummary(service.saveIdentity(draft, password)));
+              created.push(identitySummary(await service.saveIdentity(draft, password)));
             } catch (error) {
               failures.push({
                 index,
@@ -2058,7 +2058,7 @@ export class McpServer {
           },
           ["id"],
         ),
-        run: (args) => {
+        run: async (args) => {
           const existing = findIdentity(args["id"]);
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"]
@@ -2081,7 +2081,7 @@ export class McpServer {
             note: typeof args["note"] === "string" ? args["note"] : existing.note,
           };
           const password = typeof args["password"] === "string" ? args["password"] : undefined;
-          return identitySummary(service.saveIdentity(identityDraftSchema.parse(draft), password));
+          return identitySummary(await service.saveIdentity(identityDraftSchema.parse(draft), password));
         },
       },
       {
@@ -2302,12 +2302,12 @@ export class McpServer {
           "把引用别的账号的身份断开成独立副本：当前解析出的密码会写成它自己的密码，此后两边各改各的。已经是独立身份时无变化。",
         kind: "write",
         inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
-        run: (args) => {
+        run: async (args) => {
           const id = String(args["identityId"] ?? "");
           if (!service.snapshot().identities.some((item) => item.id === id)) {
             throw new Error(`身份不存在：${id}`);
           }
-          return identitySummary(service.detachReference(id));
+          return identitySummary(await service.detachReference(id));
         },
       },
       {

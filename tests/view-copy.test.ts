@@ -24,12 +24,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function site(name: string, baseUrl: string) {
-  return service.saveSite({ name, baseUrl, loginPath: "/login", autoSubmit: false });
+async function site(name: string, baseUrl: string) {
+  return await service.saveSite({ name, baseUrl, loginPath: "/login", autoSubmit: false });
 }
 
-function identity(siteId: string, username: string, password?: string) {
-  return service.saveIdentity(
+async function identity(siteId: string, username: string, password?: string) {
+  return await service.saveIdentity(
     {
       siteId,
       name: username,
@@ -42,12 +42,12 @@ function identity(siteId: string, username: string, password?: string) {
   );
 }
 
-describe("copying a view to another site", () => {
-  it("creates reference identities on the target and links the view to them", () => {
-    const local = site("本地", "http://localhost:3000");
-    const test = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin", "admin-pass");
-    const b = identity(local.id, "member", "member-pass");
+describe("copying a view to another site", async () => {
+  it("creates reference identities on the target and links the view to them", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const test = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin", "admin-pass");
+    const b = await identity(local.id, "member", "member-pass");
     const view = service.saveView({
       siteId: local.id,
       name: "权限检查",
@@ -75,10 +75,10 @@ describe("copying a view to another site", () => {
     }
   });
 
-  it("records where the copy came from", () => {
-    const local = site("本地", "http://localhost:3000");
-    const test = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin", "p");
+  it("records where the copy came from", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const test = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin", "p");
     const view = service.saveView({
       siteId: local.id,
       name: "检查",
@@ -92,13 +92,13 @@ describe("copying a view to another site", () => {
     expect(result.view.copiedFrom).toEqual({ siteId: local.id, viewId: view.id });
   });
 
-  it("reuses an existing account on the target instead of duplicating it", () => {
-    const local = site("本地", "http://localhost:3000");
-    const test = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin", "p");
+  it("reuses an existing account on the target instead of duplicating it", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const test = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin", "p");
     // The target already has this person; a second identity would split their
     // login state for no reason.
-    const existing = identity(test.id, "admin", "test-pass");
+    const existing = await identity(test.id, "admin", "test-pass");
     const view = service.saveView({
       siteId: local.id,
       name: "检查",
@@ -114,12 +114,12 @@ describe("copying a view to another site", () => {
     expect(result.view.identityIds).toEqual([existing.id]);
   });
 
-  it("mixes reuse and creation in one copy", () => {
-    const local = site("本地", "http://localhost:3000");
-    const test = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin", "p");
-    const b = identity(local.id, "member", "p");
-    identity(test.id, "admin", "q");
+  it("mixes reuse and creation in one copy", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const test = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin", "p");
+    const b = await identity(local.id, "member", "p");
+    await identity(test.id, "admin", "q");
     const view = service.saveView({
       siteId: local.id,
       name: "检查",
@@ -134,13 +134,13 @@ describe("copying a view to another site", () => {
     expect(result.createdReferences).toEqual(["member"]);
   });
 
-  it("skips a source member that is itself a reference", () => {
-    const a = site("A", "http://a.example.com");
-    const b = site("B", "http://b.example.com");
-    const c = site("C", "http://c.example.com");
-    const source = identity(a.id, "admin", "p");
+  it("skips a source member that is itself a reference", async () => {
+    const a = await site("A", "http://a.example.com");
+    const b = await site("B", "http://b.example.com");
+    const c = await site("C", "http://c.example.com");
+    const source = await identity(a.id, "admin", "p");
     // A reference has no credentials of its own, so there is nothing to pass on.
-    const reference = service.saveIdentity({
+    const reference = await service.saveIdentity({
       siteId: b.id,
       name: "admin",
       username: "admin",
@@ -161,9 +161,9 @@ describe("copying a view to another site", () => {
     expect(() => service.copyViewToSite(view.id, c.id)).toThrow();
   });
 
-  it("refuses to copy a view onto its own site", () => {
-    const local = site("本地", "http://localhost:3000");
-    const a = identity(local.id, "admin", "p");
+  it("refuses to copy a view onto its own site", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const a = await identity(local.id, "admin", "p");
     const view = service.saveView({
       siteId: local.id,
       name: "检查",
@@ -175,10 +175,10 @@ describe("copying a view to another site", () => {
     expect(() => service.copyViewToSite(view.id, local.id)).toThrow();
   });
 
-  it("the copy is independent: later edits to the source do not change it", () => {
-    const local = site("本地", "http://localhost:3000");
-    const test = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin", "p");
+  it("the copy is independent: later edits to the source do not change it", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const test = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin", "p");
     const view = service.saveView({
       siteId: local.id,
       name: "检查",
@@ -205,12 +205,12 @@ describe("copying a view to another site", () => {
   });
 });
 
-describe("cross-site views", () => {
-  it("accepts members from several sites", () => {
-    const local = site("本地", "http://localhost:3000");
-    const staging = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin");
-    const b = identity(staging.id, "member");
+describe("cross-site views", async () => {
+  it("accepts members from several sites", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const staging = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin");
+    const b = await identity(staging.id, "member");
 
     const view = service.saveView({
       siteId: local.id,
@@ -226,9 +226,9 @@ describe("cross-site views", () => {
     expect(service.snapshot().views.find((item) => item.id === view.id)?.identityIds).toHaveLength(2);
   });
 
-  it("still rejects ids that belong to no identity", () => {
-    const local = site("本地", "http://localhost:3000");
-    const a = identity(local.id, "admin");
+  it("still rejects ids that belong to no identity", async () => {
+    const local = await site("本地", "http://localhost:3000");
+    const a = await identity(local.id, "admin");
     const view = service.saveView({
       siteId: local.id,
       name: "混合",
@@ -241,10 +241,10 @@ describe("cross-site views", () => {
   });
 
   it("refuses to launch a cross-site view as external windows", async () => {
-    const local = site("本地", "http://localhost:3000");
-    const staging = site("测试", "http://test.example.com");
-    const a = identity(local.id, "admin");
-    const b = identity(staging.id, "member");
+    const local = await site("本地", "http://localhost:3000");
+    const staging = await site("测试", "http://test.example.com");
+    const a = await identity(local.id, "admin");
+    const b = await identity(staging.id, "member");
     const view = service.saveView({
       siteId: local.id,
       name: "跨部署",

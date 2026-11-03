@@ -42,13 +42,13 @@ afterAll(async () => {
 });
 
 /** A site plus one account, so a view has a legal member to point at. */
-function seed(service: WorkspaceService): { siteId: string; identityId: string } {
-  const site = service.saveSite({
+async function seed(service: WorkspaceService): Promise<{ siteId: string; identityId: string }> {
+  const site = await service.saveSite({
     name: "排序检查",
     baseUrl: "http://127.0.0.1:1",
     loginPath: "/login",
   });
-  const identity = service.saveIdentity({
+  const identity = await service.saveIdentity({
     siteId: site.id,
     name: "排序账号",
     username: "order@example.test",
@@ -74,14 +74,14 @@ function addView(service: WorkspaceService, siteId: string, identityId: string, 
 describe("view ordering", () => {
   it("keeps the order views were created in", async () => {
     const service = await makeService();
-    const { siteId, identityId } = seed(service);
+    const { siteId, identityId } = await seed(service);
     for (const name of ["甲", "乙", "丙"]) addView(service, siteId, identityId, name);
     expect(service.snapshot().views.map((view) => view.name)).toEqual(["甲", "乙", "丙"]);
   });
 
   it("moves a view to the index it was dropped on", async () => {
     const service = await makeService();
-    const { siteId, identityId } = seed(service);
+    const { siteId, identityId } = await seed(service);
     const a = addView(service, siteId, identityId, "甲");
     addView(service, siteId, identityId, "乙");
     addView(service, siteId, identityId, "丙");
@@ -93,7 +93,7 @@ describe("view ordering", () => {
 
   it("moves a view backwards as well as forwards", async () => {
     const service = await makeService();
-    const { siteId, identityId } = seed(service);
+    const { siteId, identityId } = await seed(service);
     addView(service, siteId, identityId, "甲");
     addView(service, siteId, identityId, "乙");
     const c = addView(service, siteId, identityId, "丙");
@@ -104,7 +104,7 @@ describe("view ordering", () => {
 
   it("clamps an index from a filtered list instead of throwing", async () => {
     const service = await makeService();
-    const { siteId, identityId } = seed(service);
+    const { siteId, identityId } = await seed(service);
     addView(service, siteId, identityId, "甲");
     const b = addView(service, siteId, identityId, "乙");
 
@@ -115,7 +115,7 @@ describe("view ordering", () => {
 
   it("persists the new order to disk", async () => {
     const service = await makeService();
-    const { siteId, identityId } = seed(service);
+    const { siteId, identityId } = await seed(service);
     const a = addView(service, siteId, identityId, "甲");
     addView(service, siteId, identityId, "乙");
 

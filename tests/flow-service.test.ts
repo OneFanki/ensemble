@@ -25,8 +25,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function site() {
-  return service.saveSite({
+async function site() {
+  return await service.saveSite({
     name: "多租户后台",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
@@ -35,8 +35,8 @@ function site() {
 }
 
 describe("flows", () => {
-  it("saves a flow against a site and lists it", () => {
-    const target = site();
+  it("saves a flow against a site and lists it", async () => {
+    const target = await site();
     const flow = service.saveFlow({
       siteId: target.id,
       name: "创建租户",
@@ -53,8 +53,8 @@ describe("flows", () => {
     expect(service.snapshot().flows[0]?.steps).toHaveLength(3);
   });
 
-  it("refuses a flow whose step has nothing to act on", () => {
-    const target = site();
+  it("refuses a flow whose step has nothing to act on", async () => {
+    const target = await site();
     expect(() =>
       service.saveFlow({
         siteId: target.id,
@@ -66,8 +66,8 @@ describe("flows", () => {
     expect(service.snapshot().flows).toHaveLength(0);
   });
 
-  it("refuses a flow that references an undeclared variable", () => {
-    const target = site();
+  it("refuses a flow that references an undeclared variable", async () => {
+    const target = await site();
     expect(() =>
       service.saveFlow({
         siteId: target.id,
@@ -84,8 +84,8 @@ describe("flows", () => {
     ).toThrow();
   });
 
-  it("updates an existing flow in place", () => {
-    const target = site();
+  it("updates an existing flow in place", async () => {
+    const target = await site();
     const flow = service.saveFlow({
       siteId: target.id,
       name: "创建租户",
@@ -105,8 +105,8 @@ describe("flows", () => {
     expect(updated.steps).toHaveLength(2);
   });
 
-  it("deletes a flow without touching the site", () => {
-    const target = site();
+  it("deletes a flow without touching the site", async () => {
+    const target = await site();
     const flow = service.saveFlow({
       siteId: target.id,
       name: "创建租户",
@@ -117,8 +117,8 @@ describe("flows", () => {
     expect(service.snapshot().sites).toHaveLength(1);
   });
 
-  it("removes a site's flows with the site", () => {
-    const target = site();
+  it("removes a site's flows with the site", async () => {
+    const target = await site();
     service.saveFlow({
       siteId: target.id,
       name: "创建租户",
@@ -131,7 +131,7 @@ describe("flows", () => {
   });
 
   it("survives a reload with its steps intact", async () => {
-    const target = site();
+    const target = await site();
     service.saveFlow({
       siteId: target.id,
       name: "创建租户",

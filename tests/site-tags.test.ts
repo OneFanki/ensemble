@@ -25,8 +25,8 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function makeSite(tagIds?: string[]) {
-  return service.saveSite({
+async function makeSite(tagIds?: string[]) {
+  return await service.saveSite({
     name: "订单服务-测试站点",
     baseUrl: "http://localhost:3000",
     loginPath: "/login",
@@ -36,9 +36,9 @@ function makeSite(tagIds?: string[]) {
 }
 
 describe("tags", () => {
-  it("creates a tag and attaches it to a site", () => {
+  it("creates a tag and attaches it to a site", async () => {
     const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = makeSite([tag.id]);
+    const site = await makeSite([tag.id]);
     expect(site.tagIds).toEqual([tag.id]);
     expect(service.snapshot().tags).toHaveLength(1);
   });
@@ -55,21 +55,21 @@ describe("tags", () => {
     expect(renamed.color).toBe("amber");
   });
 
-  it("ignores tag ids that do not exist", () => {
-    const site = makeSite(["missing-tag"]);
+  it("ignores tag ids that do not exist", async () => {
+    const site = await makeSite(["missing-tag"]);
     // An unknown id would make the site vanish from every group, so it is dropped.
     expect(site.tagIds).toBeUndefined();
   });
 
-  it("keeps only known tags when a site has a mix", () => {
+  it("keeps only known tags when a site has a mix", async () => {
     const real = service.saveTag({ name: "前台", color: "blue" });
-    const site = makeSite([real.id, "ghost"]);
+    const site = await makeSite([real.id, "ghost"]);
     expect(site.tagIds).toEqual([real.id]);
   });
 
-  it("deleting a tag unlinks it but keeps the site", () => {
+  it("deleting a tag unlinks it but keeps the site", async () => {
     const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = makeSite([tag.id]);
+    const site = await makeSite([tag.id]);
 
     service.deleteTag(tag.id);
 
@@ -80,30 +80,30 @@ describe("tags", () => {
     expect(survivor?.tagIds).toBeUndefined();
   });
 
-  it("removing a site does not touch its tags", () => {
+  it("removing a site does not touch its tags", async () => {
     const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = makeSite([tag.id]);
+    const site = await makeSite([tag.id]);
     service.deleteSite(site.id);
     expect(service.snapshot().tags).toHaveLength(1);
   });
 
-  it("a site can carry several tags", () => {
+  it("a site can carry several tags", async () => {
     const a = service.saveTag({ name: "后台", color: "teal" });
     const b = service.saveTag({ name: "测试", color: "rose" });
-    const site = makeSite([a.id, b.id]);
+    const site = await makeSite([a.id, b.id]);
     expect(site.tagIds).toEqual([a.id, b.id]);
   });
 
-  it("deduplicates tag ids on save", () => {
+  it("deduplicates tag ids on save", async () => {
     const tag = service.saveTag({ name: "后台", color: "teal" });
-    const site = makeSite([tag.id, tag.id]);
+    const site = await makeSite([tag.id, tag.id]);
     expect(site.tagIds).toEqual([tag.id]);
   });
 
-  it("tags identities with the same namespace as sites", () => {
+  it("tags identities with the same namespace as sites", async () => {
     const tag = service.saveTag({ name: "生产", color: "rose" });
-    const site = makeSite();
-    const identity = service.saveIdentity({
+    const site = await makeSite();
+    const identity = await service.saveIdentity({
       siteId: site.id,
       name: "管理员 · 主账号",
       username: "admin@example.test",
@@ -116,10 +116,10 @@ describe("tags", () => {
     expect(service.snapshot().tags.map((item) => item.name)).toEqual(["生产"]);
   });
 
-  it("tags views with the same namespace", () => {
+  it("tags views with the same namespace", async () => {
     const tag = service.saveTag({ name: "回归", color: "violet" });
-    const site = makeSite();
-    const first = service.saveIdentity({
+    const site = await makeSite();
+    const first = await service.saveIdentity({
       siteId: site.id,
       name: "成员",
       username: "member@example.test",
@@ -139,10 +139,10 @@ describe("tags", () => {
     expect(view.tagIds).toEqual([tag.id]);
   });
 
-  it("deleting a tag unlinks it from identities and views too", () => {
+  it("deleting a tag unlinks it from identities and views too", async () => {
     const tag = service.saveTag({ name: "测试", color: "blue" });
-    const site = makeSite([tag.id]);
-    const identity = service.saveIdentity({
+    const site = await makeSite([tag.id]);
+    const identity = await service.saveIdentity({
       siteId: site.id,
       name: "访客",
       username: "guest@example.test",

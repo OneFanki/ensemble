@@ -22,8 +22,22 @@
 
 ### 中文
 
+- 暂无
+
+### English
+
+- Nothing yet
+
+## [1.4.0] - 2026-11-03
+
+### 中文
+
 - **新增使用指南**：右上角书签图标打开，首屏一张三步流程图讲清最小路径（箭头穿插在块与块之间，子页不再重复导航）；其余功能在左侧分类里按需看，没读过时图标有红点——按钮本身这次也补上了样式，此前按原生渲染图标不居中；引导走完自动打开一次并回到浏览器页
 - **分屏更好用**：空单元格直接挑身份开页，不用先建空白页；页面还能钉到固定分辨率（内置手机/桌面预设、可手输宽高），按目标尺寸排版并等比缩小到格位，查响应式不用开第二个窗口；AI 侧同步拿到 set_browser_viewport / reset_browser_viewport
+- **同一账号可以两页并排**：把一格的页签拖到另一格，这个浏览器实例就同时占两格、各显示一页——Cookie 和登录态完全共享，不用再开第二个实例重新登录。分屏后每格只列自己那一页，末尾的按钮变回「解除分屏」；运行栏改成一格一行，层级和屏幕上的格子对得上
+- **缩进和层级对不上的问题修好了**：此前两格都画完整页签、运行栏又按实例嵌页，缩进描述的和肉眼看到的不是一回事；关掉被钉住的那页时也不再留下两格同图
+- **每处「新建页面」都会先问你选哪个账号**：视图标题栏的「+」、地址栏旁的「+」此前会默默新建一个日常档案的空白页，现在统一弹账号选择窗，视图有归属站点时只列那个站点的账号
+- **工作区级分辨率放进工具栏**：作为「全局默认」和单页的右键设置分工，菜单里一行字说明两者关系；改回自适应后缩放会正确回到 100%（此前显示 100% 但页面仍是上一个分辨率的缩放）
 - **书签支持多层文件夹，像文件管理器一样操作**：新建/编辑走一个弹窗；管理页左侧是目录树，「全部」列出顶层文件夹和未分类书签；行可拖拽——拖到文件夹归档或移动、拖到行排序，磁贴拖到文件夹条归档；删除文件夹时内容上提一级；支持直接从本机的 Edge / Chrome / Firefox 导入书签（只读、自动去重）；旧数据自动迁移
 - **AI 驱动更可靠**：语义定位与点击穿透 shadow DOM 和同源 iframe；点击结果带实际落点（hit），被遮挡不再靠猜；自动填充失败会说清缺的是哪一个密码；运行栏 AI 次数徽标按页面计数，审计日志补记页面 id
 - **站点默认密码可以在站点上设置**：以前只能进账号对话框配，站点下一堆账号都继承时反而没人找得到；现在建站点、改站点时就能填，列表上直接标出「已设置 / 未设置」
@@ -78,6 +92,10 @@
 
 - **New in-app guide**: opens from the book icon in the title bar. The first screen is one three-step diagram — arrows between the boxes now, and subpages no longer repeat the navigation; everything else sits in the left list. A dot marks it unread (and the button itself finally has its styles — it rendered native with an off-center icon); finishing the tour opens it once and lands on the browser page
 - **Split-screen is nicer**: fill an empty cell with an account directly instead of stacking a blank page; and a page can be pinned to a fixed CSS resolution (phone/desktop presets or custom size), laid out at the target and scaled to fit its cell — responsive checks without a second window. The AI side gains set_browser_viewport / reset_browser_viewport
+- **One account can show two pages side by side**: drag a page tab from one cell onto another and that browser instance fills both, each cell showing a different page — cookies and the session are shared, so there is no second instance and no second login. A split cell lists only its own page and its "+" becomes "stop splitting"; the dock draws one row per cell so its indentation matches the grid on screen
+- **The indent that disagreed with the hierarchy is fixed**: both cells used to list the window's whole tab strip while the dock nested pages under one instance, so the indentation described a relationship the screen did not show; closing a pinned page no longer leaves two identical cells behind
+- **Every "new page" control asks which account first**: the view header's "+" and the one beside the address bar used to create a blank page on the daily profile without saying so; both now open the account chooser, limited to the view's own site when it has one
+- **A workspace-wide resolution control lands in the toolbar**: it is the default for every page, with per-page overrides staying on the tab's right-click menu and a line in the menu explaining the split. Going back to adaptive now restores 100% zoom too — it used to read 100% while the page kept the previous resolution's scale
 - **Bookmarks nest, and the page works like a file manager**: creating and editing happens in one dialog; the management page has a folder tree, All lists top-level folders plus unfiled bookmarks, and rows drag — onto a folder to file it, onto a row to reorder, tiles onto the start-page strip to file them; deleting a folder moves its contents up one level. Bookmarks import straight from Edge / Chrome / Firefox installed on this machine (read-only, duplicates skipped); legacy name labels load as real folders
 - **AI driving is more reliable**: snapshots and clicks pierce shadow DOM and same-origin iframes; click results carry where the events actually landed (hit); a failed autofill says which password is missing; the dock's AI badge counts per page and the audit log records the page id
 - **A site can carry its own default password**: it was only settable from an account dialog, so when every account on a site inherited it, nobody could find it. It now lives on the site dialog itself, and the site list shows Set / Not set

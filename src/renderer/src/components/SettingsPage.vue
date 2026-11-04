@@ -1616,7 +1616,14 @@ async function submitMaster() {
 }
 
 .fineprint {
-  margin: 10px 0 0;
+  /*
+   * A comment belongs to the row above it, so it sits closer to that row than to
+   * what follows — which is why the bottom margin matters. It is the last thing
+   * before the next row's `border-top`, and with no bottom margin that hairline
+   * landed on the text's descenders: on a one-line comment it read as a
+   * strikethrough, on two-line ones it cut through the second line.
+   */
+  margin: 10px 0 6px;
   font-size: 11px;
   line-height: 1.6;
   color: var(--faint);

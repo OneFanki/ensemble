@@ -37,7 +37,14 @@ withDefaults(
   display: grid;
   place-items: center;
   border-radius: var(--radius-sm);
-  color: var(--faint);
+  /*
+   * `--dim`, not `--faint`: these are affordances the user has to find, not
+   * hairlines. At `--faint` they measured 3.05:1 against the card surface —
+   * technically over the 3:1 floor for non-text, but in practice the edit and
+   * delete icons on a site card read as decoration until the pointer happens to
+   * cross them. `--dim` is 3.9:1 and still clearly quieter than body text.
+   */
+  color: var(--dim);
   flex: 0 0 auto;
 }
 

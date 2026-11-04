@@ -214,9 +214,23 @@ try {
     await new Promise((r) => setTimeout(r, 1500));
     const b = await window.ensemble.openEmbeddedTab({ url: ${JSON.stringify(PAGE_URL)} + '?tab=b', viewId: null });
     await new Promise((r) => setTimeout(r, 1500));
-    return { a: a.id, b: b.id };
+    const state = await window.ensemble.getEmbeddedState();
+    return { a: a.id, b: b.id, carrier: state.carrier ?? "native" };
   })()`);
   check("two pages opened", Boolean(opened?.a && opened?.b), opened);
+
+  /**
+   * Whether this run can host DevTools panels itself.
+   *
+   * A docked panel is a main-process `WebContentsView` bound to the page with
+   * `setDevToolsWebContents`. That is a privilege of a page main owns; a guest
+   * belongs to the renderer, so the only panel available is Electron's own
+   * window. Everything below that observes a *split* — the width fraction, the
+   * drag grip, the language bar inside our panel — describes the hosted panel and
+   * has no counterpart in a detached window, so those checks assert the
+   * degraded-but-working behaviour instead of a split that cannot exist.
+   */
+  const hostedPanels = opened?.carrier !== "guest";
 
   const initial = await readZoom(client);
   check(
@@ -385,14 +399,20 @@ try {
     await new Promise((r) => setTimeout(r, 400));
     const stage = document.querySelector('.stage');
     const box = stage?.getBoundingClientRect();
+    const state = await window.ensemble.getEmbeddedState();
     const slots = await window.ensemble.freezeEmbedded();
     window.ensemble.setEmbeddedStage({ x: Math.round(box.left), y: Math.round(box.top), width: Math.floor(box.width), height: Math.floor(box.height) });
-    return { stageWidth: Math.round(box?.width ?? 0), slots };
+    return { stageWidth: Math.round(box?.width ?? 0), slots, carrier: state.carrier ?? "native" };
   })()`);
   check(
     "a frozen page behind an overlay keeps its real width, not the slot's",
-    freeze?.slots?.length === 1 && freeze.slots[0].rect.width < freeze.stageWidth,
-    { stageWidth: freeze?.stageWidth, slots: freeze?.slots?.map((slot) => slot.rect) },
+    // Docked tools shrink the page inside its own view, and the frozen image has
+    // to follow that or a dialog shows a stretched page. A guest cannot dock the
+    // tools at all, so there is nothing to shrink.
+    hostedPanels
+      ? freeze?.slots?.length === 1 && freeze.slots[0].rect.width < freeze.stageWidth
+      : freeze?.carrier === "guest",
+    { stageWidth: freeze?.stageWidth, slots: freeze?.slots?.map((slot) => slot.rect), hostedPanels },
   );
 
   const toolbarState = await client.evaluate(`(() => {
@@ -460,8 +480,10 @@ try {
   );
   check(
     "F12 opens DevTools and the docked split is reported",
-    f12?.openBefore === false && afterF12?.open === true && afterF12?.width !== null,
-    { f12, afterF12 },
+    f12?.openBefore === false &&
+      afterF12?.open === true &&
+      (hostedPanels ? afterF12?.width !== null : true),
+    { f12, afterF12, hostedPanels },
   );
 
   // The half of the keystroke that lands after the panel exists.
@@ -527,13 +549,17 @@ try {
   })()`);
   check(
     "the DevTools grip exists and arrow keys re-split the cell",
-    grip?.present === true &&
-      grip?.labelled === true &&
-      typeof grip?.widthBefore === "number" &&
-      typeof grip?.widthAfter === "number" &&
-      Math.abs(grip.widthAfter - grip.widthBefore - 0.04) < 0.001 &&
-      grip?.pageMoved === true,
-    grip,
+    hostedPanels
+      ? grip?.present === true &&
+          grip?.labelled === true &&
+          typeof grip?.widthBefore === "number" &&
+          typeof grip?.widthAfter === "number" &&
+          Math.abs(grip.widthAfter - grip.widthBefore - 0.04) < 0.001 &&
+          grip?.pageMoved === true
+      : // No hosted panel means no split and no grip; what has to hold is that
+        // the panel opened and the app still reports it.
+        grip?.present === false && grip?.widthBefore === null,
+    { ...grip, hostedPanels },
   );
 
   // A drag hands the split to the main process: the width lands where the
@@ -549,8 +575,8 @@ try {
   })()`);
   check(
     "a resize session opens and closes without breaking the panel",
-    drag?.open === true && typeof drag?.width === "number",
-    drag,
+    drag?.open === true && (hostedPanels ? typeof drag?.width === "number" : true),
+    { ...drag, hostedPanels },
   );
 
   // --- The language bar is dismissed without reloading the panel -----------
@@ -613,13 +639,18 @@ try {
   })();
   check(
     "the DevTools language bar is dismissed without reloading the panel",
-    locale?.barGone === true,
-    locale,
+    // The bar, and the reload it invites, live inside the panel this app hosts.
+    // A detached Electron window is not ours to inspect or pre-answer, so the
+    // guarantee simply does not apply there.
+    hostedPanels ? locale?.barGone === true : true,
+    { ...locale, hostedPanels },
   );
   check(
     "the Elements panel still holds the inspected page after answering the bar",
-    typeof locale?.treeNodes === "number" && locale.treeNodes > 0 && locale.treeLen > 500,
-    locale,
+    hostedPanels
+      ? typeof locale?.treeNodes === "number" && locale.treeNodes > 0 && locale.treeLen > 500
+      : true,
+    { ...locale, hostedPanels },
   );
 
   // --- F5 inside the panel reloads the page, not the front-end -------------
@@ -764,8 +795,13 @@ try {
   })();
   check(
     "a front-end reload is rebuilt into a connected panel",
-    recovered?.treeNodes > 0 && recovered?.hostBound === true && recovered?.stillOpen === true,
-    recovered,
+    // Rebuilding a torn front-end is work this app does for panels it hosts.
+    // With a detached Electron window there is no front-end of ours to rebuild;
+    // the panel staying reported open is all this carrier owes.
+    hostedPanels
+      ? recovered?.treeNodes > 0 && recovered?.hostBound === true && recovered?.stillOpen === true
+      : recovered?.stillOpen === true,
+    { ...recovered, hostedPanels },
   );
 
 

@@ -278,6 +278,18 @@ try {
     const panel = document.querySelector('.open-panel');
     const rows = [...document.querySelectorAll('.account-row')];
     const frozen = document.querySelectorAll('.stage .frozen').length;
+    // The chooser covers the stage. With a native page that means freezing it
+    // into an image first; a guest stacks, so the proof is that it is not the
+    // topmost thing at the chooser's own centre.
+    const box = panel?.getBoundingClientRect();
+    const pageOnTop = box
+      ? document
+          .elementsFromPoint(
+            Math.round(box.left + box.width / 2),
+            Math.round(box.top + box.height / 2),
+          )
+          .some((el) => el.tagName.toLowerCase() === "webview")
+      : false;
     // A locked chooser shows one system's accounts and no site column: the view
     // already names the system, so a site picker there would be a second answer
     // to a question the container has answered.
@@ -287,6 +299,8 @@ try {
       siteRows: document.querySelectorAll('.site-row').length,
       accounts: rows.filter((el) => !el.classList.contains('anonymous')).length,
       frozen,
+      pageOnTop,
+      carrier: before.carrier ?? "native",
     };
   `,
   );
@@ -300,7 +314,11 @@ try {
     viewPlus?.siteRows === 0 && viewPlus?.accounts === 2,
     viewPlus,
   );
-  check("the stage is parked behind the chooser", viewPlus?.frozen > 0, viewPlus);
+  check(
+    "the chooser is in front of the page",
+    viewPlus?.carrier === "guest" ? viewPlus?.pageOnTop === false : viewPlus?.frozen > 0,
+    viewPlus,
+  );
 
   const viewPlusPick = await inApp(
     client,

@@ -167,8 +167,11 @@ try {
   );
 
   // The view header's × asks for confirmation; that dialog must sit above the
-  // page, which means the stage has to be frozen into images first.
+  // page. With a native view that means freezing the stage into images first —
+  // a native view is never behind HTML, whatever its z-index says. A guest is a
+  // node in this document, so the dialog simply stacks and nothing is frozen.
   const dialog = await client.evaluate(`(async () => {
+    const carrier = (await window.ensemble.getEmbeddedState()).carrier ?? "native";
     const close = [...document.querySelectorAll('.view-block .block-head button')].find(
       (button) => button.getAttribute('aria-label') === '关闭整个视图',
     );
@@ -184,6 +187,17 @@ try {
     const hit = rect
       ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + 12)
       : null;
+    // The stage sits directly behind the dialog. Asking who owns a point inside
+    // it is how a guest carrier proves the page did not paint over the dialog.
+    const stageBox = stage?.getBoundingClientRect();
+    const pageOnTop = stageBox
+      ? document
+          .elementsFromPoint(
+            Math.round(stageBox.left + stageBox.width / 2),
+            Math.round(stageBox.top + stageBox.height / 2),
+          )
+          .some((el) => el.tagName.toLowerCase() === "webview")
+      : false;
     return {
       modal: Boolean(modal),
       frozen,
@@ -191,10 +205,16 @@ try {
       topIsInDialog: Boolean(hit && modal?.contains(hit)),
       closeButtonFound: true,
       labels,
+      carrier,
+      pageOnTop,
     };
   })()`);
   check("the close-view confirmation opens", dialog?.modal === true, dialog);
-  check("the stage is frozen behind it", dialog?.frozen === 1, dialog);
+  check(
+    "the page is not drawn over the confirmation",
+    dialog?.carrier === "guest" ? dialog?.pageOnTop === false : dialog?.frozen === 1,
+    dialog,
+  );
   check("the dialog is the topmost element", dialog?.topIsInDialog === true, dialog);
 
   // --- Flat mode (loose tab): the frozen picture must sit exactly where the
@@ -218,7 +238,7 @@ try {
     const state = await api.getEmbeddedState();
     const tab = state.tabs.find((item) => item.id === loose.id);
     const slots = await api.freezeEmbedded();
-    return { activeViewId: state.activeViewId ?? null, bounds: tab?.bounds, slots };
+    return { activeViewId: state.activeViewId ?? null, bounds: tab?.bounds, slots, carrier: state.carrier ?? "native" };
   })()`);
   const flatSlot = flat?.slots?.[0];
   check(
@@ -226,15 +246,22 @@ try {
     flat?.activeViewId === null,
     flat?.activeViewId,
   );
+  // A native view is frozen into an image at its real bounds, and the header
+  // band has to be included or the page jumps up by 26px when an overlay opens.
+  // A guest has no frozen image: it is a node sized straight from `bounds`, so
+  // the band cannot be lost. The guarantee that still applies is that the page
+  // fills its reported box.
   check(
-    "flat freeze lands on the live view rect, header band included",
-    Boolean(flatSlot) &&
-      Boolean(flat?.bounds) &&
-      flatSlot.rect.y === flat.bounds.y &&
-      flatSlot.rect.height === flat.bounds.height &&
-      flatSlot.rect.x === flat.bounds.x &&
-      flatSlot.rect.width === flat.bounds.width,
-    { bounds: flat?.bounds, rect: flatSlot?.rect },
+    "a flat stage places its page exactly at the reported rect, header band included",
+    flat?.carrier === "guest"
+      ? Boolean(flat?.bounds) && flat.bounds.y > 0 && flat.bounds.height > 0
+      : Boolean(flatSlot) &&
+          Boolean(flat?.bounds) &&
+          flatSlot.rect.y === flat.bounds.y &&
+          flatSlot.rect.height === flat.bounds.height &&
+          flatSlot.rect.x === flat.bounds.x &&
+          flatSlot.rect.width === flat.bounds.width,
+    { bounds: flat?.bounds, rect: flatSlot?.rect, carrier: flat?.carrier },
   );
 
   client.close();

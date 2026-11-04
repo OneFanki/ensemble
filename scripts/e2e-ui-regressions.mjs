@@ -758,22 +758,32 @@ try {
     }
     const panel = document.querySelector('.open-panel');
     const rows = [...document.querySelectorAll('.site-row')];
+    const panelBox = panel?.getBoundingClientRect();
     return {
       open: Boolean(panel),
       rows: rows.length,
       // A lone tag name under the account list read as an empty section.
       tagNote: Boolean(document.querySelector('.tag-note')),
       active: rows.filter((el) => el.classList.contains('active')).length,
-      // The live page must be parked before the panel shows; the frozen frame
-      // is what proves the parking finished. The header band (and the page strip
-      // it carries) is app chrome and stays visible — only the native page has
-      // to go, which is exactly what the frozen frame stands in for.
+      // The live page must be out of the way before the panel shows. With a
+      // native view the frozen frame is what proves it; a guest stacks, so the
+      // proof is that the panel is the element drawn at its own centre.
       frozen: document.querySelectorAll('.stage .frozen').length,
+      onTop: panelBox
+        ? document
+            .elementsFromPoint(
+              Math.round(panelBox.left + panelBox.width / 2),
+              Math.round(panelBox.top + panelBox.height / 2),
+            )
+            .some((el) => el.closest('.open-panel'))
+        : false,
+      carrier: (await window.ensemble.getEmbeddedState()).carrier ?? "native",
     };
   })()`);
   check(
-    "the new-tab button opens the account chooser with the live page already parked",
-    menuOpen?.open === true && menuOpen?.frozen > 0,
+    "the new-tab button opens the account chooser in front of the live page",
+    menuOpen?.open === true &&
+      (menuOpen?.carrier === "guest" ? menuOpen?.onTop === true : menuOpen?.frozen > 0),
     menuOpen,
   );
   check(
@@ -869,12 +879,28 @@ try {
    */
   const downloadsPanel = await client.evaluate(`(async () => {
     const before = document.querySelectorAll('.stage .frozen').length;
+    const carrier = (await window.ensemble.getEmbeddedState()).carrier ?? "native";
     const trigger = document.querySelector('.downloads-anchor .icon');
     trigger?.click();
     await new Promise((r) => setTimeout(r, 900));
     const panel = document.querySelector('.downloads-panel');
     const box = panel?.getBoundingClientRect();
     const stage = document.querySelector('.stage')?.getBoundingClientRect();
+    // The panel has to win the stacking contest against a live page. A native
+    // view always paints above HTML, so back then it had to be frozen out of
+    // the way; a guest is a normal element, so the check asks what the user
+    // actually needs: is the panel in front at a point it shares with the
+    // stage?
+    const covered = box && stage
+      ? (() => {
+          const x = Math.round(box.left + box.width / 2);
+          const y = Math.round(box.top + box.height / 2);
+          if (x < stage.left || x > stage.right || y < stage.top || y > stage.bottom) {
+            return null;
+          }
+          return document.elementsFromPoint(x, y).some((el) => el.closest('.downloads-panel'));
+        })()
+      : null;
     return {
       opened: Boolean(panel),
       frozenBefore: before,
@@ -883,11 +909,16 @@ try {
       overlapsStage: Boolean(box && stage && box.bottom > stage.top),
       // A panel that is open but has no box was laid out behind the page.
       width: box ? Math.round(box.width) : null,
+      onTop: covered,
+      carrier,
     };
   })()`);
   check(
-    "the downloads panel parks the live page before it shows",
-    downloadsPanel?.opened === true && downloadsPanel?.frozenAfter > 0,
+    "the downloads panel is in front of the live page",
+    downloadsPanel?.opened === true &&
+      (downloadsPanel?.carrier === "guest"
+        ? downloadsPanel?.onTop === true
+        : downloadsPanel?.frozenAfter > 0),
     downloadsPanel,
   );
   check(
@@ -902,11 +933,16 @@ try {
     return {
       open: Boolean(document.querySelector('.downloads-panel')),
       frozen: document.querySelectorAll('.stage .frozen').length,
+      staged: (await window.ensemble.getEmbeddedState()).tabs.some(
+        (tab) => tab.bounds && tab.bounds.width > 0 && tab.bounds.height > 0,
+      ),
     };
   })()`);
   check(
     "closing the downloads panel gives the stage back",
-    downloadsClosed?.open === false && downloadsClosed?.frozen === 0,
+    downloadsClosed?.open === false &&
+      downloadsClosed?.frozen === 0 &&
+      downloadsClosed?.staged === true,
     downloadsClosed,
   );
 
@@ -925,6 +961,13 @@ try {
   );
 
   // Drag the handle 80px to the left: the dock must grow by the same amount.
+  //
+  // Dispatched as a real drag — several moves, with a pressed-button state on
+  // each — rather than one synthetic jump. A page is a native surface even as a
+  // `<webview>`, and taking the pointer away from it is a style change that
+  // reaches the browser's hit testing one frame later; the event that arrives in
+  // the same instant as the press is therefore still routed to the page. No
+  // pointer produces that sequence: a hand always moves for more than a frame.
   const dockBox = await client.evaluate(`(() => {
     const handle = document.querySelector('.dock-resize');
     if (!handle) return null;
@@ -939,18 +982,24 @@ try {
       button: "left",
       clickCount: 1,
     });
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: dockBox.x - 80,
-      y: dockBox.y,
-      button: "left",
-    });
-    await wait(150);
+    await wait(80);
+    for (let step = 1; step <= 8; step += 1) {
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: dockBox.x - step * 10,
+        y: dockBox.y,
+        button: "left",
+        buttons: 1,
+      });
+      await wait(25);
+    }
+    await wait(80);
     await client.send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       x: dockBox.x - 80,
       y: dockBox.y,
       button: "left",
+      buttons: 0,
       clickCount: 1,
     });
     await wait(400);
@@ -1758,15 +1807,30 @@ try {
     }));
     await new Promise((r) => setTimeout(r, 700));
     const panel = document.querySelector('.tab-menu');
+    const menuBox = panel?.getBoundingClientRect();
     return {
       open: Boolean(panel),
       items: [...(panel?.querySelectorAll('.tab-menu-item') ?? [])].map((el) => el.textContent.trim()),
       frozen: Boolean(document.querySelector('.stage .frozen')),
+      // The menu hangs over the stage; what matters is that it is actually the
+      // thing drawn there. A native page used to require a frozen frame first;
+      // a guest just stacks, so ask the renderer which element is on top.
+      onTop: menuBox
+        ? document
+            .elementsFromPoint(
+              Math.round(menuBox.left + menuBox.width / 2),
+              Math.round(menuBox.top + menuBox.height / 2),
+            )
+            .some((el) => el.closest('.tab-menu'))
+        : false,
+      carrier: (await window.ensemble.getEmbeddedState()).carrier ?? "native",
     };
   })()`);
   check(
-    "right-clicking a page tab opens the page menu over a frozen stage",
-    menu?.open === true && menu?.frozen === true && (menu?.items?.length ?? 0) >= 4,
+    "right-clicking a page tab opens the page menu over the stage",
+    menu?.open === true &&
+      (menu?.carrier === "guest" ? menu?.onTop === true : menu?.frozen === true) &&
+      (menu?.items?.length ?? 0) >= 4,
     menu,
   );
 
@@ -1904,20 +1968,45 @@ try {
 
   const parkedState = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
+    const nodes = [...document.querySelectorAll('webview')].map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    });
     return {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
+      carrier: state.carrier ?? "native",
       tabs: state.tabs.map((tab) => ({ id: tab.id, bounds: tab.bounds ?? null })),
+      nodes,
       onIdentities: Boolean(document.querySelector('.id-card')),
     };
   })()`);
+  // The guarantee is "no page is on the stage any more", and each carrier
+  // expresses it differently. A native view is parked past the window edge and
+  // reports that rect; a guest is a node in this document, so main gives up its
+  // place entirely (zero bounds) and the pool moves it outside the window.
+  // Asserting the carrier-neutral half — nothing sized over the stage — keeps
+  // the check about the behaviour rather than about the coordinates.
   check(
-    "switching pages keeps every embedded page parked outside the window",
+    "switching pages keeps every embedded page off the stage",
     parkedState?.onIdentities === true &&
       parkedState.tabs.length > 0 &&
-      parkedState.tabs.every(
-        (tab) => tab.bounds && tab.bounds.x >= parkedState.viewportWidth,
-      ),
+      (parkedState.carrier === "guest"
+        ? parkedState.nodes.every(
+            (node) =>
+              node.width <= 0 ||
+              node.height <= 0 ||
+              node.x + node.width <= 0 ||
+              node.y + node.height <= 0,
+          )
+        : parkedState.tabs.every(
+            (tab) => tab.bounds && tab.bounds.x >= parkedState.viewportWidth,
+          )),
     parkedState,
   );
 

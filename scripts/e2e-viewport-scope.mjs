@@ -373,40 +373,73 @@ try {
    * `innerWidth` is the only reading that cannot lie, so this drives the real
    * page over CDP instead of trusting the state.
    */
-  const embeddedTarget = async () => {
+  //
+  // All four accounts of this suite load the same origin, so a target picked by
+  // URL is not necessarily the account under measurement — and comparing one
+  // account's rendered width against another account's cell quietly measured the
+  // wrong page. The page is identified by what it reports instead: while the
+  // default viewport is in effect it is the one whose `innerWidth` is exactly
+  // that width, and the same target is re-read after the default is cleared.
+  const candidates = async () => {
     const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
-    return list.find((item) => item.type === "page" && item.url.startsWith(baseUrl));
+    // A page carried by a `<webview>` is reported under its own target type, not
+    // `page`, so all three kinds are accepted.
+    return list.filter(
+      (item) =>
+        (item.type === "page" || item.type === "webview" || item.type === "iframe") &&
+        item.url.startsWith(baseUrl),
+    );
   };
-  const measure = async () => {
-    const target = await embeddedTarget();
-    if (!target) return null;
+  const readSize = async (target) => {
     const page = await connect(target.webSocketDebuggerUrl);
     try {
-      return await page.evaluate("({ w: window.innerWidth, h: window.innerHeight })");
+      // `innerWidth` is already the CSS layout width: measured on a guest, a
+      // 1280-wide request reports 1280 here while `devicePixelRatio` carries the
+      // compensating factor. Dividing by it as well turned every reading into
+      // nonsense.
+      return await page.evaluate(
+        "({ w: window.innerWidth, h: window.innerHeight })",
+      );
     } finally {
       page.close();
     }
+  };
+  /** The target reporting `width` (rounded), or undefined if none does. */
+  const targetReporting = async (width) => {
+    for (const target of await candidates()) {
+      try {
+        const size = await readSize(target);
+        if (typeof size?.w === "number" && Math.round(size.w) === width) return target;
+      } catch {
+        // A target that cannot be read is not the one.
+      }
+    }
+    return undefined;
   };
 
   const zoomReset = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const state = await api.getEmbeddedState();
     const tab = state.tabs.find((t) => t.label === '账号乙');
-    await api.setEmbeddedViewport(tab.id, 'adaptive');
+    // "inherit", not "adaptive": this page has to follow the workspace default
+    // for the measurement below to mean anything. Adaptive is an explicit
+    // opt-out, so setting it here and then expecting 1280 contradicted the
+    // feature under test.
+    await api.setEmbeddedViewport(tab.id, 'inherit');
     await api.saveAppSettings({ browserViewport: { width: 1280, height: 720 } });
     await new Promise((r) => setTimeout(r, 900));
     const pinned = await api.getEmbeddedState();
-    const view = pinned.views.find((v) => v.id === pinned.activeViewId);
     return { tabId: tab.id, cellWidth: pinned.tabs.find((t) => t.id === tab.id)?.bounds?.width ?? null };
   })()`);
   await wait(600);
-  const withViewport = await measure();
+  const pinnedTarget = await targetReporting(1280);
+  const withViewport = pinnedTarget ? await readSize(pinnedTarget) : null;
   await client.evaluate(`(async () => {
     await window.ensemble.saveAppSettings({ browserViewport: null });
     await new Promise((r) => setTimeout(r, 1000));
   })()`);
   await wait(600);
-  const afterClear = await measure();
+  const afterClear = pinnedTarget ? await readSize(pinnedTarget) : null;
   check(
     "clearing the default hands the zoom factor back, not just the state",
     withViewport?.w === 1280 &&

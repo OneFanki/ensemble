@@ -260,8 +260,13 @@ try {
 
   async function findPageTarget() {
     const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    // A page embedded as a `<webview>` shows up as a guest target rather than a
+    // top-level `page`. Both are accepted: the assertion is about the page's own
+    // DOM, not about which carrier is displaying it.
     const target = list.find(
-      (item) => item.type === "page" && item.url.startsWith(`${ORIGIN}/`),
+      (item) =>
+        (item.type === "page" || item.type === "webview" || item.type === "iframe") &&
+        item.url.startsWith(`${ORIGIN}/`),
     );
     return target ? connect(target.webSocketDebuggerUrl) : undefined;
   }

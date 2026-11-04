@@ -876,7 +876,13 @@ try {
       (item) => item.querySelector('.nt-suggest-name')?.textContent?.trim() === '控制台',
     );
     row?.click();
-    await wait(800);
+    // Polled, not a fixed wait: a guest page is carried through the renderer, so
+    // opening a bookmark has one more hop than a native view had. What the check
+    // asserts is that the new-tab surface eventually goes away.
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (!document.querySelector('.blank-slot .new-tab')) break;
+      await wait(150);
+    }
     return { ok: true, rows, newTabGone: !document.querySelector('.blank-slot .new-tab') };
   })()`);
   check(

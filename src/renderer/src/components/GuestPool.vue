@@ -153,7 +153,14 @@ function layout(): void {
         : placement.rect;
     const onStage = placement.onStage || presenting;
     const style = mounted.node.style;
-    style.display = "block";
+    // `flex`, never `block`. Electron's `<webview>` ships as `display: flex`
+    // because its inner frame is a flex item that fills the container; forcing
+    // `block` leaves that item with the user-agent stylesheet's default height,
+    // so the page lays out at `150px` tall no matter how tall the node is
+    // (measured: node 757px, `innerHeight` 150; the width kept following because
+    // a block frame still stretches horizontally). A page that paints only its
+    // top eighth of the window is what that looks like.
+    style.display = "flex";
     style.left = `${rect.x}px`;
     style.top = `${rect.y}px`;
     style.width = `${rect.width}px`;
@@ -242,7 +249,7 @@ function mountNode(payload: {
   node.setAttribute("src", payload.url);
   node.setAttribute(
     "style",
-    "position:fixed;border:0;background:#101317;display:none;z-index:1",
+    "position:fixed;border:0;background:#101317;display:none;flex:0 0 auto;z-index:1",
   );
 
   node.addEventListener("dom-ready", () => {

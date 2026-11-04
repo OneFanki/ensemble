@@ -74,6 +74,16 @@ interface Lease {
   closing: boolean;
   /** Removed from the table; the handle is dead. */
   closed: boolean;
+  /**
+   * The session must stay attached even when idle.
+   *
+   * Set for a page that pushes events to main on its own schedule. Idle release
+   * is safe for request/response traffic — the next command reopens — but an
+   * event the page emits while nothing is attached is delivered to nobody and
+   * is not queued for later. A login form is the case: the submit happens
+   * whenever the user presses Enter, not when a command arrives.
+   */
+  pinned: boolean;
   pending: number;
   idleTimer?: ReturnType<typeof setTimeout>;
   teardown?: Promise<void>;
@@ -109,6 +119,7 @@ export class GuestSessions {
       attached: false,
       closing: false,
       closed: false,
+      pinned: false,
       pending: 0,
     });
     return handle;
@@ -122,6 +133,29 @@ export class GuestSessions {
 
   has(guestId: string): boolean {
     return this.current(guestId) !== undefined;
+  }
+
+  /**
+   * Keeps the session attached until {@link unpin}, overriding idle release.
+   *
+   * For a page that emits events on its own schedule: with nothing attached,
+   * the event has no listener and is lost — it is not replayed when a session
+   * opens later. Callers pin only while such traffic can be expected, so the
+   * anti-automation benefit of idle release is given up only where a feature
+   * cannot work without it.
+   */
+  pin(guestId: string): void {
+    const lease = this.leases.get(guestId);
+    if (!lease || lease.closed) return;
+    lease.pinned = true;
+  }
+
+  /** Ends a pin; the session is released on the next idle turn. */
+  unpin(guestId: string): void {
+    const lease = this.leases.get(guestId);
+    if (!lease || lease.closed) return;
+    lease.pinned = false;
+    if (lease.attached && !lease.closing && lease.pending === 0) this.scheduleIdle(lease);
   }
 
   /** Runs one command against a guest, opening the session first if needed. */
@@ -237,11 +271,14 @@ export class GuestSessions {
   }
 
   private scheduleIdle(lease: Lease): void {
+    if (lease.pinned) return;
     if (lease.idleTimer) clearTimeout(lease.idleTimer);
     const delay = this.options.idleDetachMs ?? DEFAULT_IDLE_DETACH_MS;
     lease.idleTimer = setTimeout(() => {
       lease.idleTimer = undefined;
       if (lease.closed || lease.closing || lease.pending > 0 || !lease.attached) return;
+      // A pin set while the timer was already running wins over it.
+      if (lease.pinned) return;
       lease.attached = false;
       try {
         lease.port.close();

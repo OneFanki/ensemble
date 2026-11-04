@@ -28,8 +28,9 @@
 0010 否决时的顾虑之一是 webview 方案常见的「agent 与 human 共用单一 `persist:` 分区」做法。
 Ensemble **不采用这一点**：
 
-- `<webview>` 的 `partition` 是**每 guest 一个属性**——每身份独立 `persist:<identityId>`
-  分区在 webview 下比 WebContentsView 下表达更自然（创建期声明，不由 main 集中分发）；
+- `<webview>` 的 `partition` 是**每 guest 一个属性**，创建期声明。值由主进程随标签状态下发
+  （`EmbeddedTab.partition`），渲染层只负责抄到节点上——分区是存储边界，两处各算一遍是身份
+  串号的经典来法；
 - guest 硬化保持不变：`webviewTag: true` 只开在主窗口；`will-attach-webview` 里锁死
   `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`、`nodeIntegrationInSubFrames: false`，
   删除页面传入的 `preload`/`nodeintegration` 参数，只保留我们白名单的属性；
@@ -78,6 +79,10 @@ Ensemble **不采用这一点**：
 
 P4 是风险最集中的一步：要删的每一处都是实测补丁，删除本身要逐条重验，不接受「应该没用了」。
 
+进度：P1 已落地；P2 的架构前提已实测确认（见「P2 前置实测」与「P2 的挂载位置」），
+渲染层切换尚未开始。当前产品行为**仍走 `WebContentsView`**——`PageSurface` 抽象让切换点
+集中在一个构造处（`createTab`），但两套载体不能共存，切换必须在一次提交里完成。
+
 ### P1 落地记录（2026-11-04）
 
 三块逻辑拆成纯核心模块，各自可单测，Electron 只在边缘做适配：
@@ -120,6 +125,15 @@ P4 是风险最集中的一步：要删的每一处都是实测补丁，删除�
 两条已写进踩坑库（`<webview>` guest 截图预热、移除节点销毁 guest），P2 必须内建预热，
 否则所有后台标签的 AI 截图会各自等满超时。
 
+### P2 的挂载位置（设计结论，实现待做）
+
+「一标签一常驻节点」推出一个与直觉相反的结论：节点容器**不能放在浏览器页里**。
+`BrowserPage` 只在用户停在该页时挂载，而标签必须在用户去账号页时继续存在——AI 工具会
+在那里开页、读页、截图。所以容器要挂在应用根上，用 `position: fixed` + 舞台绝对坐标定位
+（`stageOrigin` 已经由舞台上报，坐标现成）。
+
+这条同时否掉了「让渲染层在页面挂载时批量建节点」的写法：建节点必须由主进程驱动
+（P3 的握手），渲染层只负责执行与回报。
 
 
 ## 被否方案

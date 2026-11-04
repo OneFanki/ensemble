@@ -71,8 +71,9 @@ import {
   type Session,
   type WebContents,
 } from "electron";
-import { EmbeddedCdp } from "./cdp";
+import { EmbeddedCdp, type CdpExecutor } from "./cdp";
 import { GuestPageSurface, NativePageSurface, isNativeSurface, type PageSurface } from "./surface";
+import { GuestCdp, type GuestCdpTarget } from "./guest-cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
 
@@ -155,7 +156,15 @@ interface TabRecord {
    * CDP, occupy a rectangle — is the same either way.
    */
   view: PageSurface;
-  cdp: EmbeddedCdp;
+  /**
+   * Command surface for this page.
+   *
+   * An interface, not `EmbeddedCdp`: a page hosted as a `<webview>` is driven
+   * through the guest manager (which owns idle release and the teardown
+   * handshake), and every caller must go through that route or the handshake
+   * loses track of in-flight commands.
+   */
+  cdp: CdpExecutor;
   url: string;
   title: string;
   /** Inlined site icon; cleared when the page moves to another origin. */
@@ -187,6 +196,61 @@ interface TabRecord {
 interface ViewRecord extends EmbeddedView {
   /** Tabs this container was opened from; absent for hand-made views. */
   viewDefinitionId?: string;
+}
+
+/** Where a page's renderer comes from. */
+export interface GuestHost {
+  /**
+   * Creates the node for a page and resolves once it can be driven.
+   *
+   * The renderer owns the DOM, so main has to ask; the reply arrives after the
+   * node reports `dom-ready` with its guest id. Resolving late is normal — this
+   * is one round trip through IPC — but it can also fail, which is why callers
+   * get a rejection rather than a page that silently cannot be driven.
+   */
+  mount(input: {
+    tabId: string;
+    partition: string;
+    url: string;
+  }): Promise<{ contents: WebContents }>;
+  /**
+   * Closes the page's CDP session.
+   *
+   * Resolves once it is safe to remove the node: detaching after the guest is
+   * destroyed takes the native target out from under an in-flight command.
+   */
+  release(tabId: string): Promise<void>;
+  /** Tells the renderer the node may be removed. Sent after `release`. */
+  unmount(tabId: string): void;
+  /**
+   * Asks the renderer to show a page for a moment, or to put it back.
+   *
+   * A guest only produces frames while it is actually painting, so a screenshot
+   * of a background tab has to present it first. Resolves once the renderer
+   * reports the change applied — not when a frame has landed; the caller still
+   * retries its capture.
+   */
+  present(tabId: string, visible: boolean): Promise<void>;
+  /**
+   * Keeps a page's CDP session attached while it can emit unprompted events.
+   *
+   * Idle release is right for request/response traffic, but an event the page
+   * pushes while nothing is attached reaches nobody and is not replayed later.
+   * Login capture is the one such stream, so the session is held only while a
+   * page actually has a credential form to submit.
+   */
+  holdSession?(tabId: string, hold: boolean): void;
+  /**
+   * Makes the embedding window produce a frame before a guest is captured.
+   *
+   * A guest's compositor stays silent until its embedder has painted, and a
+   * silent guest answers `Page.captureScreenshot` by never replying. The window
+   * cannot be assumed to have painted: a headless run parks it off every
+   * display, and a minimised one is equally frame-less.
+   */
+  primeForCapture?(): Promise<boolean>;
+  /** The command target for a page's guest, resolved per command. */
+  targetFor(tabId: string): GuestCdpTarget;
 }
 
 export interface EmbeddedBrowserOptions {
@@ -230,6 +294,15 @@ export interface EmbeddedBrowserOptions {
    * their timing assertions assume pages run unthrottled.
    */
   aiIdleFreeze?: boolean;
+  /**
+   * Hosts pages as `<webview>` nodes owned by the renderer.
+   *
+   * Present means "the renderer draws the pages" — main asks for a node per
+   * page and drives its guest. Absent keeps the native `WebContentsView`
+   * carrier, which is what tests and any headless surface without a renderer
+   * still use.
+   */
+  guests?: GuestHost;
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
@@ -272,6 +345,25 @@ function originOf(url: string): string {
     return new URL(url).origin;
   } catch {
     return "";
+  }
+}
+
+/**
+ * Whether two URLs address the same document.
+ *
+ * Used only to recognise that a navigation arrived: absolute vs relative form
+ * and a trailing slash are the same page, while a genuinely different path is
+ * not. Query and hash are ignored — a login bounce keeps them different on
+ * purpose, and treating that as "still navigating" would time out.
+ */
+function sameDocumentUrl(actual: string, expected: string): boolean {
+  try {
+    const a = new URL(actual);
+    const b = new URL(expected);
+    const trim = (path: string) => path.replace(/\/+$/, "") || "/";
+    return a.origin === b.origin && trim(a.pathname) === trim(b.pathname);
+  } catch {
+    return actual === expected;
   }
 }
 
@@ -414,7 +506,17 @@ export class EmbeddedBrowser {
     this.defaultViewport = size;
     for (const tab of this.tabs) {
       // A page that made its own choice does not follow the default either way.
-      if (tab.viewportOverride !== undefined) continue;
+      // "Its own choice" means a size or a deliberate opt-out — both leave the
+      // page at a zoom someone else decided. What must not survive either way is
+      // the fit scale: it is a property of having *been* fitted, and once no
+      // viewport applies it silently keeps the page shrunk at the old factor.
+      if (tab.viewportOverride !== undefined) {
+        if (!this.viewportOf(tab)) {
+          delete tab.viewportScale;
+          this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
+        }
+        continue;
+      }
       if (this.viewportOf(tab)) continue;
       delete tab.viewportScale;
       this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
@@ -475,12 +577,14 @@ export class EmbeddedBrowser {
       views: this.views.map((view) => this.describeView(view)),
       ...(this.activeTabId ? { activeTabId: this.activeTabId } : {}),
       ...(this.activeViewId ? { activeViewId: this.activeViewId } : {}),
+      carrier: this.options.guests ? "guest" : "native",
     };
   }
 
   private describe(tab: TabRecord): EmbeddedTab {
-    const contents = tab.view.webContents;
+    const contents = tab.view?.webContents;
     const effectiveViewport = this.viewportOf(tab);
+    const pending = !contents || contents.isDestroyed();
     return {
       id: tab.id,
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
@@ -514,7 +618,10 @@ export class EmbeddedBrowser {
         : { viewportOverride: tab.viewportOverride ?? null }),
       devtoolsOpen: this.devtoolsOpen(tab),
       ...(tab.devtools?.mode === "docked" ? { devtoolsWidth: tab.devtools.width } : {}),
-      ...(contents.isDestroyed()
+      // No bounds while the carrier is still being created: the renderer uses
+      // the absence to mean "not laid out yet" and keeps the node hidden until
+      // a real rect arrives, instead of placing it at 0×0.
+      ...(pending
         ? {}
         : {
             bounds: (() => {
@@ -535,8 +642,8 @@ export class EmbeddedBrowser {
    */
   private devtoolsOpen(tab: TabRecord): boolean {
     if (tab.devtools) return true;
-    const contents = tab.view.webContents;
-    if (contents.isDestroyed()) return false;
+    const contents = tab.view?.webContents;
+    if (!contents || contents.isDestroyed()) return false;
     try {
       return contents.isDevToolsOpened();
     } catch {
@@ -589,6 +696,14 @@ export class EmbeddedBrowser {
     this.stage = stage;
     if (stage) this.lastStage = stage;
     this.applyLayout();
+    /*
+     * The renderer draws a guest from `bounds`, so a layout change only reaches
+     * the screen through a state broadcast. Without this the nodes kept the
+     * rect they were given before the run dock opened and covered it: the dock
+     * looked dead to the pointer, and dragging its resize handle started on the
+     * handle and then entered a page's box.
+     */
+    if (this.options.guests) this.sendState();
   }
 
   // ---------- views ----------
@@ -1344,18 +1459,17 @@ export class EmbeddedBrowser {
     // Remembered per instance: `clean` is not part of the tab record, and the
     // next page opened by this instance has to agree with it.
     if (clean) this.cleanInstances.add(instanceId);
-    const surface = new NativePageSurface({
-      webPreferences: {
-        partition,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webviewTag: false,
-        spellcheck: false,
-      },
-    });
     this.configureSession(partition);
-    surface.setBackgroundColor("#101317");
+    /*
+     * The tab is in the list before its carrier exists.
+     *
+     * A guest's `webContents` only appears once the renderer mounts the node,
+     * and mounting is driven by a state broadcast — so publishing the tab after
+     * the node exists is a deadlock: the renderer never sees the page it is
+     * being asked to host, gives it no box, and the guest reports a 0×0
+     * viewport. Native carriers do not care about the order, so both go through
+     * the same shape and only the placeholder differs.
+     */
     const tab: TabRecord = {
       id,
       ...(identityId ? { identityId } : {}),
@@ -1365,21 +1479,33 @@ export class EmbeddedBrowser {
       origin: input.origin ?? parent?.origin ?? "manual",
       instanceId,
       ...(input.openerId ? { openerId: input.openerId } : {}),
-      view: surface,
-      cdp: new EmbeddedCdp(surface.webContents, () => this.markCdpActivity(id)),
+      view: this.options.guests
+        ? // Placeholder until the node attaches; nothing may touch it before
+          // `openCarrier` returns, because a guest page has no `webContents`
+          // until the renderer creates one.
+          (null as unknown as PageSurface)
+        : (null as unknown as PageSurface),
+      cdp: null as unknown as CdpExecutor,
       url: "about:blank",
       title: "",
       loading: false,
       crashed: false,
     };
     this.tabs.push(tab);
+    this.emitState();
+    const carrier = await this.openCarrier({ tabId: id, partition, url: input.url ?? "about:blank" });
+    tab.view = carrier.view;
+    tab.cdp = carrier.cdp;
     this.wireTab(tab);
     this.attachView(tab);
     // Lay the view out inside the window once before anything parks it. A view
     // that has never had a real rect and gets its first bounds outside the
     // window is given a 0×0 viewport and keeps it, which breaks every geometry
-    // based check on that page (see `parkAll`).
-    tab.view.setBounds({ x: 0, y: 0, ...this.hostContentSize() });
+    // based check on that page (see `parkAll`). A guest needs none of this: the
+    // node is born inside the app's own layout, so its viewport comes from CSS.
+    if (isNativeSurface(tab.view)) {
+      tab.view.setBounds({ x: 0, y: 0, ...this.hostContentSize() });
+    }
     // A new page starts at the global default; only a deliberate keystroke
     // creates an override, so the setting keeps applying to everything else.
     this.applyZoom(tab, parent ? (parent.zoomOverride ?? this.defaultZoom) : this.defaultZoom);
@@ -1416,13 +1542,76 @@ export class EmbeddedBrowser {
       this.closeTab(tab.id);
       throw new Error("只支持 http(s) 地址");
     }
-    await surface.webContents.loadURL(target).catch(() => {
+    await tab.view.webContents.loadURL(target).catch(() => {
       // A failed load still leaves a usable tab; the error page is visible.
     });
     this.syncTab(tab);
     this.applyLayout();
     this.emitState();
     return this.describe(tab);
+  }
+
+  /**
+   * Resolves how a new page will be displayed.
+   *
+   * Two carriers, one shape. A guest's `webContents` arrives asynchronously —
+   * the renderer has to mount the node first — so this is the only place the
+   * manager knows which one it got; everything downstream talks to
+   * `PageSurface` and `CdpExecutor`.
+   */
+  private async openCarrier(input: {
+    tabId: string;
+    partition: string;
+    url: string;
+  }): Promise<{ view: PageSurface; cdp: CdpExecutor }> {
+    const host = this.options.guests;
+    if (!host) {
+      const surface = new NativePageSurface({
+        webPreferences: {
+          partition: input.partition,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          webviewTag: false,
+          spellcheck: false,
+        },
+      });
+      surface.setBackgroundColor("#101317");
+      return {
+        view: surface,
+        cdp: new EmbeddedCdp(surface.webContents, () => this.markCdpActivity(input.tabId)),
+      };
+    }
+    const mounted = await host.mount({
+      tabId: input.tabId,
+      partition: input.partition,
+      url: input.url,
+    });
+    // The executor is built here, not by the host: it needs both the guest the
+    // host just registered and the presentation hook, and the manager is the
+    // only place that knows the tab id those two are keyed by.
+    return {
+      view: new GuestPageSurface(mounted.contents, () => ({
+        x: this.stage?.x ?? 0,
+        y: this.stage?.y ?? 0,
+      })),
+      cdp: this.guestExecutor(input.tabId),
+    };
+  }
+
+  /**
+   * The CDP executor for a page whose guest is registered under `tabId`.
+   *
+   * Built here rather than by the host because it needs both the guest (which
+   * the host registered) and the presentation hook for screenshots, and the
+   * manager is the only place that knows which tab both are keyed by.
+   */
+  private guestExecutor(tabId: string): CdpExecutor {
+    const guests = this.options.guests;
+    if (!guests) throw new Error("没有可用的页面载体");
+    return new GuestCdp(guests.targetFor(tabId), tabId, (id, visible) =>
+      guests.present(id, visible),
+    );
   }
 
   private attachView(tab: TabRecord): void {
@@ -1472,6 +1661,15 @@ export class EmbeddedBrowser {
         tab.captureBinding = true;
       }
       await tab.cdp.evaluate(LOGIN_CAPTURE_SCRIPT);
+      /*
+       * The listener lives in the page, but the binding's events are only
+       * delivered while a CDP session is attached. Idle release is right for
+       * commands — the next one reopens — but a form submitted by the user
+       * arrives whenever they press Enter, and an event emitted with nobody
+       * attached is dropped rather than queued. So the session stays held for
+       * as long as an instrumented document is loaded.
+       */
+      this.options.guests?.holdSession?.(tab.id, true);
     } catch {
       // A page that navigated away or a failed load has nothing to instrument.
     }
@@ -1748,6 +1946,36 @@ export class EmbeddedBrowser {
     if (title) tab.title = title;
   }
 
+  /**
+   * Waits for the page to have landed on `url` with a parsed document.
+   *
+   * `readyState` alone is not enough: the document being replaced is *also*
+   * `complete`, so a check that only looked at it returned immediately against
+   * the old page — the flow then waited on elements of the page it was leaving
+   * and read from the wrong document. The URL is the signal that the navigation
+   * actually happened.
+   */
+  private async whenReady(tab: TabRecord, url: string, timeoutMs = 10_000): Promise<void> {
+    const startedAt = Date.now();
+    const wanted = normalizeEmbeddedUrl(url) ?? url;
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        const ready = await tab.cdp.evaluate<{ href: string; state: string }>(
+          "({ href: location.href, state: document.readyState })",
+        );
+        const landed =
+          ready.href === wanted ||
+          // Redirects (trailing slash, http→https, login bounce) are normal;
+          // compare origins and paths so a redirect still counts as arrival.
+          sameDocumentUrl(ready.href, wanted);
+        if (landed && (ready.state === "interactive" || ready.state === "complete")) return;
+      } catch {
+        // Navigation in progress: the execution context is being replaced.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    }
+  }
+
   async navigate(tabId: string, url: string): Promise<EmbeddedTab> {
     const tab = this.requireTab(tabId);
     const target = normalizeEmbeddedUrl(url);
@@ -1758,6 +1986,13 @@ export class EmbeddedBrowser {
     await tab.view.webContents.loadURL(target).catch(() => {
       // The error page is the feedback; the tab stays alive.
     });
+    // A flow's next step runs immediately after this, and a guest's `loadURL`
+    // resolves before the new document is ready — the first `wait` then matched
+    // the *old* page and the following `read` looked in the wrong document.
+    // Native views never showed this because their load settled first.
+    if (this.options.guests) {
+      await this.whenReady(tab, target);
+    }
     this.syncTab(tab);
     // The page is no longer blank, so it has to take over its cell: until now
     // the renderer was drawing the new-tab surface there instead.
@@ -1974,24 +2209,36 @@ export class EmbeddedBrowser {
       this.cleanInstances.delete(tab.instanceId);
       this.instanceActive.delete(tab.instanceId);
     }
-    tab.cdp.detach();
+    // A page still waiting for its carrier has neither an executor nor a
+    // surface; the tab record is written before either exists, so closing it
+    // early has to be a no-op rather than a null dereference.
+    tab.cdp?.detach();
     // The DevTools view outlives the page only until here: it is hosted by the
     // same window, so a closed page must take its panel with it.
     this.dropDevTools(tab);
-    // A guest's node is removed by the renderer, and only after the teardown
-    // handshake; main has no child view to detach for it.
-    if (isNativeSurface(tab.view)) {
+    if (tab.view && isNativeSurface(tab.view)) {
       try {
         this.host?.contentView.removeChildView(tab.view.view);
       } catch {
         // The window may already be gone.
       }
+      try {
+        if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
+      } catch {
+        // Closing an already-destroyed contents is a no-op.
+      }
+      return;
     }
-    try {
-      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-    } catch {
-      // Closing an already-destroyed contents is a no-op.
-    }
+    // A guest's node belongs to the renderer, so it cannot be removed here —
+    // and it must not be: destroying the guest while a CDP command is in flight
+    // is a process-level crash. The handshake closes the session, and only its
+    // reply authorises the renderer to drop the node.
+    const guests = this.options.guests;
+    if (!guests) return;
+    void guests
+      .release(tab.id)
+      .catch(() => undefined)
+      .then(() => guests.unmount(tab.id));
   }
 
   private closeAllTabs(): void {
@@ -2097,7 +2344,12 @@ export class EmbeddedBrowser {
   private applyLayout(): void {
     const host = this.host;
     if (!host || host.isDestroyed()) return;
-    this.parkAll();    /**
+    // Guests are laid out by the renderer from `bounds`, so there is nothing to
+    // park: a parked rect would be handed over as if it were the page's place
+    // on the stage, and every node would render off-window. The renderer hides
+    // a page by not giving it a rect at all.
+    if (!this.options.guests) this.parkAll();
+    /**
      * Slot tables are layout *state*, not geometry, so they are normalized even
      * when no stage has been reported.
      *
@@ -2109,7 +2361,19 @@ export class EmbeddedBrowser {
      */
     const current = this.activeView();
     if (current) this.normalizeSlots(current);
-    if (!this.stage) return;
+    if (!this.stage) {
+      // No stage means the browser page is not mounted (the console covers it,
+      // or the window has no chrome yet). Guests keep their nodes but give up
+      // their place: the renderer hides a page that reports no rect, and
+      // leaving the last rect behind would paint pages over the console.
+      if (this.options.guests) {
+        for (const tab of this.tabs) {
+          if (tab.view.webContents.isDestroyed()) continue;
+          tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+        }
+      }
+      return;
+    }
 
     const view = this.activeView();
     if (!view) {
@@ -2245,8 +2509,11 @@ export class EmbeddedBrowser {
     }
     for (const tab of this.tabs) {
       if (this.stagedTabs.has(tab.id) || this.frozenTabs.has(tab.id)) continue;
-      const contents = tab.view.webContents;
-      if (contents.isDestroyed() || contents.isLoading() || tab.crashed) continue;
+      // A page is published before its carrier exists so the renderer can be
+      // asked to host it; the sweep runs on a timer and can land in that window.
+      const contents = tab.view?.webContents;
+      if (!contents || contents.isDestroyed()) continue;
+      if (contents.isLoading() || tab.crashed) continue;
       if (isBlankTab(tab) || tab.devtools) continue;
       if (contents.isCurrentlyAudible()) continue;
       if ((this.aiActiveUntil.get(tab.id) ?? 0) > now) continue;
@@ -2490,6 +2757,34 @@ export class EmbeddedBrowser {
     };
   }
 
+  /**
+   * Replaces a field's contents and optionally submits.
+   *
+   * The single place these three steps live: a guest only accepts keyboard and
+   * text input for the element its last real pointer event landed on, so the
+   * field has to be clicked first. Three copies of that rule is how one call
+   * site ends up typing into the wrong element while the others work — which is
+   * exactly what happened.
+   */
+  private async typeInto(
+    tab: TabRecord,
+    target: TargetInput,
+    value: string,
+    options: { clear?: boolean; submit?: boolean } = {},
+  ): Promise<void> {
+    if (tab.cdp.requiresPointerBeforeTyping) {
+      const point = await tab.cdp
+        .elementPoint(buildElementPointExpression(target))
+        .catch(() => undefined);
+      if (point?.ok && point.x !== undefined && point.y !== undefined) {
+        await tab.cdp.clickAt(point.x, point.y).catch(() => undefined);
+      }
+    }
+    if (options.clear !== false) await tab.cdp.selectAll().catch(() => undefined);
+    await tab.cdp.insertText(value);
+    if (options.submit) await tab.cdp.pressNamedKey("Enter");
+  }
+
   async type(
     tabId: string,
     target: TargetInput,
@@ -2505,11 +2800,7 @@ export class EmbeddedBrowser {
     }>(buildFocusExpression(target));
     if (!focus.ok)
       throw new Error(`无法输入到 ${describeTarget(target)}：${focus.reason ?? "unknown"}`);
-    if (options.clear !== false) {
-      await tab.cdp.key("a", "KeyA", 65).catch(() => {});
-    }
-    await tab.cdp.insertText(text);
-    if (options.submit) await tab.cdp.key("Enter", "Enter", 13);
+    await this.typeInto(tab, target, text, options);
     // Reported so the MCP layer can keep the value out of its audit log; a
     // password field can be a brand-new credential (creating a tenant), so it
     // cannot always go through `fill_browser_login`.
@@ -2618,9 +2909,10 @@ export class EmbeddedBrowser {
           `第 ${filled.length + 1} 个字段（${name}）无法输入：${focus.reason ?? "unknown"}`,
         );
       }
-      if (field.clear !== false) await tab.cdp.key("a", "KeyA", 65).catch(() => {});
-      await tab.cdp.insertText(field.value);
-      if (field.submit) await tab.cdp.key("Enter", "Enter", 13);
+      await this.typeInto(tab, field.target, field.value, {
+        clear: field.clear !== false,
+        ...(field.submit ? { submit: true } : {}),
+      });
       filled.push({
         field: name,
         ...(focus.selector ? { selector: focus.selector } : {}),
@@ -2687,6 +2979,9 @@ export class EmbeddedBrowser {
             await tab.view.webContents.loadURL(url).catch(() => {
               // An error page is the feedback; the navigation itself did happen.
             });
+            // The next step starts immediately; on a guest the old document is
+            // still the active context until the new one commits.
+            if (this.options.guests) await this.whenReady(tab, url);
             this.syncTab(tab);
             detail = url;
             break;
@@ -2699,9 +2994,9 @@ export class EmbeddedBrowser {
             }>(buildFocusExpression(target));
             if (!focus.ok) throw new Error(`无法输入：${focus.reason ?? "unknown"}`);
             // Some frameworks clear on focus; select-then-insert replaces the
-            // old value without leaving a trailing fragment behind.
-            await tab.cdp.key("a", "KeyA", 65).catch(() => {});
-            await tab.cdp.insertText(step.value ?? "");
+            // old value without leaving a trailing fragment behind. The pointer
+            // click inside `typeInto` is what makes a guest accept the input.
+            await this.typeInto(tab, target, step.value ?? "", { clear: true });
             detail = focus.inputType === "password" ? "[redacted]" : step.value;
             break;
           }
@@ -2833,6 +3128,10 @@ export class EmbeddedBrowser {
     options: { format?: "png" | "jpeg"; quality?: number } = {},
   ): Promise<{ path: string; bytes: number }> {
     const tab = this.requireTab(tabId);
+    // The embedder has to have painted before its guest can: a window that was
+    // parked off-screen or minimised has produced no frame, and the capture
+    // below would then sit out its whole deadline.
+    await this.options.guests?.primeForCapture?.();
     const buffer = await tab.cdp.screenshot({
       ...options,
       // A page the user switched away from (or a minimised window) has no
@@ -3205,7 +3504,7 @@ export class EmbeddedBrowser {
     }
     // `setZoomFactor` is per webContents and survives navigations within the
     // page, which is what a browser tab does. It does not leak to other pages:
-    // each page is its own WebContentsView.
+    // each page has its own contents.
     contents.setZoomFactor(Math.min(2, Math.max(0.5, percent / 100)));
   }
 
@@ -3264,6 +3563,12 @@ export class EmbeddedBrowser {
       // The carrier cannot host a panel. Rather than leave the user with a
       // button that does nothing, Electron opens its own DevTools window — the
       // one behaviour a docked panel was built to avoid, but still usable.
+      //
+      // Nothing is recorded here on purpose: this view never received the tools
+      // (binding failed), so it is closed, and `devtoolsOpen` falls back to
+      // Electron's own query — which is the truth for a detached window. Storing
+      // the closed view would have `placeDevTools` try to parent a destroyed
+      // child view.
       view.webContents.close();
       tab.view.webContents.openDevTools({ mode: "detach" });
       return { view, mode: "window", width } as NonNullable<TabRecord["devtools"]>;

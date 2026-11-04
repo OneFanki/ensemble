@@ -2,6 +2,47 @@ import type { WebContents } from "electron";
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
 
 /**
+ * The command surface every displayed page is driven through.
+ *
+ * Two implementations exist while the carrier migration is in progress: the
+ * direct one below (a page main owns outright) and a managed one that routes
+ * through the guest session state machine (idle release and teardown
+ * handshakes). Callers cannot tell them apart — which is the point: the browser
+ * manager keeps driving pages the same way regardless of where they render.
+ */
+export interface CdpExecutor {
+  isAttached(): boolean;
+  prepare(): Promise<void>;
+  detach(): void;
+  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  lifecycle(state: "frozen" | "active"): Promise<void>;
+  evaluate<T>(expression: string, options?: { awaitPromise?: boolean }): Promise<T>;
+  snapshotDom(expression: string): Promise<DomSnapshot>;
+  elementPoint(expression: string): Promise<ElementPoint>;
+  visibility(expression: string): Promise<VisibilityProbe>;
+  screenshot(options?: {
+    format?: "png" | "jpeg";
+    quality?: number;
+    preferRenderer?: boolean;
+  }): Promise<Buffer>;
+  clickAt(x: number, y: number): Promise<void>;
+  insertText(text: string): Promise<void>;
+  navigate(url: string): Promise<void>;
+  key(key: string, code: string, keyCode: number): Promise<void>;
+  /** Selects the focused field's contents, so the next input replaces them. */
+  selectAll(): Promise<void>;
+  pressNamedKey(name: string): Promise<void>;
+  /**
+   * Whether keyboard input only reaches the element the pointer last clicked.
+   *
+   * True for a `<webview>` guest: its input route follows the last real pointer
+   * event, so typing into a merely-focused field drops every keystroke. False
+   * for a page main owns, where DOM focus is enough.
+   */
+  readonly requiresPointerBeforeTyping: boolean;
+}
+
+/**
  * CDP over Electron's in-process debugger instead of a TCP endpoint.
  *
  * A `--remote-debugging-port` is unauthenticated: any local process could drive
@@ -13,7 +54,10 @@ import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspe
  * caller shares it. Electron allows DevTools to be open at the same time, so the
  * user can inspect a page while an AI call is running.
  */
-export class EmbeddedCdp {
+export class EmbeddedCdp implements CdpExecutor {
+  /** DOM focus is enough for a page main owns; see the interface note. */
+  readonly requiresPointerBeforeTyping = false;
+
   private attached = false;
   /** Resolves once attach and focus emulation are both in place. */
   private ready: Promise<void> | null = null;
@@ -220,6 +264,33 @@ export class EmbeddedCdp {
       code,
       windowsVirtualKeyCode: keyCode,
       nativeVirtualKeyCode: keyCode,
+    });
+  }
+
+  /**
+   * Selects the focused field's contents.
+   *
+   * `commands` is Chromium's own editing command; a plain "a" key press without
+   * a text payload produces no editing action on its own, which is how "clear
+   * before typing" ended up doing nothing and appending the new value instead.
+   */
+  async selectAll(): Promise<void> {
+    await this.send("Input.dispatchKeyEvent", {
+      type: "rawKeyDown",
+      key: "a",
+      code: "KeyA",
+      modifiers: 2,
+      windowsVirtualKeyCode: 65,
+      nativeVirtualKeyCode: 65,
+      commands: ["selectAll"],
+    });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "a",
+      code: "KeyA",
+      modifiers: 2,
+      windowsVirtualKeyCode: 65,
+      nativeVirtualKeyCode: 65,
     });
   }
 

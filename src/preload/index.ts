@@ -221,6 +221,28 @@ const api: EnsembleApi = {
   registerEmbeddedGuest: (guestId, tabId, partition) =>
     ipcRenderer.invoke(IPC.embeddedGuestRegister, guestId, tabId, partition),
   teardownEmbeddedGuest: (guestId) => ipcRenderer.invoke(IPC.embeddedGuestTeardown, guestId),
+  onEmbeddedGuestMount: (listener) => {
+    const handler = (_event: unknown, payload: Parameters<typeof listener>[0]) => listener(payload);
+    ipcRenderer.on(IPC.embeddedGuestMount, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedGuestMount, handler);
+  },
+  onEmbeddedGuestUnmount: (listener) => {
+    const handler = (_event: unknown, payload: { tabId: string }) => listener(payload);
+    ipcRenderer.on(IPC.embeddedGuestUnmount, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedGuestUnmount, handler);
+  },
+  onEmbeddedGuestPresent: (listener) => {
+    const handler = (
+      _event: unknown,
+      payload: { requestId: number; tabId: string; present: boolean },
+    ) => listener(payload);
+    ipcRenderer.on(IPC.embeddedGuestPresent, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedGuestPresent, handler);
+  },
+  confirmEmbeddedGuestPresented: (requestId, shown) =>
+    ipcRenderer.invoke(IPC.embeddedGuestPresented, requestId, shown),
+  confirmEmbeddedGuestLaidOut: (tabId) =>
+    ipcRenderer.invoke(IPC.embeddedGuestLaidOut, tabId),
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),

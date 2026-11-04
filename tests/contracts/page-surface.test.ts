@@ -40,8 +40,8 @@ describe("pages are addressed through a carrier-neutral surface", () => {
 
   it("makes a guest's geometry answerable without a native view", () => {
     // `viewIsOnScreen` and the screenshot paths ask for bounds; a guest answers
-    // with what the renderer laid out, so those checks keep working.
-    expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?reportBounds/);
+    // with the rect main asked for, so those checks keep working.
+    expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?setBounds\(/);
     expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?getBounds\(\)/);
   });
 });

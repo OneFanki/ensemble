@@ -101,7 +101,7 @@ import {
   Tray,
   webContents,
 } from "electron";
-import { EmbeddedBrowser } from "./embedded/browser";
+import { EmbeddedBrowser, type GuestHost } from "./embedded/browser";
 import { BrowserGuestManager } from "./embedded/guests";
 import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
@@ -256,6 +256,104 @@ let embedded: EmbeddedBrowser | null = null;
  * window simply does not get one.
  */
 const guestManager = new BrowserGuestManager();
+
+/** Correlation for "show this page briefly" requests (screenshot of a hidden tab). */
+let presentSeq = 0;
+const presentWaiters = new Map<number, (payload: { requestId: number; shown: boolean }) => void>();
+
+/**
+ * The renderer's half of the carrier contract.
+ *
+ * Main cannot create a `<webview>` node, so mounting is a request: send the
+ * page's creation parameters, wait for the renderer to report `dom-ready`, then
+ * hand back the guest's `webContents` and its CDP executor. Every page open
+ * goes through this once, which is why the wait has a deadline — a renderer
+ * that never answers must fail the open instead of hanging a tool call.
+ */
+const guestHost: GuestHost = {
+  async mount({ tabId, partition, url }) {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) throw new Error("窗口已关闭");
+    // Start waiting before asking: the renderer can report `dom-ready` before
+    // the `send` has even returned, and a wait registered afterwards would miss
+    // an attach that already happened.
+    const pending = guestManager.awaitGuest(tabId, 10_000);
+    const request = {
+      tabId,
+      partition,
+      url,
+      // Creation-time capability: a node created without it cannot receive
+      // popup requests at all, and the request would never reach main.
+      allowPopups: true,
+    };
+    win.webContents.send(IPC.embeddedGuestMount, request);
+    /*
+     * One retry shortly after the first request.
+     *
+     * The renderer subscribes to this channel while mounting, which happens a
+     * moment after its document has finished loading — and that is exactly when
+     * the MCP endpoint starts answering, so a tool call can arrive before the
+     * listener exists. A `send` to a channel with no listener is dropped in
+     * silence; the retry costs one frame in the normal case and saves a tool
+     * call from failing on a renderer that was merely a frame late.
+     */
+    const retry = setTimeout(() => {
+      if (guestManager.guestIdFor(tabId)) return;
+      const current = mainWindow;
+      if (!current || current.isDestroyed()) return;
+      current.webContents.send(IPC.embeddedGuestMount, request);
+    }, 400);
+    retry.unref?.();
+    try {
+      await pending;
+    } finally {
+      clearTimeout(retry);
+    }
+    const guestId = guestManager.guestIdFor(tabId);
+    const contents = guestId ? guestManager.contentsOf(guestId) : undefined;
+    const cdp = guestId ? guestManager.cdpFor(guestId) : undefined;
+    if (!contents || !cdp) throw new Error("页面没有在预期时间内就绪");
+    return { contents, cdp };
+  },
+  async release(tabId) {
+    const guestId = guestManager.guestIdFor(tabId);
+    guestManager.releaseKey(tabId);
+    if (guestId) await guestManager.teardown(guestId);
+  },
+  unmount(tabId) {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send(IPC.embeddedGuestUnmount, { tabId });
+  },
+  present(tabId, visible) {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) return Promise.reject(new Error("窗口已关闭"));
+    const requestId = ++presentSeq;
+    return new Promise<void>((resolve, reject) => {
+      const done = (payload: { requestId: number; shown: boolean }): void => {
+        if (payload.requestId !== requestId) return;
+        presentWaiters.delete(requestId);
+        clearTimeout(timer);
+        resolve();
+      };
+      // A renderer that never replies must not hang a screenshot; the capture
+      // itself has its own timeout, so giving up here just means "try anyway".
+      const timer = setTimeout(() => {
+        presentWaiters.delete(requestId);
+        reject(new Error("页面没有及时呈现"));
+      }, 1_500);
+      timer.unref?.();
+      presentWaiters.set(requestId, done);
+      win.webContents.send(IPC.embeddedGuestPresent, { requestId, tabId, present: visible });
+    });
+  },
+  holdSession(tabId, hold) {
+    const guestId = guestManager.guestIdFor(tabId);
+    if (guestId) guestManager.pinSession(guestId, hold);
+  },
+  primeForCapture: () => guestManager.primeForCapture(),
+  targetFor: (tabId) => guestManager.targetFor(tabId),
+};
 /**
  * Downloads from every identity partition, for the browser toolbar.
  *
@@ -410,6 +508,7 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // Downloads are session state, so every partition the surface configures
     // has to be handed to the manager — a missed one downloads invisibly.
     onSessionReady: (ses) => downloads.attach(ses),
+    guests: guestHost,
     // Dragging a layout picker in the sidebar edits the open container only for
     // hand-made views; saved views persist the choice back to the definition.
     onViewLayoutChange: (viewDefinitionId, layoutId) => {
@@ -1477,18 +1576,19 @@ function showMainWindow(): void {
  * A window created with `show: false` and never shown is not a faithful
  * environment: Chromium stops producing compositor frames for it, so
  * `Page.captureScreenshot` hangs rather than returning pixels (measured — the
- * freeze pass and every screenshot went from ~100ms to never completing). The
- * window therefore is shown, but parked outside every display, kept out of the
- * taskbar, and never focused, so nothing appears where the machine's user is
- * working while the compositor still behaves normally.
+ * freeze pass and every screenshot went from ~100ms to never completing).
+ *
+ * Parked outside every display has the same effect one level down: the window
+ * itself has frames, but a `<webview>` inside it does not, and a guest never
+ * answers a capture while its embedder is at a coordinate no display covers.
+ * So the window stays where a display is and is made invisible instead: fully
+ * transparent, out of the taskbar, never focused.
  */
 function parkWindowOffscreen(win: BrowserWindow): void {
   if (win.isDestroyed()) return;
-  // Far enough that no plausible display layout reaches it; the window keeps the
-  // size the checks expect because only the origin moves.
-  const bounds = win.getBounds();
-  win.setBounds({ ...bounds, x: -32_000, y: -32_000 });
   win.setSkipTaskbar(true);
+  win.setOpacity(0);
+  win.setIgnoreMouseEvents(true);
   win.webContents.setBackgroundThrottling(false);
   win.showInactive();
 }
@@ -2180,7 +2280,7 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.identitySave, (draft: IdentityDraft) => {
+  handle(IPC.identitySave, async (draft: IdentityDraft) => {
     const parsed = identityDraftSchema.parse(draft);
     const { password, captureToken, ...rest } = parsed;
     // A saved login capture owns the secret; it is released exactly once, here.
@@ -2190,7 +2290,11 @@ function registerIpc(workspace: WorkspaceService): void {
       captured = loginCaptures.take(captureToken);
       if (!captured) throw new Error("这次登录信息已保存过，请重新登录后再试");
     }
-    workspace.saveIdentity(rest, password ?? captured?.password);
+    // Awaited: writing the vault is asynchronous, and the snapshot returned
+    // below is what the form reads to report whether a password is stored.
+    // Returning before the write landed made a saved capture look like an
+    // account without a password.
+    await workspace.saveIdentity(rest, password ?? captured?.password);
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -3280,6 +3384,32 @@ function registerIpc(workspace: WorkspaceService): void {
     const id = Number(guestId);
     if (!Number.isInteger(id) || id <= 0) return;
     await guestManager.teardown(String(id));
+  });
+
+  /**
+   * The renderer finished (or failed) a presentation request.
+   *
+   * Resolving the waiting screenshot here — rather than sleeping a guessed
+   * number of frames — is what keeps a capture of a background tab to tens of
+   * milliseconds instead of a timeout.
+   */
+  handle(IPC.embeddedGuestPresented, (requestId: number, shown: boolean) => {
+    const done = presentWaiters.get(Number(requestId));
+    if (!done) return;
+    presentWaiters.delete(Number(requestId));
+    done({ requestId: Number(requestId), shown: Boolean(shown) });
+  });
+
+  /**
+   * The renderer laid a node out.
+   *
+   * Until this arrives the page's viewport is 0×0, and every visibility check
+   * inside it answers false — so commands that read the page wait for it rather
+   * than reporting "element not found".
+   */
+  handle(IPC.embeddedGuestLaidOut, (tabId: string) => {
+    if (typeof tabId !== "string" || !tabId) return;
+    guestManager.confirmLaidOut(tabId);
   });
 
   // The chrome reports the content area it reserves for native views. `send`

@@ -259,6 +259,29 @@ export const IPC = {
   embeddedGuestRegister: "embedded:guest-register",
   /** Renderer → main: close this guest's CDP session before unmounting the node. */
   embeddedGuestTeardown: "embedded:guest-teardown",
+  /**
+   * Main → renderer: mount a node for this page.
+   *
+   * The renderer owns the DOM, so main cannot create the node itself; it asks
+   * and waits for the `dom-ready` report. One request per page id, and a page
+   * that already has a node is a no-op.
+   */
+  embeddedGuestMount: "embedded:guest-mount",
+  /** Main → renderer: this page is gone; unmount after the teardown reply. */
+  embeddedGuestUnmount: "embedded:guest-unmount",
+  /**
+   * Main → renderer: show this page for a moment, or put it back.
+   *
+   * A guest only produces frames while it is actually painting: hidden, fully
+   * occluded and off-window guests all refuse `Page.captureScreenshot` by never
+   * answering it (measured — Chromium culls them from the compositor). A
+   * screenshot of a background tab therefore has to present the page briefly.
+   */
+  embeddedGuestPresent: "embedded:guest-present",
+  /** Renderer → main: that presentation finished; carries the request id. */
+  embeddedGuestPresented: "embedded:guest-presented",
+  /** Renderer → main: a node exists and has been given its box. */
+  embeddedGuestLaidOut: "embedded:guest-laid-out",
   settingsSave: "settings:save",
   /** Fires the connectivity test shown in the proxy settings. */
   proxyTestConnectivity: "proxy:test-connectivity",
@@ -665,6 +688,31 @@ export interface EnsembleApi {
    * takes the native target out from under an in-flight command.
    */
   teardownEmbeddedGuest(guestId: number): Promise<void>;
+  /**
+   * Fires when a page needs a node mounted.
+   *
+   * Main cannot create DOM, so it asks; the reply is the `registerEmbeddedGuest`
+   * call that follows `dom-ready`. The payload carries everything the node needs
+   * at creation time — partition and URL are creation-time attributes.
+   */
+  onEmbeddedGuestMount(
+    listener: (payload: { tabId: string; partition: string; url: string; allowPopups: boolean }) => void,
+  ): () => void;
+  /** Fires when a page's node may be removed (its session is already closed). */
+  onEmbeddedGuestUnmount(listener: (payload: { tabId: string }) => void): () => void;
+  /**
+   * Fires when main needs a page to paint for a moment (a screenshot).
+   *
+   * `present: false` puts it back. The reply is `confirmEmbeddedGuestPresented`,
+   * which is what lets main wait for a frame instead of guessing with a timer.
+   */
+  onEmbeddedGuestPresent(
+    listener: (payload: { requestId: number; tabId: string; present: boolean }) => void,
+  ): () => void;
+  /** Renderer → main: the requested presentation is done (or failed). */
+  confirmEmbeddedGuestPresented(requestId: number, shown: boolean): Promise<void>;
+  /** Renderer → main: a node now has its real box, so the page is readable. */
+  confirmEmbeddedGuestLaidOut(tabId: string): Promise<void>;
 
   saveAppSettings(patch: SettingsPatch): Promise<AppSettings>;
   setTheme(theme: AppSettings["theme"]): Promise<void>;

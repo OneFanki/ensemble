@@ -158,6 +158,16 @@ export interface EmbeddedState {
   views: EmbeddedView[];
   activeTabId?: string;
   activeViewId?: string;
+  /**
+   * What draws the pages.
+   *
+   * `native` is a main-process view composited above the app's HTML; `guest` is a
+   * `<webview>` node inside the app's own document. The difference decides
+   * whether an overlay has to freeze the stage: a native view is never behind
+   * HTML no matter what its z-index says, while a guest takes part in the normal
+   * stacking order.
+   */
+  carrier?: "native" | "guest";
 }
 
 /** Where a dragged tab is being dropped. */

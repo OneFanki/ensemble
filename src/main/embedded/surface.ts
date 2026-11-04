@@ -81,18 +81,39 @@ export class NativePageSurface implements PageSurface {
 /**
  * A page hosted by the renderer as a `<webview>`.
  *
- * Positioning is a no-op on purpose: the node sits in the app's own DOM, so its
- * box is CSS, not `setBounds`. The manager still tracks a rectangle because
- * some callers need to answer "is this page on screen" — the renderer reports
- * the real one through {@link reportBounds}.
+ * The renderer owns where the node sits, but main still computes the rect it
+ * asks for: that value is what `bounds` reports and what the screenshot paths
+ * read to decide whether the page is on screen. So `setBounds` records rather
+ * than moves.
  */
 export class GuestPageSurface implements PageSurface {
   private reported = { x: 0, y: 0, width: 0, height: 0 };
 
-  constructor(readonly webContents: WebContents) {}
+  constructor(
+    readonly webContents: WebContents,
+    /**
+     * Stage origin in window coordinates, read at call time.
+     *
+     * The manager lays pages out in window space — that is what a native view
+     * needs — while the renderer positions a node from the stage's own origin.
+     * Subtracting here is what keeps `bounds` in the renderer's space without a
+     * second layout branch in the manager. Read lazily because the stage moves
+     * (the console covers it, the window resizes) and the value must be the
+     * current one, not the one at construction.
+     */
+    private readonly stageOrigin: () => { x: number; y: number },
+  ) {}
 
-  setBounds(): void {
-    // DOM layout decides; main has nothing to move.
+  /**
+   * Records where the page sits, converted to stage-relative pixels.
+   *
+   * Nothing is moved here — the renderer positions the node — but the value is
+   * what `bounds` reports and what the screenshot paths read to decide whether
+   * the page is on screen.
+   */
+  setBounds(rect: { x: number; y: number; width: number; height: number }): void {
+    const origin = this.stageOrigin();
+    this.reported = { ...rect, x: rect.x - origin.x, y: rect.y - origin.y };
   }
 
   getBounds(): { x: number; y: number; width: number; height: number } {
@@ -116,11 +137,6 @@ export class GuestPageSurface implements PageSurface {
    */
   bindDevTools(): boolean {
     return false;
-  }
-
-  /** Records the box the renderer laid the node out in. */
-  reportBounds(rect: { x: number; y: number; width: number; height: number }): void {
-    this.reported = rect;
   }
 }
 

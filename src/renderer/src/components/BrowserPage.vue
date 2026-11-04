@@ -1153,11 +1153,17 @@ function pickSuggestion(url: string): void {
 }
 
 /**
- * Overlays float above the stage by freezing it.
+ * Overlays float above the stage by freezing it, when the carrier needs it.
  *
- * `WebContentsView` paints above all HTML regardless of z-index, so an app menu
- * that reaches into the stage would be covered by the page. Capturing the stage
- * first and parking the views keeps the menu readable and the page running.
+ * A `WebContentsView` paints above all HTML regardless of z-index, so an app
+ * menu that reaches into the stage would be covered by the page. Capturing the
+ * stage first and parking the views keeps the menu readable and the page running.
+ *
+ * A `guest` page is a node in this document instead, so it stacks like any other
+ * element: the overlay's z-index is enough and nothing has to be frozen. Skipping
+ * the capture also removes a real hazard — the parking step told main the stage
+ * was gone, and freezing again while it had no stage returned nothing to paint,
+ * which is how a second overlay ended up covering a blank rectangle.
  *
  * A drag from the running dock counts as an overlay too: while pages occupy the
  * stage, their own native views swallow every drag event, so the only way to make
@@ -1184,6 +1190,15 @@ async function syncStageCover(): Promise<void> {
   if (!covered) {
     frozenSlots.value = [];
     reportStage();
+    return;
+  }
+  // A guest stacks inside this document, so the stage is already behind the
+  // overlay and stays live. Reporting is still needed: closing an earlier
+  // overlay may have left main without a stage.
+  if (store.state.carrier === "guest") {
+    frozenSlots.value = [];
+    reportStage();
+    store.finishCover();
     return;
   }
   const slots = await window.ensemble.freezeEmbedded();

@@ -81,19 +81,39 @@ function toggleCollapsed(): void {
  * Width is written to the store on every move so the stage re-lays out live,
  * but persistence waits for pointerup: writing localStorage 60 times a second
  * during a drag is what makes sidebars feel sticky.
+ *
+ * The pointer is captured for the duration. Without it the drag stops the
+ * moment the cursor crosses out of the dock: the pages are `<webview>` nodes
+ * occupying the stage, and a guest is its own native surface, so it takes the
+ * pointer and the embedder never sees the move. Every subsequent position was
+ * lost and the dock stayed at its starting width.
  */
 function startResize(event: PointerEvent): void {
   if (collapsed.value) return;
   event.preventDefault();
+  const handle = event.currentTarget as Element | null;
+  try {
+    handle?.setPointerCapture(event.pointerId);
+  } catch {
+    // A capture that cannot be taken still leaves the window listeners working
+    // for the part of the drag that stays inside the dock.
+  }
   const startX = event.clientX;
   const startWidth = embedded.dockWidth;
   resizing.value = true;
+  embedded.holdPointer();
   const move = (next: PointerEvent) => {
     embedded.setDockWidth(startWidth - (next.clientX - startX), false);
   };
   const up = () => {
     resizing.value = false;
     embedded.setDockWidth(embedded.dockWidth);
+    embedded.releasePointer();
+    try {
+      handle?.releasePointerCapture(event.pointerId);
+    } catch {
+      // Already released by the browser.
+    }
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
   };

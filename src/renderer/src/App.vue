@@ -11,6 +11,7 @@ import type { UpdateCheckResult } from "@shared/update";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
+import GuestPool from "./components/GuestPool.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import ConsoleHeader from "./components/ConsoleHeader.vue";
 import ConsoleSidebar from "./components/ConsoleSidebar.vue";
@@ -689,6 +690,13 @@ async function handleLocale(locale: LocaleSetting) {
 
 <template>
   <div class="app-shell" :data-platform="platform">
+    <!--
+      Page nodes live here, at the root, not inside the browser page: a node
+      removed from the document destroys its renderer process, and the browser
+      page unmounts whenever the console is open — while AI tools keep using
+      tabs from there.
+    -->
+    <GuestPool />
     <div v-if="store.loading" class="boot">
       <Logo :size="30" />
       <span class="boot-copy">

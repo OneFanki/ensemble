@@ -3,6 +3,7 @@ import { GuestSessions, type GuestCdpPort, type GuestHandle } from "@core/cdp/gu
 import { GuestSlots } from "@core/cdp/guest-slots";
 import { hardenGuestPreferences } from "@core/cdp/guest-policy";
 import { EmbeddedCdp } from "./cdp";
+import type { GuestCdpTarget } from "./guest-cdp";
 
 /**
  * The main-process half of a `<webview>`-hosted page.
@@ -85,6 +86,13 @@ export class BrowserGuestManager {
   private readonly keyToGuest = new Map<string, string>();
   /** Commands waiting for a guest that has not attached yet. */
   private readonly slots = new GuestSlots<GuestHandle>();
+  /** Pages whose node the renderer has laid out at least once. */
+  private readonly laidOut = new Set<string>();
+  /** Commands waiting for that layout. */
+  private readonly layoutWaiters = new Map<
+    string,
+    { promise: Promise<void>; resolve: () => void; timer: ReturnType<typeof setTimeout> }
+  >();
   private host: WebContents | null = null;
   /** Whether the embedder has been made to produce a frame (see {@link primeHost}). */
   private hostPrimed = false;
@@ -164,17 +172,30 @@ export class BrowserGuestManager {
    * Deliberately a CDP capture of the *host*: `capturePage()` on a window whose
    * page contains a webview throws `UnknownVizError`, and attaching without
    * capturing does not produce the frame.
+   *
+   * "Once" is per host frame, not per window: a window that is moved off every
+   * display after its first frame (a headless run parks itself) stops producing
+   * them, and the flag would then claim a prime that no longer holds. {@link
+   * primeForCapture} is what callers use when a real capture is about to happen.
    */
   private async primeHost(): Promise<void> {
     const host = this.host;
     if (!host || host.isDestroyed() || this.hostPrimed) return;
     this.hostPrimed = true;
+    await this.captureHost();
+  }
+
+  private async captureHost(): Promise<boolean> {
+    const host = this.host;
+    if (!host || host.isDestroyed()) return false;
     try {
       if (!host.debugger.isAttached()) host.debugger.attach("1.3");
       await host.debugger.sendCommand("Page.captureScreenshot", { format: "png" });
+      return true;
     } catch {
       // A window that cannot be captured still works for everything except
       // guest screenshots; retrying on every command would be worse.
+      return false;
     } finally {
       try {
         if (!host.isDestroyed() && host.debugger.isAttached()) host.debugger.detach();
@@ -182,6 +203,19 @@ export class BrowserGuestManager {
         // The host died under the session; nothing to release.
       }
     }
+  }
+
+  /**
+   * Primes the embedder right before a guest capture.
+   *
+   * Cheap when the window is already painting — the point is that "already
+   * primed" cannot be remembered: a parked window, a minimised one and one that
+   * was just moved produce no frames, and a guest whose embedder is not
+   * producing frames waits out the whole screenshot deadline.
+   */
+  async primeForCapture(): Promise<boolean> {
+    this.hostPrimed = true;
+    return this.captureHost();
   }
 
   /**
@@ -201,10 +235,11 @@ export class BrowserGuestManager {
     const existing = this.guests.get(guestId);
     if (existing) return existing.handle;
 
+    const cdp = new EmbeddedCdp(contents, () => this.options.onActivity?.(guestId));
     const record: GuestRecord = {
-      handle: this.sessions.attach(guestId, this.createPort(guestId, contents)),
+      handle: this.sessions.attach(guestId, this.createPort(guestId, contents, cdp)),
       contents,
-      cdp: new EmbeddedCdp(contents, () => this.options.onActivity?.(guestId)),
+      cdp,
     };
     this.guests.set(guestId, record);
     this.routeWindowOpen(record);
@@ -216,6 +251,23 @@ export class BrowserGuestManager {
       this.sessions.forget(guestId);
     });
     return record.handle;
+  }
+
+  /**
+   * Keeps a guest's session attached, or releases it on the next idle turn.
+   *
+   * Set while a page can emit events nobody asked for — a login form pushing a
+   * captured credential is the case. Idle release would drop those events on
+   * the floor, since they are not replayed to a later session.
+   */
+  pinSession(guestId: string, pinned: boolean): void {
+    if (pinned) this.sessions.pin(guestId);
+    else this.sessions.unpin(guestId);
+  }
+
+  /** The CDP executor for a guest, or `undefined` once it is gone. */
+  cdpFor(guestId: string): EmbeddedCdp | undefined {
+    return this.guests.get(guestId)?.cdp;
   }
 
   /**
@@ -270,7 +322,8 @@ export class BrowserGuestManager {
    *
    * Closing the session is a separate, explicit step ({@link teardown}): the
    * renderer has to await it before removing the node, so it cannot be a side
-   * effect of dropping bookkeeping.
+   * effect of dropping bookkeeping. A pending wait is failed on purpose —
+   * whoever asked for the page has to learn it is not coming.
    */
   releaseKey(key: string): void {
     this.keyToGuest.delete(key);
@@ -355,6 +408,73 @@ export class BrowserGuestManager {
   }
 
   /**
+   * The command target for a page, keyed by the token the renderer knows.
+   *
+   * The page id is the only thing stable across a node being replaced; the
+   * guest id changes with it, so every command re-resolves it.
+   */
+  targetFor(tabId: string): GuestCdpTarget {
+    return {
+      guestId: () => this.guestIdFor(tabId),
+      send: (guestId, method, params) => this.send(guestId, method, params),
+      evaluate: (guestId, expression, options) =>
+        this.evaluate(guestId, expression, options ?? {}),
+      has: (guestId) => this.has(guestId),
+      waitLaidOut: (timeoutMs) => this.waitLaidOut(tabId, timeoutMs),
+    };
+  }
+
+  /**
+   * Records that a page's node has a real box.
+   *
+   * Reported by the renderer the first time it lays the node out. Until then
+   * every command that depends on the page's own geometry answers wrongly.
+   */
+  confirmLaidOut(tabId: string): void {
+    this.laidOut.add(tabId);
+    const waiter = this.layoutWaiters.get(tabId);
+    if (!waiter) return;
+    this.layoutWaiters.delete(tabId);
+    clearTimeout(waiter.timer);
+    waiter.resolve();
+  }
+
+  /** Forgets a page's layout state when its node goes away. */
+  forgetLaidOut(tabId: string): void {
+    this.laidOut.delete(tabId);
+    const waiter = this.layoutWaiters.get(tabId);
+    if (!waiter) return;
+    this.layoutWaiters.delete(tabId);
+    clearTimeout(waiter.timer);
+    waiter.resolve();
+  }
+
+  /**
+   * Waits until a page's node has a real box.
+   *
+   * `dom-ready` says the guest exists; it does not say the node was sized yet.
+   * A command that runs in that gap sees a 0×0 viewport, and every visibility
+   * check inside the page answers false — which reads as "the element does not
+   * exist" rather than "the page is not laid out".
+   */
+  waitLaidOut(tabId: string, timeoutMs = 2_000): Promise<void> {
+    if (this.laidOut.has(tabId)) return Promise.resolve();
+    const existing = this.layoutWaiters.get(tabId);
+    if (existing) return existing.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const timer = setTimeout(() => {
+      this.layoutWaiters.delete(tabId);
+      resolve();
+    }, timeoutMs);
+    timer.unref?.();
+    this.layoutWaiters.set(tabId, { promise, resolve, timer });
+    return promise;
+  }
+
+  /**
    * Marks the login-capture binding as installed for this guest.
    *
    * Returns `true` the first time, so the caller knows whether it still has to
@@ -385,9 +505,13 @@ export class BrowserGuestManager {
    * `open` has to restore session state, not just attach: Chromium gives a
    * reopened session a clean slate, and a missing `Page.enable` is the kind of
    * loss that produces no error anywhere — events simply stop.
+   *
+   * Shares the record's executor rather than building a second one: two
+   * clients over the same `webContents` disagree about whether the session is
+   * attached — the idle release would detach one and leave the other believing
+   * it is connected, so its next command would fail on a detached debugger.
    */
-  private createPort(guestId: string, contents: WebContents): GuestCdpPort {
-    const cdp = new EmbeddedCdp(contents, () => this.options.onActivity?.(guestId));
+  private createPort(guestId: string, contents: WebContents, cdp: EmbeddedCdp): GuestCdpPort {
     return {
       open: async () => {
         // `prepare` attaches and turns on focus emulation, and is safe to call

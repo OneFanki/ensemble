@@ -478,7 +478,18 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     draggingTabId.value = tabId;
   }
 
+  /**
+   * Stage rectangle in window coordinates, as last reported to main.
+   *
+   * Kept here because the page nodes live at the app root, not inside the
+   * browser page: they have to survive the browser page unmounting (the user
+   * going to the accounts page while an AI tool keeps using a tab). The root
+   * needs the origin to place them at all.
+   */
+  const stageRect = ref<StageRect | null>(null);
+
   function setStage(stage: StageRect | null): void {
+    stageRect.value = stage;
     window.ensemble.setEmbeddedStage(stage);
   }
 
@@ -493,10 +504,36 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     if (persist) window.localStorage.setItem("ensemble.runtimeDock.width", String(next));
   }
 
+  /**
+   * How many gestures currently need the pointer to stay in this document.
+   *
+   * A page is a real native surface even as a `<webview>`: once the cursor
+   * crosses into a page's box, that page receives the mouse events and this
+   * document gets nothing — not even the moves of a drag that started on one of
+   * the app's own controls. Dragging the run dock's edge is the case that
+   * exposed it: the drag began on the handle, entered the page a pixel later,
+   * and the width never moved.
+   *
+   * A count rather than a flag because gestures can nest, and the pages only
+   * become hit-testable again when the last one ends.
+   */
+  const pointerShield = ref(0);
+
+  function holdPointer(): void {
+    pointerShield.value += 1;
+  }
+
+  function releasePointer(): void {
+    pointerShield.value = Math.max(0, pointerShield.value - 1);
+  }
+
   return {
     state,
     ready,
     draggingTabId,
+    pointerShield,
+    holdPointer,
+    releasePointer,
     stageMenuOpen,
     setStageMenu,
     coverStage,
@@ -555,6 +592,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     navigate,
     dragTab: setDragTab,
     setStage,
+    stageRect,
     setSidebarCollapsed,
   };
 });

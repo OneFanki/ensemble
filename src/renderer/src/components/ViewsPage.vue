@@ -968,7 +968,7 @@ async function confirmCopy(): Promise<void> {
   overflow: hidden;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out);
 }
 
 /* A filled cell is a solid outline with the member's text; the 5% green tint

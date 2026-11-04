@@ -200,7 +200,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .chevron {
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-base) var(--ease-out);
 }
 
 .chevron.flip {
@@ -221,6 +221,17 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   padding: 4px;
+  /* Grows out of the field it belongs to: the panel is anchored there, so a
+     small downward nudge is enough to say "this came from that field". Same
+     wording as every other anchored popover. */
+  animation: popover-in var(--motion-fast) var(--ease-out);
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift)));
+  }
 }
 
 .option {

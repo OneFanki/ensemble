@@ -61,7 +61,7 @@ function toggle(id: string): void {
   font-size: 10.5px;
   color: var(--faint);
   background: transparent;
-  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+  transition: border-color var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out);
 }
 
 .tag-toggle:hover {

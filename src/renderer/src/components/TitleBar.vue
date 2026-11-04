@@ -208,7 +208,7 @@ async function openClean(): Promise<void> {
 .chevron {
   flex: 0 0 auto;
   color: var(--faint);
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-base) var(--ease-out);
 }
 
 .chevron.flip {

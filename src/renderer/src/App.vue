@@ -971,5 +971,19 @@ async function handleLocale(locale: LocaleSetting) {
   bottom: 46px;
   transform: translateX(-50%);
   width: min(520px, calc(100vw - 48px));
+  /* Rises from the bottom edge, which is where it lives. The resting transform
+     keeps the horizontal centring, so both keyframes have to state it. */
+  animation: capture-in var(--motion-slow) var(--ease-out);
+}
+
+@keyframes capture-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 </style>

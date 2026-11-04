@@ -1481,7 +1481,7 @@ async function submitMaster() {
 }
 
 .spin {
-  animation: spin 1s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 @keyframes spin {
@@ -2202,7 +2202,7 @@ async function submitMaster() {
 }
 
 .spinning {
-  animation: spin 1s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 @keyframes spin {

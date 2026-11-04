@@ -70,6 +70,28 @@ function onPointerDownOutside(event: CustomEvent<{ originalEvent: PointerEvent }
   background: rgb(0 0 0 / 55%);
   backdrop-filter: blur(2px);
   z-index: 70;
+  /*
+   * Reka keeps the node mounted through the exit and flips `data-state`, so both
+   * directions are CSS and no wrapper component is needed. Opacity only: a mask
+   * that scaled would move the layer the dialog is centred against.
+   */
+  animation: overlay-in var(--motion-base) var(--ease-out);
+}
+
+.overlay[data-state="closed"] {
+  animation: overlay-out var(--motion-base) var(--ease-in) forwards;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+  }
 }
 
 .content {
@@ -87,6 +109,31 @@ function onPointerDownOutside(event: CustomEvent<{ originalEvent: PointerEvent }
   box-shadow: var(--shadow-dialog);
   z-index: 71;
   overflow: hidden;
+  /*
+   * Entry is a short rise plus a fade. The transform has to be spelled out in
+   * full at both ends: the resting position is `translate(-50%, -50%)`, so a
+   * keyframe that only said `translateY(4px)` would drop the centring and the
+   * dialog would jump to the bottom-right on its first frame.
+   */
+  animation: dialog-in var(--motion-base) var(--ease-out);
+}
+
+.content[data-state="closed"] {
+  animation: dialog-out var(--motion-fast) var(--ease-in) forwards;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--motion-shift))) scale(0.985);
+  }
+}
+
+@keyframes dialog-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--motion-shift))) scale(0.985);
+  }
 }
 
 .head {

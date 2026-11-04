@@ -1017,7 +1017,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 
 /* Animating width is fine here: the dock has no native child, only text rows. */
 .dock:not(.resizing) {
-  transition: width 0.18s ease;
+  transition: width var(--motion-slow) var(--ease-out);
 }
 
 .dock.resizing {
@@ -1033,8 +1033,8 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   flex: 1 1 auto;
   opacity: 1;
   transition:
-    opacity 0.16s ease,
-    visibility 0.16s;
+    opacity var(--motion-base) var(--ease-out),
+    visibility var(--motion-base);
 }
 
 /* The contents stay mounted and fade out while the width collapses, so the
@@ -1069,7 +1069,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   bottom: 0;
   width: 1px;
   background: transparent;
-  transition: background 0.15s ease;
+  transition: background var(--motion-base) var(--ease-out);
 }
 
 .dock-resize:hover::after,
@@ -1704,7 +1704,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   border: 1.5px solid var(--line);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
   flex: none;
 }
 

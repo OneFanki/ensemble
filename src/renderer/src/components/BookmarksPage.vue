@@ -795,7 +795,7 @@ div.tree-row {
 }
 
 .twist-btn svg {
-  transition: transform 0.12s ease;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 .twist-btn svg.open {
@@ -821,7 +821,7 @@ div.tree-row {
   margin-left: auto;
   font-size: 9.5px;
   color: var(--faint);
-  transition: opacity 0.1s ease;
+  transition: opacity var(--motion-fast) var(--ease-out);
 }
 
 /*
@@ -842,7 +842,7 @@ div.tree-row {
   background: linear-gradient(to right, transparent, var(--row-bg, var(--bg)) 10px);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.1s ease;
+  transition: opacity var(--motion-fast) var(--ease-out);
 }
 
 .tree-row:hover .tree-actions,

@@ -143,6 +143,29 @@
     "Noto Sans SC", ui-monospace, sans-serif;
   --font-display: "Inter", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI",
     "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
+
+  /*
+   * Motion.
+   *
+   * Three durations, by how far the eye has to travel — not by how important the
+   * thing feels. Something that appears in place (a menu, a tooltip) is over
+   * before it can be watched; something that crosses the screen (a sheet, a
+   * panel) needs long enough to be followed.
+   *
+   * The ease-out curve is the only one used for entries: it starts fast and
+   * settles, which reads as "this responded to you". Exits use `--ease-in`
+   * because a slow start on the way out looks like the interface hesitated.
+   * Nothing here is decorative — no bounce, no overshoot. On a workbench the
+   * motion explains where a thing came from; it is not a personality.
+   */
+  --motion-fast: 110ms;
+  --motion-base: 160ms;
+  --motion-slow: 220ms;
+  --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
+  --ease-in: cubic-bezier(0.4, 0, 0.9, 0.4);
+  /* Distance a floating panel travels on entry. Small on purpose: a menu that
+     slides far reads as a drawer, which it is not. */
+  --motion-shift: 4px;
 }
 
 :root[data-theme="light"] {

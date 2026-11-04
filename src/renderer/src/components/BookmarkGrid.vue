@@ -558,7 +558,7 @@ function onDropIntoFolder(id: string): void {
 }
 
 .crumb-caret svg {
-  transition: transform 0.12s ease;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 .crumb-caret.open svg {

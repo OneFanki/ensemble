@@ -1058,7 +1058,7 @@ function passwordLabel(identity: Identity): string {
   gap: 5px;
   overflow: hidden;
   min-width: 0;
-  transition: border-color 0.16s ease, background 0.16s ease;
+  transition: border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out);
 }
 
 .id-card::before {

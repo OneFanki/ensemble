@@ -514,7 +514,7 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
 
 .chev {
   color: var(--faint);
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-base) var(--ease-out);
 }
 
 .chev.flip {

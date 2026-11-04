@@ -244,7 +244,7 @@ function onKeydown(event: KeyboardEvent) {
 .chevron {
   flex: 0 0 12px;
   color: var(--faint);
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 .chevron.flip {
@@ -265,6 +265,14 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   padding: 4px;
+  animation: popover-in var(--motion-fast) var(--ease-out);
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift)));
+  }
 }
 
 .option {

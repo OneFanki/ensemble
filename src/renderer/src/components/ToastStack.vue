@@ -70,7 +70,7 @@ const embedded = useEmbeddedStore();
   font-size: 11.5px;
   line-height: 1.5;
   box-shadow: var(--shadow-menu);
-  animation: toast-in 0.16s ease-out;
+  animation: toast-in var(--motion-fast) var(--ease-out);
 }
 
 .toast svg {
@@ -106,7 +106,7 @@ const embedded = useEmbeddedStore();
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(3px);
+    transform: translateY(var(--motion-shift));
   }
   to {
     opacity: 1;

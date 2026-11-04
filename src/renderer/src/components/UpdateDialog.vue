@@ -246,7 +246,7 @@ watch(
   height: 100%;
   border-radius: 999px;
   background: var(--accent);
-  transition: width 0.15s linear;
+  transition: width var(--motion-base) var(--ease-out);
 }
 
 .progress-text {
@@ -280,7 +280,7 @@ watch(
 }
 
 .spinning {
-  animation: spin 1s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 @keyframes spin {

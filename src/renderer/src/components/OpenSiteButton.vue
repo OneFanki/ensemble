@@ -244,13 +244,13 @@ function chooseIdentity(identityId: string): void {
   /* The panel waits for the stage to be parked (about 100ms) before it renders,
      so it arrives complete. A short fade turns that wait into an opening
      animation instead of a pause. */
-  animation: panel-in 120ms ease-out;
+  animation: panel-in var(--motion-fast) var(--ease-out);
 }
 
 @keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateY(-3px);
+    transform: translateY(calc(-1 * var(--motion-shift)));
   }
   to {
     opacity: 1;

@@ -2464,7 +2464,7 @@ function fillMessage(reason?: string): string {
   border-radius: 50%;
   border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-top-color: var(--accent);
-  animation: tabspin 0.7s linear infinite;
+  animation: tabspin var(--motion-slow) linear infinite;
 }
 
 @keyframes tabspin {
@@ -2696,7 +2696,7 @@ function fillMessage(reason?: string): string {
   background: transparent;
   overflow: hidden;
   flex: 0 0 auto;
-  transition: background 0.14s ease;
+  transition: background var(--motion-base) var(--ease-out);
 }
 
 .zoom-stepper:hover {
@@ -2945,7 +2945,7 @@ function fillMessage(reason?: string): string {
   display: block;
   height: 100%;
   background: var(--accent);
-  transition: width 150ms linear;
+  transition: width var(--motion-base) var(--ease-out);
 }
 
 .download-actions {
@@ -3358,11 +3358,11 @@ function fillMessage(reason?: string): string {
   border: 1.5px solid var(--line);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 .spin {
-  animation: spin 0.9s linear infinite;
+  animation: spin var(--motion-slow) linear infinite;
 }
 
 @keyframes spin {

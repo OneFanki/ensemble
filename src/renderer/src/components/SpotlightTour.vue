@@ -311,10 +311,10 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 9999px rgba(5, 8, 12, 0.62);
   pointer-events: none;
   transition:
-    top 180ms ease,
-    left 180ms ease,
-    width 180ms ease,
-    height 180ms ease;
+    top var(--motion-slow) var(--ease-out),
+    left var(--motion-slow) var(--ease-out),
+    width var(--motion-slow) var(--ease-out),
+    height var(--motion-slow) var(--ease-out);
 }
 
 @media (prefers-reduced-motion: no-preference) {

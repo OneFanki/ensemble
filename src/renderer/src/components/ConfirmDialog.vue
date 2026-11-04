@@ -69,6 +69,25 @@ const { t } = useI18n();
   /* Same layer stack as `Modal`; a confirm can open over a form. */
   display: grid;
   place-items: center;
+  animation: overlay-in var(--motion-base) var(--ease-out);
+}
+
+.overlay[data-state="closed"] {
+  animation: overlay-out var(--motion-base) var(--ease-in) forwards;
+}
+
+/* The same two keyframes `Modal` uses. Every dialog shares one motion
+   vocabulary, whichever component happens to draw it. */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes overlay-out {
+  to {
+    opacity: 0;
+  }
 }
 
 .content {
@@ -86,6 +105,27 @@ const { t } = useI18n();
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
+  animation: confirm-in var(--motion-base) var(--ease-out);
+}
+
+.content[data-state="closed"] {
+  animation: confirm-out var(--motion-fast) var(--ease-in) forwards;
+}
+
+/* A question is answered, not navigated to: the travel is shorter than a form
+   dialog's so the answer buttons are already where the eye lands. */
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--motion-shift))) scale(0.985);
+  }
+}
+
+@keyframes confirm-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + var(--motion-shift))) scale(0.985);
+  }
 }
 
 /* The mark carries the tone. A red ring around the whole dialog (the earlier

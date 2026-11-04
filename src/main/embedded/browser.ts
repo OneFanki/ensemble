@@ -61,8 +61,18 @@ import {
   interpolateStep,
 } from "@shared/flows";
 import type { AppSettings, LayoutId, RoleColor, SlotRect } from "@shared/types";
-import { BrowserWindow, Menu, screen, session, shell, WebContentsView, type Session, type WebContents } from "electron";
+import {
+  BrowserWindow,
+  Menu,
+  screen,
+  session,
+  shell,
+  WebContentsView,
+  type Session,
+  type WebContents,
+} from "electron";
 import { EmbeddedCdp } from "./cdp";
+import { GuestPageSurface, NativePageSurface, isNativeSurface, type PageSurface } from "./surface";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
 
@@ -136,7 +146,15 @@ interface TabRecord {
   instanceId: string;
   /** Page that opened this one, for ordering and for closing the opener's group. */
   openerId?: string;
-  view: WebContentsView;
+  /**
+   * Where this page is displayed.
+   *
+   * An interface rather than a concrete `WebContentsView`: the page may be
+   * hosted by main (today) or by the renderer as a `<webview>` (migration in
+   * progress). Everything the manager asks of a page — navigate, drive over
+   * CDP, occupy a rectangle — is the same either way.
+   */
+  view: PageSurface;
   cdp: EmbeddedCdp;
   url: string;
   title: string;
@@ -1325,7 +1343,7 @@ export class EmbeddedBrowser {
     // Remembered per instance: `clean` is not part of the tab record, and the
     // next page opened by this instance has to agree with it.
     if (clean) this.cleanInstances.add(instanceId);
-    const view = new WebContentsView({
+    const surface = new NativePageSurface({
       webPreferences: {
         partition,
         contextIsolation: true,
@@ -1336,7 +1354,7 @@ export class EmbeddedBrowser {
       },
     });
     this.configureSession(partition);
-    view.setBackgroundColor("#101317");
+    surface.setBackgroundColor("#101317");
     const tab: TabRecord = {
       id,
       ...(identityId ? { identityId } : {}),
@@ -1346,8 +1364,8 @@ export class EmbeddedBrowser {
       origin: input.origin ?? parent?.origin ?? "manual",
       instanceId,
       ...(input.openerId ? { openerId: input.openerId } : {}),
-      view,
-      cdp: new EmbeddedCdp(view.webContents, () => this.markCdpActivity(id)),
+      view: surface,
+      cdp: new EmbeddedCdp(surface.webContents, () => this.markCdpActivity(id)),
       url: "about:blank",
       title: "",
       loading: false,
@@ -1397,7 +1415,7 @@ export class EmbeddedBrowser {
       this.closeTab(tab.id);
       throw new Error("只支持 http(s) 地址");
     }
-    await view.webContents.loadURL(target).catch(() => {
+    await surface.webContents.loadURL(target).catch(() => {
       // A failed load still leaves a usable tab; the error page is visible.
     });
     this.syncTab(tab);
@@ -1409,7 +1427,7 @@ export class EmbeddedBrowser {
   private attachView(tab: TabRecord): void {
     const host = this.host;
     if (!host || host.isDestroyed()) return;
-    host.contentView.addChildView(tab.view);
+    if (isNativeSurface(tab.view)) tab.view.attachTo(host);
   }
 
   private configureSession(partition: string): void {
@@ -1959,10 +1977,14 @@ export class EmbeddedBrowser {
     // The DevTools view outlives the page only until here: it is hosted by the
     // same window, so a closed page must take its panel with it.
     this.dropDevTools(tab);
-    try {
-      this.host?.contentView.removeChildView(tab.view);
-    } catch {
-      // The window may already be gone.
+    // A guest's node is removed by the renderer, and only after the teardown
+    // handshake; main has no child view to detach for it.
+    if (isNativeSurface(tab.view)) {
+      try {
+        this.host?.contentView.removeChildView(tab.view.view);
+      } catch {
+        // The window may already be gone.
+      }
     }
     try {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
@@ -3237,7 +3259,14 @@ export class EmbeddedBrowser {
       },
     });
     view.setBackgroundColor("#101317");
-    tab.view.webContents.setDevToolsWebContents(view.webContents);
+    if (!tab.view.bindDevTools(view.webContents)) {
+      // The carrier cannot host a panel. Rather than leave the user with a
+      // button that does nothing, Electron opens its own DevTools window — the
+      // one behaviour a docked panel was built to avoid, but still usable.
+      view.webContents.close();
+      tab.view.webContents.openDevTools({ mode: "detach" });
+      return { view, mode: "window", width } as NonNullable<TabRecord["devtools"]>;
+    }
     const devtools = { view, mode, width };
     tab.devtools = devtools;
     this.watchDevToolsKeys(tab);

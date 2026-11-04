@@ -498,6 +498,7 @@ export class EmbeddedBrowser {
       instanceId: tab.instanceId,
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
       ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
+      partition: this.partitionOf(tab),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       // In viewport mode the fit scale *is* the effective zoom; reporting the
       // untouched override here would make the chrome claim 100% while the

@@ -61,6 +61,15 @@ export interface EmbeddedTab {
    * thing the URL cannot tell you.
    */
   clean?: boolean;
+  /**
+   * Session partition this page's renderer lives in.
+   *
+   * Sent with the tab rather than re-derived in the renderer: the partition is
+   * a storage boundary, and two places computing it is how an identity ends up
+   * sharing cookies with the daily profile. The renderer only copies it onto
+   * the `<webview>` node, which is a creation-time attribute.
+   */
+  partition: string;
   /** True for the page currently shown by its instance. */
   active: boolean;
   /** Effective zoom in percent; `100` means the page renders at its natural size. */

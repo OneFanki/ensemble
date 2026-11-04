@@ -13,6 +13,7 @@ function tab(id: string, viewId?: string): EmbeddedTab {
     canGoForward: false,
     origin: "manual",
     instanceId: id,
+    partition: "persist:embedded-test",
     active: true,
     zoom: 100,
     devtoolsOpen: false,

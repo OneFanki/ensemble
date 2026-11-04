@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onClickOutside } from "@vueuse/core";
 import { Check, ChevronDown } from "lucide-vue-next";
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref } from "vue";
+import { useAnchoredPanel } from "../composables/anchoredPanel";
 
 export interface SelectOption {
   value: string;
@@ -42,50 +43,14 @@ onClickOutside(root, (event) => {
 
 const selected = computed(() => props.options.find((item) => item.value === props.modelValue));
 
-/**
- * The panel lives in a teleport because dialogs clip their body with
- * `overflow-y: auto`; an absolutely positioned list would be cut off.
- */
-function placePanel() {
-  const trigger = root.value?.querySelector<HTMLElement>(".select-trigger");
-  if (!trigger) return;
-  const rect = trigger.getBoundingClientRect();
-  const width = Math.max(rect.width, 180);
-  const margin = 8;
-  const left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
-  panelStyle.value = { left: `${left}px`, top: `${rect.bottom + 4}px`, width: `${width}px` };
-  void nextTick(() => {
-    const height = panel.value?.offsetHeight ?? 0;
-    if (!height) return;
-    const below = window.innerHeight - rect.bottom - margin;
-    if (height > below && rect.top - margin > below) {
-      panelStyle.value = {
-        left: `${left}px`,
-        top: `${rect.top - 4 - height}px`,
-        width: `${width}px`,
-      };
-    }
-  });
-}
-
-function onViewportChange() {
-  if (open.value) placePanel();
-}
-
-watch(open, (value) => {
-  if (value) {
-    placePanel();
-    window.addEventListener("resize", onViewportChange);
-    window.addEventListener("scroll", onViewportChange, true);
-  } else {
-    window.removeEventListener("resize", onViewportChange);
-    window.removeEventListener("scroll", onViewportChange, true);
-  }
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("resize", onViewportChange);
-  window.removeEventListener("scroll", onViewportChange, true);
+// Placement is shared with the suggestion list — see `useAnchoredPanel` for why
+// the panel is teleported and how it flips above the trigger when it must.
+useAnchoredPanel({
+  open,
+  anchor: () => root.value?.querySelector<HTMLElement>(".select-trigger"),
+  panel,
+  style: panelStyle,
+  minWidth: 180,
 });
 
 function toggle() {

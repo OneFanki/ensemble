@@ -79,9 +79,31 @@ Ensemble **不采用这一点**：
 
 P4 是风险最集中的一步：要删的每一处都是实测补丁，删除本身要逐条重验，不接受「应该没用了」。
 
-进度：P1 已落地；P2 的架构前提已实测确认（见「P2 前置实测」与「P2 的挂载位置」），
-渲染层切换尚未开始。当前产品行为**仍走 `WebContentsView`**——`PageSurface` 抽象让切换点
-集中在一个构造处（`createTab`），但两套载体不能共存，切换必须在一次提交里完成。
+进度：**P1–P3 已落地，产品已跑在 `<webview>` 上**。P4（删定位资产）与 P5（手工矩阵）待做。
+26 套 e2e 里 25 套稳定全绿，`pnpm verify` 通过（typecheck / 676 单测 / 结构契约 / 构建）。
+
+### P3 落地记录（2026-11-04）
+
+握手链路：MCP 开页 → `guestHost.mount()` → `embedded:guest-mount` → 渲染层建节点 →
+`dom-ready` 上报 guestId → `attachByKey` 完成 pending。实测踩到两处：
+
+1. **占位记录不是「还没填」，而是一个会被读到的状态。** `createTab` 先广播 tab 再
+   等 carrier，冻结清扫、关页路径、状态描述都会在这段窗口里访问 `tab.view` /
+   `tab.cdp`。这些路径现在都按「carrier 可能不存在」写。
+2. **`send` 到没有监听者的通道会被静默丢弃。** MCP 端点在 `did-finish-load` 后就能
+   应答，而渲染层的 IPC 监听是 Vue 挂载时才注册的。`mount()` 因此在 400ms 后补发一次。
+
+另一处与握手无关但同级的问题：`handle(identitySave)` 没 await 异步的 `vault.set`，
+返回的 snapshot 里 `passwordSet` 为 false——登录捕获保存后看起来像没存密码。
+
+### P2 落地时修掉的两个渲染层缺陷（2026-11-04）
+
+- **`placeFor` 用 `!tab.viewId` 判定在台。** 这条件把所有视图成员都判成 off-stage，
+  2×2 舞台上四个格子的页面从未显示过。改为复用 store 已有的 `isOnStage`，并额外要求
+  该视图正是 `activeViewId`。
+- **`setStage` 不重发 state。** 主进程改了 `bounds` 只调 `applyLayout`，渲染层拿的还是
+  旧 rect：节点按整窗宽度盖住运行栏，拖动手柄一进入页面就被 guest 抢走指针。运行栏的
+  `startResize` 同时补了 pointer capture 与 `pointerShield`（同步 flush，不等下一帧）。
 
 ### P1 落地记录（2026-11-04）
 

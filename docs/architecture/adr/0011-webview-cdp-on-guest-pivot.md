@@ -78,6 +78,31 @@ Ensemble **不采用这一点**：
 
 P4 是风险最集中的一步：要删的每一处都是实测补丁，删除本身要逐条重验，不接受「应该没用了」。
 
+### P1 落地记录（2026-11-04）
+
+三块逻辑拆成纯核心模块，各自可单测，Electron 只在边缘做适配：
+
+| 模块 | 位置 | 职责 |
+| --- | --- | --- |
+| 会话状态机 | `core/cdp/guest-sessions.ts` | attach 复用、空闲释放、teardown 握手、分代 |
+| 挂载策略 | `core/cdp/guest-policy.ts` | 协议/分区白名单、guest `webPreferences` 强制硬化 |
+| 等待队列 | `core/cdp/guest-slots.ts` | 开页到 attach 之间的命令挂起与超时 |
+| 适配层 | `main/embedded/guests.ts` | `will/did-attach-webview` 接线、popup 路由、CDP 端口 |
+
+两条与计划不同的落地结论：
+
+1. **`allowpopups` 必须放行，不能剥掉。** 原计划按「未知属性一律丢弃」处理，实测语义是：
+   属性缺失时 Chromium 在更早的权限边界就吞掉新窗口请求，main 的
+   `setWindowOpenHandler` 根本收不到事件。所以它是白名单内成员，安全性由下一层的
+   「一律 deny + 转 app tab」承担，而不是靠不发请求。
+2. **executor 一行没改。** `EmbeddedCdp` 的构造参数本来就是 `WebContents`，guest 与原生
+   view 在它眼里没有区别；迁移后只是换了一个创建位置。这也意味着 P4 删除的是定位资产，
+   不是命令面。
+
+`withGuest` 是所有命令的唯一入口：它在状态机里计数，teardown 才能等在途命令归零。
+任何绕过它的调用都会让握手失去意义——这条约束没有类型能强制，靠 review 和这条记录守住。
+
+
 ## 被否方案
 
 - **A. 维持 WebContentsView 继续修**（0010 的现状，本次被否）。0010 的三条重启条件第一条

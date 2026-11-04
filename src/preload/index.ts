@@ -218,6 +218,9 @@ const api: EnsembleApi = {
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
   stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),
   freezeEmbedded: () => ipcRenderer.invoke(IPC.embeddedFreeze),
+  registerEmbeddedGuest: (guestId, tabId, partition) =>
+    ipcRenderer.invoke(IPC.embeddedGuestRegister, guestId, tabId, partition),
+  teardownEmbeddedGuest: (guestId) => ipcRenderer.invoke(IPC.embeddedGuestTeardown, guestId),
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),

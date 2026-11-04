@@ -255,6 +255,10 @@ export const IPC = {
   embeddedStopFind: "embedded:stop-find",
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
   embeddedFreeze: "embedded:freeze",
+  /** Renderer → main: a `<webview>` node exists and may be driven. */
+  embeddedGuestRegister: "embedded:guest-register",
+  /** Renderer → main: close this guest's CDP session before unmounting the node. */
+  embeddedGuestTeardown: "embedded:guest-teardown",
   settingsSave: "settings:save",
   /** Fires the connectivity test shown in the proxy settings. */
   proxyTestConnectivity: "proxy:test-connectivity",
@@ -645,6 +649,22 @@ export interface EnsembleApi {
    * hiding pages.
    */
   freezeEmbedded(): Promise<FrozenSlot[]>;
+  /**
+   * Tells main a `<webview>` is attached so it can be driven over CDP.
+   *
+   * The renderer owns the node; main cannot enumerate guests on its own. The
+   * guest id is Electron's id for the guest `webContents`, read off the node
+   * once it reports `dom-ready`; `tabId` is what main was already waiting on,
+   * so the two halves can be joined.
+   */
+  registerEmbeddedGuest(guestId: number, tabId?: string, partition?: string): Promise<void>;
+  /**
+   * Closes the guest's CDP session before its node is removed.
+   *
+   * Must be awaited before unmounting: detaching after the guest is destroyed
+   * takes the native target out from under an in-flight command.
+   */
+  teardownEmbeddedGuest(guestId: number): Promise<void>;
 
   saveAppSettings(patch: SettingsPatch): Promise<AppSettings>;
   setTheme(theme: AppSettings["theme"]): Promise<void>;

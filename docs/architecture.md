@@ -39,15 +39,23 @@
   跳过任务栏。它不持有多余状态，只订阅同一份 `WorkspaceSnapshot`，点一下通过
   `Page.bringToFront` 把对应浏览器窗口提到最前（最小化则先恢复）；
 - 内置浏览器**不再有独立窗口**：它画在主窗口的「浏览器」页里。`BrowserPage.vue` 只画
-  工具条、格位标题与查找栏，页面本身由主进程的 `WebContentsView` 覆盖在舞台区域上。
+  工具条、格位标题与查找栏，页面本身是主窗口里由主进程托管的 `<webview>`。
   之前那个独立外壳（`#embedded`）已删除——两个窗口各有一份标签状态，切来切去只是负担。
+
+  **渲染载体迁移中（[ADR 0011](architecture/adr/0011-webview-cdp-on-guest-pivot.md)）**：
+  页面宿主正在从主进程的 `WebContentsView` 换成 renderer 里的 `<webview>`，控制面仍是
+  CDP（main 拿到 guest `webContents` 后 `debugger.attach`）。P1 已完成——guest 会话状态机、
+  挂载硬化策略、开页等待队列三块纯逻辑在 `src/core/cdp/` 下，Electron 侧适配层是
+  `src/main/embedded/guests.ts`。P2 起 renderer 才开始渲染节点，在那之前
+  `WebContentsView` 仍是实际载体。
 
 悬浮条的位置保存在 `userData/overlay.json`（纯窗口偏好，不进入可导出的工作区文件）；
 显示开关是 `settings.overlayEnabled`。
 
 `src/core` 不依赖 Electron，所以能在纯 Node 下跑单元测试，也能被未来的 CLI 或 CI
 直接复用。外部浏览器窗口不是 Electron 的 `BrowserWindow`，而是由 `spawn` 启动的独立
-系统浏览器进程；内置浏览器则是主进程里的 `WebContentsView`，两者的取舍见下文。
+系统浏览器进程；内置浏览器的页面宿主在主窗口里（迁移中，最终形态是 `<webview>`，控制面
+走 CDP），两者的取舍见下文。
 
 ### 渲染层的共享控件
 
@@ -716,8 +724,9 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 
 ## 安全边界
 
-- 渲染进程：`contextIsolation: true`、`nodeIntegration: false`、`webviewTag: false`，
-  导航与 `window.open` 一律拦截，外链交给系统浏览器。
+- 渲染进程：`contextIsolation: true`、`nodeIntegration: false`，导航与 `window.open` 一律
+  拦截，外链交给系统浏览器。主窗口开着 `webviewTag`（内置浏览器的页面宿主，见
+  「内置浏览器」一节），其余窗口不开。
 - 内置浏览器的页面是远程内容：`nodeIntegration: false`、`contextIsolation: true`、
   `sandbox: true`，不挂任何 preload；权限请求（摄像头、麦克风、定位、通知）默认全部拒绝，
   需要时在 `configureSession` 里逐项放开。

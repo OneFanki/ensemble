@@ -99,8 +99,10 @@ import {
   screen,
   shell,
   Tray,
+  webContents,
 } from "electron";
 import { EmbeddedBrowser } from "./embedded/browser";
+import { BrowserGuestManager } from "./embedded/guests";
 import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
 import { LoginCaptureStore } from "./embedded/login-capture";
@@ -244,6 +246,16 @@ const loginCaptures = new LoginCaptureStore();
  * partitions.
  */
 let embedded: EmbeddedBrowser | null = null;
+/**
+ * CDP sessions on `<webview>` guests.
+ *
+ * Exists independently of `embedded`: the guest lifecycle belongs to the DOM
+ * (the renderer creates and removes the nodes), so this manager has to be live
+ * from the first window, not from the first browser tab. Popup routing is
+ * attached once a guest is mapped to a tab; until then a guest that asks for a
+ * window simply does not get one.
+ */
+const guestManager = new BrowserGuestManager();
 /**
  * Downloads from every identity partition, for the browser toolbar.
  *
@@ -1632,12 +1644,21 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      webviewTag: false,
+      // `<webview>` is the carrier for the built-in browser surface (ADR 0011).
+      // It has to be on for the window that hosts the nodes; every guest is
+      // still hardened in `will-attach-webview`, which is where `webviewTag`
+      // is turned back off for the guest itself.
+      webviewTag: true,
       spellcheck: false,
     },
   });
 
   Menu.setApplicationMenu(isMac ? buildMacMenu() : null);
+
+  // Guests in this window are hardened and watched by the guest manager. It has
+  // to be installed before the renderer loads, because `will-attach-webview`
+  // fires the moment the first `<webview>` element is parsed.
+  guestManager.install(mainWindow.webContents);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -2013,6 +2034,9 @@ async function shutdownAndQuit(): Promise<void> {
     // gone before the app quits; there is no external process to reclaim.
     embedded?.dispose();
     embedded = null;
+    // Any guest still attached belongs to the window being destroyed; closing
+    // its session first is what keeps the teardown from racing the destruction.
+    await guestManager.dispose();
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
     overlayWindow = null;
     disposeWindowFocus();
@@ -3224,6 +3248,39 @@ function registerIpc(workspace: WorkspaceService): void {
     ensureEmbeddedBrowser().stopFind(String(tabId));
   });
   handle(IPC.embeddedFreeze, () => ensureEmbeddedBrowser().freeze());
+
+  /**
+   * A `<webview>` node attached and can be driven.
+   *
+   * Main cannot discover guests on its own: the renderer creates the nodes. The
+   * report is what turns an attached guest into something the surface can talk
+   * to, and it is idempotent so a reload of the embedder does not double-drive.
+   */
+  handle(IPC.embeddedGuestRegister, (guestId: number, tabId?: string, partition?: string) => {
+    const id = Number(guestId);
+    if (!Number.isInteger(id) || id <= 0) throw new Error("无效的页面标识");
+    const contents = webContents.fromId(id);
+    if (!contents) throw new Error("页面已关闭");
+    const host = mainWindow?.webContents ?? undefined;
+    const handle =
+      typeof tabId === "string" && tabId
+        ? guestManager.attachByKey(tabId, contents, host)
+        : guestManager.register(contents, host);
+    guestManager.describe(handle.guestId, typeof partition === "string" ? partition : undefined);
+  });
+
+  /**
+   * Close the CDP session before the renderer removes the node.
+   *
+   * The reply is the signal that detaching finished: unmounting earlier would
+   * take the native target out from under an in-flight command, which crashes
+   * the process rather than failing the call.
+   */
+  handle(IPC.embeddedGuestTeardown, async (guestId: number) => {
+    const id = Number(guestId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    await guestManager.teardown(String(id));
+  });
 
   // The chrome reports the content area it reserves for native views. `send`
   // rather than `invoke`: it fires on every resize and needs no reply.

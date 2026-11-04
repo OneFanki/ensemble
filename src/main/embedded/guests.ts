@@ -86,6 +86,8 @@ export class BrowserGuestManager {
   /** Commands waiting for a guest that has not attached yet. */
   private readonly slots = new GuestSlots<GuestHandle>();
   private host: WebContents | null = null;
+  /** Whether the embedder has been made to produce a frame (see {@link primeHost}). */
+  private hostPrimed = false;
   private readonly onWillAttach: (
     event: Electron.Event,
     preferences: Electron.WebPreferences,
@@ -113,6 +115,10 @@ export class BrowserGuestManager {
     // re-attach one before that report arrives.
     this.onDidAttach = (_event, contents) => {
       this.register(contents);
+      // Not awaited: the guest is usable for everything except screenshots
+      // until the frame lands, and blocking the attach event would stall the
+      // renderer's own `dom-ready` handling.
+      void this.primeHost();
     };
   }
 
@@ -126,6 +132,9 @@ export class BrowserGuestManager {
     if (this.host === host) return;
     this.uninstall();
     this.host = host;
+    // A new window has never produced a frame; the next guest has to prime it
+    // again, or every screenshot of a background tab waits out its timeout.
+    this.hostPrimed = false;
     host.on("will-attach-webview", this.onWillAttach);
     host.on("did-attach-webview", this.onDidAttach);
   }
@@ -141,6 +150,38 @@ export class BrowserGuestManager {
   /** Number of guests currently attached; the surface uses it for diagnostics. */
   get size(): number {
     return this.guests.size;
+  }
+
+  /**
+   * Makes the embedder produce a frame, so guests can be captured.
+   *
+   * A guest's compositor produces nothing until the page embedding it has
+   * produced a frame of its own: `Page.captureScreenshot` on a guest does not
+   * fail in that state, it never returns. Screenshots of background tabs are
+   * the main use, so this runs once when the first guest attaches rather than
+   * lazily per call — one 150ms prime instead of a 4s timeout per screenshot.
+   *
+   * Deliberately a CDP capture of the *host*: `capturePage()` on a window whose
+   * page contains a webview throws `UnknownVizError`, and attaching without
+   * capturing does not produce the frame.
+   */
+  private async primeHost(): Promise<void> {
+    const host = this.host;
+    if (!host || host.isDestroyed() || this.hostPrimed) return;
+    this.hostPrimed = true;
+    try {
+      if (!host.debugger.isAttached()) host.debugger.attach("1.3");
+      await host.debugger.sendCommand("Page.captureScreenshot", { format: "png" });
+    } catch {
+      // A window that cannot be captured still works for everything except
+      // guest screenshots; retrying on every command would be worse.
+    } finally {
+      try {
+        if (!host.isDestroyed() && host.debugger.isAttached()) host.debugger.detach();
+      } catch {
+        // The host died under the session; nothing to release.
+      }
+    }
   }
 
   /**

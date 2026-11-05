@@ -79,8 +79,36 @@ Ensemble **不采用这一点**：
 
 P4 是风险最集中的一步：要删的每一处都是实测补丁，删除本身要逐条重验，不接受「应该没用了」。
 
-进度：**P1–P3 已落地，产品已跑在 `<webview>` 上**。P4（删定位资产）与 P5（手工矩阵）待做。
-26 套 e2e 里 25 套稳定全绿，`pnpm verify` 通过（typecheck / 676 单测 / 结构契约 / 构建）。
+进度：**P1–P5 已落地**。产品跑在 `<webview>` 上，native 定位资产已全部删除。
+32 套 e2e 全绿，`pnpm verify` 通过（typecheck / 677 单测 / 结构契约 / 构建）。
+
+### P4/P5 落地记录（2026-11-04）
+
+**P4 删掉的东西**（逐条实测确认已无调用点，不是「应该没用了」）：
+
+| 删除 | 原用途 | 为什么可以删 |
+| --- | --- | --- |
+| `NativePageSurface` / `isNativeSurface` | 第二套载体 | `guests` 从可选改为必填，唯一构造点一直传值；留着等于每条布局路径都带一个永不执行的 native 分支 |
+| `attachView` / `applyLayout` 里的 `parkAll` | 把 native view 停到窗口右侧 | 渲染层按 `bounds` 自己布局，主进程再停一次会把「停到窗口外」的 rect 当成舞台上的位置交给节点 |
+| `freeze()` + `FrozenSlot` + `embedded:freeze` IPC | 遮罩前把页面拍成图 | 遮罩就是 DOM，节点天然被盖住。冻结回路还带一个真实隐患：二次冻结时舞台已被上一次 `setStage(null)` 清空，返回空图 |
+| 停靠 DevTools（`devtools` 记录、`placeDevTools`、`setDevToolsWidth`、拖拽手柄、三条 IPC） | 在格位内分屏显示开发者工具 | `setDevToolsWebContents` 需要 native 载体，guest 下 `bindDevTools` 恒 false，整套是不可达代码。改为 Electron 自己的窗口 |
+| `devtoolsWidth` / `DEVTOOLS_GRIP_WIDTH` | 手柄几何 | 同上 |
+| `parkedViewBounds` | 停放几何 | 剩下的唯一调用点是自己 | 
+
+新增 `guestNodeRect`（`shared/embedded.ts`）承接真正在用的那条规则：有舞台且在台 → 舞台原点 + bounds；
+否则保持完整尺寸并停到窗口左侧外。**两侧共用同一个纯函数**，主进程和渲染层不再各算一遍。
+
+**P5 补上的缺口**：最小化此前从未被真正执行过。新增 `scripts/e2e-minimize.mjs`（8 条断言，唯一
+不 headless 的套件——headless 下窗口 `opacity: 0`，`minimize()` 是空操作）。它当场抓到一个严重缺陷：
+最小化后 `screenshot_browser_tab` 挂 178 秒。实测结论与修复见踩坑库「最小化窗口的截图」一条。
+
+**顺带修掉的两条**：
+- `viewIsOnScreen` 只判左上角，节点停在 `x = -width` 时被判成在屏 → 后台页面截图全走必超时路径。
+  改为相交判定。
+- `e2e-mcp-tools.mjs`（76 条断言）把 62 个 MCP 工具逐个真调一遍，当场暴露三处工具语义：`create_view`
+  返回的是**定义 id**，而 `set_browser_layout`/`pin_browser_tab` 要**运行时容器 id**；两个同身份标签页
+  不能 `compose_view`；`copy_view_to_site` 会把源视图的成员页**移走**。这些都不是 bug，但都是只有
+  真调才会发现的形状。
 
 ### P3 落地记录（2026-11-04）
 

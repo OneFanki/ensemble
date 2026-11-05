@@ -42,20 +42,20 @@
   工具条、格位标题与查找栏，页面本身是主窗口里由主进程托管的 `<webview>`。
   之前那个独立外壳（`#embedded`）已删除——两个窗口各有一份标签状态，切来切去只是负担。
 
-  **渲染载体迁移中（[ADR 0011](architecture/adr/0011-webview-cdp-on-guest-pivot.md)）**：
-  页面宿主正在从主进程的 `WebContentsView` 换成 renderer 里的 `<webview>`，控制面仍是
-  CDP（main 拿到 guest `webContents` 后 `debugger.attach`）。P1 已完成——guest 会话状态机、
-  挂载硬化策略、开页等待队列三块纯逻辑在 `src/core/cdp/` 下，Electron 侧适配层是
-  `src/main/embedded/guests.ts`。P2 起 renderer 才开始渲染节点，在那之前
-  `WebContentsView` 仍是实际载体。
+  **页面宿主是 renderer 里的 `<webview>`**（[ADR 0011](architecture/adr/0011-webview-cdp-on-guest-pivot.md)），
+  控制面仍是 CDP：main 在 `did-attach-webview` 里拿到 guest `webContents` 后
+  `debugger.attach`。节点由 `GuestPool.vue` 在 App 根节点维护——**不在** `BrowserPage` 里，
+  因为移出文档的节点会立刻销毁渲染进程，而打开控制台时浏览器页会卸载。主进程侧的适配层是
+  `src/main/embedded/guests.ts`，纯逻辑（会话状态机、挂载硬化、等待队列）在 `src/core/cdp/`。
+  没有第二套载体：`WebContentsView` 与它的定位/冻结/停靠资产已在 P4 全部删除。
 
 悬浮条的位置保存在 `userData/overlay.json`（纯窗口偏好，不进入可导出的工作区文件）；
 显示开关是 `settings.overlayEnabled`。
 
 `src/core` 不依赖 Electron，所以能在纯 Node 下跑单元测试，也能被未来的 CLI 或 CI
 直接复用。外部浏览器窗口不是 Electron 的 `BrowserWindow`，而是由 `spawn` 启动的独立
-系统浏览器进程；内置浏览器的页面宿主在主窗口里（迁移中，最终形态是 `<webview>`，控制面
-走 CDP），两者的取舍见下文。
+系统浏览器进程；内置浏览器的页面宿主是主窗口渲染进程里的 `<webview>`（控制面走 CDP），
+两者的取舍见下文。
 
 ### 渲染层的共享控件
 
@@ -64,7 +64,7 @@
 
 - `AppButton`：文字/图标按钮，`variant`（default / primary / ghost / danger）+ `size`。
 - `IconButton`：纯图标按钮，`ariaLabel` 是**必填**属性（没有可访问名的图标按钮在测试里
-  也找不到）；`title` 默认取同一个字符串。
+  也找不到）；`title` 默认取同一个字符串，并转成 `v-tooltip` 的悬停提示（见下节）。
 
 这条规则是踩出来的：以前每个页面把 `.btn` 的样式复制进自己的 `scoped` 块，新页面只要
 「用了类名但没复制样式」，按钮就以裸文字渲染——流程页和它的新建弹窗就是这样上线的。
@@ -74,13 +74,41 @@
 表单字段的词汇表同理留在全局：`.field` 只定义「标题在上的一个控件」，输入框尺寸由它统一，
 避免每个对话框各自写 1px 边框与 6/7/9px 混用的内边距。
 
+### 悬停提示：`v-tooltip`，不用原生 `title`
+
+纯图标控件的说明走 `src/renderer/src/directives/tooltip.ts` 的 `v-tooltip`（app 级注册）：
+
+```vue
+<button v-tooltip="t('app.browserReload')" :aria-label="t('app.browserReload')">…</button>
+<button v-tooltip="{ text: label, placement: 'top' }">…</button>
+```
+
+原生 `title` 不做成「少写一个属性」的替代：它等约一秒才出现、字体和缩放开不走应用自己的一套、
+位置由系统决定，也没法跟主题。它此前留下的理由是内置页面曾是主进程的原生视图、画在渲染层
+之上，任何自绘浮层都会被盖住——页面改成渲染层 DOM 里的 guest 之后，这个理由就不成立了。
+
+运行时由 e2e `e2e-chrome-geometry` 断言（存在、可见、藏在窗口内、`pointer-events: none`、
+移开即消失），源码层由 `tests/contracts/tooltips.test.ts` 守住：浏览器工具栏里不留
+`:title="t(...)"`。长 URL 的页签仍用原生 `title`——那是「系统会截断并可复制」的另一种需求。
+
+### 右上角归谁：`--window-controls-width`
+
+`titleBarOverlay` 下 caption 按钮由 OS 画在客户端区域之上，所以每个触及窗口右上角的表面都要
+让开它。宽度不写死：`src/renderer/src/composables/windowControls.ts` 用
+`navigator.windowControlsOverlay.getTitlebarAreaRect()` 实测后发布成 CSS 变量（Windows 11
+@1.5x 实测 137px；历史上三个文件分别硬编码 148/140/146）。
+
+**这个保留是有条件的**：浏览模式右上角是标签条，工作台模式是运行栏。谁在右上角谁让位，另一个
+把这部分还回去——两边同时预留会在标签与运行栏之间留一条 138px 的死空。由
+`e2e-chrome-geometry` 的几何断言守住。
+
 
 ## 两种浏览器表面
 
 两种表面共用同一套身份、凭据、视图与布局模型，区别只在承载方式（决策记录见
 [ADR 0006](./architecture/adr/0006-embedded-browser-first.md)）：
 
-| | 内置（`WebContentsView`） | 外部（系统浏览器） |
+| | 内置（`<webview>` guest） | 外部（系统浏览器） |
 | --- | --- | --- |
 | 可控性：截图、接管、录制、并排、布局 | 完整 | 受限 |
 | 保真度：真实版本、扩展、DRM、企业策略 | 较弱 | 最强 |
@@ -112,7 +140,7 @@
 之前空槽位的账号入口只传 `identityId` 不传地址，页面停在 `about:blank`、标题已变成
 账号名而舞台还画着新标签页搜索框，就是这个漏掉的统一。
 
-缩放走 `webContents.setZoomFactor`，因此天然是**每页一份**：页面各有自己的 `WebContentsView`，
+缩放走 `webContents.setZoomFactor`，因此天然是**每页一份**：页面各有自己的 `webContents`，
 没有共享的缩放状态。`settings.browserZoom` 只是「没被手动调过的页面的默认值」，
 `zoomBy` 在页面上按 Ctrl +/-/0 时写入 `zoomOverride`（仅内存，随标签页消失），并在
 `before-input-event` 里拦截——网页自己会吞掉这些按键。
@@ -128,8 +156,8 @@ Electron 不绑任何默认刷新，不拦就是死键。
 「跟随全局 / 自适应 / 固定尺寸」。解析顺序只有一条
 （`browser.ts` 的 `viewportOf`）：页面自己的选择优先，否则用默认，否则铺满格子。
 `viewportOverride` 的三态是关键：缺省=继承、`null`=显式自适应、对象=固定；只有页面明确
-选过才允许和默认不一致。改分辨率的菜单项选中后**立即关闭菜单**——菜单浮在冻结截图上，
-视图此刻停放在窗口外，不关菜单就看不到重排结果。清除默认值必须传 `null` 而不是
+选过才允许和默认不一致。改分辨率的菜单项选中后**立即关闭菜单**——不关菜单就看不到重排
+的结果。清除默认值必须传 `null` 而不是
 `undefined`：设置经 `JSON.stringify` 过 IPC，`undefined` 会整键消失，主进程收不到要改的信号。
 
 **同一实例可以在两个格位各显示一页。** 一个格位本来对应一个实例，实例只显示自己的当前页；
@@ -149,9 +177,9 @@ Electron 不绑任何默认刷新，不拦就是死键。
    否则它会退回去显示兄弟格正在显示的那一页，两格一模一样，等于一个没有意义的重复。
 
 界面侧跟着这个模型走：分屏格位的标签条只画自己那一页（加上「解除分屏」按钮，代替「+」），
-运行栏（`RunDock`）分屏时**一格一行**、各自标自己的格位号，未分屏时仍是一实例一行、页面
-嵌套在下面。此前两格都画完整标签条、运行栏又按实例嵌页，缩进与实际层级对不上，是这次
-修复的主要症状。
+运行栏（`RunDock`）分屏时**一格一行**、各自标自己的格位号，未分屏时是一实例一行。
+**两处都不列实例内部的页面**：运行栏回答的是「哪些窗口在跑」，窗口里的页面由舞台自己的
+标签条列出。一个实例持有多页时，行尾只加一个计数徽章。
 
 内置表面在 `src/main/embedded/`：
 
@@ -172,10 +200,10 @@ Electron 不绑任何默认刷新，不拦就是死键。
   标签页」是同一个语义。`clean` 也随实例继承：干净会话里打开的登录弹窗不会掉进日常档案。
 - `cdp.ts` 通过 `webContents.debugger` 说 CDP，**不开放任何调试端口**。调试端口无鉴权，
   本机任意进程都能驱动浏览器；进程内通道的唯一入口是已鉴权的 IPC 与 MCP。
-- 视图的 `setBounds` 坐标是窗口内容区 DIP，`shared/embedded.ts` 的网格计算直接复用
-  比例槽位，不需要处理窗口边框、阴影或前台抢占。**不在台上的页面移到窗口内容区右缘之外**
-  （`parkedViewBounds`），而不是 `setVisible(false)`：后者会让 CDP 截图超时，见
-  [浏览器表面设计](./design/browser-surface.md#管理页面如何盖住浏览器)。
+- `bounds` 是**舞台相对**坐标，由 `guestNodeRect` 与舞台原点相加得到节点的窗口位置。
+  不在台上的页面保持完整尺寸、停在窗口左缘之外：整页移出窗口会让合成器把它 cull，截图
+  命令永不返回；缩成 0×0 或 `display:none` 则会让页面里的可见性判断全部答 false。
+  规则只有这一个纯函数，主进程与渲染层共用。
 
 由此带来的几条约束：
 
@@ -197,8 +225,8 @@ MCP 暴露 18 个浏览器工具：列标签、开视图、开标签（按身份
 仍然抬窗口——那是用户刚刚点了一下，想看到结果；AI 是把页面当工作区在用，往往在用户读
 文档或改设置时开页，每开一个页就把窗口顶到最前面会让这个端点没法用。
 
-- 不抬窗口也照样能工作：`createTab` 先给新视图一个窗口内的真实矩形再停放，所以截图与
-  DOM 读取在后台照常可用；`viewId` 指定的视图仍然被激活，用户切回去时就是那一屏。
+- 不抬窗口也照样能工作：页面节点一开始就按舞台矩形摆好，所以截图与 DOM 读取在后台照常
+  可用；`viewId` 指定的视图仍然被激活，用户切回去时就是那一屏。
 - 输入类工具开启 `Emulation.setFocusEmulationEnabled`，窗口不在前台也能派发事件。
 - `openEmbeddedView(viewId, { reveal })` 用同一个函数服务两边，差别只有这一个参数。
 
@@ -238,24 +266,19 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
   不占新格位。
 - 内置表面是懒创建的可选依赖：测试里可以注入假实现，未打开过内置浏览器时工具会给出
   明确错误而不是崩溃。
-- **离开舞台的页面停在窗口内容区右缘之外，既不是负数坐标，也不是舞台宽度。**
-  Electron 44 / Chromium 152 上实测出两条各自独立的坑：
-  1. `x = -100000` 会让渲染器把视口算成 0×0：脚本照跑，但整页按零宽度布局，`innerWidth`
-     是 0，块级元素宽度也是 0。凡是依赖渲染几何的判断（这段文字可见吗、按钮在哪）都会
-     得到「页面上什么都没有」的假结论——AI 在流程页 / 设置页调用浏览器工具时就会撞上。
-  2. `x = stage.width` 仍然落在窗口内部：舞台在导航栏右侧，按舞台宽度停放等于把页面画在
-     账号页/设置页上面（实际发生过，右侧栏被一整页后台盖住）。
-  正确做法是 `parkedViewBounds(窗口内容区尺寸)`，即 `x = content.width`，保持原来的宽高。
-- **新建的视图必须先有过真实尺寸再停放。** 一个刚创建、第一次 `setBounds` 就在窗口外的
-  视图会被渲染器判定为不可见，视口固定成 0×0 且之后不再恢复；`createTab` 因此先把它按
-  窗口内容区铺一次，再由 `applyLayout` 决定放哪。这是第 1 条那个 0×0 现象的另一半原因，
-  只改停放坐标不够。
-- 窗口 resize 时重新跑 `applyLayout`：停放位置跟着内容区宽度走，否则缩小窗口会把页面
-  拉回可见区域。
+- **离开舞台的页面保持完整尺寸、停在窗口左缘之外**（`guestNodeRect`）。三条实测约束：
+  1. 坐标不能是 `-100000` 这种大负数：渲染器会把视口算成 0×0，脚本照跑但整页按零宽度
+     布局，凡是依赖渲染几何的判断（这段文字可见吗、按钮在哪）都会得到「什么都没有」。
+  2. 不能缩成 0×0 或用 `display: none`，原因同上；也不能用 `visibility: hidden`——它保住
+     了尺寸，却让页面内的 `checkVisibility()` 对每个元素答 false，并拒绝截图。
+  3. 整页移出窗口会被合成器 cull，`Page.captureScreenshot` 从此永不返回。所以停在
+     `x = -width`：不在窗口内、拿不到指针，但离得足够近，截图前搬回来只要一帧。
+- 节点尺寸由 `bounds`（舞台相对）加舞台原点得到，主进程与渲染层共用同一个纯函数。
+- 窗口 resize 与运行栏开合都会重新上报舞台矩形，页面节点跟着重排。
 - **舞台尺寸要经过响应式状态，不能直接读 `clientWidth`。** 格位头的几何由渲染层按舞台矩形
-  算出来（`slotChrome`），原生页面按 `setStage` 上报的矩形铺，两者必须同源。早先 `slotChrome`
-  直接读 `stage.clientWidth`，computed 不会因为布局变化重算，于是收起运行栏后原生页面已经
-  变宽、格位头还停在旧宽度，右边留出一条死带。现在 `reportStage` 把 `clientWidth` 写进
+  算出来（`slotChrome`），页面节点按 `setStage` 上报的矩形铺，两者必须同源。早先 `slotChrome`
+  直接读 `stage.clientWidth`，computed 不会因为布局变化重算，于是收起运行栏后页面已经变宽、
+  格位头还停在旧宽度，右边留出一条死带。现在 `reportStage` 把 `clientWidth` 写进
   `stageBox` 这个 ref，`slotChrome` 依赖它，ResizeObserver 触发的重报就同时更新两边。
 - **站点图标在主进程内联。** `EmbeddedTab.favicon` 是一个 `data:` URL，渲染层只负责画。
   渲染层 CSP 是 `img-src 'self' data:`，不加载远程图片；更重要的是图标要用页面自己的会话去取
@@ -263,14 +286,12 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
   纯函数，避免为了测它而启动 Electron。
 - **停放页空闲后睡眠（`aiIdleFreeze`，headless 关闭）。** 页面挪出窗口只是看不见，Chromium
   仍视其为「可见」，原生后台节流永不触发——应用窗口在屏上时，每个停放页（包括 3D 首页）都会
-  满速渲染。实测 `setVisible(false)` 连 `visibilityState` 都不变（JS/rAF 照跑），CPU 节流拖不
-  动 compositor 驱动的帧循环；真正生效的是 CDP `Page.setWebLifecycleState: "frozen"`——页面
-  JavaScript 整体挂起（冻结页上 evaluate 永不返回），3D 场景随之停。停放页闲置 60 秒（窗口期
-  内无任何 CDP 流量）后由 10 秒一轮的扫描冻结，**扫描在浏览器构造时无条件启动**（曾惰性启动
-  于首次 CDP 命令，纯手工会话里从未运行过）；AI 的每条命令经 `EmbeddedCdp.send` 前都会
-  **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击永远落在活页面上。扫描刻意保守：台上、
-  加载中、崩溃、空白、有声、开着 DevTools 的页面一律不动。另注意窗口级遮挡：整个应用被盖住
-  或移出屏幕时，Chromium 原生节流本就会把所有页压停，无需任何额外机制。
+  满速渲染。真正生效的是 CDP `Page.setWebLifecycleState: "frozen"`：页面 JavaScript 整体挂起
+  （冻结页上 evaluate 永不返回），3D 场景随之停。停放页闲置 60 秒（窗口期内无任何 CDP 流量）
+  后由 10 秒一轮的扫描冻结，**扫描在浏览器构造时无条件启动**；AI 的每条命令经
+  `EmbeddedCdp.send` 前都会 **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击永远落在
+  活页面上。扫描刻意保守：台上、加载中、崩溃、空白、有声、开着 DevTools 的页面一律不动。
+  另注意窗口级遮挡：整个应用被盖住或移出屏幕时，Chromium 原生节流本就会把所有页压停。
 
 ### 流程：把走通的操作存成资产
 
@@ -521,12 +542,13 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 
 ### 舞台几何只有一个出口
 
-渲染层测量舞台矩形并上报主进程，主进程据此摆放原生视图。这段逻辑收在
-`composables/stageGeometry.ts`：**这是与「用什么显示页面」之间唯一的契约**。今天内容是
-`WebContentsView`，将来换载体时这个契约不变——「给你一个矩形，把页面放进去」。
+渲染层测量舞台矩形并上报主进程，主进程据此算出每个页面在自己的舞台里占哪一块。这段逻辑
+收在 `composables/stageGeometry.ts`：**这是与「用什么显示页面」之间唯一的契约**——「给你
+一个矩形，把页面放进去」。节点位置由 `shared/embedded.ts` 的 `guestNodeRect` 统一计算，
+主进程和渲染层共用同一个纯函数，不再各算一遍。
 
-把它单独成模块的实际用途：换载体时改动收敛在这里，而不用在 2971 行的组件里重新找散落的
-`getBoundingClientRect`。
+把它单独成模块的实际用途：换载体（或再换一次）时改动收敛在这里，而不用在两千多行的组件里
+重新找散落的 `getBoundingClientRect`。
 
 内置预设定义在 `src/shared/layouts.ts`，槽位坐标是相对工作区的比例（0–1），
 与显示器分辨率解耦：
@@ -557,7 +579,7 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 
 三个概念必须分清，它们的 id 关系是最容易踩的地方：
 
-- **页面**（`EmbeddedTab`）：一个 `WebContentsView`，等同于浏览器的一张标签页。
+- **页面**（`EmbeddedTab`）：一个 `<webview>` guest，等同于浏览器的一张标签页。
 - **实例**（browser instance）：一个共享会话的浏览器窗口。实例 id 是它的**根页面 id**。
   页面自己 `window.open` / `target="_blank"` 出来的页面加入同一个实例，共享 cookie，
   不占新格位。
@@ -613,12 +635,17 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
   （站点若按浏览器语言本地化，看到的就是用户读的那一种）。
 - core 层拿到的是**解析后的** `"zh" | "en"`，不是三值。三值只在设置与渲染层存在。
 
-**DevTools 前端不受这条链路控制**：它的 UI 语言要加载语言包，而语言包在自建 DevTools 视图里
-取不到（详见 `docs/design/browser-surface.md`）。它固定英文，这是已知边界，不是遗漏。
+**DevTools 面板是应用自建的原生视图，停靠在页面右侧。** `openDevTools({ mode: "right" })` 在
+启用 `titleBarOverlay` 的 Windows 上只会落成独立窗口（已实测），所以面板由一个
+`WebContentsView` 承载，`setDevToolsWebContents` 把前端指过去，页面与工具在同一格位里分成
+两部分，中间留 7px 真实缝隙给渲染层的分隔条。
 
-DevTools 内部的设置项触发前端 reload 时，主进程会整套重建前端以保住面板（Electron 从不
-重新绑定 `InspectorFrontendHost`，只有换掉前端视图才能恢复）。用户可见的效果是面板闪一下
-然后继续可用，而不是留下一个空壳。
+两个容易踩的坑（详见 `docs/engineering/踩坑库.md`）：宿主视图必须在
+`setDevToolsWebContents` **之前**拿到非零矩形，否则前端在零尺寸里初始化、内容层永远不会建立；
+往 `devtools://` 文档注入脚本（`executeJavaScript` 或自建 CDP 会话）同样会让前端起不来且不报错。
+
+因此应用**不代答**前端那句「切换到中文」的提示条：它的答案存在 Electron 从不持久化的宿主偏好里，
+而唯一能点掉它的方式就是注入脚本。前端语言跟随 `--lang`，首次出现的一次性提示由用户自己点。
 
 ## 进程生命周期
 
@@ -750,14 +777,14 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
 ## 自动化运行（headless）
 
 所有端到端脚本与截图脚本都启动一个真实的应用进程，并用 CDP 驱动它。这些进程设
-`ENSEMBLE_HEADLESS=1`，含义是**不出现在桌面上**：主窗口被移到所有显示器之外、不进任务栏、
+`ENSEMBLE_HEADLESS=1`，含义是**不出现在桌面上**：主窗口以零不透明度显示、不进任务栏、
 不抢焦点，托盘图标、运行实例悬浮条、切换回执都不创建，`focusPage()` 只通知渲染层换页而不抬窗口。
 
 两个实现细节值得记住，两者都只有实际跑过才能发现：
 
-- **窗口必须 `show()`，不能只创建不显示。** 从未显示过的窗口不产生合成帧，
-  `Page.captureScreenshot` 会一直挂着而不是返回图片——冻结舞台与全部截图直接失效（实测从
-  ~100ms 变永不完成）。所以是「显示到屏幕外」，不是「隐藏」。
+- **窗口必须 `show()`，不能只创建不显示。** 从未显示过的窗口不产生合成帧，而 guest 的
+  合成器跟着宿主走：`Page.captureScreenshot` 会一直挂着而不是返回图片（实测从 ~100ms 变
+  永不完成）。所以是「以零不透明度显示」，不是「隐藏」——`show()` 之后立刻 `setOpacity(0)`。
 - **`focusPage()` 的两半要拆开。** 它同时做「抬窗口」和「通知渲染层切到浏览器页」；
   headless 模式下跳过前者、保留后者，否则脚本驱动的页面在界面上根本不会被切过去。
 

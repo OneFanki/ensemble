@@ -90,7 +90,7 @@ ADR 0010 是把迁移**暂缓**（2026-10-28 裁决），并列了三条重启�
 | --- | --- | --- |
 | `tabs`（list/create/close/activate/claim） | `list_browser_tabs` / `open_browser_tab` / `close_browser_tab` / `set_tab_page` | 有，但语义不同 |
 | `scope`（子任务临时控制域，with barrier） | 无 | **缺**（可用 `launch_clean_session` 覆盖部分场景） |
-| `set_visible` | 内部有（停放机制），无工具 | 部分 |
+| `set_visible` | 内部有（离台页面停到窗口外），无工具 | 部分 |
 | `resize` / `viewport_reset` | `set_browser_viewport` / `reset_browser_viewport` | 有 |
 
 ### 其他
@@ -158,5 +158,6 @@ ADR 0010 是把迁移**暂缓**（2026-10-28 裁决），并列了三条重启�
 
 - [x] 写 ADR 0011：内置浏览器迁移到 renderer `<webview>` + CDP-on-guest（取代 0010 的
       「暂缓」结论，并重新论证隔离边界）
-- [ ] 整表重测截图/几何矩阵（迁移前后各一份，作为回归基线）
-- [ ] 拆阶段：P1 guest 底座 → P2 renderer webview 组件 → P3 握手 → P4 删定位资产 → P5 回归
+- [x] 整表重测截图/几何矩阵（迁移前后各一份，作为回归基线）
+- [x] 拆阶段：P1 guest 底座 → P2 renderer webview 组件 → P3 握手 → P4 删定位资产 → P5 回归
+      （P5 补上了此前从未执行过的最小化场景，见 ADR 0011 的 P4/P5 落地记录）

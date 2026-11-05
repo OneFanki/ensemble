@@ -16,6 +16,7 @@
  * reports the guest id back. Creation-time matters — `partition` and
  * `allowpopups` cannot be applied afterwards.
  */
+import { guestNodeRect, type StageRect } from "@shared/embedded";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useEmbeddedStore } from "../stores/embedded";
 
@@ -64,13 +65,11 @@ const nodes = new Map<string, Mounted>();
  * symptom — the drag started on the handle and then entered a page's box, which
  * took the pointer away and left the width where it was.
  */
-function placeFor(tabId: string): {
-  rect: { x: number; y: number; width: number; height: number };
-  onStage: boolean;
-} {
-  const stage = embedded.stageRect;
+function placeFor(
+  tabId: string,
+  stage: StageRect | null,
+): { rect: StageRect; onStage: boolean } {
   const tab = embedded.tabs.find((item) => item.id === tabId);
-  const bounds = tab?.bounds;
   /*
    * Whether this page is one of the pages the stage is showing.
    *
@@ -80,33 +79,28 @@ function placeFor(tabId: string): {
    * view, so a 2×2 stage went blank while its state looked correct. The extra
    * check is that the view itself is the one on screen; a page of an off-stage
    * view is not visible even though its slot table still lists it.
+   *
+   * A missing stage means the whole surface is suspended (the console covers
+   * the browser), so nothing is on stage regardless of what the store says. This
+   * is not cosmetic: the store keeps its answer across the switch, and an
+   * `onStage` that stayed true while the rect went off-window left the node
+   * transparent but still hit-testable.
    */
   const onStage = Boolean(
-    tab &&
+    stage &&
+      tab &&
       (tab.viewId
         ? tab.viewId === embedded.state.activeViewId && embedded.isOnStage(tab)
         : embedded.isOnStage(tab)),
   );
-  const hasBox = Boolean(bounds && bounds.width > 0 && bounds.height > 0);
-  if (hasBox && onStage && stage && stage.width > 0 && stage.height > 0) {
-    return {
-      rect: {
-        x: stage.x + bounds!.x,
-        y: stage.y + bounds!.y,
-        width: bounds!.width,
-        height: bounds!.height,
-      },
-      onStage: true,
-    };
-  }
-  // Off stage but must stay sized: park it outside the window's left edge. It is
-  // transparent anyway; this only guarantees it cannot intercept a pointer meant
-  // for the chrome.
-  const width = stage && stage.width > 0 ? stage.width : Math.max(1, window.innerWidth);
-  const height = stage && stage.height > 0 ? stage.height : Math.max(1, window.innerHeight);
   return {
-    rect: { x: -width, y: stage?.y ?? 0, width, height },
-    onStage: false,
+    rect: guestNodeRect({
+      stage,
+      bounds: tab?.bounds,
+      onStage,
+      window: { width: window.innerWidth, height: window.innerHeight },
+    }),
+    onStage,
   };
 }
 
@@ -139,9 +133,21 @@ function layout(): void {
   // starting value. `draggingTabId` is the same situation — a tab dragged out of
   // the dock crosses the stage before it is dropped.
   const shielded = embedded.pointerShield > 0 || Boolean(embedded.draggingTabId);
-  const stage = embedded.stageRect;
+  // Published for diagnostics and for tests that have to tell "the shield is
+  // correctly held" from "the shield leaked". Neither can be read off a node's
+  // own style: a page that is merely off-stage is also `pointer-events: none`,
+  // so the two states look identical from the outside.
+  if (container.value) {
+    container.value.dataset["shielded"] = shielded ? "1" : "0";
+    container.value.dataset["shieldHolds"] = String(embedded.pointerShield);
+  }
+  // A suspended stage means another app page is taking the window. Park in the
+  // same task as that decision: the incoming page is ordinary HTML under a page
+  // that is a real surface, so any frame spent waiting is a frame of the page
+  // showing through the page the user asked for.
+  const stage = embedded.stageSuspended ? null : embedded.stageRect;
   for (const [tabId, mounted] of nodes) {
-    const placement = placeFor(tabId);
+    const placement = placeFor(tabId, stage);
     const presenting = mounted.presenting > 0;
     // A presented background page is placed on the stage for the capture: the
     // window box if the stage is unknown (the console covers the browser).
@@ -325,6 +331,18 @@ const stopWatching = watch(
 );
 
 /**
+ * Parks every page the instant the browser surface is handed over.
+ *
+ * Synchronous, for the same reason the pointer shield is: the console is
+ * ordinary in-flow HTML and a page is a real surface, so the two only ever show
+ * one over the other by accident. Leaving this to the normal pre-flush queue ran
+ * it *after* the parent's render job (Vue orders jobs by mount order, and the
+ * shell mounts before this pool), which is exactly one frame of the old page
+ * showing through the new panel.
+ */
+const stopSuspension = watch(() => embedded.stageSuspended, () => layout(), { flush: "sync" });
+
+/**
  * Takes the pointer away from every page the instant a gesture starts.
  *
  * This one has to be synchronous, and that is not an optimisation. The gesture
@@ -355,6 +373,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopWatching();
+  stopSuspension();
   stopShield();
   for (const unsubscribe of unsubscribers) unsubscribe();
   unsubscribers = [];

@@ -27,6 +27,19 @@ const confirm = useConfirmStore();
 const { t } = useI18n();
 
 /**
+ * The dock reaches the window's top-right corner, which is exactly where the
+ * native window controls are painted.
+ *
+ * On Windows and Linux the controls are drawn by the OS *over* the app, so the
+ * dock's first row used to land underneath them: "创建视图" and the collapse
+ * button were not merely hard to find, they were invisible and unclickable.
+ * Reserving the band here — rather than in whichever component happens to sit
+ * at the top right — is what keeps the two from fighting over the corner.
+ */
+const platform = computed(() => workspace.snapshot?.platform ?? "win32");
+const reservesControls = computed(() => platform.value !== "darwin");
+
+/**
  * A dock row is a browser instance, not a page.
  *
  * One view slot holds one instance; pages a page opens (`target="_blank"`,
@@ -133,16 +146,11 @@ function activePageOf(root: EmbeddedTab): EmbeddedTab {
 /**
  * One row of the dock's view block.
  *
- * The dock used to draw exactly one row per instance, with its pages nested
- * underneath. A split breaks that: one instance now occupies two cells showing
- * two different pages, so "one row per instance" had to either repeat the page
- * list twice or list an instance that visibly holds two cells as a single row —
- * the header then said 1/2 while both cells were full, and the nesting repeated
- * the same page under itself.
- *
- * So a row is now a *cell* when the instance is split, and an *instance* when it
- * is not. `nested` carries the pages to indent under the row and is empty for a
- * split row: there is nothing below a cell that shows exactly one page.
+ * A row is a *cell* when the instance is split and an *instance* when it is not.
+ * Either way it stands for one browser window, never for one of its pages: this
+ * list answers "what is running", and a window's internal pages are a property of
+ * that window, shown in the stage's own tab strip. Listing them again under the
+ * row said the same thing twice, and a split repeated a page underneath itself.
  */
 interface DockRow {
   root: EmbeddedTab;
@@ -150,16 +158,21 @@ interface DockRow {
   page: EmbeddedTab;
   /** Zero-based slot this row occupies; absent when the instance is off stage. */
   slot?: number;
-  /** Pages to list under the row; empty for a split row. */
-  nested: EmbeddedTab[];
+  /**
+   * Pages open in the instance, as a count.
+   *
+   * Only the number: it answers "does this window hold more than the page I am
+   * looking at", which the stage's strip then answers in detail. The pages are
+   * deliberately not carried — nothing in the dock draws them any more.
+   */
+  pageCount: number;
 }
 
 /**
  * Rows for one view block, in slot order then off-stage order.
  *
  * Off-stage instances still deserve a row — they are running, and that is how the
- * user finds and drags them back. They are never split (a split needs two cells),
- * so they keep the nested-pages shape.
+ * user finds and drags them back.
  */
 function dockRows(view: EmbeddedView): DockRow[] {
   const rows: DockRow[] = [];
@@ -183,7 +196,7 @@ function dockRows(view: EmbeddedView): DockRow[] {
         root,
         page: pinned ?? activePageOf(root),
         slot: index,
-        nested: [],
+        pageCount: pages.length,
       });
       return;
     }
@@ -193,14 +206,13 @@ function dockRows(view: EmbeddedView): DockRow[] {
       root,
       page: activePageOf(root),
       slot: index,
-      nested: pages.length > 1 ? pages : [],
+      pageCount: pages.length,
     });
   });
 
   for (const root of embedded.viewInstances(view.id)) {
     if (placed.has(root.instanceId)) continue;
-    const pages = pagesOf(root);
-    rows.push({ root, page: activePageOf(root), nested: pages.length > 1 ? pages : [] });
+    rows.push({ root, page: activePageOf(root), pageCount: pagesOf(root).length });
   }
   return rows;
 }
@@ -243,8 +255,7 @@ function aiCountOf(root: EmbeddedTab): number {
  *
  * A native `title` cannot be styled, waits a second before opening, and renders
  * as browser chrome on top of the app. Drawing it needs care in one place: the
- * panel clips its own overflow and each view block clips too, while the pages on
- * the stage are native views that always paint over app HTML — so the hint has
+ * panel clips its own overflow and each view block clips too — so the hint has
  * to stay inside the dock, and it opens leftwards for that reason.
  *
  * One line, no wrapping: a wrapped hint is taller than the row it belongs to and
@@ -391,9 +402,6 @@ function faviconOf(root: EmbeddedTab): string | undefined {
   return activePageOf(root).favicon ?? root.favicon;
 }
 
-/** Tab icons are a pixel or two smaller than the collapsed tile's. */
-const PAGE_ICON_SIZE = 11;
-
 /** Group boundary tinted by the group it opens, so colour carries the grouping. */
 function groupRuleStyle(color: RoleColor | undefined): Record<string, string> {
   if (!color) return {};
@@ -403,11 +411,10 @@ function groupRuleStyle(color: RoleColor | undefined): Record<string, string> {
 /**
  * Hover label for an icon-only strip.
  *
- * This is the one place a native `title` is used on purpose: the strip is 46px
- * wide inside the dock, and any HTML flyout would extend over the stage, where
- * the native pages paint above the app's own renderer. A tooltip drawn in our
- * layer would be invisible exactly where it needs to be. The instance tab strip
- * can use its own tooltip because it sits inside the stage's HTML band.
+ * Drawn by `v-tooltip` and not by the OS: the strip's controls are the only way
+ * to tell one instance from another, so their labels have to appear at the app's
+ * own scale and light up immediately. `placement: "top"` keeps the label inside
+ * the dock column instead of hanging past the window's right edge.
  */
 function miniLabel(root: EmbeddedTab): string {
   const pages = pagesOf(root).length;
@@ -545,9 +552,22 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   <aside
     class="dock"
     :class="{ collapsed, resizing }"
+    :data-platform="platform"
     :style="{ '--dock-width': `${embedded.dockWidth}px` }"
     data-tour="run-dock"
   >
+    <!--
+      The window-control band. It is a drag handle because this strip sits where
+      the title bar used to be, and a window whose entire top-right quarter
+      cannot be used to move it feels broken. Collapsed, the icons start below
+      the window buttons so they stay reachable and unclipped.
+    -->
+    <div
+      v-if="reservesControls"
+      class="dock-titlebar drag-region"
+      :class="{ compact: collapsed }"
+      aria-hidden="true"
+    ></div>
     <!-- Sits on the border so the pointer turns into a resize cursor before the
          dock itself is reached; a 1px target would be unusable. -->
     <span
@@ -556,7 +576,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
       role="separator"
       aria-orientation="vertical"
       :aria-label="t('app.browserResizeDock')"
-      :title="t('app.browserResizeDock')"
+      v-tooltip="t('app.browserResizeDock')"
       @pointerdown="startResize"
     ></span>
 
@@ -569,7 +589,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
       <button
         type="button"
         class="expand"
-        :title="t('app.browserExpandDock')"
+        v-tooltip="t('app.browserExpandDock')"
         :aria-label="t('app.browserExpandDock')"
         :aria-expanded="false"
         @click="toggleCollapsed"
@@ -593,7 +613,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
             type="button"
             class="mini-tab"
             :class="{ current: miniActive(root), offstage: !miniOnStage(root) }"
-            :title="miniLabel(root)"
+            v-tooltip="{ text: miniLabel(root), placement: 'top' }"
             :aria-label="miniLabel(root)"
             :aria-current="miniActive(root) ? 'true' : undefined"
             @click="embedded.activate(activePageOf(root).id)"
@@ -616,7 +636,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
         <button
           type="button"
           class="add-view"
-          :title="t('app.browserNewView')"
+          v-tooltip="t('app.browserNewViewHint')"
           @click="newView"
         >
           <Plus :size="12" />
@@ -625,7 +645,8 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
         <button
           type="button"
           class="icon-btn collapse-btn"
-          :title="t('app.browserCollapseDock')"
+          v-tooltip="t('app.browserCollapseDock')"
+          :aria-label="t('app.browserCollapseDock')"
           @click="toggleCollapsed"
         >
           <PanelRightClose :size="13" />
@@ -633,11 +654,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
       </header>
 
       <div class="scroll">
-        <!--
-          Views: block level, coloured, collapsible; instances are rows.
-          `gridded` shows the slot-number column (only a real grid can
-          cross-reference one) and deepens the page-list indent to clear it.
-        -->
+        <!-- Views: block level, coloured, collapsible; instances are rows. -->
         <section
           v-for="view in embedded.views"
           :key="view.id"
@@ -646,7 +663,6 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
             viewDropClass(view.id),
             {
               active: view.id === embedded.state.activeViewId,
-              gridded: embedded.slots(view) > 1,
             },
           ]"
           @dragover="onViewDragOver(view.id, $event)"
@@ -657,7 +673,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
               type="button"
               class="chevron"
               :aria-label="view.collapsed ? t('app.collapse') : t('app.expand')"
-              :title="view.collapsed ? t('app.expand') : t('app.collapse')"
+              v-tooltip="view.collapsed ? t('app.expand') : t('app.collapse')"
               @click.stop="embedded.collapseView(view.id, !view.collapsed)"
             >
               <ChevronRight v-if="view.collapsed" :size="11" />
@@ -682,7 +698,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
             <template v-else>
               <span
                 class="view-name"
-                :title="t('app.browserRenameHint')"
+                v-tooltip="t('app.browserRenameHint')"
                 @dblclick.stop="startRename(view)"
                 @contextmenu.prevent.stop="startRename(view)"
               >
@@ -718,7 +734,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
             <button
               type="button"
               class="icon-btn"
-              :title="t('app.browserCloseView')"
+              v-tooltip="t('app.browserCloseView')"
               :aria-label="t('app.browserCloseView')"
               @click.stop="closeView(view)"
             >
@@ -789,10 +805,11 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
                     {{ t("app.aiActionCount") }}
                   </span>
                 </span>
-                <!-- A split row stands for one page of a two-cell instance, so the
-                     "this window has N pages" badge would contradict the row. -->
-                <span v-if="row.nested.length > 1" class="pages-badge mono">
-                  {{ row.nested.length }}
+                <!-- The page count, not the pages: the stage's own strip lists
+                     them, and repeating that list here is what the dock stopped
+                     doing. -->
+                <span v-if="row.pageCount > 1" class="pages-badge mono">
+                  {{ row.pageCount }}
                 </span>
                 <span v-if="row.page.loading" class="spinner"></span>
                 <button
@@ -802,25 +819,6 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
                   @click.stop="closeInstance(row.root)"
                 >
                   <X :size="10" />
-                </button>
-              </div>
-              <!-- Pages opened by the page itself stay inside the instance. -->
-              <div v-if="row.nested.length > 1" class="pages">
-                <button
-                  v-for="page in row.nested"
-                  :key="page.id"
-                  type="button"
-                  class="page-row"
-                  :class="{ current: page.id === row.page.id }"
-                  :data-page-id="page.id"
-                  :title="page.url"
-                  @click="embedded.activate(page.id)"
-                >
-                  <!-- Same icon as the stage's own tab strip: the dock's page
-                       list is where a test run is checked, so a page must be
-                       identifiable by its site even before it reports a title. -->
-                  <TabIcon :src="page.favicon" :size="PAGE_ICON_SIZE" />
-                  <span class="page-title">{{ embedded.titleOf(page) }}</span>
                 </button>
               </div>
             </div>
@@ -928,24 +926,6 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
                   <X :size="10" />
                 </button>
               </div>
-              <div v-if="pagesOf(root).length > 1" class="pages">
-                <button
-                  v-for="page in pagesOf(root)"
-                  :key="page.id"
-                  type="button"
-                  class="page-row"
-                  :class="{ current: page.id === activePageOf(root).id }"
-                  :data-page-id="page.id"
-                  :title="page.url"
-                  @click="embedded.activate(page.id)"
-                >
-                  <!-- Same icon as the stage's own tab strip: the dock's page
-                       list is where a test run is checked, so a page must be
-                       identifiable by its site even before it reports a title. -->
-                  <TabIcon :src="page.favicon" :size="PAGE_ICON_SIZE" />
-                  <span class="page-title">{{ embedded.titleOf(page) }}</span>
-                </button>
-              </div>
             </div>
           </div>
           <p v-else class="row-empty">{{ t("app.browserNoTabs") }}</p>
@@ -967,7 +947,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
               class="tab-row ext"
               role="button"
               tabindex="0"
-              :title="t('app.switchTo')"
+              v-tooltip="t('app.switchTo')"
               @click="workspace.focusInstance(instance.id)"
               @keydown.enter="workspace.focusInstance(instance.id)"
             >
@@ -1013,6 +993,37 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   gap: 10px;
   width: var(--dock-width);
   flex: 0 0 auto;
+}
+
+/*
+ * The band the native caption buttons are painted into, at the top of the dock.
+ *
+ * Sized from the measured overlay, not from a guess. Collapsed, the strip is
+ * only 46px wide and the whole strip is inside the caption band, so the spacer
+ * still has to be tall enough to clear it: subtracting the dock's own padding and
+ * the flex gap from `--titlebar-height` is what puts the first tile below the
+ * buttons instead of under them.
+ */
+.dock-titlebar {
+  flex: 0 0 auto;
+  height: var(--titlebar-height);
+  /* Cancels the dock's own padding so the drag band reaches the window edges;
+     a band inset by 12px leaves 12px of unclickable dead space above it. */
+  margin: -12px -10px 0;
+}
+
+.dock[data-platform="darwin"] .dock-titlebar {
+  display: none;
+}
+
+/*
+ * Collapsed padding is 10px, not 12, and the flex gap is 10, so the spacer has
+ * to be 26 to put the first tile at y=46 — clear of the 34px caption band. (At
+ * 24 the tile landed at 32, still two pixels under a window button, which is
+ * exactly the kind of "almost" that leaves a control unclickable.)
+ */
+.dock.collapsed .dock-titlebar {
+  height: 26px;
 }
 
 /* Animating width is fine here: the dock has no native child, only text rows. */
@@ -1310,6 +1321,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
  * 244px column, which is the "card inside a card" look. What identifies a group
  * is its header text and the fact that its rows sit under it; the staging
  * colour already rides the row's own left edge.
+ *
+ * Removing the boxes went too far the other way: with nothing but an 8px gap
+ * between them, two groups of rows read as one long list, and the header of the
+ * lower group looked like another row. What separates them now is structure —
+ * a hairline between blocks, and a guide the rows hang from — rather than a
+ * surface. A rule can say "new group" without turning the dock into cards.
  */
 .view-block {
   border: 0;
@@ -1318,6 +1335,21 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   flex: none;
   /* Rows draw their own leading rule; the block only supplies the gap. */
   padding-bottom: 2px;
+}
+
+/* The boundary between groups.
+ *
+ * Two things went wrong before this. First the rule was `--line-soft`, which is
+ * a step *lighter* than the dock's `--bg` in the light theme (#eceff3 over
+ * #dee2e7) — a border in a lighter colour than its own background draws nothing.
+ * Every token in that family (`--line`, `--line-soft`) is tuned for white
+ * surfaces, and the dock is not one. Second, even a visible hairline is a weak
+ * signal at 0.67px. So the rule is mixed from `--text`, which moves away from the
+ * background in both themes, and it is reinforced with real space above it. */
+.view-block + .view-block {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
 }
 
 /* Active is a filled header, not an outline: a 1px accent border around the
@@ -1343,15 +1375,19 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
  * picker, "+" and "×" land on the same pixel in every group. Spacers keep the
  * loose block — which has no layout picker and no close button — aligned.
  *
- * A plain band, not a filled bar: the header is a label for the rows below it,
- * and filling it made each group look like a window title inside the dock.
+ * A faint filled band, not a bare label: the dock's rows are 28px tall and a
+ * 24px caption of the same weight reads as one more row, which is exactly how
+ * two groups turned into one list. The band is a caption surface — it names what
+ * is below it and never looks like something you can select into.
  */
 .block-head {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 6px;
+  padding: 4px 6px;
+  margin-bottom: 3px;
   border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   cursor: pointer;
   min-width: 0;
 }
@@ -1360,8 +1396,10 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   cursor: default;
 }
 
+/* One step brighter than the resting band, so the header responds to the
+   pointer without a second kind of surface appearing. */
 .block-head:hover {
-  background: color-mix(in srgb, var(--text) 5%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .chevron {
@@ -1598,8 +1636,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
  *
  * Drawn, not a native `title`: native hints cannot be styled and paint as
  * browser chrome over the app. It has to stay inside the dock — the panel clips
- * its overflow, and the pages on the stage are native views that always paint
- * over app HTML — so it opens leftwards from the badge, which is the one
+ * its overflow — so it opens leftwards from the badge, which is the one
  * direction with room to spare at the end of a row.
  */
 .ai-tip {
@@ -1646,50 +1683,9 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   background: var(--surface-3);
 }
 
-/* Pages of one instance: indented under its row, like nested browser tabs.
-   The indent must clear the parent row's icon (5px padding + 12px icon + 6px
-   gap = 23px; +22px more when the slot-number column is shown in a grid), or
-   the levels visually invert and children read as siblings. */
-.pages {
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--line-soft);
-  margin-left: 23px;
-}
-
-.view-block.gridded .pages {
-  margin-left: 45px;
-}
-
-.page-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 3px 8px;
-  border: none;
-  background: transparent;
-  color: var(--faint);
-  font-size: 10.5px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.page-row:hover {
-  background: var(--surface-2);
-  color: var(--text-secondary);
-}
-
-.page-row.current {
-  color: var(--text-secondary);
-}
-
-.page-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* Pages of one instance are not listed here — the dock is a list of windows, and
+   a window's pages belong to the stage's own tab strip. Only the count remains,
+   as a badge on the row. */
 
 .row-empty {
   margin: 0;

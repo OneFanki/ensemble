@@ -46,7 +46,9 @@ const platform = computed(() => store.snapshot?.platform ?? "win32");
   display: flex;
   align-items: center;
   height: var(--titlebar-height);
-  padding: 0 148px 0 8px;
+  /* The caption buttons are painted over this band by the OS; the width comes
+     from the overlay itself rather than from a hardcoded guess. */
+  padding: 0 calc(var(--window-controls-width, 138px) + 8px) 0 8px;
   background: var(--frame);
 }
 

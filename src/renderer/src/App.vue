@@ -30,13 +30,13 @@ import SpotlightTour from "./components/SpotlightTour.vue";
 import BookmarksPage from "./components/BookmarksPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
-import TitleBar from "./components/TitleBar.vue";
 import ToastStack from "./components/ToastStack.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
 import ViewDialog from "./components/ViewDialog.vue";
 import ViewsPage from "./components/ViewsPage.vue";
 import { type Locale, setLocale, tr } from "./i18n";
 import { type LocaleSetting, resolveLocale } from "@shared/locale";
+import { installWindowControlsWidth } from "./composables/windowControls";
 import { GUIDE_VERSION, guideIsUnread } from "./onboarding/guide";
 import {
   shouldAutoStartTour,
@@ -155,6 +155,10 @@ const overlayOpen = computed(
 onMounted(async () => {
   await store.init();
   await embedded.init();
+  // Measured from the native overlay rather than guessed: every surface that
+  // reaches the window's top-right corner reserves this band, and a hardcoded
+  // number is what put the dock's own header underneath the caption buttons.
+  installWindowControlsWidth(store.snapshot?.platform ?? "win32");
   // The status bar shows the endpoint on every screen, so it has to be known
   // before the first settings visit.
   void store.mcpStatus();
@@ -243,6 +247,36 @@ function switchView(next: View) {
     void store.saveSettings({ lastView: next });
   }
 }
+
+/**
+ * The browser's one door into the console.
+ *
+ * It lands on Settings, not on Sites. The control is a gear (see
+ * `BrowserPage.vue`), and a gear that opens a table of sites is a promise the
+ * shape does not keep: the thing people reach for when they see a gear is the
+ * place where preferences live. Everything else in the console is one click away
+ * from its rail.
+ */
+function openConsole() {
+  switchView("settings");
+}
+
+/**
+ * Hands the window over to, or back from, the console.
+ *
+ * A watcher on the view rather than a line in `switchView`, because `switchView`
+ * is not the only way in: the native menu, the status bar and the guide all set
+ * the view directly, and every one of them opens a panel over a live page. This
+ * is synchronous on purpose — the console is in-flow HTML while a page is a real
+ * native surface, so the pages have to be parked in the same task that decides to
+ * draw the console, or the first frame of the console renders underneath the page
+ * it replaced.
+ */
+watch(
+  view,
+  (next) => embedded.suspendStage(next !== "browser"),
+  { flush: "sync", immediate: true },
+);
 
 /**
  * The shell follows the layout.
@@ -717,7 +751,7 @@ async function handleLocale(locale: LocaleSetting) {
       <BrowserPage
         :obscured="overlayOpen"
         :bench="mode === 'bench'"
-        @open-console="switchView('sites')"
+        @open-console="openConsole"
         @switch-mode="setMode"
       />
 
@@ -938,6 +972,18 @@ async function handleLocale(locale: LocaleSetting) {
   display: flex;
   flex-direction: column;
   background: var(--content);
+  /*
+   * Above the page pool, by number rather than by arrival order.
+   *
+   * Every page is a real compositing surface stacked at `z-index: 1` at the app
+   * root. Parking them when this view opens is a timing bet: the guest layer can
+   * still be composited for a frame after its element has been moved, which
+   * showed up as the page and the settings panel swapping places twice on the
+   * way in. Claiming a higher layer here means no ordering mistake upstream can
+   * ever put a page in front of the console.
+   */
+  position: relative;
+  z-index: 2;
 }
 
 /* Rail and page share the row under the title bar. */

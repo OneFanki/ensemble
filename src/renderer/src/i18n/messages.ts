@@ -883,8 +883,6 @@ export const messages = {
       browserFindPlaceholder: "在页面中查找",
       browserDevTools: "开发者工具",
       browserDevToolsClose: "关闭开发者工具",
-      browserDevToolsDetach: "在独立窗口打开开发者工具",
-      devtoolsGrip: "拖动调整页面与开发者工具的宽度，左右方向键微调",
       browserZoomIn: "放大这一页（Ctrl + 加号）",
       browserZoomOut: "缩小这一页（Ctrl + 减号）",
       browserZoomReset:
@@ -1008,6 +1006,7 @@ export const messages = {
       browserExternal: "外置",
       browserViewDefaultName: "新视图",
       browserNewView: "创建视图",
+      browserNewViewHint: "新建一个空视图；再把实例拖进去分格",
       browserRenameHint: "双击或右键改名",
       browserDropHint: "拖动排序；拖进视图即加入；新视图点上方按钮创建；拖格位分界线可改比例",
       browserExpandDock: "展开运行栏",
@@ -1956,8 +1955,6 @@ export const messages = {
       browserFindPlaceholder: "Find in page",
       browserDevTools: "Developer tools",
       browserDevToolsClose: "Close developer tools",
-      browserDevToolsDetach: "Open developer tools in a separate window",
-      devtoolsGrip: "Drag to resize the page and the developer tools; arrow keys nudge it",
       browserZoomIn: "Zoom in on this page (Ctrl + plus)",
       browserZoomOut: "Zoom out of this page (Ctrl + minus)",
       browserZoomReset:
@@ -2084,6 +2081,7 @@ export const messages = {
       browserExternal: "EXT",
       browserViewDefaultName: "New view",
       browserNewView: "Create view",
+      browserNewViewHint: "Create an empty view, then drag instances into it",
       browserRenameHint: "Double-click or right-click to rename",
       browserDropHint:
         "Drag to reorder; drop into a view to join it; create views with the button above; drag a slot seam to re-proportion",

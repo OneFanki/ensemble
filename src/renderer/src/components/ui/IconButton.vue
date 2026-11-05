@@ -4,10 +4,18 @@
  *
  * `ariaLabel` is required: an icon button with no accessible name is invisible
  * to a screen reader and unfindable in a test. `title` gives the same text as a
- * hover hint, so callers usually pass the same string twice — that is
- * deliberate, not redundant.
+ * hover hint and defaults to the label, so callers usually pass the same string
+ * twice — that is deliberate, not redundant.
+ *
+ * The hint is drawn by the app (`v-tooltip`), not by the OS. A native `title`
+ * waits about a second, uses the system font at the system scale, and appears
+ * where the platform decides; on a toolbar of icon-only controls that reads as
+ * something bolted on. `title` remains the prop name because that is what the
+ * value means here — the text of the hint.
  */
-withDefaults(
+import { computed } from "vue";
+
+const props = withDefaults(
   defineProps<{
     ariaLabel: string;
     title?: string;
@@ -17,6 +25,8 @@ withDefaults(
   }>(),
   { variant: "default", size: "md" },
 );
+
+const hint = computed(() => props.title ?? props.ariaLabel);
 </script>
 
 <template>
@@ -25,7 +35,7 @@ withDefaults(
     class="icon-btn"
     :class="[variant, `size-${size}`, { active }]"
     :aria-label="ariaLabel"
-    :title="title ?? ariaLabel"
+    v-tooltip="hint"
     :aria-pressed="active === undefined ? undefined : active"
   >
     <slot />

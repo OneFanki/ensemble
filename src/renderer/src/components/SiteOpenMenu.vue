@@ -255,17 +255,35 @@ function openIdentity(identity: Identity): void {
 }
 
 .site-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
   padding: 7px 7px;
   border-radius: var(--radius-sm);
-  /* The active row is carried by the left rule as well as the fill: with a list
-     of near-identical rows, a subtle background alone is easy to miss. */
-  box-shadow: inset 2px 0 0 transparent;
   color: var(--muted);
   text-align: left;
+}
+
+/*
+ * The selected row's left rule.
+ *
+ * It used to be `box-shadow: inset 2px 0 0 var(--accent)`, which follows the
+ * element's rounded corner — so instead of a straight edge it drew a two-pixel
+ * arc curving around the corner, reading as a stray bracket rather than as a
+ * marker. A separate square element inside the row is the shape that was wanted:
+ * a straight rule with no radius of its own, clipped by the row's corners.
+ */
+.site-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
 }
 
 .site-row:hover {
@@ -275,8 +293,11 @@ function openIdentity(identity: Identity): void {
 
 .site-row.active {
   background: var(--surface-3);
-  box-shadow: inset 2px 0 0 var(--accent);
   color: var(--text);
+}
+
+.site-row.active::before {
+  background: var(--accent);
 }
 
 .site-row.active .chev {

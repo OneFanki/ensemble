@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import type { EmbeddedTab, EmbeddedView, FrozenSlot, StageRect } from "@shared/embedded";
+import type { EmbeddedTab, EmbeddedView, StageRect } from "@shared/embedded";
 import {
-  DEVTOOLS_GRIP_WIDTH,
+  EMBEDDED_DEVTOOLS_GRIP,
   EMBEDDED_DIVIDER,
   EMBEDDED_SLOT_HEADER,
   embeddedSlotRects,
   isBlankTab,
+  stageDrawsSlotHeaders,
   tabDisplayTitle,
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
@@ -29,7 +30,6 @@ import {
   Copy,
   CornerDownLeft,
   Download,
-  ExternalLink,
   FolderOpen,
   KeyRound,
   LayoutGrid,
@@ -38,16 +38,17 @@ import {
   Plus,
   RotateCw,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
   Star,
-  Table2,
   Trash2,
   Users,
   X,
 } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useFloatingLayer } from "../composables/floatingLayer";
 import { useStageGeometry } from "../composables/stageGeometry";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useNavigationStore } from "../stores/navigation";
@@ -100,18 +101,36 @@ const geometry = useStageGeometry((rect) => store.setStage(rect));
 /** Template ref: `useStageGeometry` owns the measuring, so the ref comes from it. */
 const stage = geometry.stage;
 const stageBox = geometry.box;
-const stageOrigin = geometry.origin;
 const reportStage = geometry.report;
 const address = ref("");
 const findText = ref("");
 const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
 const findOpen = ref(false);
-/** Frozen frames shown while the native views are parked for an overlay. */
-const frozenSlots = ref<FrozenSlot[]>([]);
 
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
 /** The AI endpoint menu: state, address and the way to settings. */
 const aiMenuOpen = ref(false);
+
+/**
+ * Closes the AI menu on a click anywhere outside it.
+ *
+ * It was the one popup in the toolbar that had no dismissal at all: it opened
+ * from its own button and only closed by clicking that button again. Combined
+ * with the header being a drag region — where clicks were swallowed before they
+ * reached the page — the only reliable way out was to find the same small icon.
+ */
+watch(aiMenuOpen, (open) => {
+  if (open) window.addEventListener("pointerdown", onAiMenuOutside, true);
+  else window.removeEventListener("pointerdown", onAiMenuOutside, true);
+});
+
+function onAiMenuOutside(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest(".ai-entry")) return;
+  aiMenuOpen.value = false;
+}
+
+useFloatingLayer(aiMenuOpen);
 
 function openMcpSettings(): void {
   aiMenuOpen.value = false;
@@ -350,6 +369,20 @@ const slotChrome = computed(() => {
   );
 });
 
+/**
+ * Cells that draw their own header band.
+ *
+ * Empty for a one-cell stage: with a single cell the band repeats the window's
+ * tab strip one row lower and says nothing the strip does not. The same rule
+ * decides the page's geometry in the main process (`stageDrawsSlotHeaders`), so
+ * the two cannot disagree about whether that 26px belongs to the chrome or to
+ * the page.
+ */
+const slotHeaders = computed(() => {
+  if (!stageDrawsSlotHeaders(slotChrome.value.length)) return [];
+  return slotChrome.value.filter((item) => item.tabId);
+});
+
 function tabById(id: string | null): EmbeddedTab | undefined {
   if (!id) return undefined;
   return store.tabs.find((tab) => tab.id === id);
@@ -458,6 +491,11 @@ function selectPage(pageId: string, slotIndex?: number): void {
  * click anywhere.
  */
 const tabMenu = ref<{ page: EmbeddedTab; x: number; y: number } | null>(null);
+// The page menu is a floating layer like the others, so the header has to be
+// clickable while it is up — otherwise the one gesture everyone reaches for to
+// dismiss it (click the empty part of the chrome) does nothing.
+const tabMenuOpen = computed(() => tabMenu.value !== null);
+useFloatingLayer(tabMenuOpen);
 
 async function openTabMenu(page: EmbeddedTab, event: MouseEvent): Promise<void> {
   const x = Math.min(event.clientX, window.innerWidth - 208);
@@ -545,6 +583,10 @@ const viewportError = ref<string | null>(null);
  */
 const globalViewport = computed(() => workspace.settings.browserViewport);
 const globalViewportOpen = ref(false);
+// Registered so the window's drag band stops swallowing clicks while this menu
+// is up; without it, clicking the header's empty space to dismiss the menu did
+// nothing at all. See `composables/floatingLayer.ts`.
+useFloatingLayer(globalViewportOpen);
 
 function toggleGlobalViewport(): void {
   globalViewportOpen.value = !globalViewportOpen.value;
@@ -631,7 +673,7 @@ async function applyCustomViewport(): Promise<void> {
 /**
  * Blank pages the stage has to draw itself.
  *
- * The main process keeps a blank page's native view parked, so the app's own
+ * A blank page has no rect from main, so its node is parked and the app's own
  * new-tab surface is what the user sees: search box, engine list, and a clear
  * answer for what Enter will do. This is what makes "+" land somewhere instead
  * of on an empty white rectangle.
@@ -661,73 +703,14 @@ const blankSurfaces = computed(() => {
 function embeddedSlotRectsForSlot(index: number): StageRect | null {
   const slot = slotChrome.value.find((item) => item.index === index);
   if (!slot) return null;
+  // One cell has no band (see `slotHeaders`), so the surface takes the full cell.
+  const header = stageDrawsSlotHeaders(slotChrome.value.length) ? EMBEDDED_SLOT_HEADER : 0;
   return {
     x: slot.x,
-    y: slot.y + EMBEDDED_SLOT_HEADER,
+    y: slot.y + header,
     width: slot.width,
-    height: Math.max(1, slot.height - EMBEDDED_SLOT_HEADER),
+    height: Math.max(1, slot.height - header),
   };
-}
-
-/**
- * Drag handles between a docked DevTools panel and its page.
- *
- * The gap the handle lives in is real: the main process parts the two native
- * views around `DEVTOOLS_GRIP_WIDTH` precisely because renderer HTML paints
- * below them. Same arithmetic on both sides, one shared constant.
- */
-const devtoolsGrips = computed(() => {
-  const grips: Array<{ tabId: string; x: number; y: number; width: number; height: number }> = [];
-  const push = (page: EmbeddedTab | undefined, rect: StageRect | null) => {
-    if (!page?.devtoolsOpen || page.devtoolsWidth === undefined || !rect) return;
-    const split = Math.round(rect.width * (1 - page.devtoolsWidth));
-    grips.push({
-      tabId: page.id,
-      x: rect.x + split - Math.round(DEVTOOLS_GRIP_WIDTH / 2),
-      y: rect.y,
-      width: DEVTOOLS_GRIP_WIDTH,
-      height: rect.height,
-    });
-  };
-  for (const slot of slotChrome.value) {
-    push(slotPage(slot.tabId, slot.index), embeddedSlotRectsForSlot(slot.index));
-  }
-  const tab = activeTab.value;
-  if (!activeView.value && tab && !tab.viewId) {
-    const box = stageBox.value;
-    push(tab, {
-      x: 0,
-      y: EMBEDDED_SLOT_HEADER,
-      width: box.width,
-      height: Math.max(1, box.height - EMBEDDED_SLOT_HEADER),
-    });
-  }
-  return grips;
-});
-
-/**
- * A drag is handed to the main process, which follows the cursor itself — the
- * pointer spends the drag over the native views, where HTML events never reach.
- * The renderer's mouseup is the fallback for a release over app chrome; over a
- * view, the view's own input-event reports it.
- */
-function onGripDown(tabId: string, event: MouseEvent): void {
-  event.preventDefault();
-  void window.ensemble.beginEmbeddedDevToolsResize(tabId);
-  const stop = () => {
-    window.removeEventListener("mouseup", stop);
-    void window.ensemble.endEmbeddedDevToolsResize();
-  };
-  window.addEventListener("mouseup", stop);
-}
-
-/** Arrow keys move the split in small steps, as a separator should. */
-function onGripKey(tabId: string, event: KeyboardEvent): void {
-  const page = tabById(tabId);
-  const step = event.key === "ArrowLeft" ? -0.04 : event.key === "ArrowRight" ? 0.04 : 0;
-  if (!step || !page || page.devtoolsWidth === undefined) return;
-  event.preventDefault();
-  void window.ensemble.setEmbeddedDevToolsWidth(tabId, page.devtoolsWidth + step);
 }
 
 function activateSlot(rootId: string | null, index?: number): void {
@@ -799,6 +782,17 @@ const emptySlots = computed(() =>
       width: slot.width,
       height: slot.height,
     })),
+);
+
+/**
+ * Occupied cells that need a drop cover while a drag is in flight.
+ *
+ * See the template comment: without it the drop is delivered to the page instead
+ * of to the cell. `draggingTabId` is set by both drag sources (the dock and a
+ * page tab), so this appears for either.
+ */
+const dragCoverSlots = computed(() =>
+  store.draggingTabId ? slotChrome.value.filter((slot) => slot.tabId) : [],
 );
 
 /**
@@ -919,6 +913,17 @@ function startResize(divider: Divider, event: PointerEvent): void {
   if (!view) return;
   event.preventDefault();
   event.stopPropagation();
+  /*
+   * The pointer has to be taken away from the pages for the whole gesture.
+   *
+   * A boundary runs beside two live pages, and the very first move lands over
+   * one of them. A guest is a real surface: it takes the pointer and the
+   * `pointermove` stream stops reaching the window, so the divider froze at its
+   * starting position — the drag looked like it simply did not work. The dock's
+   * resize handle has held the shield for the same reason since it was written;
+   * this one was missing it.
+   */
+  store.holdPointer();
   drag.value = {
     axis: divider.axis,
     at: divider.at,
@@ -987,6 +992,10 @@ function onResizeMove(event: PointerEvent): void {
 
 function endResize(): void {
   drag.value = null;
+  // Balanced with `startResize`: a shield left held would leave every page
+  // permanently unable to take the pointer, which reads as "the browser stopped
+  // responding" rather than as a stuck resize.
+  store.releasePointer();
   window.removeEventListener("pointermove", onResizeMove);
   if (resizeFrame) {
     window.cancelAnimationFrame(resizeFrame);
@@ -995,8 +1004,62 @@ function endResize(): void {
   pendingRects = null;
 }
 
-let offDownloads: (() => void) | undefined;
+/**
+ * Pages with a docked DevTools panel, and the gutter their handle sits in.
+ *
+ * The panel is a native surface laid out by main, so this only draws the seam.
+ * The arithmetic has to match `placeDevTools` in the main process pixel for
+ * pixel or the handle lands beside the gap it is supposed to fill — both sides
+ * read `EMBEDDED_DEVTOOLS_GRIP` and round the same way.
+ */
+const devtoolsGrips = computed(() => {
+  const view = activeView.value;
+  const cells = slotChrome.value;
+  const stages: Array<{ id: string; tabId: string; rect: StageRect; width: number }> = [];
+  if (view) {
+    for (const cell of cells) {
+      const page = slotPage(cell.tabId, cell.index);
+      if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) continue;
+      const rect = embeddedSlotRectsForSlot(cell.index);
+      if (rect) stages.push({ id: page.id, tabId: page.id, rect, width: page.devtoolsWidth });
+    }
+  } else {
+    const page = activeTab.value;
+    if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) return [];
+    const box = stageBox.value;
+    const rect = { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) };
+    stages.push({ id: page.id, tabId: page.id, rect, width: page.devtoolsWidth });
+  }
+  return stages.map((entry) => {
+    const split = Math.round(entry.rect.width * (1 - entry.width));
+    const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
+    return {
+      key: entry.id,
+      tabId: entry.tabId,
+      left: entry.rect.x + left,
+      top: entry.rect.y,
+      width: EMBEDDED_DEVTOOLS_GRIP,
+      height: entry.rect.height,
+    };
+  });
+});
 
+function startDevToolsResize(tabId: string, event: PointerEvent): void {
+  event.preventDefault();
+  event.stopPropagation();
+  // Same shield as the stage dividers: the first move lands over one of the two
+  // native surfaces, which would otherwise take the pointer and freeze the grip.
+  store.holdPointer();
+  void window.ensemble.resizeEmbeddedDevTools(tabId);
+  const stop = (): void => {
+    window.removeEventListener("pointerup", stop);
+    store.releasePointer();
+    void window.ensemble.endEmbeddedDevToolsResize();
+  };
+  window.addEventListener("pointerup", stop, { once: true });
+}
+
+let offDownloads: (() => void) | undefined;
 /**
  * The download list lives in the main process (a download belongs to the
  * session, not the tab that started it), so this panel is a view of that list:
@@ -1006,6 +1069,9 @@ let offDownloads: (() => void) | undefined;
 const downloadEntries = ref<DownloadEntry[]>([]);
 const downloadsOpen = ref(false);
 const downloadsAnchor = ref<HTMLElement | null>(null);
+// Same reason as the viewport menu: the panel is a floating layer, so a click on
+// the header has to reach the page to dismiss it.
+useFloatingLayer(downloadsOpen);
 const activeDownloads = computed(
   () => downloadEntries.value.filter((entry) => entry.state === "progressing").length,
 );
@@ -1145,6 +1211,9 @@ const siteSuggestions = computed(() => {
 });
 
 const suggestionsOpen = ref(false);
+// The address box is not in a drag region, but the list it opens reaches the
+// top of the window on a narrow layout; registering it keeps the rule uniform.
+useFloatingLayer(suggestionsOpen);
 
 function pickSuggestion(url: string): void {
   address.value = url;
@@ -1153,65 +1222,28 @@ function pickSuggestion(url: string): void {
 }
 
 /**
- * Overlays float above the stage by freezing it, when the carrier needs it.
+ * Hands the stage to main after an overlay opens or closes.
  *
- * A `WebContentsView` paints above all HTML regardless of z-index, so an app
- * menu that reaches into the stage would be covered by the page. Capturing the
- * stage first and parking the views keeps the menu readable and the page running.
+ * There is nothing to freeze any more. A page is a `<webview>` node in this
+ * document, so an overlay stacks over it like any other element and the page
+ * keeps running underneath. All an overlay has to do is tell main the stage is
+ * still there: closing one that had parked the stage earlier must not leave the
+ * pages with no rect to come back to.
  *
- * A `guest` page is a node in this document instead, so it stacks like any other
- * element: the overlay's z-index is enough and nothing has to be frozen. Skipping
- * the capture also removes a real hazard — the parking step told main the stage
- * was gone, and freezing again while it had no stage returned nothing to paint,
- * which is how a second overlay ended up covering a blank rectangle.
- *
- * A drag from the running dock counts as an overlay too: while pages occupy the
- * stage, their own native views swallow every drag event, so the only way to make
- * a whole cell a drop target is to park them for the duration of the drag. The
- * frozen picture is pixel-identical to the live page, so nothing visibly changes.
+ * The cover handshake is still completed. Menus wait for it before opening, and
+ * a menu that never hears back stays shut — an overlay that skipped the report
+ * would look like a dead button rather than an unstyled one.
  */
-let freezeSeq = 0;
-
-async function syncStageCover(): Promise<void> {
-  const covered =
-    props.obscured ||
-    Boolean(store.draggingTabId) ||
-    store.stageMenuOpen ||
-    // Address-bar suggestions hang below the toolbar, over the stage; native
-    // pages would paint on top of them otherwise. The workspace-resolution
-    // dropdown and the downloads panel are the same shape of overlay and need
-    // the same treatment: every one of them is a plain HTML box anchored to the
-    // toolbar, and a native view is never behind HTML no matter what z-index it
-    // is given.
-    (suggestionsOpen.value && siteSuggestions.value.length > 0) ||
-    globalViewportOpen.value ||
-    downloadsOpen.value;
-  const seq = ++freezeSeq;
-  if (!covered) {
-    frozenSlots.value = [];
-    reportStage();
-    return;
-  }
-  // A guest stacks inside this document, so the stage is already behind the
-  // overlay and stays live. Reporting is still needed: closing an earlier
-  // overlay may have left main without a stage.
-  if (store.state.carrier === "guest") {
-    frozenSlots.value = [];
-    reportStage();
-    store.finishCover();
-    return;
-  }
-  const slots = await window.ensemble.freezeEmbedded();
-  // A later call (drop, overlay closed) already restored the stage; applying this
-  // stale snapshot would park the views again with nothing to put back.
-  if (seq !== freezeSeq) return;
-  frozenSlots.value = slots;
-  store.setStage(null);
-  // Only now is the stage actually free of native views, which is what a menu
-  // opening over it has to wait for.
+function syncStageCover(): void {
+  reportStage();
   store.finishCover();
 }
 
+// Re-report on a stage resize: the rect main holds is what every overlay and
+// every page node is placed from, and collapsing the run dock changes it.
+watch(() => [stageBox.value.width, stageBox.value.height] as const, syncStageCover);
+
+// The overlay inputs still matter, but only as a signal to report.
 watch(
   () =>
     [
@@ -1221,12 +1253,6 @@ watch(
       suggestionsOpen.value && siteSuggestions.value.length > 0,
       globalViewportOpen.value,
       downloadsOpen.value,
-      // The stage size participates because a frozen frame is a picture placed
-      // at the rect the main process reported when it captured. Collapsing the
-      // run dock mid-overlay shrinks the stage by 46px; without re-capturing,
-      // the picture keeps its old — wider — rect and spills past the stage edge.
-      stageBox.value.width,
-      stageBox.value.height,
     ] as const,
   syncStageCover,
 );
@@ -1307,12 +1333,7 @@ function reload(): void {
 }
 
 function openDevTools(tabId: string): void {
-  void window.ensemble.openEmbeddedDevTools(tabId, "docked");
-}
-
-/** Opens the same tools in their own window, for a screen too small to split. */
-function detachDevTools(tabId: string): void {
-  void window.ensemble.openEmbeddedDevTools(tabId, "window");
+  void window.ensemble.openEmbeddedDevTools(tabId);
 }
 
 function closeDevTools(tabId: string): void {
@@ -1492,78 +1513,65 @@ function fillMessage(reason?: string): string {
         type="button"
         class="layout-btn no-drag"
         :class="{ 'is-bench': bench }"
-        :title="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
+        v-tooltip="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
         :aria-label="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
         @click="toggleBench"
       >
         <LayoutGrid :size="14" />
       </button>
       <div class="tabs no-drag" role="tablist" :aria-label="t('app.browserTabs')">
-        <button
-          v-for="page in windowPages"
-          :key="page.id"
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ active: page.id === windowActivePageId }"
-          :aria-selected="page.id === windowActivePageId"
-          :data-tab-id="page.id"
-          :title="page.url"
-          draggable="true"
-          @click="activateWindowPage(page.id)"
-          @dragstart="onWindowPageDragStart(page, $event)"
-          @dragend="onWindowPageDragEnd"
-          @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
-        >
-          <span class="tab-fav">
-            <TabIcon :src="page.favicon" :size="13" />
-          </span>
-          <span class="tab-label">{{ store.titleOf(page) }}</span>
-          <span
-            v-if="page.loading"
-            class="tab-loading"
-            :aria-label="t('app.browserLoading')"
-          ></span>
-          <span
-            v-else-if="page.id === windowActivePageId"
-            class="tab-close"
-            role="button"
-            tabindex="0"
-            :aria-label="t('app.browserCloseTab')"
-            :data-close-tab="page.id"
-            @click.stop="store.closeTab(page.id)"
-            @keydown.enter.stop="store.closeTab(page.id)"
-            @keydown.space.prevent.stop="store.closeTab(page.id)"
+        <TransitionGroup name="tab">
+          <button
+            v-for="page in windowPages"
+            :key="page.id"
+            type="button"
+            role="tab"
+            class="tab"
+            :class="{ active: page.id === windowActivePageId }"
+            :aria-selected="page.id === windowActivePageId"
+            :data-tab-id="page.id"
+            :title="page.url"
+            draggable="true"
+            @click="activateWindowPage(page.id)"
+            @dragstart="onWindowPageDragStart(page, $event)"
+            @dragend="onWindowPageDragEnd"
+            @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
           >
-            <X :size="10" />
-          </span>
-        </button>
+            <span class="tab-fav">
+              <TabIcon :src="page.favicon" :size="13" />
+            </span>
+            <span class="tab-label">{{ store.titleOf(page) }}</span>
+            <span
+              v-if="page.loading"
+              class="tab-loading"
+              :aria-label="t('app.browserLoading')"
+            ></span>
+            <span
+              v-else-if="page.id === windowActivePageId"
+              class="tab-close"
+              role="button"
+              tabindex="0"
+              :aria-label="t('app.browserCloseTab')"
+              :data-close-tab="page.id"
+              @click.stop="store.closeTab(page.id)"
+              @keydown.enter.stop="store.closeTab(page.id)"
+              @keydown.space.prevent.stop="store.closeTab(page.id)"
+            >
+              <X :size="10" />
+            </span>
+          </button>
+        </TransitionGroup>
       </div>
       <button
         type="button"
         class="strip-add no-drag"
         :aria-label="t('app.browserNewTabHere')"
-        :title="t('app.browserNewTabHere')"
+        v-tooltip="t('app.browserNewTabHere')"
         @click="addWindowPage"
       >
         <Plus :size="14" />
       </button>
       <div class="strip-drag drag-region"></div>
-      <!--
-        The console entry. `PanelLeft` drew a panel with a divider down its left
-        edge — the icon for "open a side rail", which is what this console used
-        to be and no longer is. A grid-of-records glyph says what the destination
-        actually is: the tables behind the browser.
-      -->
-      <button
-        type="button"
-        class="console-btn no-drag"
-        :aria-label="t('app.openConsole')"
-        :title="t('app.openConsole')"
-        @click="emit('openConsole')"
-      >
-        <Table2 :size="14" />
-      </button>
     </div>
 
     <div class="toolbar">
@@ -1571,7 +1579,8 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon"
         :disabled="!activeTab?.canGoBack"
-        :title="t('app.browserBack')"
+        v-tooltip="t('app.browserBack')"
+        :aria-label="t('app.browserBack')"
         @click="goBack"
       >
         <ArrowLeft :size="15" />
@@ -1580,7 +1589,8 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon"
         :disabled="!activeTab?.canGoForward"
-        :title="t('app.browserForward')"
+        v-tooltip="t('app.browserForward')"
+        :aria-label="t('app.browserForward')"
         @click="goForward"
       >
         <ArrowRight :size="15" />
@@ -1588,7 +1598,8 @@ function fillMessage(reason?: string): string {
       <button
         type="button"
         class="icon"
-        :title="t('app.browserReload')"
+        v-tooltip="t('app.browserReload')"
+        :aria-label="t('app.browserReload')"
         @click="reload"
       >
         <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
@@ -1614,7 +1625,7 @@ function fillMessage(reason?: string): string {
           type="submit"
           class="go"
           :aria-label="t('app.browserGo')"
-          :title="t('app.browserGo')"
+          v-tooltip="t('app.browserGo')"
         >
           <CornerDownLeft :size="13" />
         </button>
@@ -1639,7 +1650,7 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon star"
         :class="{ active: Boolean(bookmarkedEntry) }"
-        :title="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
+        v-tooltip="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
         :aria-label="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAdd')"
         :aria-pressed="Boolean(bookmarkedEntry)"
         @click="toggleBookmark"
@@ -1650,7 +1661,7 @@ function fillMessage(reason?: string): string {
         v-if="activeTab?.identityId"
         type="button"
         class="icon"
-        :title="t('app.browserFillHint')"
+        v-tooltip="t('app.browserFillHint')"
         :aria-label="t('app.browserFill')"
         @click="fillLogin(activeTab.id)"
       >
@@ -1668,7 +1679,7 @@ function fillMessage(reason?: string): string {
         class="icon"
         data-ai-origin-switch
         :class="{ active: aiOriginAuthorized }"
-        :title="aiOriginAuthorized ? t('app.aiOriginRevokeHint') : t('app.aiOriginGrantHint')"
+        v-tooltip="aiOriginAuthorized ? t('app.aiOriginRevokeHint') : t('app.aiOriginGrantHint')"
         :aria-label="t('app.aiOriginTitle')"
         :aria-pressed="aiOriginAuthorized"
         @click="toggleAiOrigin"
@@ -1679,7 +1690,7 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon"
         :class="{ active: findOpen }"
-        :title="t('app.browserFind')"
+        v-tooltip="t('app.browserFind')"
         @click="findOpen = !findOpen"
       >
         <Search :size="15" />
@@ -1694,7 +1705,7 @@ function fillMessage(reason?: string): string {
           type="button"
           class="icon"
           :class="{ active: downloadsOpen }"
-          :title="t('app.downloads')"
+          v-tooltip="t('app.downloads')"
           :aria-label="t('app.downloads')"
           :aria-expanded="downloadsOpen"
           @click="downloadsOpen = !downloadsOpen"
@@ -1743,7 +1754,7 @@ function fillMessage(reason?: string): string {
                 v-if="entry.state === 'progressing'"
                 type="button"
                 class="download-mini"
-                :title="t('app.downloadCancel')"
+                v-tooltip="t('app.downloadCancel')"
                 @click="actOnDownload('cancel', entry.id)"
               >
                 <X :size="13" />
@@ -1752,7 +1763,7 @@ function fillMessage(reason?: string): string {
                 <button
                   type="button"
                   class="download-mini"
-                  :title="t('app.downloadReveal')"
+                  v-tooltip="t('app.downloadReveal')"
                   @click="actOnDownload('reveal', entry.id)"
                 >
                   <FolderOpen :size="13" />
@@ -1760,7 +1771,7 @@ function fillMessage(reason?: string): string {
                 <button
                   type="button"
                   class="download-mini"
-                  :title="t('app.downloadRemove')"
+                  v-tooltip="t('app.downloadRemove')"
                   @click="actOnDownload('remove', entry.id)"
                 >
                   <Trash2 :size="13" />
@@ -1782,7 +1793,7 @@ function fillMessage(reason?: string): string {
           type="button"
           class="icon viewport-btn"
           :class="{ changed: Boolean(globalViewport) }"
-          :title="t('app.viewportDefaultHint')"
+          v-tooltip="t('app.viewportDefaultHint')"
           :aria-label="t('app.viewportDefaultLabel')"
           :aria-expanded="globalViewportOpen"
           @click="toggleGlobalViewport"
@@ -1834,7 +1845,7 @@ function fillMessage(reason?: string): string {
           type="button"
           class="zoom-step"
           :aria-label="t('app.browserZoomOut')"
-          :title="t('app.browserZoomOut')"
+          v-tooltip="t('app.browserZoomOut')"
           @click="zoom('out')"
         >
           <Minus :size="12" />
@@ -1842,7 +1853,7 @@ function fillMessage(reason?: string): string {
         <button
           type="button"
           class="zoom-value mono"
-          :title="t('app.browserZoomReset')"
+          v-tooltip="t('app.browserZoomReset')"
           @click="zoom('reset')"
         >
           {{ activeTab.zoom }}%
@@ -1851,7 +1862,7 @@ function fillMessage(reason?: string): string {
           type="button"
           class="zoom-step"
           :aria-label="t('app.browserZoomIn')"
-          :title="t('app.browserZoomIn')"
+          v-tooltip="t('app.browserZoomIn')"
           @click="zoom('in')"
         >
           <Plus :size="12" />
@@ -1861,23 +1872,13 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon"
         :class="{ active: activeTab?.devtoolsOpen }"
-        :title="
+        v-tooltip="
           activeTab?.devtoolsOpen ? t('app.browserDevToolsClose') : t('app.browserDevTools')
         "
+        :aria-label="t('app.browserDevTools')"
         @click="activeTab && (activeTab.devtoolsOpen ? closeDevTools(activeTab.id) : openDevTools(activeTab.id))"
       >
         <Bug :size="15" />
-      </button>
-      <!-- Only relevant once the tools are docked: a small screen may want them
-           in their own window instead of splitting the cell. -->
-      <button
-        v-if="activeTab?.devtoolsOpen"
-        type="button"
-        class="icon"
-        :title="t('app.browserDevToolsDetach')"
-        @click="activeTab && detachDevTools(activeTab.id)"
-      >
-        <ExternalLink :size="15" />
       </button>
       <!--
         The AI entry, and the only place the endpoint's status is reported.
@@ -1893,7 +1894,7 @@ function fillMessage(reason?: string): string {
           :class="{ on: workspace.mcp?.running }"
           :aria-label="t('app.mcpAiAccess')"
           :aria-expanded="aiMenuOpen"
-          :title="t('app.statusMcpHint')"
+          v-tooltip="t('app.statusMcpHint')"
           @click="aiMenuOpen = !aiMenuOpen"
         >
           <span class="ai-mark"><Sparkles :size="14" /></span>
@@ -1925,6 +1926,27 @@ function fillMessage(reason?: string): string {
         @open-clean="openSiteClean"
         @open-identity="openIdentityBookmark"
       />
+      <!--
+        The console entry, at the toolbar's right end where every application
+        puts its settings.
+
+        It used to sit in the tab strip, between the last tab and the window
+        buttons, drawn as `Table2` — "the tables behind the browser". Two things
+        were wrong with that. The strip's middle is a flex spacer, so on a wide
+        window the button floated in an empty band far from anything it belonged
+        to; and a grid-of-records glyph at 14px is indistinguishable from the
+        layout control at the strip's other end. People looking for settings look
+        for a gear in the toolbar, so that is what this is and where it lives.
+      -->
+      <button
+        type="button"
+        class="icon console-btn"
+        :aria-label="t('app.openConsole')"
+        v-tooltip="t('app.openConsole')"
+        @click="emit('openConsole')"
+      >
+        <Settings :size="15" />
+      </button>
     </div>
 
     <div v-if="findOpen" class="findbar">
@@ -1950,21 +1972,7 @@ function fillMessage(reason?: string): string {
     </div>
 
     <div ref="stage" class="stage">
-      <img
-        v-for="slot in frozenSlots"
-        :key="slot.tabId"
-        class="frozen"
-        :src="slot.dataUrl"
-        :style="{
-          left: `${slot.rect.x - stageOrigin.x}px`,
-          top: `${slot.rect.y - stageOrigin.y}px`,
-          width: `${slot.rect.width}px`,
-          height: `${slot.rect.height}px`,
-        }"
-        alt=""
-        aria-hidden="true"
-      />
-      <!-- A blank page has no native view on screen; the app draws it. -->
+      <!-- A blank page has no node on the stage; the app draws it. -->
       <div
         v-for="surface in blankSurfaces"
         :key="`blank-${surface.tab.id}`"
@@ -1984,29 +1992,6 @@ function fillMessage(reason?: string): string {
       </div>
 
       <!--
-        One handle per docked DevTools panel, standing in the gap the main
-        process leaves between the page and the tools. Dragging re-splits the
-        cell live; arrows nudge it from the keyboard.
-      -->
-      <div
-        v-for="grip in devtoolsGrips"
-        :key="`grip-${grip.tabId}`"
-        class="devtools-grip"
-        role="separator"
-        aria-orientation="vertical"
-        :aria-label="t('app.devtoolsGrip')"
-        tabindex="0"
-        :style="{
-          left: `${grip.x}px`,
-          top: `${grip.y}px`,
-          width: `${grip.width}px`,
-          height: `${grip.height}px`,
-        }"
-        @mousedown="onGripDown(grip.tabId, $event)"
-        @keydown="onGripKey(grip.tabId, $event)"
-      ></div>
-
-      <!--
         A flat stage gets no header band, in either mode.
 
         It used to carry one so that an instance opened into the default tab
@@ -2019,7 +2004,7 @@ function fillMessage(reason?: string): string {
 
       <!-- Native views paint over this area; only the slot headers stay visible. -->
       <div
-        v-for="slot in slotChrome.filter((item) => item.tabId)"
+        v-for="slot in slotHeaders"
         :key="slot.index"
         class="slot-header"
         :class="{
@@ -2070,6 +2055,36 @@ function fillMessage(reason?: string): string {
       </div>
 
       <!--
+        Drop cover, one per occupied cell, while a drag is in flight.
+
+        A page is a real surface: it takes the drop. `pointer-events: none`
+        during a drag stops it stealing the *pointer*, but drag-and-drop is
+        dispatched by hit-testing the document, and the guest still answers it —
+        so a drop aimed at a cell's page area was delivered to the page itself,
+        and the browser treated it as "drop a link on this page" (which is where
+        the stray new tab came from). This layer covers the cell's page area for
+        the duration of the drag so the drop handler here is what receives it.
+
+        It is drawn for occupied cells only; an empty cell already owns its whole
+        rectangle and listens for itself.
+      -->
+      <div
+        v-for="slot in dragCoverSlots"
+        :key="`cover-${slot.index}`"
+        class="slot-drop-cover"
+        :class="{ 'drop-target': dropSlot === slot.index }"
+        :style="{
+          left: `${slot.x}px`,
+          top: `${slot.y}px`,
+          width: `${slot.width}px`,
+          height: `${slot.height}px`,
+        }"
+        @dragover="onSlotDragOver(slot.index, $event)"
+        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
+        @drop="onSlotDrop(slot.index, $event)"
+      ></div>
+
+      <!--
         An empty slot invites the next action: the dashed frame covers the whole
         cell, the slot number sits inside it, and the button drops a focused tab
         straight into this cell — so the address bar is ready to type.
@@ -2115,7 +2130,7 @@ function fillMessage(reason?: string): string {
               class="slot-add slot-add-icon"
               :aria-label="t('app.browserAddIdentityHere')"
               :aria-expanded="openSlotPicker === slot.index"
-              :title="t('app.browserAddIdentityHere')"
+              v-tooltip="t('app.browserAddIdentityHere')"
               @click="toggleSlotPicker(slot.index)"
             >
               <Users :size="13" />
@@ -2144,8 +2159,8 @@ function fillMessage(reason?: string): string {
         </div>
       </div>
 
-      <!-- Divider handles sit in the HTML header bands; the page body is painted
-           over by the native views and would swallow a handle on the boundary. -->
+      <!-- Divider handles sit in the HTML header bands: a page node is a real
+           surface and would take the pointer anywhere its own box covers. -->
       <div
         v-for="handle in dividers"
         :key="handle.key"
@@ -2160,7 +2175,32 @@ function fillMessage(reason?: string): string {
         @pointerdown="startResize(handle, $event)"
       ></div>
 
-      <div v-if="!store.tabs.length" class="empty">
+      <!-- The seam between a page and its docked DevTools panel. Same reason as
+           the stage dividers: both sides are native surfaces, so only a real gap
+           between them leaves anywhere for this to be seen and grabbed. -->
+      <div
+        v-for="grip in devtoolsGrips"
+        :key="`devtools-grip-${grip.key}`"
+        class="devtools-grip"
+        :style="{
+          left: `${grip.left}px`,
+          top: `${grip.top}px`,
+          width: `${grip.width}px`,
+          height: `${grip.height}px`,
+        }"
+        @pointerdown="startDevToolsResize(grip.tabId, $event)"
+      ></div>
+
+      <!--
+        The empty stage, and only when nothing else on it says what to do.
+
+        A view with empty cells already draws each one as a dashed "add a tab
+        here" box; the global prompt then landed between them saying the same
+        thing a second time, in the middle of the grid it was standing in for.
+        The prompt is for a genuinely blank stage — no pages anywhere and no
+        cells to invite one.
+      -->
+      <div v-if="!store.tabs.length && !emptySlots.length" class="empty">
         <p>{{ t("app.browserEmptyTitle") }}</p>
         <p class="sub">{{ t("app.browserEmptyHint") }}</p>
         <!-- One button, not a wall of site chips: the address bar is right above
@@ -2369,11 +2409,23 @@ function fillMessage(reason?: string): string {
  * shrink together, which is the browser behaviour. `flex-basis: auto` is what
  * makes a two-character title produce a narrow tab instead of a 184px slab.
  */
+/*
+ * A tab fills the whole strip so that its top edge is the window's top edge.
+ *
+ * It used to be 30px inside a 34px band, bottom-aligned: the 4px of frame above
+ * every tab was dead space that could not be clicked, and people who slam the
+ * pointer at the top of the screen to switch tabs hit the window frame instead.
+ * The maximised-window case is the one that matters — the top of the screen is
+ * an infinite target, and a control that starts 4px below it throws that away.
+ *
+ * The radius stays: a rounded tab is what says "browser". Its corners are only
+ * a few pixels, and the middle of the label — where a click lands — is inside.
+ */
 .tab {
   display: flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
+  height: 100%;
   padding: 0 6px 0 10px;
   border-radius: 7px 7px 0 0;
   min-width: 46px;
@@ -2388,6 +2440,50 @@ function fillMessage(reason?: string): string {
 .tab:hover {
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
+}
+
+/*
+ * A new tab grows from nothing instead of appearing at full width.
+ *
+ * Without this the strip re-lays out in one frame: the new tab materialises
+ * already at its final width and every tab to its right jumps sideways. The eye
+ * reads that as a flash, not as a tab being added.
+ *
+ * It animates `width`, not `max-width`. `max-width` only caps a box whose width
+ * comes from somewhere else, and this tab's width comes from its own content —
+ * so a transition on the cap changed nothing and the strip still snapped. The
+ * three width-driving properties are animated together: `width` for the box,
+ * `min-width` because the resting rule floors it at 46px, and the horizontal
+ * padding because a zero-width tab that still carries 10px of padding pops in at
+ * the wrong size for one frame.
+ */
+.tab-enter-active,
+.tab-leave-active {
+  overflow: hidden;
+  transition:
+    width var(--motion-base) var(--ease-out),
+    min-width var(--motion-base) var(--ease-out),
+    padding var(--motion-base) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
+}
+
+.tab-enter-from,
+.tab-leave-to {
+  width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  opacity: 0;
+}
+
+/* Leaving tabs stay in flow while they shrink, so the neighbours slide across
+   as the space closes rather than snapping when the node is dropped. */
+.tab-leave-active {
+  position: relative;
+}
+
+.tab-move {
+  transition: transform var(--motion-base) var(--ease-out);
 }
 
 /* Same colour as the toolbar, and deliberately no bottom border: the tab and the
@@ -2505,28 +2601,26 @@ function fillMessage(reason?: string): string {
   height: 100%;
 }
 
+/* The console entry is a full toolbar button; these rules only place it. Its
+   size, hover and icon colour come from `.icon`, which is what keeps it looking
+   like the controls beside it rather than like a second kind of button. */
 .console-btn {
-  align-self: center;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius);
-  color: var(--muted);
-  flex: 0 0 26px;
+  margin-left: 2px;
   margin-right: 4px;
 }
 
-.console-btn:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-/* The native window controls are drawn over the strip's right end; that space is
-   reserved by the main process overlay, so the strip only has to keep clear. */
+/* The native window controls are drawn over the window's top-right corner. With
+   no dock that corner belongs to this strip, so it reserves the band; with the
+   dock open the dock meets the corner and reserves it, and keeping the strip's
+   reservation too would leave a 138px hole of dead space between the last tab
+   and the dock. */
 .tabstrip[data-platform="win32"],
 .tabstrip[data-platform="linux"] {
-  padding-right: 140px;
+  padding-right: calc(var(--window-controls-width, 138px) + 2px);
+}
+
+.browser.bench .tabstrip {
+  padding-right: 4px;
 }
 
 .tabstrip[data-platform="darwin"] {
@@ -3090,46 +3184,11 @@ function fillMessage(reason?: string): string {
   background: var(--content);
 }
 
-.frozen {
-  position: absolute;
-  object-fit: fill;
-  pointer-events: none;
-}
-
 /* A blank page's HTML surface: it fills the cell below the header band. */
 .blank-slot {
   position: absolute;
   z-index: 0;
   overflow: hidden;
-}
-
-/*
- * The DevTools drag handle. It stands in a real gap between the page and the
- * tools — the only place renderer HTML can exist between two native views —
- * and shows as a hairline until hovered or focused.
- */
-.devtools-grip {
-  position: absolute;
-  cursor: col-resize;
-  z-index: 1;
-  outline: none;
-}
-
-.devtools-grip::before {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--line);
-}
-
-.devtools-grip:hover::before,
-.devtools-grip:focus-visible::before {
-  left: 2px;
-  width: 3px;
-  background: var(--accent);
 }
 
 .slot-header {
@@ -3186,6 +3245,25 @@ function fillMessage(reason?: string): string {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+/*
+ * Drop cover over an occupied cell.
+ *
+ * Transparent until the pointer is over it, so the page stays readable while the
+ * drag is in flight; only the cell being aimed at lights up. It exists purely to
+ * receive the drop — without it the page takes it (see the template comment).
+ */
+.slot-drop-cover {
+  position: absolute;
+  z-index: 2;
+  border-radius: 2px;
+  transition: box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.slot-drop-cover.drop-target {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* The number belongs inside the empty cell: a separate 26px header with only a
@@ -3318,6 +3396,39 @@ function fillMessage(reason?: string): string {
 .divider:hover {
   background: color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 2px;
+}
+
+/*
+ * The page ↔ DevTools seam.
+ *
+ * Wider hit area than it looks: the visible line is drawn by `::before` in the
+ * middle of the gap, while the element itself fills the gap. A 7px target is
+ * hard to hit on a fast move, and the two neighbours are native surfaces that
+ * will keep the pointer if it slips off — so the element is the whole gutter and
+ * the line is only what marks it.
+ */
+.devtools-grip {
+  position: absolute;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.devtools-grip::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--line);
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.devtools-grip:hover::before,
+.devtools-grip:active::before {
+  background: var(--accent);
 }
 
 .slot-index {

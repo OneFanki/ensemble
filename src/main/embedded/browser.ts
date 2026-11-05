@@ -28,7 +28,10 @@ import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
   desktopUserAgent,
-  DEVTOOLS_GRIP_WIDTH,
+  EMBEDDED_DEVTOOLS_DEFAULT,
+  EMBEDDED_DEVTOOLS_GRIP,
+  EMBEDDED_DEVTOOLS_MAX,
+  EMBEDDED_DEVTOOLS_MIN,
   EMBEDDED_SLOT_HEADER,
   type EmbeddedState,
   type EmbeddedTab,
@@ -37,14 +40,13 @@ import {
   embeddedSlotRects,
   embeddedTabPartition,
   embeddedViewRect,
-  type FrozenSlot,
   inlineFavicon,
   insetSlotRects,
   isBlankTab,
   isEmbeddedLayout,
+  stageDrawsSlotHeaders,
   neighborZoomStep,
   normalizeEmbeddedUrl,
-  parkedViewBounds,
   planTabClick,
   resolveSlotPages,
   resolveSlotTabs,
@@ -68,11 +70,13 @@ import {
   session,
   shell,
   WebContentsView,
+  type Event as ElectronEvent,
+  type InputEvent,
   type Session,
   type WebContents,
 } from "electron";
 import { EmbeddedCdp, type CdpExecutor } from "./cdp";
-import { GuestPageSurface, NativePageSurface, isNativeSurface, type PageSurface } from "./surface";
+import { GuestPageSurface, type PageSurface } from "./surface";
 import { GuestCdp, type GuestCdpTarget } from "./guest-cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
@@ -174,23 +178,27 @@ interface TabRecord {
   captureBinding?: boolean;
   crashed: boolean;
   /**
-   * DevTools hosted by this app, rather than by Electron.
+   * The DevTools panel this app hosts for the page, when one exists.
    *
-   * `openDevTools({ mode: "right" })` cannot dock inside a `WebContentsView` —
-   * Electron opens its own window instead, which is exactly the behaviour that
-   * was not wanted. `setDevToolsWebContents` lets the tools render into a view
-   * we own, so they sit inside the page's cell; the same view is re-parented
-   * into a small window when the user asks to detach.
+   * A guest cannot hand its tools to a `<webview>` — `setDevToolsWebContents`
+   * needs a `WebContents` the embedder owns outright, and a guest is sandboxed
+   * by its embedder, so a webview host never receives the `DevToolsHost` binding
+   * and renders the front-end with no connection to anything. The panel
+   * therefore stays a native `WebContentsView` laid out by this manager *beside*
+   * the page's cell: the page keeps the left part, the tools take the right, and
+   * the renderer draws the drag handle in the gap between the two.
    */
-  devtools?: {
-    view: WebContentsView;
-    /** Where the tools are shown right now. */
-    mode: "docked" | "window";
-    /** Set while they are shown in their own window. */
-    window?: BrowserWindow;
-    /** Fraction of the cell the docked panel takes. */
-    width: number;
-  };
+  devtools?: DevToolsRecord;
+  /** Monotonic per page, so an in-flight setup step can detect a newer panel. */
+  devtoolsGeneration?: number;
+}
+
+interface DevToolsRecord {
+  view: WebContentsView;
+  /** Fraction of the cell the panel takes; the page gets the rest. */
+  width: number;
+  /** Value of `TabRecord.devtoolsGeneration` when this panel was created. */
+  generation: number;
 }
 
 interface ViewRecord extends EmbeddedView {
@@ -297,12 +305,12 @@ export interface EmbeddedBrowserOptions {
   /**
    * Hosts pages as `<webview>` nodes owned by the renderer.
    *
-   * Present means "the renderer draws the pages" — main asks for a node per
-   * page and drives its guest. Absent keeps the native `WebContentsView`
-   * carrier, which is what tests and any headless surface without a renderer
-   * still use.
+   * Required, not optional: the guest is the only carrier. Keeping a second one
+   * around meant every layout path carried a branch for moving native views that
+   * no longer existed, and those branches were what silently parked pages over
+   * the chrome whenever a new overlay forgot to announce itself.
    */
-  guests?: GuestHost;
+  guests: GuestHost;
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
@@ -370,10 +378,10 @@ function sameDocumentUrl(actual: string, expected: string): boolean {
 /**
  * The in-app browser surface.
  *
- * Pages live in `WebContentsView`s stacked inside the main window, so a whole
- * cast of accounts fits on one screen without opening a system window each. The
- * window's own renderer draws the chrome (tab strip, per-slot header, sidebar);
- * the native views paint over the stage below it.
+ * Pages are `<webview>` guests owned by the window's renderer, so a whole cast
+ * of accounts fits on one screen without opening a system window each. This class
+ * decides where each page goes and drives it over CDP; the renderer draws both
+ * the chrome (tab strip, per-slot header, sidebar) and the page nodes.
  *
  * Only one view is on stage at a time: a view is a shared screen region, and
  * every view keeps its own grid layout and focused slot while it is off screen.
@@ -383,6 +391,11 @@ function sameDocumentUrl(actual: string, expected: string): boolean {
  */
 export class EmbeddedBrowser {
   private host: BrowserWindow | null = null;
+
+  /** The renderer-side page host. Always present; see `EmbeddedBrowserOptions`. */
+  private get guests(): GuestHost {
+    return this.options.guests;
+  }
   private tabs: TabRecord[] = [];
   private views: ViewRecord[] = [];
   /** Active page per browser instance; the page a slot shows. */
@@ -404,10 +417,9 @@ export class EmbeddedBrowser {
   /**
    * Last window content size that was actually readable.
    *
-   * Parking coordinates must clear the *window* edge, never the stage edge, and
-   * the window can be briefly unmeasurable (hidden to the tray). Keeping the
-   * last good value is what lets `hostContentSize` honour that invariant instead
-   * of falling back to a number that puts pages on top of the dock.
+   * The window can be briefly unmeasurable (hidden to the tray), and keeping the
+   * last real value beats any fallback: the size decides whether a page counts
+   * as visible, which decides which screenshot path is taken.
    */
   private lastContentSize: { width: number; height: number } | null = null;
   private pendingState = false;
@@ -452,6 +464,16 @@ export class EmbeddedBrowser {
   private frozenTabs = new Set<string>();
   private stagedTabs = new Set<string>();
   private freezeSweep: NodeJS.Timeout | undefined;
+  /** The live split drag, if one is in progress. */
+  private devtoolsResize:
+    | {
+        timer: NodeJS.Timeout;
+        listeners: Array<{
+          contents: WebContents;
+          handler: (event: ElectronEvent, input: InputEvent) => void;
+        }>;
+      }
+    | undefined;
 
   constructor(private readonly options: EmbeddedBrowserOptions) {
     // The sweep must exist from construction, not from the first CDP command:
@@ -543,7 +565,6 @@ export class EmbeddedBrowser {
     if (this.host === win) return;
     this.host = win;
     this.stage = null;
-    for (const tab of this.tabs) this.attachView(tab);
     // A destroyed window takes its child views with it; drop the records rather
     // than keeping handles to closed renderers.
     win.once("closed", () => {
@@ -563,7 +584,6 @@ export class EmbeddedBrowser {
       if (this.host !== win) return;
       this.applyLayout();
     });
-    this.parkAll();
     this.sendState();
   }
 
@@ -577,7 +597,7 @@ export class EmbeddedBrowser {
       views: this.views.map((view) => this.describeView(view)),
       ...(this.activeTabId ? { activeTabId: this.activeTabId } : {}),
       ...(this.activeViewId ? { activeViewId: this.activeViewId } : {}),
-      carrier: this.options.guests ? "guest" : "native",
+      carrier: "guest",
     };
   }
 
@@ -617,7 +637,7 @@ export class EmbeddedBrowser {
         ? {}
         : { viewportOverride: tab.viewportOverride ?? null }),
       devtoolsOpen: this.devtoolsOpen(tab),
-      ...(tab.devtools?.mode === "docked" ? { devtoolsWidth: tab.devtools.width } : {}),
+      ...(tab.devtools ? { devtoolsWidth: tab.devtools.width } : {}),
       // No bounds while the carrier is still being created: the renderer uses
       // the absence to mean "not laid out yet" and keeps the node hidden until
       // a real rect arrives, instead of placing it at 0×0.
@@ -633,22 +653,15 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Whether this page's DevTools are open.
+   * Whether this page has a panel open.
    *
-   * Our own record is authoritative: when the tools are hosted in a
-   * `WebContentsView` we created, Chromium's `isDevToolsOpened()` reports false
-   * even though they are live and painting. The native query is kept as a
-   * fallback for the moment before our view is registered.
+   * Answered from our own record, not from `isDevToolsOpened()`: once the tools
+   * are handed a `WebContents` of ours through `setDevToolsWebContents`, Electron
+   * no longer reports them as "this page's DevTools" and the getter stays false
+   * for a panel that is running and visible. Measured on Electron 45.
    */
   private devtoolsOpen(tab: TabRecord): boolean {
-    if (tab.devtools) return true;
-    const contents = tab.view?.webContents;
-    if (!contents || contents.isDestroyed()) return false;
-    try {
-      return contents.isDevToolsOpened();
-    } catch {
-      return false;
-    }
+    return Boolean(tab.devtools);
   }
 
   private describeView(view: ViewRecord): EmbeddedView {
@@ -703,7 +716,7 @@ export class EmbeddedBrowser {
      * looked dead to the pointer, and dragging its resize handle started on the
      * handle and then entered a page's box.
      */
-    if (this.options.guests) this.sendState();
+    this.sendState();
   }
 
   // ---------- views ----------
@@ -1467,8 +1480,7 @@ export class EmbeddedBrowser {
      * and mounting is driven by a state broadcast — so publishing the tab after
      * the node exists is a deadlock: the renderer never sees the page it is
      * being asked to host, gives it no box, and the guest reports a 0×0
-     * viewport. Native carriers do not care about the order, so both go through
-     * the same shape and only the placeholder differs.
+     * viewport.
      */
     const tab: TabRecord = {
       id,
@@ -1479,12 +1491,10 @@ export class EmbeddedBrowser {
       origin: input.origin ?? parent?.origin ?? "manual",
       instanceId,
       ...(input.openerId ? { openerId: input.openerId } : {}),
-      view: this.options.guests
-        ? // Placeholder until the node attaches; nothing may touch it before
-          // `openCarrier` returns, because a guest page has no `webContents`
-          // until the renderer creates one.
-          (null as unknown as PageSurface)
-        : (null as unknown as PageSurface),
+      // Placeholder until the node attaches; nothing may touch it before
+      // `openCarrier` returns, because a guest page has no `webContents` until
+      // the renderer creates one.
+      view: null as unknown as PageSurface,
       cdp: null as unknown as CdpExecutor,
       url: "about:blank",
       title: "",
@@ -1497,15 +1507,6 @@ export class EmbeddedBrowser {
     tab.view = carrier.view;
     tab.cdp = carrier.cdp;
     this.wireTab(tab);
-    this.attachView(tab);
-    // Lay the view out inside the window once before anything parks it. A view
-    // that has never had a real rect and gets its first bounds outside the
-    // window is given a 0×0 viewport and keeps it, which breaks every geometry
-    // based check on that page (see `parkAll`). A guest needs none of this: the
-    // node is born inside the app's own layout, so its viewport comes from CSS.
-    if (isNativeSurface(tab.view)) {
-      tab.view.setBounds({ x: 0, y: 0, ...this.hostContentSize() });
-    }
     // A new page starts at the global default; only a deliberate keystroke
     // creates an override, so the setting keeps applying to everything else.
     this.applyZoom(tab, parent ? (parent.zoomOverride ?? this.defaultZoom) : this.defaultZoom);
@@ -1554,35 +1555,17 @@ export class EmbeddedBrowser {
   /**
    * Resolves how a new page will be displayed.
    *
-   * Two carriers, one shape. A guest's `webContents` arrives asynchronously —
-   * the renderer has to mount the node first — so this is the only place the
-   * manager knows which one it got; everything downstream talks to
-   * `PageSurface` and `CdpExecutor`.
+   * A guest's `webContents` arrives asynchronously — the renderer has to mount
+   * the node first — so this is the only place the manager learns the page's
+   * `webContents`; everything downstream talks to `PageSurface` and
+   * `CdpExecutor`.
    */
   private async openCarrier(input: {
     tabId: string;
     partition: string;
     url: string;
   }): Promise<{ view: PageSurface; cdp: CdpExecutor }> {
-    const host = this.options.guests;
-    if (!host) {
-      const surface = new NativePageSurface({
-        webPreferences: {
-          partition: input.partition,
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-          webviewTag: false,
-          spellcheck: false,
-        },
-      });
-      surface.setBackgroundColor("#101317");
-      return {
-        view: surface,
-        cdp: new EmbeddedCdp(surface.webContents, () => this.markCdpActivity(input.tabId)),
-      };
-    }
-    const mounted = await host.mount({
+    const mounted = await this.guests.mount({
       tabId: input.tabId,
       partition: input.partition,
       url: input.url,
@@ -1612,12 +1595,6 @@ export class EmbeddedBrowser {
     return new GuestCdp(guests.targetFor(tabId), tabId, (id, visible) =>
       guests.present(id, visible),
     );
-  }
-
-  private attachView(tab: TabRecord): void {
-    const host = this.host;
-    if (!host || host.isDestroyed()) return;
-    if (isNativeSurface(tab.view)) tab.view.attachTo(host);
   }
 
   private configureSession(partition: string): void {
@@ -1912,14 +1889,13 @@ export class EmbeddedBrowser {
         else this.reload(tab.id);
       }
       // The same toggle Chrome offers: F12, and Ctrl+Shift+I for laptops whose
-      // F12 shares a row with volume. The DevTools' own webContents gets the
-      // same handler below — with focus inside the panel, this one never fires.
+      // F12 shares a row with volume.
       // Auto-repeat is ignored: holding the key would otherwise flip the panel
       // open and shut until the user lets go.
       if (!input.isAutoRepeat && (key === "f12" || (modifier && input.shift && key === "i"))) {
         event.preventDefault();
         if (this.devtoolsOpen(tab)) this.closeDevTools(tab.id);
-        else this.openDevTools(tab.id, "docked");
+        else this.openDevTools(tab.id);
       }
       // Zoom has to be intercepted here: a page can swallow Ctrl +/- itself
       // (code editors do), and the gesture must still work on that page.
@@ -2077,8 +2053,9 @@ export class EmbeddedBrowser {
   private focusActiveView(): void {
     if (!this.activeTabId) return;
     const tab = this.findTab(this.activeTabId);
-    if (!tab || tab.view.webContents.isDestroyed()) return;
-    tab.view.webContents.focus();
+    const contents = tab?.view?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    contents.focus();
   }
 
   closeTab(tabId: string): EmbeddedState {
@@ -2213,28 +2190,11 @@ export class EmbeddedBrowser {
     // surface; the tab record is written before either exists, so closing it
     // early has to be a no-op rather than a null dereference.
     tab.cdp?.detach();
-    // The DevTools view outlives the page only until here: it is hosted by the
-    // same window, so a closed page must take its panel with it.
-    this.dropDevTools(tab);
-    if (tab.view && isNativeSurface(tab.view)) {
-      try {
-        this.host?.contentView.removeChildView(tab.view.view);
-      } catch {
-        // The window may already be gone.
-      }
-      try {
-        if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-      } catch {
-        // Closing an already-destroyed contents is a no-op.
-      }
-      return;
-    }
     // A guest's node belongs to the renderer, so it cannot be removed here —
     // and it must not be: destroying the guest while a CDP command is in flight
     // is a process-level crash. The handshake closes the session, and only its
     // reply authorises the renderer to drop the node.
-    const guests = this.options.guests;
-    if (!guests) return;
+    const guests = this.guests;
     void guests
       .release(tab.id)
       .catch(() => undefined)
@@ -2344,11 +2304,6 @@ export class EmbeddedBrowser {
   private applyLayout(): void {
     const host = this.host;
     if (!host || host.isDestroyed()) return;
-    // Guests are laid out by the renderer from `bounds`, so there is nothing to
-    // park: a parked rect would be handed over as if it were the page's place
-    // on the stage, and every node would render off-window. The renderer hides
-    // a page by not giving it a rect at all.
-    if (!this.options.guests) this.parkAll();
     /**
      * Slot tables are layout *state*, not geometry, so they are normalized even
      * when no stage has been reported.
@@ -2366,32 +2321,45 @@ export class EmbeddedBrowser {
       // or the window has no chrome yet). Guests keep their nodes but give up
       // their place: the renderer hides a page that reports no rect, and
       // leaving the last rect behind would paint pages over the console.
-      if (this.options.guests) {
-        for (const tab of this.tabs) {
-          if (tab.view.webContents.isDestroyed()) continue;
-          tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-        }
+      for (const tab of this.tabs) {
+        // A tab is published before its carrier exists — the renderer has to
+        // see the page in order to mount a node for it — so this can run while
+        // `view` is still the placeholder. Reading `webContents` off it threw
+        // here on the first state broadcast of a fresh session.
+        const contents = tab.view?.webContents;
+        if (!contents || contents.isDestroyed()) continue;
+        tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
       }
+      this.stagedTabs.clear();
+      this.dockAllDevTools();
       return;
     }
 
     const view = this.activeView();
     if (!view) {
-      // Flat mode: one page fills the stage below a header band that carries the
-      // instance's page tabs. The band is the same height as a slot header, so
-      // switching between a view and the flat list does not move the page.
+      /*
+       * Flat mode: one page fills the whole stage.
+       *
+       * This used to subtract `EMBEDDED_SLOT_HEADER` from the top, because the
+       * flat stage drew a header band with the instance's page tabs. It does not
+       * draw one any more — the window-level strip above the toolbar owns the
+       * tabs in every mode, and the flat band was a second identical row. The
+       * subtraction stayed behind, so every flat page was inset 26px and the
+       * stage showed a dark band above it that belonged to nothing.
+       */
+      const staged = new Set<string>();
       const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
       const page = tab ? this.activePageOf(tab.instanceId) : undefined;
-      // A page that has not navigated anywhere stays parked so the app's own
-      // new-tab surface (search box, engine picker) is what the user sees. The
-      // renderer draws it in the empty stage; it is plain HTML and needs no
-      // native view behind it.
+      // A page that has not navigated anywhere keeps its rect off the stage so the
+      // app's own new-tab surface (search box, engine picker) is what the user
+      // sees. The renderer draws it; there is no page to draw behind it.
       if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
         void this.wakeTab(page.id);
-        page.view.setBounds(this.placePageSurface(page, embeddedViewRect(this.stage)));
-        this.stagedTabs.add(page.id);
+        page.view.setBounds(this.placePageSurface(page, this.stage));
+        staged.add(page.id);
       }
-      if (tab?.devtools?.mode === "docked") this.placeDevTools(tab);
+      this.parkUnstaged(staged);
+      this.dockAllDevTools();
       return;
     }
 
@@ -2399,6 +2367,11 @@ export class EmbeddedBrowser {
       embeddedSlotRects(view.layoutId, this.stage, view.slotRects),
       this.stage,
     );
+    // One cell is the browser, not a grid: no band, so the page gets the whole
+    // rectangle. Several cells keep the band, because the account name and the
+    // page tabs are what tell the cells apart.
+    const header = stageDrawsSlotHeaders(slots.length) ? EMBEDDED_SLOT_HEADER : 0;
+    const staged = new Set<string>();
     // `slotTabs` was already normalized above; the geometry is the only thing
     // left to do here.
     slots.forEach((slot, index) => {
@@ -2413,51 +2386,57 @@ export class EmbeddedBrowser {
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
       void this.wakeTab(page.id);
-      page.view.setBounds(this.placePageSurface(page, embeddedViewRect(slot)));
-      this.stagedTabs.add(page.id);
+      page.view.setBounds(this.placePageSurface(page, embeddedViewRect(slot, header)));
+      staged.add(page.id);
     });
-    // Docked DevTools follow the cell they were opened in, so a layout change or
-    // a different page on screen keeps the panel beside the right page.
+    this.parkUnstaged(staged);
+    this.dockAllDevTools();
+  }
+
+  /**
+   * Re-seats every open panel beside its page after a layout pass.
+   *
+   * `applyLayout` writes each page's *full* cell, which is correct for a page
+   * with no panel and wrong for one with a panel: the panel would be left where
+   * it was while the page grew under it. Docking afterwards is what keeps the
+   * two halves of the split on the same cell through a resize, a layout change,
+   * a tab switch and a dragged stage divider. Pages that left the stage get
+   * their panel parked by the same call.
+   */
+  private dockAllDevTools(): void {
     for (const tab of this.tabs) {
-      if (tab.devtools?.mode === "docked") this.placeDevTools(tab);
+      if (tab.devtools) this.placeDevTools(tab);
     }
   }
 
   /**
-   * Moves every view off the window instead of hiding it.
+   * Clears the placement of every page this pass did not stage.
    *
-   * Measured on Electron 44 / Chromium 152: `setVisible(false)` still runs page
-   * scripts and `capturePage`, but CDP screenshots time out; bounds outside the
-   * window keep everything working. AI calls therefore behave identically no
-   * matter which app page the user is looking at.
+   * `stagedTabs` is documented as "recomputed by applyLayout", but it was only
+   * ever added to, and no page's bounds were ever cleared. Switching to a new tab
+   * therefore left the previous page holding a full-stage rect: `getBounds()`
+   * still said "I am the stage", `viewIsOnScreen` still said yes, and the
+   * renderer kept painting it. The tab strip moved, the address bar emptied, and
+   * the pixels did not — reported as "the new tab does not actually switch".
    *
-   * Two details decide the coordinates, both measured:
-   *
-   * 1. Park past the *window's* right edge, not past the stage's. The stage
-   *    starts to the right of the rail, so `x = stage.width` is still inside the
-   *    window — a parked page painted itself over the accounts page.
-   * 2. A view that is *created* outside the window gets a 0×0 viewport for good:
-   *    scripts run, but the document lays out at zero width, so "is this text
-   *    visible" and every element position are wrong. `createTab` therefore
-   *    gives a new view a real on-window rect before it is parked. A view that
-   *    was laid out once keeps its size when moved out, so this only has to
-   *    happen at creation.
+   * Only pages that *had* a box are cleared. A page that has never been placed
+   * (a background tab opened through MCP, one that is still loading) keeps its
+   * zero rect and, more importantly, is never given one here: writing a rect and
+   * then clearing it would leave the guest with a box it was laid out for and
+   * then had taken away, and `capturePage` on that reports `UnknownVizError`
+   * instead of pixels — which is how a background screenshot stopped working
+   * when this first cleared everything unconditionally.
    */
-  private parkAll(): void {
-    // Everything leaves the stage together; the placement loops in
-    // `applyLayout` re-add the pages that come right back.
-    this.stagedTabs.clear();
-    const content = this.hostContentSize();
-    const parked = parkedViewBounds(content);
+  private parkUnstaged(staged: Set<string>): void {
     for (const tab of this.tabs) {
-      if (tab.view.webContents.isDestroyed()) continue;
-      tab.view.setBounds(parked);
-      // Docked DevTools are children of the same window: leaving them where they
-      // were would paint a panel over whichever page is now on stage.
-      if (tab.devtools?.mode === "docked" && !tab.devtools.view.webContents.isDestroyed()) {
-        tab.devtools.view.setBounds(parked);
-      }
+      if (staged.has(tab.id)) continue;
+      const contents = tab.view?.webContents;
+      if (!contents || contents.isDestroyed()) continue;
+      const bounds = tab.view.getBounds();
+      if (bounds.width <= 0 || bounds.height <= 0) continue;
+      tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     }
+    this.stagedTabs = staged;
   }
 
   /**
@@ -2514,7 +2493,7 @@ export class EmbeddedBrowser {
       const contents = tab.view?.webContents;
       if (!contents || contents.isDestroyed()) continue;
       if (contents.isLoading() || tab.crashed) continue;
-      if (isBlankTab(tab) || tab.devtools) continue;
+      if (isBlankTab(tab) || this.devtoolsOpen(tab)) continue;
       if (contents.isCurrentlyAudible()) continue;
       if ((this.aiActiveUntil.get(tab.id) ?? 0) > now) continue;
       this.frozenTabs.add(tab.id);
@@ -2523,17 +2502,13 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Size of the window content area, which is what child view bounds use.
+   * Size of the window content area, used to decide whether a page can be seen.
    *
-   * The fallback must never be the stage: parking past `stage.width` puts a
-   * page's left edge exactly where the dock starts, so the page paints over the
-   * dock instead of off-screen. That is not theoretical — with the window hidden
-   * to the tray, `getContentBounds()` is not always usable, the fallback kicked
-   * in, and pages were parked at `x = stage.width` (1222 with the dock
-   * collapsed). Reopening the window showed a ~98px band of the parked page
-   * along the right edge, which read as page content spilling over the dock.
-   * Remembering the last real window size keeps the invariant the parking
-   * coordinates depend on.
+   * The screen bounds must not be confused with the stage: a page that is off
+   * stage sits left of the *window*, and judging that against the stage width
+   * gives the wrong answer. With the window hidden to the tray,
+   * `getContentBounds()` is not always usable, so the last real measurement is
+   * remembered instead of falling back to a guess.
    */
   private hostContentSize(): { width: number; height: number } {
     const host = this.host;
@@ -2545,8 +2520,6 @@ export class EmbeddedBrowser {
       }
     }
     if (this.lastContentSize) return this.lastContentSize;
-    // Nothing has been measured yet (no window, no prior layout). A deliberately
-    // generous default keeps a parked view off-screen even in that case.
     return { width: 1920, height: 1080 };
   }
 
@@ -3128,17 +3101,17 @@ export class EmbeddedBrowser {
     options: { format?: "png" | "jpeg"; quality?: number } = {},
   ): Promise<{ path: string; bytes: number }> {
     const tab = this.requireTab(tabId);
-    // The embedder has to have painted before its guest can: a window that was
-    // parked off-screen or minimised has produced no frame, and the capture
-    // below would then sit out its whole deadline.
-    await this.options.guests?.primeForCapture?.();
-    const buffer = await tab.cdp.screenshot({
-      ...options,
-      // A page the user switched away from (or a minimised window) has no
-      // compositor frames, so the CDP path would stall until its timeout. The
-      // renderer still paints, so read from there directly.
-      preferRenderer: !this.isOnScreen(tab),
-    });
+    // A page the user switched away from, or one in a minimised window, has no
+    // compositor frames: the CDP path would stall until its timeout, while the
+    // renderer still paints into an offscreen surface (measured: 41ms and a full
+    // image against a 5s timeout). Decide before priming — priming captures the
+    // *host*, which is exactly the thing that never answers in that state.
+    const preferRenderer = !this.isOnScreen(tab);
+    if (!preferRenderer) {
+      // The embedder has to have painted before its guest can.
+      await this.options.guests?.primeForCapture?.();
+    }
+    const buffer = await tab.cdp.screenshot({ ...options, preferRenderer });
     mkdirSync(this.options.shotDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const extension = options.format === "jpeg" ? "jpg" : "png";
@@ -3332,102 +3305,6 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Paints every page on stage into positioned images.
-   *
-   * Called before the views are parked for an HTML overlay. The capture goes
-   * through CDP, not `capturePage`: on Electron 44 `capturePage` on a
-   * WebContentsView throws `UnknownVizError`, and the overlay then covers a
-   * black stage. CDP's own fallback still handles a minimised window.
-   */
-  async freeze(): Promise<FrozenSlot[]> {
-    const stage = this.stage;
-    const view = this.activeView();
-    const shots: FrozenSlot[] = [];
-    /**
-     * Captures one page and reports the rect its pixels actually fill.
-     *
-     * Docked DevTools shrink the page inside the same view, so the screenshot is
-     * narrower than the slot. Scaling it to the full slot would stretch the page;
-     * reporting the real page box leaves the tools area unpainted instead.
-     */
-    const capture = async (tab: TabRecord) => {
-      const contents = tab.view.webContents;
-      if (contents.isDestroyed()) return;
-      try {
-        const png = await tab.cdp.screenshot();
-        // The view's own bounds, not the cell: docked DevTools shrink the page
-        // inside the same view, and a fixed-viewport page is fitted and centred
-        // rather than filling — either way the real bounds are where its pixels
-        // are, while the cell would stretch or misplace the frozen image.
-        const b = tab.view.getBounds();
-        const page = await this.pageBoxDip(tab, {
-          x: b.x,
-          y: b.y,
-          width: b.width,
-          height: b.height,
-        });
-        shots.push({
-          tabId: tab.id,
-          rect: page,
-          dataUrl: `data:image/png;base64,${png.toString("base64")}`,
-        });
-      } catch {
-        // A page that cannot be captured simply stays unpainted behind the overlay.
-      }
-    };
-
-    if (view && stage) {
-      const slots = insetSlotRects(embeddedSlotRects(view.layoutId, stage, view.slotRects), stage);
-      for (let index = 0; index < slots.length; index += 1) {
-        const rootId = view.slotTabs[index];
-        if (!rootId) continue;
-        const slot = slots[index];
-        // Capture the page the slot is actually showing, which may be a popup.
-        const page = this.activePageOf(rootId);
-        if (!page || !slot) continue;
-        // A blank page has no native pixels — the renderer draws the new-tab
-        // surface in that cell. Capturing it would return an empty image and
-        // paint over the search box the user is typing into.
-        if (isBlankTab(page)) continue;
-        await capture(page);
-      }
-      return shots;
-    }
-
-    const tab = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
-    const page = tab ? this.activePageOf(tab.instanceId) : undefined;
-    // Flat mode must freeze at the page's real bounds, same as the live
-    // placement in `applyLayout`: the stage does have a header band (the
-    // instance tab strip, 26px, since flat stages grew one), and freezing at
-    // the raw stage origin painted the picture one band too high. The view's
-    // real bounds carry that offset — plus docked DevTools shrinking and the
-    // fixed-viewport fit — so `capture` reading them covers every case.
-    if (page && stage && !isBlankTab(page)) await capture(page);
-    return shots;
-  }
-
-  /**
-   * Where a page's pixels land inside its slot, in window DIP.
-   *
-   * `window.innerWidth` is in CSS pixels, so multiplying by the zoom factor gives
-   * the DIP width the page occupies. Without DevTools this equals the slot; with
-   * them docked it is the shrunken page area.
-   */
-  private async pageBoxDip(tab: TabRecord, slot: StageRect): Promise<StageRect> {
-    try {
-      const size = await tab.cdp.evaluate<{ width: number; height: number }>(
-        "({ width: window.innerWidth, height: window.innerHeight })",
-      );
-      const zoom = tab.view.webContents.getZoomFactor() || 1;
-      const width = Math.min(slot.width, Math.max(1, Math.round(size.width * zoom)));
-      const height = Math.min(slot.height, Math.max(1, Math.round(size.height * zoom)));
-      return { x: slot.x, y: slot.y, width, height };
-    } catch {
-      return slot;
-    }
-  }
-
-  /**
    * Zooms one page, the Ctrl +/- gesture.
    *
    * The step list mirrors Chrome's: 50/67/75/80/90/100/110/125/150/175/200.
@@ -3509,47 +3386,37 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Opens DevTools for one page, docked inside its cell.
+   * Opens a DevTools panel docked beside the page, inside its own cell.
    *
-   * Electron cannot dock DevTools into a `WebContentsView` (`mode: "right"` opens
-   * a separate window), so the tools render into a view this manager owns and
-   * are laid out beside the page. `mode: "window"` re-parents that same view
-   * into a small window instead — one DevTools session either way, so its
-   * console history survives the switch.
+   * The panel is a `WebContentsView` this manager owns and places; the tools are
+   * pointed at it with `setDevToolsWebContents`. Electron's `mode: "right"` is
+   * not usable here: under `titleBarOverlay` on Windows it opens a separate
+   * window instead of docking (measured), and there is no way to dock tools into
+   * a cell of an app-owned stage either way.
+   *
+   * A panel is per page and survives until it or the page is closed. Opening one
+   * that already exists only brings it back to the dock — it is never rebuilt,
+   * so console history survives toggling.
    */
-  openDevTools(tabId: string, mode: "docked" | "window"): void {
+  openDevTools(tabId: string): void {
     const tab = this.requireTab(tabId);
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
-    const devtools = tab.devtools ?? this.mountDevTools(tab, mode, 0.42);
-    devtools.mode = mode;
-    this.placeDevTools(tab);
-    contents.openDevTools({ mode: "detach" });
-    this.applyLayout();
-    this.emitState();
-  }
-
-  /**
-   * Creates the front-end view, binds it to the inspected page, and installs
-   * every listener it needs.
-   *
-   * `openDevTools` and the reload recovery both go through here: a rebuilt
-   * front-end must be indistinguishable from a first one, including the
-   * keyboard handler, the language-bar dismissal, and the reload guard.
-   */
-  private mountDevTools(
-    tab: TabRecord,
-    mode: "docked" | "window",
-    width: number,
-  ): NonNullable<TabRecord["devtools"]> {
-    // DevTools needs the devtools:// scheme and their own preload; the page's
-    // identity partition would block both, so this view gets its own default
-    // session and no preload of ours.
-    //
-    // `backgroundThrottling: false` is kept from the earlier black-panel
-    // investigation. It was not the cause (see `silenceDevToolsLocaleBar`), but
-    // a panel that keeps painting while the app is in the background costs one
-    // idle compositor and avoids a stale first frame on re-focus.
+    if (tab.devtools) {
+      this.placeDevTools(tab);
+      this.emitState();
+      return;
+    }
+    /*
+     * The panel gets its own session and no preload of ours.
+     *
+     * The front-end needs the `devtools://` scheme to resolve, which the page's
+     * identity partition would refuse; it also must not inherit the app's
+     * preload, since it is not our page. Background throttling is off because
+     * the panel's content area is one large tiled layer: throttled, the tiles
+     * stop rasterising while the chrome keeps its last frame, which reads as a
+     * panel with a black middle.
+     */
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
@@ -3559,337 +3426,220 @@ export class EmbeddedBrowser {
       },
     });
     view.setBackgroundColor("#101317");
-    if (!tab.view.bindDevTools(view.webContents)) {
-      // The carrier cannot host a panel. Rather than leave the user with a
-      // button that does nothing, Electron opens its own DevTools window — the
-      // one behaviour a docked panel was built to avoid, but still usable.
-      //
-      // Nothing is recorded here on purpose: this view never received the tools
-      // (binding failed), so it is closed, and `devtoolsOpen` falls back to
-      // Electron's own query — which is the truth for a detached window. Storing
-      // the closed view would have `placeDevTools` try to parent a destroyed
-      // child view.
-      view.webContents.close();
-      tab.view.webContents.openDevTools({ mode: "detach" });
-      return { view, mode: "window", width } as NonNullable<TabRecord["devtools"]>;
-    }
-    const devtools = { view, mode, width };
-    tab.devtools = devtools;
+    const generation = (tab.devtoolsGeneration ?? 0) + 1;
+    tab.devtoolsGeneration = generation;
+    tab.devtools = { view, width: EMBEDDED_DEVTOOLS_DEFAULT, generation };
+    this.host?.contentView.addChildView(view);
+    /*
+     * The panel owns its rectangle *before* the tools move in.
+     *
+     * `setDevToolsWebContents` points the front-end at a target while it is
+     * still about to load. Given a 0×0 host it starts inside a zero box, and no
+     * later resize brings the content layer back: the toolbar draws, Elements
+     * stays empty and `DevToolsHost` is never created — a dock that looks alive
+     * and inspects nothing. Measured on Electron 45 by reordering these two
+     * calls and nothing else.
+     */
+    this.placeDevTools(tab, true);
+    contents.setDevToolsWebContents(view.webContents);
+    contents.openDevTools({ mode: "detach" });
     this.watchDevToolsKeys(tab);
-    this.silenceDevToolsLocaleBar(tab);
-    this.guardDevToolsFrontend(tab);
-    return devtools;
-  }
-
-  /**
-   * Keeps the panel usable across the front-end's own reloads.
-   *
-   * DevTools reloads itself for some settings changes — "restore defaults and
-   * reload" is the one users hit. That reload used to leave every panel empty
-   * for good: afterwards `InspectorFrontendHost` comes back as a stub whose
-   * `sendMessageToBackend` is a no-op, so the panels keep their chrome and never
-   * receive data. Measured signature — healthy:
-   * `sendMessageToBackend(message) { DevToolsAPI.sendMessage...`; broken:
-   * `sendMessageToBackend(r){}`. The Elements tree tells the same story: the
-   * inspected page's DOM is there before the reload and gone after.
-   *
-   * Electron never re-binds the host for the lifetime of the inspected
-   * `WebContents`, which is why closing and reopening the *same* front-end does
-   * not help. Discarding the whole front-end and building a new one does: the
-   * fresh document handshakes with the inspected page again. That was verified
-   * from both states (healthy and already broken, 2/2 each), so this handler
-   * rebuilds rather than forbidding the gesture — which is what makes the
-   * settings dialog work instead of hanging on a blank panel.
-   *
-   * `will-navigate` is the fast path: cancelling the navigation leaves the panel
-   * alive (nothing has been thrown away yet), and the rebuild applies the
-   * setting the user just changed by booting a front-end that reads it. The
-   * `did-finish-load` half catches reloads that never asked — anything that went
-   * straight to `webContents.reload()` would otherwise land in the broken state
-   * silently.
-   */
-  private guardDevToolsFrontend(tab: TabRecord): void {
-    const contents = tab.devtools?.view.webContents;
-    if (!contents) return;
-    // The first load is the front-end booting; only a later one is a reload.
-    let loaded = false;
-    contents.on("will-navigate", (event, url) => {
-      if (url !== contents.getURL()) return;
-      event.preventDefault();
-      void this.rebuildDevTools(tab);
-    });
-    contents.on("did-finish-load", () => {
-      if (!loaded) {
-        loaded = true;
-        return;
-      }
-      void this.rebuildDevTools(tab);
-    });
-  }
-
-  /**
-   * Replaces the DevTools front-end with a freshly mounted one.
-   *
-   * The wait is not cosmetic: closing the view does not finish destroying its
-   * renderer synchronously, and mounting a new front-end while the old one is
-   * still attached leaves the new one bound to nothing (measured: empty Elements
-   * tree, stub host). 350ms proved enough on this Electron; the retry covers a
-   * slower machine by checking the panel instead of trusting the clock.
-   */
-  private async rebuildDevTools(tab: TabRecord): Promise<void> {
-    const pending = tab.devtools;
-    if (!pending || this.devtoolsRebuilds.has(tab.id)) return;
-    const { mode, width } = pending;
-    const ticket = { cancelled: false };
-    this.devtoolsRebuilds.set(tab.id, ticket);
-    try {
-      this.discardDevTools(tab);
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      // The user may have closed the panel during the wait; their intent wins.
-      if (ticket.cancelled) return;
-      const live = this.findTab(tab.id);
-      if (!live || live.view.webContents.isDestroyed()) return;
-      this.openDevTools(live.id, mode);
-      const rebuilt = live.devtools;
-      if (rebuilt) {
-        rebuilt.width = width;
-        this.placeDevTools(live);
-        this.applyLayout();
-        this.emitState();
-      }
-    } finally {
-      this.devtoolsRebuilds.delete(tab.id);
-    }
-  }
-
-  /**
-   * Tears the front-end down without deciding what happens next.
-   *
-   * Separate from `closeDevTools` because a rebuild must not look like a user
-   * closing the panel — and because a close arriving mid-rebuild has to cancel
-   * it rather than race it.
-   */
-  private discardDevTools(tab: TabRecord): void {
-    if (tab.view.webContents.isDestroyed()) return;
-    tab.view.webContents.closeDevTools();
-    this.dropDevTools(tab);
-    this.applyLayout();
     this.emitState();
   }
 
   /**
-   * Keys the panel owns while focus is inside it.
+   * F12 / Ctrl+Shift+I while the focus sits inside the panel.
    *
-   * The page's handler never sees these then, and without the first half the
-   * panel would be a one-way door from the keyboard.
+   * The page's handler never sees those keys then, and without this the panel
+   * would be a one-way door from the keyboard.
    *
-   * F5 / Ctrl+R reload the *inspected page*, which is what Chrome does with the
-   * focus inside DevTools — this is the real behaviour, not a workaround. It is
-   * also the safer choice: a reload of the front-end has to be rebuilt (see
-   * `guardDevToolsFrontend`), and spending that on a keystroke the user meant
-   * for the page would be a regression dressed up as fidelity.
+   * keyDown only, and no auto-repeat: `before-input-event` fires twice for one
+   * physical press (down and up), and this closes the panel on the first — so
+   * acting on both would immediately reopen it. Same rule as every other
+   * handler of this event in the app.
    */
   private watchDevToolsKeys(tab: TabRecord): void {
     const contents = tab.devtools?.view.webContents;
     if (!contents) return;
     contents.on("before-input-event", (event, input) => {
-      // Only the keyDown half of a press counts.
-      //
-      // This is not tidiness: the panel is opened by a keyDown handled on the
-      // page, it takes focus immediately, and the *keyUp of that same press* is
-      // then delivered here. Treating it as a toggle closed the panel in the
-      // same instant it opened — F12 looked broken while the toolbar button,
-      // which has no keystroke to finish, worked. The page-side handler never
-      // shows this symptom because it calls `preventDefault()` on its keyDown,
-      // which stops the matching keyUp from being reported at all.
-      if (input.type !== "keyDown") return;
+      if (input.type !== "keyDown" || input.isAutoRepeat) return;
       const key = input.key.toLowerCase();
       const modifier = process.platform === "darwin" ? input.meta : input.control;
-      if (!input.isAutoRepeat && (key === "f12" || (modifier && input.shift && key === "i"))) {
+      if (key === "f12" || (modifier && input.shift && key === "i")) {
         event.preventDefault();
-        this.closeDevTools(tab.id);
-        return;
-      }
-      if (key === "f5" || (modifier && key === "r")) {
-        event.preventDefault();
-        const page = tab.view.webContents;
-        if (!page.isDestroyed()) page.reload();
+        if (this.findTab(tab.id)) this.closeDevTools(tab.id);
       }
     });
+  }
+
+  closeDevTools(tabId: string): void {
+    const tab = this.requireTab(tabId);
+    this.dropDevTools(tab);
+    this.applyLayout();
+    this.emitState();
+  }
+
+  /** Tears the panel down: tools first, then the view that hosted them. */
+  private dropDevTools(tab: TabRecord): void {
+    const devtools = tab.devtools;
+    if (!devtools) return;
+    delete tab.devtools;
+    const contents = tab.view.webContents;
+    try {
+      if (!contents.isDestroyed()) contents.closeDevTools();
+    } catch {
+      // The page may be gone already; the panel still has to be released.
+    }
+    this.host?.contentView.removeChildView(devtools.view);
+    if (!devtools.view.webContents.isDestroyed()) devtools.view.webContents.close();
   }
 
   /**
-   * Dismisses the DevTools "now available in Chinese" bar without reloading.
+   * Lays the panel out beside its page, or parks it when the page is off stage.
    *
-   * Two hard facts drive this, both measured on Electron 44.9 with a self-hosted
-   * DevTools view:
+   * The page and the tools are both native surfaces, so the HTML handle can only
+   * be seen and grabbed in a real gap between them: the page gives up the right
+   * part of its cell minus half the grip, and the panel starts half a grip later.
+   * `applyLayout` has just written the page's full cell, so the two agree on the
+   * same rectangle.
    *
-   * 1. The bar cannot be honoured. Clicking "Switch DevTools to Chinese" makes
-   *    the front-end fetch its zh-CN language pack through the host's
-   *    `loadNetworkResource`; that call is unimplemented for a front-end we host
-   *    ourselves, the fetch fails, and the front-end falls back to en-US. The
-   *    button buys a reload and delivers nothing.
-   * 2. Once the front-end has loaded, its `InspectorFrontendHost` is bound to
-   *    the inspected page; after a reload it comes back as a stub whose
-   *    `sendMessageToBackend` does nothing, so Elements/Console/Network keep
-   *    their chrome and stay empty. A rebuild recovers it (see
-   *    `guardDevToolsFrontend`), but there is no reason to pay a rebuild here.
-   *
-   * So the bar gets its other button, "Don't show again", which dismisses the
-   * block without a navigation. The cost is that the DevTools UI stays English.
-   *
-   * The bar shows up some time after `did-finish-load`, hence polling. It is
-   * answered once per panel: the click leaves `disable-locale-info-bar` in the
-   * host's preferences, so it does not come back for the rest of the run.
+   * `forOpening` is set by the one caller that runs before the tools have
+   * loaded. It lets the panel fall back to the page's own rectangle when the
+   * layout has not decided a cell yet (the stage is reported but this tab has
+   * not been staged), because leaving the host at 0×0 there is permanent — see
+   * the note in `openDevTools`.
    */
-  private silenceDevToolsLocaleBar(tab: TabRecord): void {
-    const contents = tab.devtools?.view.webContents;
-    if (!contents) return;
-    let answered = false;
-    contents.on("did-finish-load", () => {
-      if (answered) return;
-      answered = true;
-      let attempts = 0;
-      const poll = () => {
-        if (contents.isDestroyed()) return;
-        attempts += 1;
-        // The click target is a `devtools-button` inside the front-end's shadow
-        // DOM, so a document-level query never finds it. The apostrophe in the
-        // label is U+2019, not ASCII.
-        void contents
-          .executeJavaScript(
-            `(() => {
-              const wanted = "Don\u2019t show again";
-              const found = { el: null };
-              const walk = (root) => {
-                for (const el of root.querySelectorAll('*')) {
-                  if (el.shadowRoot) walk(el.shadowRoot);
-                  if (!found.el && /^(devtools-button|button)$/i.test(el.tagName) && (el.textContent || '').includes(wanted)) found.el = el;
-                }
-              };
-              walk(document);
-              if (found.el) { found.el.click(); return true; }
-              return false;
-            })()`,
-            true,
-          )
-          .then((hit) => {
-            if (hit || attempts >= 12 || contents.isDestroyed()) return;
-            setTimeout(poll, 1000);
-          })
-          .catch(() => undefined);
-      };
-      setTimeout(poll, 1200);
-    });
-  }
-
-  /** Moves an open panel between its cell and its own window. */
-  setDevToolsMode(tabId: string, mode: "docked" | "window"): void {
-    const tab = this.requireTab(tabId);
-    if (!tab.devtools) {
-      this.openDevTools(tabId, mode);
+  private placeDevTools(tab: TabRecord, forOpening = false): void {
+    const devtools = tab.devtools;
+    const host = this.host;
+    if (!devtools || !host || host.isDestroyed()) return;
+    let rect = this.cellOf(tab);
+    if (!rect && forOpening) {
+      const reported = tab.view.getBounds();
+      if (reported.width > 0 && reported.height > 0) {
+        const origin = this.stage ?? { x: 0, y: 0 };
+        rect = { ...reported, x: reported.x + origin.x, y: reported.y + origin.y };
+      }
+    }
+    if (!rect) {
+      // Off stage: keep the tools alive but out of sight, like any other page.
+      this.parkDevTools(tab);
       return;
     }
-    if (tab.devtools.mode === mode) return;
-    tab.devtools.mode = mode;
-    this.placeDevTools(tab);
-    this.applyLayout();
-    this.emitState();
+    const split = Math.round(rect.width * (1 - devtools.width));
+    const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
+    tab.view.setBounds({ ...rect, width: left });
+    devtools.view.setBounds({
+      x: rect.x + left + EMBEDDED_DEVTOOLS_GRIP,
+      y: rect.y,
+      width: Math.max(1, rect.width - left - EMBEDDED_DEVTOOLS_GRIP),
+      height: rect.height,
+    });
+    // A resize after the first paint has been observed to leave the panel's
+    // content area unpainted — the chrome draws, the DOM tree does not — until
+    // something asks for a repaint. The panel is resized on every layout pass,
+    // so this is not cosmetic here.
+    devtools.view.webContents.invalidate();
+  }
+
+  /** Keeps a panel out of sight without tearing it down. */
+  private parkDevTools(tab: TabRecord): void {
+    const devtools = tab.devtools;
+    if (!devtools) return;
+    devtools.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  /**
+   * The cell a page occupies right now, in window DIP; undefined when off stage.
+   *
+   * Mirrors the geometry `applyLayout` places pages into, so a docked panel lands
+   * on the same cell its page does — in a grid that is one cell, not the stage.
+   */
+  private cellOf(tab: TabRecord): StageRect | undefined {
+    const stage = this.stage;
+    if (!stage) return undefined;
+    // A blank page draws nothing — the renderer owns that cell — so a panel must
+    // not split a rectangle the page does not occupy.
+    if (isBlankTab(tab)) return undefined;
+    const view = this.activeView();
+    if (!view) {
+      if (this.activeTabId !== tab.id) return undefined;
+      const active = this.activePageOf(tab.instanceId);
+      if (!active || active.id !== tab.id) return undefined;
+      return stage;
+    }
+    const slots = insetSlotRects(
+      embeddedSlotRects(view.layoutId, stage, view.slotRects),
+      stage,
+    );
+    const header = stageDrawsSlotHeaders(slots.length) ? EMBEDDED_SLOT_HEADER : 0;
+    for (let index = 0; index < slots.length; index += 1) {
+      const slot = slots[index];
+      if (!slot) continue;
+      if (this.pageForSlot(view, index)?.id !== tab.id) continue;
+      return embeddedViewRect(slot, header);
+    }
+    return undefined;
   }
 
   /**
    * Live drag of the docked split.
    *
-   * The pointer spends most of the drag over one of the two native views, so
-   * the renderer cannot follow it there — HTML events stop at the view's edge.
-   * Instead the main process polls the cursor and re-splits on every move, and
+   * The pointer spends most of the drag over one of the two native views, so the
+   * renderer cannot follow it there — HTML events stop at a native view's edge.
+   * The main process polls the cursor and re-splits on every move instead, and
    * the drag ends from a mouse-up seen by either view (`input-event`) or by the
-   * renderer's own mouseup when the pointer is back over app chrome.
+   * renderer's own pointerup when the pointer is back over app chrome.
    */
-  private resizeSession?: {
-    tabId: string;
-    timer: NodeJS.Timeout;
-    listeners: Array<{ contents: WebContents; handler: () => void }>;
-  };
-
   beginDevToolsResize(tabId: string): void {
     const tab = this.requireTab(tabId);
-    if (!tab.devtools || tab.devtools.mode !== "docked" || !this.host || this.host.isDestroyed()) {
-      return;
-    }
-    this.endDevToolsResize();
-    const rect = this.pageRect(tab);
     const host = this.host;
-    if (!rect || !host || host.isDestroyed()) return;
-    const move = () => {
+    if (!tab.devtools || !host || host.isDestroyed()) return;
+    this.endDevToolsResize();
+    const rect = this.cellOf(tab);
+    if (!rect) return;
+    const move = (): void => {
       const live = this.findTab(tabId);
-      if (!live?.devtools || live.devtools.mode !== "docked") {
+      if (!live?.devtools) {
         this.endDevToolsResize();
         return;
       }
       const cursor = screen.getCursorScreenPoint();
       const content = host.getContentBounds();
       // Cursor and window bounds are both in screen DIP, so the difference is
-      // the position inside the content area — the same space `pageRect` uses.
+      // the position inside the content area — the same space `cellOf` uses.
       const localX = cursor.x - content.x;
       const fraction = (rect.width - (localX - rect.x)) / rect.width;
-      const next = Math.min(0.7, Math.max(0.2, fraction));
+      const next = Math.min(EMBEDDED_DEVTOOLS_MAX, Math.max(EMBEDDED_DEVTOOLS_MIN, fraction));
       if (Math.abs(next - live.devtools.width) < 0.001) return;
       live.devtools.width = next;
       this.placeDevTools(live);
     };
     const timer = setInterval(move, 16);
-    const listeners: Array<{ contents: WebContents; handler: (...args: never[]) => void }> = [];
+    const listeners: Array<{ contents: WebContents; handler: (event: ElectronEvent, input: InputEvent) => void }> = [];
     for (const contents of [tab.view.webContents, tab.devtools.view.webContents]) {
-      // Parameter types are left to be inferred from the listener signature:
-      // only "did the pointer go up" matters here.
-      const handler = (...args: [unknown, { type?: string }]) => {
-        if (args[1]?.type === "mouseUp") this.endDevToolsResize();
+      // Only "did the pointer go up" matters here; the rest of the event is
+      // ignored, but the signature has to match so the listener can be removed.
+      const handler = (_event: ElectronEvent, input: InputEvent): void => {
+        if (input.type === "mouseUp") this.endDevToolsResize();
       };
       contents.on("input-event", handler);
       listeners.push({ contents, handler });
     }
-    this.resizeSession = { tabId, timer, listeners };
+    this.devtoolsResize = { timer, listeners };
     move();
   }
 
   endDevToolsResize(): void {
-    const session = this.resizeSession;
+    const session = this.devtoolsResize;
     if (!session) return;
-    this.resizeSession = undefined;
+    this.devtoolsResize = undefined;
     clearInterval(session.timer);
     for (const { contents, handler } of session.listeners) {
       if (!contents.isDestroyed()) contents.removeListener("input-event", handler);
     }
     // One state push for the whole drag: the renderer's handle jumps to where
     // the split actually landed.
-    this.emitState();
-  }
-
-  /**
-   * While the handle is dragged, the page and the panel must not take the
-   * pointer: events have to reach the renderer's HTML handle even when the
-   * pointer crosses over one of the native views.
-   */
-  setDevToolsWidth(tabId: string, width: number): void {
-    const tab = this.requireTab(tabId);
-    if (!tab.devtools || tab.devtools.mode !== "docked") return;
-    const next = Math.min(0.7, Math.max(0.2, width));
-    if (Math.abs(next - tab.devtools.width) < 0.001) return;
-    tab.devtools.width = next;
-    this.placeDevTools(tab);
-    this.emitState();
-  }
-
-  closeDevTools(tabId: string): void {
-    const tab = this.requireTab(tabId);
-    // A rebuild that is mid-wait would otherwise reopen the panel right after
-    // the user closed it.
-    const inFlight = this.devtoolsRebuilds.get(tabId);
-    if (inFlight) inFlight.cancelled = true;
-    tab.view.webContents.closeDevTools();
-    this.dropDevTools(tab);
-    this.applyLayout();
     this.emitState();
   }
 
@@ -3906,139 +3656,10 @@ export class EmbeddedBrowser {
     const tab = tabId ? this.findTab(tabId) : undefined;
     if (!tab) return;
     if (this.devtoolsOpen(tab)) this.closeDevTools(tab.id);
-    else this.openDevTools(tab.id, "docked");
-  }
-
-  /**
-   * Releases a closed panel's resources.
-   *
-   * Electron does not destroy a `devToolsWebContents` when the DevTools close —
-   * the caller owns it. Without an explicit close every toggle leaks a renderer,
-   * so a session that opens the panel on a dozen pages ends up holding a dozen
-   * idle DevTools processes
-   */
-  private dropDevTools(tab: TabRecord): void {
-    if (!tab.devtools) return;
-    const { view, window: win } = tab.devtools;
-    if (win && !win.isDestroyed()) {
-      win.contentView.removeChildView(view);
-      win.destroy();
-    }
-    this.host?.contentView.removeChildView(view);
-    if (!view.webContents.isDestroyed()) view.webContents.close();
-    delete tab.devtools;
-  }
-
-  /** Hosts the DevTools view in its window, or in the main window beside the page. */
-  private placeDevTools(tab: TabRecord): void {
-    const devtools = tab.devtools;
-    if (!devtools) return;
-    if (devtools.mode === "window") {
-      if (!devtools.window || devtools.window.isDestroyed()) {
-        const win = new BrowserWindow({
-          width: 900,
-          height: 620,
-          title: `DevTools — ${tab.label}`,
-          // A detached DevTools window is still a window on the desktop; an
-          // automated run that detaches them must not paint one.
-          show: !this.options.headless,
-          ...(this.options.appIcon ? { icon: this.options.appIcon } : {}),
-        });
-        win.on("resize", () => {
-          const [width, height] = win.getContentSize();
-          devtools.view.setBounds({
-            x: 0,
-            y: 0,
-            width: Math.max(1, width ?? 900),
-            height: Math.max(1, height ?? 620),
-          });
-        });
-        win.on("closed", () => {
-          // Closing the window closes the tools, not just their host: leaving
-          // them "open" with nowhere to draw makes the toolbar toggle lie.
-          if (tab.devtools?.window === win) {
-            tab.view.webContents.closeDevTools();
-            this.dropDevTools(tab);
-            this.applyLayout();
-            this.emitState();
-          }
-        });
-        devtools.window = win;
-      }
-      this.host?.contentView.removeChildView(devtools.view);
-      const win = devtools.window;
-      win.contentView.addChildView(devtools.view);
-      const [width, height] = win.getContentSize();
-      devtools.view.setBounds({
-        x: 0,
-        y: 0,
-        width: Math.max(1, width ?? 900),
-        height: Math.max(1, height ?? 620),
-      });
-      if (!this.options.headless) win.show();
-      return;
-    }
-
-    // Docked: the page keeps the left part of its cell, the tools take the rest.
-    if (devtools.window && !devtools.window.isDestroyed()) {
-      devtools.window.contentView.removeChildView(devtools.view);
-      devtools.window.destroy();
-      delete devtools.window;
-    }
-    if (!this.host || this.host.isDestroyed()) return;
-    this.host.contentView.addChildView(devtools.view);
-    const rect = this.pageRect(tab);
-    if (!rect) {
-      // Off stage: keep the tools alive but out of sight, like any other page.
-      const content = this.hostContentSize();
-      devtools.view.setBounds({ ...parkedViewBounds(content), width: 800, height: 600 });
-      return;
-    }
-    // The drag handle lives in the renderer's HTML, which paints *below* every
-    // native view — so the two views must part around a real gap for the handle
-    // to be visible and clickable at all. `DEVTOOLS_GRIP_WIDTH` matches the
-    // renderer's constant; the split line runs through the gap's middle.
-    const split = Math.round(rect.width * (1 - devtools.width));
-    const left = Math.max(1, split - Math.round(DEVTOOLS_GRIP_WIDTH / 2));
-    // The page gives up the right-hand part of its cell; the tools take it.
-    // `applyLayout` resets the page to the full cell first, and this runs right
-    // after it, so the two agree on the same rect. A fixed-viewport page fits
-    // into the reduced cell, not the full one.
-    tab.view.setBounds(
-      this.placePageSurface(tab, { x: rect.x, y: rect.y, width: left, height: rect.height }),
-    );
-    devtools.view.setBounds({
-      x: rect.x + left + DEVTOOLS_GRIP_WIDTH,
-      y: rect.y,
-      width: Math.max(1, rect.width - left - DEVTOOLS_GRIP_WIDTH),
-      height: rect.height,
-    });
-    // A resize after the first paint has been observed to leave the panel's
-    // content area black (the chrome draws, the DOM tree does not) until
-    // something forces a repaint. Ask for one explicitly; harmless otherwise.
-    devtools.view.webContents.invalidate();
-  }
-
-  /** Cell a page occupies right now, in window DIP; undefined when off stage. */
-  private pageRect(tab: TabRecord): StageRect | undefined {
-    const stage = this.stage;
-    if (!stage) return undefined;
-    // A blank page draws nothing on screen — the renderer owns that cell — so
-    // docked tools must not split a rectangle the page does not occupy.
-    if (isBlankTab(tab)) return undefined;
-    const view = this.activeView();
-    if (view) {
-      const slots = insetSlotRects(embeddedSlotRects(view.layoutId, stage, view.slotRects), stage);
-      const index = view.slotTabs.findIndex((id) => id === tab.instanceId || id === tab.id);
-      const slot = index >= 0 ? slots[index] : undefined;
-      return slot ? embeddedViewRect(slot) : undefined;
-    }
-    const active = this.activeTabId ? this.findTab(this.activeTabId) : undefined;
-    if (!active || active.instanceId !== tab.instanceId) return undefined;
-    // The flat header band belongs to the renderer, like a slot header does.
-    return embeddedViewRect(stage);
+    else this.openDevTools(tab.id);
   }
 
   /** Per-slot label height, exported so the chrome and the manager agree. */
   static readonly slotHeaderHeight = EMBEDDED_SLOT_HEADER;
+
 }

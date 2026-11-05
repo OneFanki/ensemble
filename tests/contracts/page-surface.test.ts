@@ -3,13 +3,21 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The browser manager must not depend on the carrier it is displaying through.
+ * The manager must not move *pages'* pixels.
  *
- * Pages are being moved from a main-process `WebContentsView` to a renderer
- * `<webview>`. The manager does not care which: it talks to a `PageSurface`.
- * That abstraction only holds if the manager never reaches for the native view
- * directly — one `host.contentView.addChildView(tab.view)` left behind is
- * enough to crash on the first guest, because a guest has no child view.
+ * Pages are `<webview>` nodes owned by the renderer, so the browser manager
+ * computes a rectangle and the renderer places the node. Anything that reaches
+ * for a window's child-view tree in order to position a page belongs to the
+ * carrier that no longer exists.
+ *
+ * One exception is deliberate and narrow: a docked DevTools panel is a native
+ * `WebContentsView`, and cannot be anything else. `setDevToolsWebContents` needs
+ * a webContents the embedder owns outright, and a guest is sandboxed by its
+ * embedder, so a `<webview>` host never receives the `DevToolsHost` binding and
+ * renders the front-end with nothing to talk to (measured; see
+ * `docs/engineering/踩坑库.md`). The panel is not a page carrier — pages keep
+ * going through `PageSurface`, and the assertions below pin the exception to the
+ * panel alone.
  *
  * This is a wiring rule, so it is checked against the source rather than
  * exercised at runtime: a unit test cannot fabricate an Electron view tree.
@@ -17,19 +25,39 @@ import { describe, expect, it } from "vitest";
 const BROWSER = readFileSync(join(process.cwd(), "src", "main", "embedded", "browser.ts"), "utf8");
 const SURFACE = readFileSync(join(process.cwd(), "src", "main", "embedded", "surface.ts"), "utf8");
 
-describe("pages are addressed through a carrier-neutral surface", () => {
-  it("keeps native-view operations inside the adapter", () => {
-    // `setBounds`/`getBounds` are part of the surface interface, so the manager
-    // calling them is correct. What must not leak out is anything that only
-    // exists on a native view: the child-view tree, DevTools hosting, and
-    // visibility toggling on a view that a guest does not have.
-    expect(BROWSER).not.toMatch(/contentView\.addChildView\(tab\.view\)/);
+describe("the manager addresses pages through a carrier-neutral surface", () => {
+  it("never positions a page through a window's child-view tree", () => {
     expect(BROWSER).not.toMatch(/tab\.view\.setVisible/);
     expect(BROWSER).not.toMatch(/tab\.view\.webContents\.setDevToolsWebContents/);
-    // The two remaining native calls are guarded by a type check, which is the
-    // only place the manager is allowed to know the difference.
-    const guarded = BROWSER.match(/isNativeSurface\(tab\.view\)/g) ?? [];
-    expect(guarded.length).toBeGreaterThanOrEqual(2);
+    // Exactly one native view, and it is the panel's: a second would mean a
+    // page went back to being moved by main.
+    expect(BROWSER.match(/new WebContentsView\(/g) ?? []).toHaveLength(1);
+    expect(BROWSER.match(/contentView\.addChildView/g) ?? []).toHaveLength(1);
+    expect(BROWSER.match(/contentView\.removeChildView/g) ?? []).toHaveLength(1);
+  });
+
+  it("keeps the native view confined to the DevTools panel", () => {
+    // Anchored on the opening method: a `WebContentsView` created anywhere else
+    // is a page that main is positioning again.
+    expect(BROWSER).toMatch(
+      /openDevTools\(tabId: string\): void \{[\s\S]*?new WebContentsView\([\s\S]*?contentView\.addChildView\(view\)/,
+    );
+  });
+
+  it("attaches an existing panel instead of rebuilding it", () => {
+    // Rebuilding on every toggle would throw away console history, which is the
+    // one thing a DevTools panel is used for across a session.
+    expect(BROWSER).toMatch(
+      /if \(tab\.devtools\) \{\s*this\.placeDevTools\(tab\);\s*this\.emitState\(\);\s*return;/,
+    );
+  });
+
+  it("has no carrier branch left to keep in sync", () => {
+    // One page carrier means no "is this native?" checks: forgetting one branch
+    // was how pages silently stayed parked over the console.
+    expect(BROWSER).not.toContain("isNativeSurface");
+    expect(BROWSER).not.toContain("NativePageSurface");
+    expect(SURFACE).not.toContain("NativePageSurface");
   });
 
   it("exposes exactly the operations a page needs", () => {
@@ -39,9 +67,18 @@ describe("pages are addressed through a carrier-neutral surface", () => {
   });
 
   it("makes a guest's geometry answerable without a native view", () => {
-    // `viewIsOnScreen` and the screenshot paths ask for bounds; a guest answers
-    // with the rect main asked for, so those checks keep working.
+    // The renderer positions the node; `bounds` is what it was told to use, and
+    // what every geometry-based check reads back.
     expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?setBounds\(/);
     expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?getBounds\(\)/);
+  });
+
+  it("judges the panel open from its own record, not the page's getter", () => {
+    // Handing the tools a webContents of ours makes `isDevToolsOpened()` stay
+    // false for a panel that is running and visible (measured on Electron 45),
+    // so the toolbar toggle would report a closed panel that is on screen.
+    expect(BROWSER).toMatch(
+      /private devtoolsOpen\(tab: TabRecord\): boolean \{\s*return Boolean\(tab\.devtools\);/,
+    );
   });
 });

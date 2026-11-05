@@ -3,7 +3,6 @@ import type {
   EmbeddedDropTarget,
   EmbeddedState,
   EmbeddedTab,
-  FrozenSlot,
   StageRect,
 } from "./embedded";
 import type { FlowDraft, FlowRunResult } from "./flows";
@@ -246,15 +245,14 @@ export const IPC = {
   embeddedFill: "embedded:fill",
   embeddedDevTools: "embedded:devtools",
   embeddedDevToolsClose: "embedded:devtools-close",
-  embeddedDevToolsWidth: "embedded:devtools-width",
-  embeddedDevToolsResizeStart: "embedded:devtools-resize-start",
+  /** Starts a live drag of the split between a page and its docked panel. */
+  embeddedDevToolsResize: "embedded:devtools-resize",
   embeddedDevToolsResizeEnd: "embedded:devtools-resize-end",
   embeddedZoom: "embedded:zoom",
   embeddedViewport: "embedded:viewport",
   embeddedFind: "embedded:find",
   embeddedStopFind: "embedded:stop-find",
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
-  embeddedFreeze: "embedded:freeze",
   /** Renderer → main: a `<webview>` node exists and may be driven. */
   embeddedGuestRegister: "embedded:guest-register",
   /** Renderer → main: close this guest's CDP session before unmounting the node. */
@@ -631,13 +629,19 @@ export interface EnsembleApi {
     submitted?: boolean;
     missingFields?: string[];
   }>;
-  /** Opens DevTools for one page; docked inside the page by default. */
-  openEmbeddedDevTools(tabId: string, mode?: "docked" | "window"): Promise<void>;
+  /** Opens DevTools for one page, docked beside it inside the same cell. */
+  openEmbeddedDevTools(tabId: string): Promise<void>;
+  /** Closes the panel and releases the view that hosted it. */
   closeEmbeddedDevTools(tabId: string): Promise<void>;
-  /** Sets the docked panel's fraction of the cell; clamped main-process side. */
-  setEmbeddedDevToolsWidth(tabId: string, width: number): Promise<void>;
-  /** Hands a handle drag to the main process, which follows the cursor itself. */
-  beginEmbeddedDevToolsResize(tabId: string): Promise<void>;
+  /**
+   * Starts dragging the split between a page and its docked panel.
+   *
+   * Main polls the cursor for the duration: the pointer is mostly over one of
+   * the two native surfaces, where the renderer sees nothing. Ends on the
+   * pointer-up reported by either surface, or by `endEmbeddedDevToolsResize`
+   * when the pointer came back over app chrome.
+   */
+  resizeEmbeddedDevTools(tabId: string): Promise<void>;
   endEmbeddedDevToolsResize(): Promise<void>;
   /**
    * Ctrl +/-/0 on one page. Returns the new factor in percent.
@@ -671,7 +675,7 @@ export interface EnsembleApi {
    * float above the browser. Native views paint over HTML, so the alternative is
    * hiding pages.
    */
-  freezeEmbedded(): Promise<FrozenSlot[]>;
+
   /**
    * Tells main a `<webview>` is attached so it can be driven over CDP.
    *

@@ -28,6 +28,14 @@ export interface GuestCdpTarget {
   has(guestId: string): boolean;
   /** Resolves once the page's node has a real box (or the wait times out). */
   waitLaidOut(timeoutMs?: number): Promise<void>;
+  /**
+   * The guest's own `webContents`, when the caller needs more than CDP.
+   *
+   * Only the renderer screenshot path uses it: `capturePage()` paints into an
+   * offscreen surface, which is the one thing that still works when the window
+   * is minimised and the compositor has stopped producing frames.
+   */
+  contents(guestId: string): Electron.WebContents | undefined;
 }
 
 export class GuestCdp implements CdpExecutor {
@@ -55,6 +63,13 @@ export class GuestCdp implements CdpExecutor {
     const guestId = this.target.guestId();
     if (!guestId) throw new Error("页面已关闭");
     return guestId;
+  }
+
+  /** The guest's `webContents`, for the renderer capture path. */
+  private guestContents(): Electron.WebContents | undefined {
+    const guestId = this.target.guestId();
+    if (!guestId) return undefined;
+    return this.target.contents(guestId);
   }
 
   isAttached(): boolean {
@@ -138,21 +153,34 @@ export class GuestCdp implements CdpExecutor {
   }
 
   /**
-   * Screenshot through the guest's CDP session.
+   * Screenshot of a guest page.
    *
-   * A guest only produces frames while it is painting. Hidden, fully occluded
-   * and off-window guests are culled from the compositor, and a culled guest
-   * answers `Page.captureScreenshot` by never replying at all — not by failing,
-   * which is what makes it expensive. So the page is presented first, captured,
-   * then put back.
+   * Two paths, and which one works is decided by the *embedding window's* state,
+   * not by the guest's:
+   *
+   * - **Compositor** (`Page.captureScreenshot`). Correct pixels, but a guest only
+   *   produces frames while its embedder does. A minimised window produces none,
+   *   and a culled guest answers this command by never replying at all — not by
+   *   failing, which is what makes it expensive.
+   * - **Renderer** (`webContents.capturePage`). Measured on a minimised window:
+   *   41ms and a full image, while the CDP path timed out at 5s. A guest is a
+   *   real `webContents`, so the renderer can paint into an offscreen surface
+   *   without the window being on screen.
+   *
+   * `preferRenderer` is how the caller says "the window is not painting". The
+   * CDP path needs the guest to be composited, so it presents first; the renderer
+   * path does not need compositor frames, but it *does* need the node to have a
+   * real box — `capturePage` on a node that was never laid out (or was laid out
+   * and then cleared) fails with `UnknownVizError` rather than returning an empty
+   * image. So both paths present, for different reasons.
+   *
+   * That distinction cost a regression once: clearing a parked page's rect fixed
+   * tab switching and broke background screenshots, because the renderer branch
+   * had assumed the rect was still there.
    *
    * The deadline is not defensive padding: it is the difference between a
    * screenshot that reports "this page cannot be captured" and a tool call that
-   * never returns. The native executor has the same bound for the same reason.
-   *
-   * No renderer fallback: a guest cannot be captured with `capturePage` (the
-   * embedder's page owns the pixels), so an unavailable capture reports the
-   * failure instead of silently returning the app's own chrome.
+   * never returns.
    */
   async screenshot(
     options: { format?: "png" | "jpeg"; quality?: number; preferRenderer?: boolean } = {},
@@ -162,17 +190,44 @@ export class GuestCdp implements CdpExecutor {
       format,
       ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
     };
-    // Presenting covers both halves of the problem: a culled guest never answers
-    // this command, and a hidden one makes the page's own visibility checks lie.
-    return this.presented(async () => {
-      const result = await Promise.race([
-        this.send<{ data: string }>("Page.captureScreenshot", params),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("截图超时")), 4_000),
-        ),
-      ]);
-      return Buffer.from(result.data, "base64");
-    });
+    const fromRenderer = async (): Promise<Buffer> => {
+      const contents = this.guestContents();
+      if (!contents) throw new Error("页面已关闭");
+      const image = await contents.capturePage();
+      if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
+      return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
+    };
+    if (options.preferRenderer) {
+      // Present for the box, not for the frames: `capturePage` needs the node
+      // laid out, and the caller's reason for taking this path is that the node
+      // has no usable box right now. The capture happens *inside* `presented` —
+      // once it returns, the node is parked again and a second `capturePage`
+      // would fail exactly as the first one did.
+      return this.presented(fromRenderer);
+    }
+    // Presenting covers both halves of the compositor's requirements: a culled
+    // guest never answers this command, and a hidden one makes the page's own
+    // visibility checks lie.
+    try {
+      return await this.presented(async () => {
+        const result = await Promise.race([
+          this.send<{ data: string }>("Page.captureScreenshot", params),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("截图超时")), 4_000),
+          ),
+        ]);
+        return Buffer.from(result.data, "base64");
+      });
+    } catch (error) {
+      // The window can stop painting between the caller's check and this command
+      // — minimised mid-flight, moved to another display. Falling back here turns
+      // a failed screenshot into a slightly slower one.
+      try {
+        return await fromRenderer();
+      } catch {
+        throw error;
+      }
+    }
   }
 
   async clickAt(x: number, y: number): Promise<void> {

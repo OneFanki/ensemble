@@ -9,7 +9,6 @@ import type { LayoutId, RoleColor, SlotRect } from "./types";
  * Main process (layout) and renderer (handle) share the constant so the gap
  * and the handle stay the same width.
  */
-export const DEVTOOLS_GRIP_WIDTH = 7;
 
 /**
  * A page hosted inside the app's own browser surface.
@@ -95,19 +94,21 @@ export interface EmbeddedTab {
   /** True while this page's DevTools are open (docked by default). */
   devtoolsOpen: boolean;
   /**
-   * Fraction of the cell the docked panel takes, while it is docked.
+   * Fraction of the page's cell the docked panel takes, when it is docked.
    *
-   * The renderer draws the drag handle between page and tools, so it needs the
-   * same split the native views were laid out with — a stale guess would put
-   * the handle over one of the two surfaces.
+   * Absent while the panel is closed or detached. Published so the renderer can
+   * draw the drag handle exactly where the native views part: the page and the
+   * panel are laid out by main, and the handle is the only part of the split the
+   * HTML owns.
    */
   devtoolsWidth?: number;
   /**
-   * Native view geometry, in window content coordinates.
+   * Where the page sits inside the stage, in stage-relative pixels.
    *
-   * Reported so a test can prove an off-stage page is really outside the window
-   * rather than trusting the code that moved it — a parked view left inside
-   * paints over whatever page is on screen, which is invisible to the renderer.
+   * Computed by main from the layout, so the renderer positions the node from
+   * it rather than re-deriving the cell arithmetic. Absent while the carrier is
+   * still being created — that is the renderer's signal to keep the node hidden
+   * instead of placing it at 0×0.
    */
   bounds?: StageRect;
 }
@@ -176,20 +177,6 @@ export type EmbeddedDropTarget =
   | { kind: "view"; viewId: string }
   | { kind: "loose" };
 
-/**
- * One captured page, positioned where its native view sits.
- *
- * Native views paint above all HTML, so an app overlay that reaches into the
- * stage only stays readable if the stage is frozen into images first. Every
- * on-stage tab is captured, not just the focused one: a 2×2 view frozen into a
- * single image would leave three black cells behind the overlay.
- */
-export interface FrozenSlot {
-  tabId: string;
-  rect: StageRect;
-  dataUrl: string;
-}
-
 /** Rectangle in the window's content area, CSS pixels. */
 export interface StageRect {
   x: number;
@@ -209,6 +196,27 @@ export const EMBEDDED_SLOT_HEADER = 26;
  * internal edge, which leaves a visible, clickable seam for the divider.
  */
 export const EMBEDDED_DIVIDER = 8;
+
+/**
+ * Width of the gutter between a page and its docked DevTools panel.
+ *
+ * Same reason as `EMBEDDED_DIVIDER`: the page and the tools are both native
+ * surfaces, so the HTML handle can only be seen and grabbed in a real gap
+ * between them. Both sides read this one value, which is what keeps the drawn
+ * handle on top of the gap it drags.
+ */
+export const EMBEDDED_DEVTOOLS_GRIP = 7;
+
+/**
+ * How far the docked panel may go, as a fraction of the cell.
+ *
+ * Narrower than 20% and the panel's own columns collapse; wider than 70% and
+ * the page it is inspecting is too small to see what the tools describe.
+ */
+export const EMBEDDED_DEVTOOLS_MIN = 0.2;
+export const EMBEDDED_DEVTOOLS_MAX = 0.7;
+/** The split a panel opens with. */
+export const EMBEDDED_DEVTOOLS_DEFAULT = 0.42;
 
 /** Built-in layouts the embedded surface can use, in picker order. */
 export const EMBEDDED_LAYOUTS: LayoutId[] = ["free", "1x1", "2x1", "1x2", "2x2", "3x1"];
@@ -264,30 +272,50 @@ export function embeddedSlotCount(layoutId: LayoutId, custom?: SlotRect[]): numb
 }
 
 /**
- * Bounds for a page that is alive but must not be seen.
+ * Where a page node sits, given the stage and whether the page is on it.
  *
- * Every number here was measured on Electron 44 / Chromium 152, because both
- * obvious choices are wrong in ways that only show up later:
+ * Pure, and shared with the renderer's pool, because both sides have to agree
+ * on one thing: a page that is not on stage still needs a real box *and* must
+ * not be anywhere the user can see or click it.
  *
- * - `setVisible(false)` keeps scripts running but makes CDP screenshots time
- *   out, and the AI surface takes screenshots.
- * - A large negative coordinate (the classic `-100000` park) makes Chromium
- *   hand the renderer a 0×0 viewport: scripts run, but the document lays out at
- *   zero width, so "is this text visible" and every element position are wrong.
+ * Measured on Electron 45, all three of these are load-bearing:
  *
- * So the view keeps its size and sits immediately past the window's content
- * edge. The edge is the *window's*, not the stage's: the stage starts to the
- * right of the navigation rail, so parking at the stage's width leaves the page
- * sitting inside the window, painted over whatever page is on screen.
+ * - **Keep the size.** A guest with no box reports a 0×0 viewport, and every
+ *   visibility check inside it then answers false — reads turn into "element not
+ *   found" for a page that is perfectly alive.
+ * - **Hide by moving, not by `display`.** `display: none` collapses the viewport
+ *   to 0×0 for the same reason; `visibility: hidden` keeps the size but refuses
+ *   screenshots. `opacity: 0` does neither.
+ * - **Park to the left of the window, not far away.** A node pushed well outside
+ *   the window is culled from the compositor and its capture never replies, while
+ *   the one-removed-left position stays cheap to bring back for a screenshot.
  */
-export function parkedViewBounds(content: { width: number; height: number }): StageRect {
-  const width = Math.max(1, Math.round(content.width));
-  const height = Math.max(1, Math.round(content.height));
-  return { x: width, y: 0, width, height };
+export function guestNodeRect(input: {
+  stage: StageRect | null;
+  bounds: StageRect | undefined;
+  onStage: boolean;
+  window: { width: number; height: number };
+}): StageRect {
+  const { stage, bounds, onStage, window: win } = input;
+  // A zero-size rect is the "carrier not laid out yet" state, not a placement:
+  // using it would give the node a 0×0 box, and every visibility check inside
+  // the page then answers false.
+  const hasBox = Boolean(bounds && bounds.width > 0 && bounds.height > 0);
+  if (hasBox && onStage && stage && stage.width > 0 && stage.height > 0 && bounds) {
+    return {
+      x: stage.x + bounds.x,
+      y: stage.y + bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  }
+  const width = stage && stage.width > 0 ? stage.width : Math.max(1, Math.round(win.width));
+  const height = stage && stage.height > 0 ? stage.height : Math.max(1, Math.round(win.height));
+  return { x: -width, y: stage?.y ?? 0, width, height };
 }
 
 /**
- * Whether a view is painting on screen, i.e. whether the compositor has frames
+ * Whether a page is painting on screen, i.e. whether the compositor has frames
  * for it.
  *
  * This decides which screenshot path to take, because the two available paths
@@ -302,8 +330,13 @@ export function parkedViewBounds(content: { width: number; height: number }): St
  *
  * "Never returns" is the dangerous one: it is not an error, so a caller that
  * tries the compositor first pays its full timeout every single time. A page the
- * user switched away from is parked past the window edge, so this returns false
+ * user switched away from is parked outside the window, so this returns false
  * and the screenshot goes straight to the renderer.
+ *
+ * The test is a real intersection, not "is the top-left corner inside". A parked
+ * node sits at `x = -width` — its left edge is *left* of the window, which the
+ * corner check read as on screen because `-1320 < 1320`. That inverted answer
+ * sent every screenshot of a background page down the path that never replies.
  *
  * Pure on purpose: the three inputs are all the caller needs to read, and a
  * wrong answer only costs a slower path, never a wrong pixel.
@@ -315,9 +348,9 @@ export function viewIsOnScreen(
 ): boolean {
   if (!host.visible || host.minimized) return false;
   if (rect.width <= 0 || rect.height <= 0) return false;
-  // A parked view starts exactly at the window's right edge, so the comparison
-  // is strict: touching the edge is not on screen.
-  return rect.x < content.width && rect.y < content.height;
+  // Touching an edge is not overlapping it: a view parked flush against the
+  // window has no pixel on screen, and its compositor produces nothing.
+  return rect.x < content.width && rect.x + rect.width > 0 && rect.y < content.height && rect.y + rect.height > 0;
 }
 
 export function embeddedSlotRects(
@@ -442,15 +475,33 @@ function toBase64(bytes: Uint8Array): string {
  * at the top of every slot so the identity stays visible even though a native
  * view paints over the page. A slot shorter than the header keeps a 1px view
  * rather than producing a negative height.
+ *
+ * `header` is a parameter because a single-cell stage has no band: with one cell
+ * there is nothing to tell apart, and the window-level tab strip already answers
+ * "which page is this". Passing `0` gives the page the whole rectangle.
+ * Callers that lay out a real grid keep the default.
  */
-export function embeddedViewRect(slot: StageRect): StageRect {
-  const header = Math.min(EMBEDDED_SLOT_HEADER, Math.max(0, slot.height - 1));
+export function embeddedViewRect(slot: StageRect, header = EMBEDDED_SLOT_HEADER): StageRect {
+  const inset = Math.min(header, Math.max(0, slot.height - 1));
   return {
     x: slot.x,
-    y: slot.y + header,
+    y: slot.y + inset,
     width: slot.width,
-    height: Math.max(1, slot.height - header),
+    height: Math.max(1, slot.height - inset),
   };
+}
+
+/**
+ * Whether a stage with this many cells draws a per-cell header band.
+ *
+ * A layout is a comparison: several cells whose identity and pages have to stay
+ * distinguishable. One cell is just the browser, and the band there duplicated
+ * the window's own tab strip — a second row of the same thing, one row lower.
+ * Both surfaces read this, so the rule cannot drift between the geometry the
+ * main process computes and the chrome the renderer draws.
+ */
+export function stageDrawsSlotHeaders(slotCount: number): boolean {
+  return slotCount > 1;
 }
 
 /**

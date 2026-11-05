@@ -205,19 +205,15 @@ const api: EnsembleApi = {
   closeEmbeddedView: (viewId, mode) => ipcRenderer.invoke(IPC.embeddedViewClose, viewId, mode),
   dropEmbeddedTab: (tabId, target) => ipcRenderer.invoke(IPC.embeddedDropTab, tabId, target),
   fillEmbeddedLogin: (tabId) => ipcRenderer.invoke(IPC.embeddedFill, tabId),
-  openEmbeddedDevTools: (tabId, mode) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId, mode),
+  openEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId),
   closeEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevToolsClose, tabId),
-  setEmbeddedDevToolsWidth: (tabId, width) =>
-    ipcRenderer.invoke(IPC.embeddedDevToolsWidth, tabId, width),
-  beginEmbeddedDevToolsResize: (tabId) =>
-    ipcRenderer.invoke(IPC.embeddedDevToolsResizeStart, tabId),
+  resizeEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevToolsResize, tabId),
   endEmbeddedDevToolsResize: () => ipcRenderer.invoke(IPC.embeddedDevToolsResizeEnd),
   zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
   setEmbeddedViewport: (tabId, size) => ipcRenderer.invoke(IPC.embeddedViewport, tabId, size),
   findInEmbeddedTab: (tabId, text, options) =>
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
   stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),
-  freezeEmbedded: () => ipcRenderer.invoke(IPC.embeddedFreeze),
   registerEmbeddedGuest: (guestId, tabId, partition) =>
     ipcRenderer.invoke(IPC.embeddedGuestRegister, guestId, tabId, partition),
   teardownEmbeddedGuest: (guestId) => ipcRenderer.invoke(IPC.embeddedGuestTeardown, guestId),

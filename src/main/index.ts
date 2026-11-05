@@ -3292,22 +3292,13 @@ function registerIpc(workspace: WorkspaceService): void {
     ensureEmbeddedBrowser().dropTab(String(tabId), target),
   );
   handle(IPC.embeddedFill, (tabId: string) => ensureEmbeddedBrowser().fillLogin(String(tabId)));
-  handle(IPC.embeddedDevTools, (tabId: string, mode?: "docked" | "window") => {
-    const browser = ensureEmbeddedBrowser();
-    const tab = browser.findTab(String(tabId));
-    const next = mode === "window" ? "window" : "docked";
-    // Reopening an already-open panel means "move it", not "open it twice": the
-    // toolbar calls this for both, and the only difference is the host.
-    if (tab?.devtools) browser.setDevToolsMode(String(tabId), next);
-    else browser.openDevTools(String(tabId), next);
+  handle(IPC.embeddedDevTools, (tabId: string) => {
+    ensureEmbeddedBrowser().openDevTools(String(tabId));
   });
   handle(IPC.embeddedDevToolsClose, (tabId: string) => {
     ensureEmbeddedBrowser().closeDevTools(String(tabId));
   });
-  handle(IPC.embeddedDevToolsWidth, (tabId: string, width: number) => {
-    ensureEmbeddedBrowser().setDevToolsWidth(String(tabId), Number(width));
-  });
-  handle(IPC.embeddedDevToolsResizeStart, (tabId: string) => {
+  handle(IPC.embeddedDevToolsResize, (tabId: string) => {
     ensureEmbeddedBrowser().beginDevToolsResize(String(tabId));
   });
   handle(IPC.embeddedDevToolsResizeEnd, () => {
@@ -3351,7 +3342,6 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedStopFind, (tabId: string) => {
     ensureEmbeddedBrowser().stopFind(String(tabId));
   });
-  handle(IPC.embeddedFreeze, () => ensureEmbeddedBrowser().freeze());
 
   /**
    * A `<webview>` node attached and can be driven.

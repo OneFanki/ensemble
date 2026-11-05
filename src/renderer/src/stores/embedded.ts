@@ -488,6 +488,21 @@ export const useEmbeddedStore = defineStore("embedded", () => {
    */
   const stageRect = ref<StageRect | null>(null);
 
+  /**
+   * True while the console covers the browser.
+   *
+   * Set before the view switches, so the pages are parked in the same task that
+   * renders the console. Waiting for the browser page to unmount and report the
+   * stage as gone is a step too late: the console's first paint can land while a
+   * page is still on stage, and a page paints above ordinary in-flow content, so
+   * the panel and the page swap places for a frame.
+   */
+  const stageSuspended = ref(false);
+
+  function suspendStage(suspended: boolean): void {
+    stageSuspended.value = suspended;
+  }
+
   function setStage(stage: StageRect | null): void {
     stageRect.value = stage;
     window.ensemble.setEmbeddedStage(stage);
@@ -593,6 +608,8 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     dragTab: setDragTab,
     setStage,
     stageRect,
+    suspendStage,
+    stageSuspended,
     setSidebarCollapsed,
   };
 });

@@ -15,7 +15,7 @@ import {
   inlineFavicon,
   neighborZoomStep,
   normalizeEmbeddedUrl,
-  parkedViewBounds,
+  guestNodeRect,
   viewIsOnScreen,
   resolveSlotPages,
   resolveSlotTabs,
@@ -232,38 +232,47 @@ describe("user agent", () => {
   });
 });
 
-describe("parked pages", () => {
-  // A page that is alive but off stage still has to lay out at full size, and
-  // it must not be visible anywhere in the window. Both requirements failed in
-  // ways that only showed up at runtime, so the rule is pinned here.
-  const content = { width: 1280, height: 800 };
+describe("where a page node sits", () => {
+  // Every rule here failed at least once at runtime, and each failure looked
+  // like something else — a page that read as "element not found", a screenshot
+  // that hung, a page painting over the console. They are pinned together.
+  const stage = { x: 52, y: 113, width: 900, height: 600 };
+  const win = { width: 1280, height: 800 };
+  const bounds = { x: 10, y: 26, width: 880, height: 574 };
 
-  it("keeps the page at a real size instead of collapsing the viewport", () => {
-    const parked = parkedViewBounds(content);
-    expect(parked.width).toBe(content.width);
-    expect(parked.height).toBe(content.height);
-  });
-
-  it("sits entirely past the window's right edge", () => {
-    const parked = parkedViewBounds(content);
-    // The stage starts right of the navigation rail, so parking at the stage's
-    // width would leave the page inside the window and paint over other pages.
-    expect(parked.x).toBeGreaterThanOrEqual(content.width);
-  });
-
-  it("never uses a negative coordinate, which zeroes the layout viewport", () => {
-    const parked = parkedViewBounds(content);
-    expect(parked.x).toBeGreaterThanOrEqual(0);
-    expect(parked.y).toBeGreaterThanOrEqual(0);
-  });
-
-  it("clamps a window that reports no size", () => {
-    expect(parkedViewBounds({ width: 0, height: 0 })).toEqual({
-      x: 1,
-      y: 0,
-      width: 1,
-      height: 1,
+  it("places an on-stage page at the stage origin plus its own rect", () => {
+    expect(guestNodeRect({ stage, bounds, onStage: true, window: win })).toEqual({
+      x: 62,
+      y: 139,
+      width: 880,
+      height: 574,
     });
+  });
+
+  it("keeps a real box for a page that is off stage", () => {
+    const parked = guestNodeRect({ stage, bounds, onStage: false, window: win });
+    expect(parked.width).toBe(stage.width);
+    expect(parked.height).toBe(stage.height);
+  });
+
+  it("parks off stage to the left of the window, out of sight and out of reach", () => {
+    const parked = guestNodeRect({ stage, bounds, onStage: false, window: win });
+    // Entirely left of x=0: no part of it can be seen, and no part of it can
+    // take a pointer meant for the chrome.
+    expect(parked.x + parked.width).toBeLessThanOrEqual(0);
+  });
+
+  it("parks a page whose bounds never arrived instead of placing it at 0×0", () => {
+    const parked = guestNodeRect({ stage, bounds: undefined, onStage: true, window: win });
+    expect(parked.width).toBeGreaterThan(0);
+    expect(parked.x).toBeLessThan(0);
+  });
+
+  it("falls back to the window size when no stage has been reported", () => {
+    const parked = guestNodeRect({ stage: null, bounds, onStage: true, window: win });
+    expect(parked.width).toBe(win.width);
+    expect(parked.height).toBe(win.height);
+    expect(parked.x).toBe(-win.width);
   });
 });
 
@@ -279,9 +288,10 @@ describe("on-screen detection (which screenshot path can work)", () => {
     expect(viewIsOnScreen(onStage, window, onScreen)).toBe(true);
   });
 
-  it("treats a view parked past the window edge as off screen", () => {
-    // This is exactly what `parkAll` produces: x = content width.
-    const parked = parkedViewBounds(window);
+  it("treats a view parked left of the window as off screen", () => {
+    // This is exactly what the page pool produces: x = -width.
+    const parked = guestNodeRect({ stage: null, bounds: undefined, onStage: false, window });
+    expect(parked.x).toBe(-window.width);
     expect(viewIsOnScreen(parked, window, onScreen)).toBe(false);
   });
 

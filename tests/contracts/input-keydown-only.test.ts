@@ -66,7 +66,10 @@ describe("keyboard shortcuts act on keyDown only", () => {
         }
       }
     }
-    expect(total).toBeGreaterThanOrEqual(3);
+    // Two handlers are expected: the app shell's, and the page's own. The count
+    // is a sanity check that the extraction found them at all — asserting that
+    // every one of them is guarded is what this test is for.
+    expect(total).toBeGreaterThanOrEqual(2);
     expect(offenders).toEqual([]);
   });
 });

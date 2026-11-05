@@ -421,6 +421,11 @@ export class BrowserGuestManager {
         this.evaluate(guestId, expression, options ?? {}),
       has: (guestId) => this.has(guestId),
       waitLaidOut: (timeoutMs) => this.waitLaidOut(tabId, timeoutMs),
+      contents: (guestId) => {
+        const record = this.guests.get(guestId);
+        if (!record || record.contents.isDestroyed()) return undefined;
+        return record.contents;
+      },
     };
   }
 

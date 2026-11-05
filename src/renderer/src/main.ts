@@ -3,6 +3,7 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import OverlayApp from "./overlay/OverlayApp.vue";
 import FocusLabelApp from "./overlay/FocusLabelApp.vue";
+import { vTooltip } from "./directives/tooltip";
 import { i18n } from "./i18n";
 import "./styles/tokens.css";
 import "./styles/base.css";
@@ -19,4 +20,8 @@ const root = hash.includes("focus-label")
     : { name: "app", component: App };
 if (root.name !== "app") document.documentElement.dataset["mode"] = root.name;
 
-createApp(root.component).use(createPinia()).use(i18n).mount("#app");
+createApp(root.component)
+  .use(createPinia())
+  .use(i18n)
+  .directive("tooltip", vTooltip)
+  .mount("#app");

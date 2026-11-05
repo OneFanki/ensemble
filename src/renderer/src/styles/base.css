@@ -86,6 +86,22 @@ a {
   -webkit-app-region: drag;
 }
 
+/*
+ * While a floating layer is open, the window's drag bands stop being drag bands.
+ *
+ * Electron consumes mouse events inside an app-region, so a click on the empty
+ * part of the header never reaches the document — which is why dismissing a menu
+ * by clicking there did nothing. People aim at that empty space *because* it does
+ * nothing on its own, and the one thing it must do is exactly that: reach the
+ * page, where the dismissal handler is listening.
+ *
+ * Moving the window is not lost, only deferred: open a menu to move it, or move
+ * it with the menu shut. That is the same trade every app makes with a modal.
+ */
+:root[data-floating="1"] .drag-region {
+  -webkit-app-region: no-drag;
+}
+
 .no-drag {
   -webkit-app-region: no-drag;
 }
@@ -386,6 +402,51 @@ a {
 
 .input:focus {
   border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+}
+
+/*
+ * The app's hover label (`v-tooltip`).
+ *
+ * Global rather than scoped because the host lives on `<body>`, outside every
+ * component's tree. Positioned with `transform` rather than `left`/`top` so the
+ * label moves on the compositor: a label that reflowed the page while the
+ * pointer travelled across a toolbar would be worse than no label at all.
+ *
+ * `pointer-events: none` is not decoration — the label sits directly under the
+ * control that opened it, and one that could be hovered would steal the pointer,
+ * fire `pointerleave` on the control, and flicker.
+ */
+.app-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: var(--z-tooltip);
+  /* A hard cap that actually holds: `white-space: nowrap` made long hints draw
+     as one line far wider than this box, so the clamp in the directive measured
+     260px while the visible label ran across the dock. Labels are short; the
+     ones that are not (the zoom hint is a whole sentence) wrap. */
+  max-width: 260px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    visibility var(--motion-fast);
+}
+
+.app-tooltip.visible {
+  visibility: visible;
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {

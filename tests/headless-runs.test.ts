@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -60,9 +60,19 @@ describe("headless runs", () => {
     expect(browserSource).toMatch(/if \(this\.options\.headless\) \{\s*this\.options\.onShowPage\?\.\(\);\s*return;/);
   });
 
-  it("does not paint a detached DevTools window", () => {
-    expect(browserSource).toMatch(/show: !this\.options\.headless/);
-    expect(browserSource).toMatch(/if \(!this\.options\.headless\) win\.show\(\)/);
+  it("docks the DevTools panel instead of opening a desktop window", () => {
+    // The panel renders into a `WebContentsView` this app owns, beside the page
+    // inside the same cell. That is also what keeps a headless run clean: there
+    // is no second window to hide, because there is no second window. A
+    // regression here would put a real DevTools window on someone's desktop
+    // during every automated pass.
+    expect(browserSource).toContain('openDevTools({ mode: "detach" })');
+    expect(browserSource).toMatch(
+      /openDevTools\(tabId: string\): void \{[\s\S]*?new WebContentsView\([\s\S]*?setDevToolsWebContents\(view\.webContents\)/,
+    );
+    // No detached window of ours: the only `BrowserWindow` references left are
+    // the host window and the app-icon plumbing.
+    expect(browserSource).not.toMatch(/new BrowserWindow\(/);
   });
 });
 
@@ -80,7 +90,13 @@ describe("automation scripts", () => {
     "e2e-empty-slot.mjs",
     "e2e-flows.mjs",
     "e2e-instances.mjs",
+    "e2e-console-overlap.mjs",
+    "e2e-chrome-geometry.mjs",
+    "e2e-drag-pin.mjs",
+    "e2e-tab-switch.mjs",
+    "e2e-chrome-click.mjs",
     "e2e-login-capture.mjs",
+    "e2e-mcp-tools.mjs",
     "e2e-mcp-tenant-setup.mjs",
     "e2e-overlay-freeze.mjs",
     "e2e-placement.mjs",
@@ -99,5 +115,23 @@ describe("automation scripts", () => {
       expect(text.includes("spawn("), `${name} is expected to start the app`).toBe(true);
       expect(text, `${name} must pass ENSEMBLE_HEADLESS`).toContain("ENSEMBLE_HEADLESS");
     }
+  });
+
+  it("exempts only the suite that needs a minimisable window", () => {
+    // `e2e-minimize` starts the app *with* a window on purpose: a headless run
+    // parks it at opacity 0, where `minimize()` is a no-op, and the whole point
+    // of that suite is what a really minimised window does. It is the only
+    // exemption, and it is pinned here so a new script cannot excuse itself by
+    // copying its pattern.
+    const text = readFileSync(join(process.cwd(), "scripts", "e2e-minimize.mjs"), "utf8");
+    expect(text).not.toContain("ENSEMBLE_HEADLESS");
+    expect(text).toContain("minimize()");
+    const exempt = readdirSync(join(process.cwd(), "scripts"))
+      .filter((name) => name.startsWith("e2e-") && name.endsWith(".mjs"))
+      .filter((name) => {
+        const source = readFileSync(join(process.cwd(), "scripts", name), "utf8");
+        return source.includes("spawn(") && !source.includes("ENSEMBLE_HEADLESS");
+      });
+    expect(exempt).toEqual(["e2e-minimize.mjs"]);
   });
 });

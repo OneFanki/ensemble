@@ -65,6 +65,13 @@
     "e2e:flows": "node scripts/e2e-flows.mjs",
     "e2e:batch-launch": "node scripts/e2e-batch-launch.mjs",
     "e2e:toast-geometry": "node scripts/e2e-toast-geometry.mjs",
+    "e2e:console-overlap": "node scripts/e2e-console-overlap.mjs",
+    "e2e:chrome-geometry": "node scripts/e2e-chrome-geometry.mjs",
+    "e2e:drag-pin": "node scripts/e2e-drag-pin.mjs",
+    "e2e:tab-switch": "node scripts/e2e-tab-switch.mjs",
+    "e2e:chrome-click": "node scripts/e2e-chrome-click.mjs",
+    "e2e:mcp-tools": "node scripts/e2e-mcp-tools.mjs",
+    "e2e:minimize": "node scripts/e2e-minimize.mjs",
     "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs"
   },
   "devDependencies": {

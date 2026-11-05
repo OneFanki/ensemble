@@ -13,10 +13,13 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PROBE_PORT = 3977;
+const PROBE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-connectivity-"));
-const port = 9710 + Math.floor(Math.random() * 30);
+// Chromium owns the debug port: it picks one at bind time and writes it back,
+// so there is no window in which another process can steal the number.
+const port = "0";
 
 const zen = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/plain" });
@@ -66,7 +69,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   {
     env: {
       ...process.env,
@@ -140,7 +143,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),

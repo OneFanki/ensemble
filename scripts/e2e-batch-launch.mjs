@@ -25,10 +25,11 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 9672;
-const MCP_PORT = 49783;
-const DEBUG_PORT = 9791;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
+const DEBUG_PORT = "0";
 const TOKEN = "e2e-batch-launch-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-batch-"));
 
@@ -110,7 +111,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [join(process.cwd(), "out", "main", "index.js"), `--remote-debugging-port=${DEBUG_PORT}`],
+  [join(process.cwd(), "out", "main", "index.js"), `--remote-debugging-port=0`],
   {
     env: { ...process.env, ENSEMBLE_USER_DATA: userData, ENSEMBLE_HEADLESS: "1" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -281,7 +282,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" &&

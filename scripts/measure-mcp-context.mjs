@@ -12,8 +12,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const MCP_PORT = 49793;
+const MCP_PORT = await freePort();
 const TOKEN = "measure-mcp-context-token-123456";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-measure-mcp-"));
 

@@ -16,9 +16,10 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 9666;
-const MCP_PORT = 49777;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
 const TOKEN = "e2e-embedded-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-embedded-"));
 
@@ -321,6 +322,10 @@ try {
   check("audit log holds no password", !audit.includes("env-secret-value"));
 } catch (error) {
   check("run completed", false, String(error));
+  // The app's own output is the only place a main-process failure shows up; the
+  // test only sees "fetch failed" from a dead MCP endpoint.
+  console.error("--- app log tail ---");
+  console.error(appLog.slice(-3000));
 } finally {
   app.kill();
   server.close();

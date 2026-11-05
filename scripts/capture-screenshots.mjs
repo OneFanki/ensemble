@@ -15,10 +15,13 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 2 };
 const OUTPUT_DIR = "docs/screenshots";
-const PAGE_PORT = 3999;
+// Ask the OS: a fixed number can be reserved by Hyper-V after a reboot, and the
+// failure reads as "the window never appeared" rather than as a port problem.
+const PAGE_PORT = await freePort();
 
 const args = process.argv.slice(2);
 const onlyIndex = args.indexOf("--only");
@@ -476,10 +479,9 @@ async function capture(shot) {
   const userData = await mkdtemp(join(tmpdir(), `ensemble-shot-${shot.name}-`));
   await seed(userData, shot.locale, shot.theme);
 
-  const port = 9900 + Math.floor(Math.random() * 90);
   const child = spawn(
     electronBinary,
-    [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`],
+    [".", `--user-data-dir=${userData}`, "--remote-debugging-port=0"],
     // Headless: the shot is taken over CDP, so the window never has to appear —
     // and it must not, because capturing a whole screenshot pass would otherwise
     // flash a window in front of whatever the machine's user is doing.
@@ -488,6 +490,9 @@ async function capture(shot) {
 
   try {
     let target;
+    // `0` makes Chromium pick the port when it binds, which removes the window
+    // between "this number is free" and "the app claims it".
+    const port = await waitForDebugPort(userData);
     for (let attempt = 0; attempt < 100; attempt += 1) {
       await wait(250);
       try {
@@ -605,50 +610,31 @@ async function capture(shot) {
         })()`);
         await wait(700);
       }
-      // Re-report the stage after any layout change above. The freeze uses the
-      // main process's last known stage rect, and a wide-to-strip transition
-      // reports asynchronously; capturing before it lands paints every cell at
-      // the old width and leaves a dead band on the right.
+      // The pages are <webview> nodes in this document, so they are part of the
+      // window's own pixels: a plain Page.captureScreenshot sees them. Nothing has
+      // to be frozen and painted into the DOM first.
+      //
+      // The stage is still re-reported before the shot. A layout change above
+      // (view opened, dock collapsed) moves the stage, and main places the page
+      // nodes from the rect it was last given — capturing before that lands
+      // leaves every cell at the old width.
       await client.evaluate(`(async () => {
         const stage = document.querySelector('.stage');
         if (!stage) return false;
         const box = stage.getBoundingClientRect();
-        await window.ensemble.setEmbeddedStage({
+        window.ensemble.setEmbeddedStage({
           x: Math.round(box.left),
           y: Math.round(box.top),
           width: Math.round(box.width),
           height: Math.round(box.height),
         });
-        await new Promise((r) => setTimeout(r, 400));
+        // One frame for the state broadcast to reach the renderer, one more for
+        // the compositor to actually paint the moved nodes.
+        await new Promise((r) => requestAnimationFrame(r));
+        await new Promise((r) => requestAnimationFrame(r));
+        await new Promise((r) => setTimeout(r, 600));
         return true;
       })()`);
-      // Native views are not part of the window's own pixels, so a plain
-      // screenshot leaves the stage black. Freeze each page and paint the images
-      // into the DOM instead — the same mechanism the app uses for its overlays.
-      await client.evaluate(
-        `(async () => {
-           const api = window.ensemble;
-           const stage = document.querySelector('.stage');
-           if (!stage) return false;
-           const slots = await api.freezeEmbedded();
-           const box = stage.getBoundingClientRect();
-           api.setEmbeddedStage(null);
-           for (const slot of slots) {
-             const img = document.createElement('img');
-             img.src = slot.dataUrl;
-             Object.assign(img.style, {
-               position: 'absolute',
-               left: (slot.rect.x - Math.round(box.left)) + 'px',
-               top: (slot.rect.y - Math.round(box.top)) + 'px',
-               width: slot.rect.width + 'px',
-               height: slot.rect.height + 'px',
-             });
-             stage.appendChild(img);
-           }
-           return slots.length;
-         })()`,
-      );
-      await wait(1200);
     } else {
       // The app opens on the browser page, so every other shot has to navigate
       // there explicitly — including identities, which used to be the default.

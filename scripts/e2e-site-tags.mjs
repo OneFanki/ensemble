@@ -9,8 +9,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const MCP_PORT = 49779;
+const MCP_PORT = await freePort();
 const TOKEN = "site-tags-e2e-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-tags-e2e-"));
 

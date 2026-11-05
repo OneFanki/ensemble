@@ -15,9 +15,10 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 3987;
-const DEBUG_PORT = 9787;
+const PAGE_PORT = await freePort();
+const DEBUG_PORT = "0";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-ui-regression-"));
 
 // A real icon is served so the dock's favicon path is exercised, not just the
@@ -166,7 +167,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -269,7 +270,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" &&
@@ -602,7 +603,7 @@ try {
 
   let loginTarget;
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
     loginTarget = list.find((item) => item.url.startsWith(PAGE_URL));
     if (loginTarget) break;
     await wait(250);
@@ -1446,7 +1447,7 @@ try {
   // gains a second page without gaining a cell.
   let popupTarget;
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
     popupTarget = list.find((item) => item.url.startsWith(PAGE_URL));
     if (popupTarget) break;
     await wait(250);
@@ -1709,46 +1710,49 @@ try {
     newTabSearch,
   );
 
-  // Freezing the stage happens for every overlay, and a blank page has no native
-  // pixels to capture. Including it produced an empty image that covered the
-  // search box — the surface was there, just painted over.
-  const freezeBlank = await client.evaluate(`(async () => {
+  // A blank page draws its own new-tab surface, and nothing may be painted over
+  // it. While pages were native views this was the freeze path's job: a blank
+  // page has no pixels to capture, so capturing it produced an empty image that
+  // covered the search box. A guest is a node in this document, so the check
+  // that still means something is that the surface owns the pixels where it is
+  // drawn.
+  const blankSurface = await client.evaluate(`(async () => {
     const state0 = await window.ensemble.getEmbeddedState();
     const viewId = state0.activeViewId;
     await window.ensemble.openEmbeddedTab({ viewId: null });
     await new Promise((r) => setTimeout(r, 900));
-    const slots = await window.ensemble.freezeEmbedded();
     const state = await window.ensemble.getEmbeddedState();
     const active = state.tabs.find((tab) => tab.id === state.activeTabId);
     window.ensemble.setEmbeddedStage({
       x: 0, y: 0, width: window.innerWidth, height: window.innerHeight,
     });
+    await new Promise((r) => requestAnimationFrame(r));
     const surface = document.querySelector('.stage .blank-slot .new-tab');
-    const overlap = surface
-      ? [...document.querySelectorAll('.stage .frozen')].some((img) => {
-          const a = img.getBoundingClientRect();
-          const b = surface.getBoundingClientRect();
-          return a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left &&
-            a.top < b.bottom && a.bottom > b.top;
-        })
-      : false;
+    // Nothing may sit on top of the surface where it is drawn.
+    const box = surface?.getBoundingClientRect();
+    const hit = box
+      ? document.elementFromPoint(
+          Math.round(box.left + box.width / 2),
+          Math.round(box.top + box.height / 2),
+        )
+      : null;
     // Restore the view: the rest of this suite works inside its cells.
     if (viewId) await window.ensemble.activateEmbeddedView(viewId);
     await new Promise((r) => setTimeout(r, 700));
     return {
       activeBlank: Boolean(active) && (!active.url || active.url === "about:blank"),
-      frozen: slots.length,
-      surfaceUnderFrozen: overlap,
+      surfacePresent: Boolean(surface),
+      surfaceOwnsItsCentre: Boolean(hit && surface?.contains(hit)),
       restored: (await window.ensemble.getEmbeddedState()).activeViewId === viewId,
     };
   })()`);
   check(
-    "freezing the stage leaves the new-tab surface un-covered",
-    freezeBlank?.activeBlank === true &&
-      freezeBlank?.frozen === 0 &&
-      freezeBlank?.surfaceUnderFrozen === false &&
-      freezeBlank?.restored === true,
-    freezeBlank,
+    "a blank page's new-tab surface draws and owns its own box",
+    blankSurface?.activeBlank === true &&
+      blankSurface?.surfacePresent === true &&
+      blankSurface?.surfaceOwnsItsCentre === true &&
+      blankSurface?.restored === true,
+    blankSurface,
   );
 
   // --- Page actions: close one page, and the right-click menu ---------------
@@ -2011,7 +2015,7 @@ try {
   );
 
   const parkedViewport = await (async () => {
-    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
     const targets = list.filter((item) => item.url.startsWith(PAGE_URL));
     const sizes = [];
     for (const target of targets) {
@@ -2073,21 +2077,26 @@ try {
     dockSwitch,
   );
 
-  // Every page row carries the site's icon, with a placeholder when the page has
-  // not reported one. Checking a run means recognising pages by site, and the
-  // rows used to be bare titles.
-  const pageIcons = await client.evaluate(`(async () => {
+  // A second page must not add a nested list to the dock.
+  //
+  // The dock lists windows. Its rows used to indent the window's own pages
+  // underneath, which repeated the stage's tab strip one level down and, in a
+  // split, listed a page under itself. The page count stays as a badge; the
+  // pages themselves belong to the stage.
+  const noNestedPages = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
     const active = state.tabs.find((tab) => tab.id === state.activeTabId);
     if (!active) return null;
-    // A second page is what makes the instance's own page list appear.
     await window.ensemble.openEmbeddedTabInInstance(active.instanceId);
     await new Promise((r) => setTimeout(r, 1200));
-    const rows = [...document.querySelectorAll('.dock .pages .page-row')];
-    const slots = rows.map((row) => {
-      const icon = row.querySelector('.tab-icon');
-      return Boolean(icon && (icon.querySelector('img') || icon.querySelector('svg')));
-    });
+    const rows = [...document.querySelectorAll('.dock .rows > .instance')];
+    const nested = rows.reduce(
+      (sum, row) => sum + row.querySelectorAll('.page-row').length,
+      0,
+    );
+    const badges = rows.map(
+      (row) => row.querySelector('.pages-badge')?.textContent?.trim() ?? '',
+    );
     // Leave the surface as it was found.
     for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
       if (tab.instanceId === active.instanceId && tab.id !== active.id) {
@@ -2095,14 +2104,17 @@ try {
       }
     }
     await new Promise((r) => setTimeout(r, 700));
-    return { rows: rows.length, slots };
+    return { rows: rows.length, nested, badges };
   })()`);
   check(
-    "each page row in the dock shows an icon or its placeholder",
-    (pageIcons?.rows ?? 0) >= 2 &&
-      pageIcons?.slots?.length === pageIcons?.rows &&
-      pageIcons.slots.every(Boolean),
-    pageIcons,
+    "the dock lists windows, not the pages inside them",
+    (noNestedPages?.rows ?? 0) >= 1 &&
+      noNestedPages?.nested === 0 &&
+      // A count, not a list: the row says how many pages the window holds. The
+      // exact number depends on what earlier steps left open, so only "more than
+      // one, as a number" is the contract.
+      noNestedPages?.badges?.some((badge) => /^\d+$/.test(badge) && Number(badge) > 1),
+    noNestedPages,
   );
 
   // The favicon path itself, not only the placeholder: the test page declares an

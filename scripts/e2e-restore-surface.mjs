@@ -11,20 +11,10 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 9670;
-// Ask the OS for a free port instead of hardcoding one: a fixed port ends up
-// inside a Windows excluded range after some reboots (Hyper-V reserves dynamic
-// ranges) and the MCP endpoint dies with EACCES before the test even starts.
-const freePort = await new Promise((resolve, reject) => {
-  const probe = createServer();
-  probe.once("error", reject);
-  probe.listen(0, "127.0.0.1", () => {
-    const { port } = probe.address();
-    probe.close(() => resolve(port));
-  });
-});
-const MCP_PORT = freePort;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
 const TOKEN = "e2e-restore-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-restore-"));
 
@@ -187,10 +177,16 @@ try {
   launch();
   check("second run started", await waitForMcp(), log.slice(-600));
   // Restore runs after the MCP server is up, so give it a moment.
+  //
+  // Waiting for "two tabs exist" is not enough: a tab is published before its
+  // `viewId` is assigned, so a run that read at that instant saw one member
+  // still belonging to no container. Wait for the *state the assertions below
+  // are about* instead of a proxy for it.
   let state;
   for (let attempt = 0; attempt < 40; attempt += 1) {
     state = await call("list_browser_tabs");
-    if ((state.tabs ?? []).length >= 2) break;
+    const members = (state.tabs ?? []).filter((tab) => peopleIds.has(tab.identityId));
+    if (members.length === 2 && members.every((tab) => Boolean(tab.viewId))) break;
     await wait(300);
   }
   check(

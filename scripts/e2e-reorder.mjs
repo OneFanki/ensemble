@@ -21,9 +21,11 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
+import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-sort-"));
-const port = 9800 + Math.floor(Math.random() * 50);
+const port = await freePort();
 const now = new Date().toISOString();
 const PAGE_URL = "http://127.0.0.1:3997";
 
@@ -94,7 +96,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${port}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -191,7 +193,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),

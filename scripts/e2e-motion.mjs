@@ -20,9 +20,10 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 4023;
-const DEBUG_PORT = 9923;
+const PAGE_PORT = await freePort();
+const DEBUG_PORT = "0";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-motion-"));
 
 const page = createServer((_req, res) => {
@@ -64,7 +65,7 @@ const electron =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electron,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -163,7 +164,7 @@ try {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (i) => i.type === "page" && i.url.includes("index.html") && !i.url.startsWith("devtools"),
       );

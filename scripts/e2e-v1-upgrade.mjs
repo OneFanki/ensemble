@@ -11,8 +11,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const MCP_PORT = 49778;
+const MCP_PORT = await freePort();
 const TOKEN = "v1-upgrade-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-v1-upgrade-"));
 

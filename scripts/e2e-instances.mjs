@@ -12,9 +12,10 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 9671;
-const MCP_PORT = 49793;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
 const TOKEN = "e2e-instances-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-instances-"));
 

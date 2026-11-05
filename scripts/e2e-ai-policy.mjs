@@ -22,10 +22,11 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 3991;
-const MCP_PORT = 49791;
-const DEBUG_PORT = 9791;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
+const DEBUG_PORT = "0";
 const TOKEN = "e2e-ai-policy-token-123456";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-ai-policy-"));
 
@@ -127,7 +128,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -224,7 +225,7 @@ async function connectRenderer() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       const target = list.find(
         (item) =>
           item.type === "page" &&
@@ -259,7 +260,7 @@ try {
   }
 
   async function findPageTarget() {
-    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
     // A page embedded as a `<webview>` shows up as a guest target rather than a
     // top-level `page`. Both are accepted: the assertion is about the page's own
     // DOM, not about which carrier is displaying it.

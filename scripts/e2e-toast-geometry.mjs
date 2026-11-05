@@ -21,10 +21,11 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 9676;
-const MCP_PORT = 49791;
-const DEBUG_PORT = 9796;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
+const DEBUG_PORT = "0";
 const TOKEN = "e2e-toast-geometry-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-toast-geom-"));
 
@@ -75,7 +76,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [join(process.cwd(), "out", "main", "index.js"), `--remote-debugging-port=${DEBUG_PORT}`],
+  [join(process.cwd(), "out", "main", "index.js"), `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_USER_DATA: userData, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -193,7 +194,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" &&
@@ -230,8 +231,13 @@ try {
   check("batch launched", launched?.ok === true && launched.tabs >= names.length, launched);
 
   // Wait out the login-failure reports (fill ≈2s + 20s confirm deadline).
+  //
+  // The budget is deliberately generous. Each identity gets its own confirm
+  // deadline, and four of them start together; under load the last report lands
+  // well past the nominal 20s, which showed up as a one-off failure in a
+  // parallel run while passing 9/9 twice in isolation.
   let toasts = [];
-  for (let attempt = 0; attempt < 90; attempt += 1) {
+  for (let attempt = 0; attempt < 160; attempt += 1) {
     toasts = await client.evaluate(`(() => {
       const doc = document.documentElement;
       const stack = document.querySelector('.toast-stack');

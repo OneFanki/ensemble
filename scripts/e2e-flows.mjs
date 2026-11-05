@@ -18,10 +18,11 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 3997;
-const MCP_PORT = 49795;
-const DEBUG_PORT = 9807;
+const PAGE_PORT = await freePort();
+const MCP_PORT = await freePort();
+const DEBUG_PORT = "0";
 const TOKEN = "e2e-flows-token-1234567890";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-flows-"));
 
@@ -143,7 +144,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -426,7 +427,7 @@ try {
   );
 
   // 10. The UI shows the flows page with the flow in it.
-  const targets = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+  const targets = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
   const renderer = targets.find(
     (item) => item.type === "page" && item.url.includes("index.html"),
   );

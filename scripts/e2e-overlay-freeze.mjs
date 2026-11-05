@@ -2,18 +2,20 @@
 /**
  * End-to-end check that an app dialog paints above a live page.
  *
- * Native `WebContentsView`s paint over all HTML, so a dialog opened over the
- * browser page has to freeze the stage first. Without it the dialog renders
- * behind a live page and looks broken — the reported bug this guards.
+ * The page is a `<webview>` node in the app's own document, so a dialog stacks
+ * over it like any other element. The reported bug this guards is the older one:
+ * while pages were native views they painted over all HTML and every dialog had
+ * to freeze the stage first. The dialog must stay readable and on top.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PAGE_PORT = 3989;
-const DEBUG_PORT = 9761;
+const PAGE_PORT = await freePort();
+const DEBUG_PORT = "0";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-overlay-"));
 
 const page = createServer((req, res) => {
@@ -63,7 +65,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -120,7 +122,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await wait(250);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find(
         (item) =>
           item.type === "page" &&
@@ -237,31 +239,27 @@ try {
     }
     const state = await api.getEmbeddedState();
     const tab = state.tabs.find((item) => item.id === loose.id);
-    const slots = await api.freezeEmbedded();
-    return { activeViewId: state.activeViewId ?? null, bounds: tab?.bounds, slots, carrier: state.carrier ?? "native" };
+    return { activeViewId: state.activeViewId ?? null, bounds: tab?.bounds, carrier: state.carrier ?? "guest" };
   })()`);
-  const flatSlot = flat?.slots?.[0];
   check(
     "flat stage is actually flat (no view active)",
     flat?.activeViewId === null,
     flat?.activeViewId,
   );
-  // A native view is frozen into an image at its real bounds, and the header
-  // band has to be included or the page jumps up by 26px when an overlay opens.
-  // A guest has no frozen image: it is a node sized straight from `bounds`, so
-  // the band cannot be lost. The guarantee that still applies is that the page
-  // fills its reported box.
+  // The page is a node sized from `bounds`, so what matters is that the rect
+  // covers the stage. It used to start below a 26px header band because the flat
+  // stage drew one with the instance's page tabs; that band is gone (the
+  // window-level strip owns the tabs in every mode, and the flat band was a
+  // second identical row), so the page now takes the whole stage from y = 0.
+  // Asserting the band's absence is the point: a leftover inset showed up as a
+  // dark strip above every flat page.
   check(
-    "a flat stage places its page exactly at the reported rect, header band included",
-    flat?.carrier === "guest"
-      ? Boolean(flat?.bounds) && flat.bounds.y > 0 && flat.bounds.height > 0
-      : Boolean(flatSlot) &&
-          Boolean(flat?.bounds) &&
-          flatSlot.rect.y === flat.bounds.y &&
-          flatSlot.rect.height === flat.bounds.height &&
-          flatSlot.rect.x === flat.bounds.x &&
-          flatSlot.rect.width === flat.bounds.width,
-    { bounds: flat?.bounds, rect: flatSlot?.rect, carrier: flat?.carrier },
+    "a flat stage gives its page the whole stage, with no header band",
+    flat?.carrier === "guest" &&
+      Boolean(flat?.bounds) &&
+      flat.bounds.y === 0 &&
+      flat.bounds.height > 0,
+    { bounds: flat?.bounds, carrier: flat?.carrier },
   );
 
   client.close();

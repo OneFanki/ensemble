@@ -18,9 +18,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildElementPointExpression, buildFocusExpression } from "../src/core/cdp/inspect.ts";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
-const PORT = 3995;
-const DEBUG_PORT = 9805;
+const PORT = await freePort();
+const DEBUG_PORT = "0";
 
 const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>组件库表单</title>
@@ -76,7 +77,7 @@ writeFileSync(join(hostDir, "package.json"), JSON.stringify({ name: "resolver-ho
 const userData = mkdtempSync(join(tmpdir(), "ensemble-resolver-"));
 const electron = spawn(
   resolve("node_modules/electron/dist/electron.exe"),
-  [hostDir, `--user-data-dir=${userData}`, `--remote-debugging-port=${DEBUG_PORT}`],
+  [hostDir, `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let hostLog = "";
@@ -90,7 +91,7 @@ try {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await wait(300);
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
       target = list.find((item) => item.type === "page" && item.url.includes(`:${PORT}`));
       if (target) break;
     } catch {

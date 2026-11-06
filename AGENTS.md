@@ -27,10 +27,11 @@ pnpm test             # 核心层单元测试
 pnpm typecheck        # Node 侧 + 渲染层类型检查
 pnpm build            # 构建 out/
 pnpm screenshots      # 重新生成 README 截图（需先 build）
+pnpm e2e:all          # 串行跑全部 e2e 套件（每套自建 user-data-dir；并发会偶发假失败）
 pnpm dist             # 打包三平台产物到 release/
 ```
 
-单跑某个测试文件：`pnpm test tests/grid.test.ts`。
+单跑某个测试文件：`pnpm test tests/grid.test.ts`。单跑某个 e2e：`pnpm e2e:<名字>`。
 
 ## 强制约束
 
@@ -107,6 +108,7 @@ pnpm dist             # 打包三平台产物到 release/
 
 ```bash
 pnpm verify
+pnpm e2e:all
 ```
 
 涉及浏览器启动、登录填充、窗口定位的改动，还必须在真实浏览器上手工验证，并确认退出后无残留进程：

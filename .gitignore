@@ -30,6 +30,9 @@ Thumbs.db
 .temp/
 .temp-*
 
+# Agent session state (plans, drafts): per-machine, like runtime data.
+.zcode/
+
 # Ad-hoc verification artifacts (screenshots, one-off scripts) live at the repo root.
 .temp*.mjs
 .temp*.png

@@ -197,13 +197,16 @@ function onKeydown(event: KeyboardEvent) {
   /* Grows out of the field it belongs to: the panel is anchored there, so a
      small downward nudge is enough to say "this came from that field". Same
      wording as every other anchored popover. */
-  animation: popover-in var(--motion-fast) var(--ease-out);
+  animation: popover-in var(--motion-base) var(--ease-out);
+  /* Grows from the edge it hangs off, so the scale reads as the panel opening
+     rather than as the whole box shrinking toward its middle. */
+  transform-origin: top center;
 }
 
 @keyframes popover-in {
   from {
     opacity: 0;
-    transform: translateY(calc(-1 * var(--motion-shift)));
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
 }
 

@@ -50,6 +50,16 @@ defineProps<{
   gap: var(--space-6);
   flex: 0 0 auto;
   padding-bottom: var(--space-6);
+  /*
+   * Keep the actions out from under the window's own buttons.
+   *
+   * They are painted over the top-right corner of the client area on Windows,
+   * and this row is the topmost thing on a management page — the right-hand
+   * action was being clipped in half by them. The page already insets 28px, so
+   * only the remainder of the caption width has to be reserved here; measured
+   * rather than guessed, so a different caption size does not reintroduce it.
+   */
+  padding-right: max(0px, calc(var(--window-controls-width, 0px) - 28px));
 }
 
 /* Let the copy shrink so buttons keep their intrinsic width. Without this the

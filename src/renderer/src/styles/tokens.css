@@ -34,6 +34,18 @@
   --surface-2: var(--field);
   --surface-3: #2b3138;
 
+  /*
+   * Selection is a neutral step, not the accent.
+   *
+   * The accent is amber, and an amber fill says "warning" or "active toggle" —
+   * the run dock's selected row read as something being flagged rather than as
+   * the page you are looking at. Selection here means "this is the one on
+   * screen", which is a position, not an alert; the accent stays for accents
+   * that really are actions (the primary button, a badge, a count).
+   */
+  --selected: #2f353d;
+  --selected-strong: #3a4048;
+
   /* Text scale: every level clears 4.5:1 on --content. --faint is for icons and
      hairline hints only, never for text that has to be read. */
   --text: #e9edf2;
@@ -163,9 +175,19 @@
   --motion-slow: 220ms;
   --ease-out: cubic-bezier(0.16, 0.84, 0.44, 1);
   --ease-in: cubic-bezier(0.4, 0, 0.9, 0.4);
-  /* Distance a floating panel travels on entry. Small on purpose: a menu that
-     slides far reads as a drawer, which it is not. */
-  --motion-shift: 4px;
+  /*
+   * Distance a floating panel travels on entry.
+   *
+   * 4px was invisible in practice: at 110ms the panel finished before the eye
+   * registered that it had moved, so every menu read as simply appearing. A menu
+   * that slides far reads as a drawer, so the fix is not distance alone — it is
+   * 10px over `--motion-base` plus a slight scale, which is what makes the entry
+   * legible at normal window sizes without pretending a menu is a sheet.
+   */
+  --motion-shift: 10px;
+  /* Anchored panels start slightly smaller and settle to full size. Deliberately
+     tiny: enough to read as "opening", not as a zoom. */
+  --motion-pop-scale: 0.97;
 }
 
 :root[data-theme="light"] {
@@ -179,6 +201,11 @@
   --line: #dfe4ea;
   --line-soft: #eceff3;
   --surface-3: #e9ecef;
+
+  /* Selection on a light surface: a step toward the frame colour rather than the
+     accent, for the same reason the dark theme dropped the amber. */
+  --selected: #e4e8ec;
+  --selected-strong: #d8dee5;
 
   --text: #14181d;
   --text-secondary: #4d5661;

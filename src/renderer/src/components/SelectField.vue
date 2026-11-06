@@ -230,13 +230,16 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   padding: 4px;
-  animation: popover-in var(--motion-fast) var(--ease-out);
+  animation: popover-in var(--motion-base) var(--ease-out);
+  /* Grows from the edge it hangs off, so the scale reads as the panel opening
+     rather than as the whole box shrinking toward its middle. */
+  transform-origin: top center;
 }
 
 @keyframes popover-in {
   from {
     opacity: 0;
-    transform: translateY(calc(-1 * var(--motion-shift)));
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
 }
 

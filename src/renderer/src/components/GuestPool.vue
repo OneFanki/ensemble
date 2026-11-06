@@ -114,10 +114,12 @@ function placeFor(
  *   still answers `Page.captureScreenshot`. Measured on 45.2.1: a guest is
  *   culled from the compositor when it is `visibility: hidden` or outside the
  *   window, not when it is merely transparent.
- * - **Presenting**: a background page brought into the window for one capture.
+ * - **Presenting**: a background page brought into the window for one read.
  *   This has to *move* the node, not just un-fade it — a page parked outside the
  *   window is culled no matter what its opacity is, and its capture then never
  *   replies (measured: the on-stage guest captured, the parked one timed out).
+ *   It stays transparent: the box is what the read needs, and painting it would
+ *   flash a whole-window page over whatever the user is looking at.
  * - **Parked**: kept alive at full size outside the window, so it keeps a real
  *   viewport for reads (`display: none` would report 0×0 and make every
  *   visibility check inside it answer false) while taking no pointer events.
@@ -149,15 +151,25 @@ function layout(): void {
   for (const [tabId, mounted] of nodes) {
     const placement = placeFor(tabId, stage);
     const presenting = mounted.presenting > 0;
-    // A presented background page is placed on the stage for the capture: the
-    // window box if the stage is unknown (the console covers the browser).
-    const rect =
-      presenting && !placement.onStage
-        ? stage && stage.width > 0 && stage.height > 0
-          ? { x: stage.x, y: stage.y, width: stage.width, height: stage.height }
-          : { x: 0, y: 0, width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) }
-        : placement.rect;
-    const onStage = placement.onStage || presenting;
+    /*
+     * A page presented only to be read is a ghost: moved onto the stage for its
+     * box and its frames, but never shown.
+     *
+     * It used to become a visible full-window page for the duration, which is
+     * what made a view launch flicker — every new tab installs its login
+     * listener through `evaluate`, several at a time, and each one painted a
+     * whole-window page over the page the user was looking at. Being invisible
+     * costs nothing: the guest still lays out, still produces frames for
+     * `Page.captureScreenshot`, and still answers input dispatched over CDP. A
+     * page that is already on stage keeps its own cell and is not ghosted.
+     */
+    const ghost = presenting && !placement.onStage;
+    const rect = ghost
+      ? stage && stage.width > 0 && stage.height > 0
+        ? { x: stage.x, y: stage.y, width: stage.width, height: stage.height }
+        : { x: 0, y: 0, width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) }
+      : placement.rect;
+    const onStage = placement.onStage;
     const style = mounted.node.style;
     // `flex`, never `block`. Electron's `<webview>` ships as `display: flex`
     // because its inner frame is a flex item that fills the container; forcing
@@ -176,8 +188,8 @@ function layout(): void {
     // A transparent page must not take clicks meant for the one in front, and
     // no page may take the pointer during an app gesture.
     style.pointerEvents = onStage && !shielded ? "auto" : "none";
-    // Above the other nodes while presenting, so a temporarily shown background
-    // page is not painted underneath the page on stage.
+    // Above the other nodes while presenting: a page that is being read must not
+    // be painted underneath a sibling that is parked at the same spot.
     style.zIndex = presenting ? "3" : "1";
     // A node that has never had a real box reports a 0×0 viewport, and every
     // visibility check inside the page then answers false. Main has to know the
@@ -190,12 +202,13 @@ function layout(): void {
 }
 
 /**
- * Shows one page briefly so main can capture it, then puts it back.
+ * Brings one page into the window so main can read or capture it, then puts it
+ * back. The page is laid out on the stage for the duration but stays invisible
+ * unless it was already on stage: a node parked outside the window is culled
+ * from the compositor and its `Page.captureScreenshot` never replies.
  *
- * The page is moved onto the stage for the duration: a node parked outside the
- * window is culled from the compositor and its `Page.captureScreenshot` never
- * replies. Hiding it is the only thing that changes otherwise — nothing is
- * added or removed, and the page keeps running.
+ * Hiding it is the only thing that changes otherwise — nothing is added or
+ * removed, and the page keeps running.
  *
  * Main resolves its screenshot call from the reply, so this reports after the
  * change is applied — the caller still retries the capture, because a

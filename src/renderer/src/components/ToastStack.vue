@@ -1,13 +1,8 @@
 <script setup lang="ts">
 import { CircleAlert, CircleCheck, Info, TriangleAlert } from "lucide-vue-next";
-import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 
 const store = useWorkspaceStore();
-// The dock's width bounds the stack: a native page view paints over everything
-// on the stage, so any part of a toast that hangs past the dock's left edge is
-// simply not painted (2026-10-31 — the cards were missing their first characters).
-const embedded = useEmbeddedStore();
 </script>
 
 <template>
@@ -19,11 +14,7 @@ const embedded = useEmbeddedStore();
     the chain, so the anchor cannot be stolen.
   -->
   <Teleport to="body">
-    <div
-      class="toast-stack"
-      aria-live="polite"
-      :style="{ '--dock-w': `${embedded.dockWidth}px` }"
-    >
+    <div class="toast-stack" aria-live="polite">
       <div
         v-for="toast in store.toasts"
         :key="toast.id"
@@ -51,10 +42,16 @@ const embedded = useEmbeddedStore();
   display: flex;
   flex-direction: column;
   gap: 7px;
-  /* Never leave the dock: the stage's native page view paints over every HTML
-     layer, so a card wider than the dock has its left part unpainted. 18px in
-     from each edge keeps the stack floating inside the dock's own rectangle. */
-  max-width: min(380px, calc(var(--dock-w, 292px) - 36px));
+  /*
+   * Wide enough for a sentence, never wider than the window.
+   *
+   * This used to be capped at the dock's width because a native `WebContentsView`
+   * painted over every HTML layer: anything hanging past the dock's left edge was
+   * simply not drawn. The carrier is a `<webview>` guest now, which is an ordinary
+   * composited layer, so the stack can sit where a browser puts it — bottom right,
+   * over the page, at its own width.
+   */
+  max-width: min(380px, calc(100vw - 36px));
   pointer-events: none;
 }
 

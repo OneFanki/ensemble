@@ -7,7 +7,7 @@ import {
   ChevronRight,
   ExternalLink,
   Layers,
-  PanelRightClose,
+  PanelLeftClose,
   Plus,
   Power,
   X,
@@ -27,17 +27,13 @@ const confirm = useConfirmStore();
 const { t } = useI18n();
 
 /**
- * The dock reaches the window's top-right corner, which is exactly where the
- * native window controls are painted.
+ * Which platform the strip is drawn for.
  *
- * On Windows and Linux the controls are drawn by the OS *over* the app, so the
- * dock's first row used to land underneath them: "创建视图" and the collapse
- * button were not merely hard to find, they were invisible and unclickable.
- * Reserving the band here — rather than in whichever component happens to sit
- * at the top right — is what keeps the two from fighting over the corner.
+ * The caption band moved to `AppSidebar.vue` with the column — the sidebar now
+ * owns the corner that touches the window controls, and this only needs the
+ * platform for a couple of row rules.
  */
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
-const reservesControls = computed(() => platform.value !== "darwin");
 
 /**
  * A dock row is a browser instance, not a page.
@@ -101,39 +97,6 @@ function toggleCollapsed(): void {
  * pointer and the embedder never sees the move. Every subsequent position was
  * lost and the dock stayed at its starting width.
  */
-function startResize(event: PointerEvent): void {
-  if (collapsed.value) return;
-  event.preventDefault();
-  const handle = event.currentTarget as Element | null;
-  try {
-    handle?.setPointerCapture(event.pointerId);
-  } catch {
-    // A capture that cannot be taken still leaves the window listeners working
-    // for the part of the drag that stays inside the dock.
-  }
-  const startX = event.clientX;
-  const startWidth = embedded.dockWidth;
-  resizing.value = true;
-  embedded.holdPointer();
-  const move = (next: PointerEvent) => {
-    embedded.setDockWidth(startWidth - (next.clientX - startX), false);
-  };
-  const up = () => {
-    resizing.value = false;
-    embedded.setDockWidth(embedded.dockWidth);
-    embedded.releasePointer();
-    try {
-      handle?.releasePointerCapture(event.pointerId);
-    } catch {
-      // Already released by the browser.
-    }
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-}
-
 /** Pages of an instance; more than one means it behaves like a tabbed window. */
 function pagesOf(root: EmbeddedTab): EmbeddedTab[] {
   return embedded.instancePages(root.instanceId);
@@ -169,13 +132,20 @@ interface DockRow {
 }
 
 /**
- * Rows for one view block, in slot order then off-stage order.
+ * Rows for one view block, in the workspace's own list order.
  *
- * Off-stage instances still deserve a row — they are running, and that is how the
- * user finds and drags them back.
+ * Order comes from the tab list, not from the slot array.
+ *
+ * Deriving it from `slotTabs` looked equivalent and was not: clicking an
+ * off-stage instance swaps it into the focused cell, so the list re-sorted itself
+ * on every selection and the row you just clicked jumped to the first line. The
+ * list is a list — its order should only change when the user drags something —
+ * and which cell an instance occupies is a separate fact, shown as the number.
  */
 function dockRows(view: EmbeddedView): DockRow[] {
   const rows: DockRow[] = [];
+  // A split instance appears once per cell it occupies; count first so a single
+  // row can be drawn per instance in the common case.
   const slotCounts = new Map<string, number>();
   for (const rootId of view.slotTabs) {
     const root = rootId ? embedded.state.tabs.find((tab) => tab.id === rootId) : undefined;
@@ -183,36 +153,31 @@ function dockRows(view: EmbeddedView): DockRow[] {
     slotCounts.set(root.instanceId, (slotCounts.get(root.instanceId) ?? 0) + 1);
   }
 
-  const placed = new Set<string>();
-  view.slotTabs.forEach((rootId, index) => {
-    const root = rootId ? embedded.state.tabs.find((tab) => tab.id === rootId) : undefined;
-    if (!root) return;
-    placed.add(root.instanceId);
+  for (const root of embedded.viewInstances(view.id)) {
     const pages = pagesOf(root);
-    if ((slotCounts.get(root.instanceId) ?? 1) > 1) {
-      const pinnedId = view.slotPages?.[index] ?? null;
-      const pinned = pinnedId ? pages.find((page) => page.id === pinnedId) : undefined;
-      rows.push({
-        root,
-        page: pinned ?? activePageOf(root),
-        slot: index,
-        pageCount: pages.length,
+    const slotCount = slotCounts.get(root.instanceId) ?? 0;
+    if (slotCount > 1) {
+      // A split instance fills several cells, so it has several rows — one per
+      // cell, because each cell can show a different page of it.
+      view.slotTabs.forEach((rootId, index) => {
+        if (rootId !== root.id) return;
+        const pinnedId = view.slotPages?.[index] ?? null;
+        const pinned = pinnedId ? pages.find((page) => page.id === pinnedId) : undefined;
+        rows.push({
+          root,
+          page: pinned ?? activePageOf(root),
+          slot: index,
+          pageCount: pages.length,
+        });
       });
-      return;
+      continue;
     }
-    // One cell: a single row for the instance, in slot order.
-    if (rows.some((row) => row.root.id === root.id)) return;
     rows.push({
       root,
       page: activePageOf(root),
-      slot: index,
+      ...(slotCount === 1 ? { slot: view.slotTabs.indexOf(root.id) } : {}),
       pageCount: pages.length,
     });
-  });
-
-  for (const root of embedded.viewInstances(view.id)) {
-    if (placed.has(root.instanceId)) continue;
-    rows.push({ root, page: activePageOf(root), pageCount: pagesOf(root).length });
   }
   return rows;
 }
@@ -548,38 +513,17 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
     the way a vertical tab strip does. Collapsing should reclaim width, not hide
     the fact that several pages are running: clicking an icon switches to that
     instance, and the last button reopens the panel.
+
+    No width and no caption band of its own any more: this is the top half of
+    `AppSidebar.vue`, which owns the column's width, its resize handle and the
+    drag band. The dock used to be the whole right-hand column; the sidebar's
+    navigation now sits under it, so the two have to share one box.
   -->
-  <aside
+  <div
     class="dock"
     :class="{ collapsed, resizing }"
     :data-platform="platform"
-    :style="{ '--dock-width': `${embedded.dockWidth}px` }"
-    data-tour="run-dock"
   >
-    <!--
-      The window-control band. It is a drag handle because this strip sits where
-      the title bar used to be, and a window whose entire top-right quarter
-      cannot be used to move it feels broken. Collapsed, the icons start below
-      the window buttons so they stay reachable and unclipped.
-    -->
-    <div
-      v-if="reservesControls"
-      class="dock-titlebar drag-region"
-      :class="{ compact: collapsed }"
-      aria-hidden="true"
-    ></div>
-    <!-- Sits on the border so the pointer turns into a resize cursor before the
-         dock itself is reached; a 1px target would be unusable. -->
-    <span
-      v-if="!collapsed"
-      class="dock-resize"
-      role="separator"
-      aria-orientation="vertical"
-      :aria-label="t('app.browserResizeDock')"
-      v-tooltip="t('app.browserResizeDock')"
-      @pointerdown="startResize"
-    ></span>
-
     <!--
       The expand control sits where the collapse control sits in the expanded
       panel — top right. A control that jumps from the bottom of the strip to the
@@ -630,12 +574,23 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
     </div>
 
     <div class="dock-main" :class="{ hidden: collapsed }">
-      <header class="dock-head">
+      <!--
+        The header doubles as the window's drag band.
+
+        The sidebar used to reserve a blank 34px strip above this row for the
+        native caption buttons — which are painted on the right, so the strip
+        reserved nothing and just pushed this row down a full title bar. Now the
+        header takes that height itself: it starts at the window's top edge,
+        lines up with the tab strip beside it, and is the one row in the column
+        with nothing clickable to lose, so it is where the window is dragged.
+        Every control inside it is `no-drag`.
+      -->
+      <header class="dock-head drag-region">
         <span class="dock-title">{{ t("app.browserExpandedDock") }}</span>
         <span class="count mono">{{ totalRunning }}</span>
         <button
           type="button"
-          class="add-view"
+          class="add-view no-drag"
           v-tooltip="t('app.browserNewViewHint')"
           @click="newView"
         >
@@ -644,12 +599,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
         </button>
         <button
           type="button"
-          class="icon-btn collapse-btn"
+          class="icon-btn collapse-btn no-drag"
           v-tooltip="t('app.browserCollapseDock')"
           :aria-label="t('app.browserCollapseDock')"
           @click="toggleCollapsed"
         >
-          <PanelRightClose :size="13" />
+          <PanelLeftClose :size="13" />
         </button>
       </header>
 
@@ -977,60 +932,37 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
         </button>
       </footer>
     </div>
-  </aside>
+  </div>
 </template>
 
 <style scoped>
+/*
+ * The dock fills the top half of the sidebar.
+ *
+ * It used to *be* the sidebar: a fixed-width right-hand column with its own
+ * border, its own caption-button band and its own resize handle. All three moved
+ * to `AppSidebar.vue` when the navigation took the bottom half — a child that
+ * kept them would draw a second border inside the sidebar's border and reserve
+ * the window controls it no longer touches. The background stays, because the
+ * group rules and header bands below are mixed from `--text` and are measured
+ * against this surface.
+ */
 .dock {
   position: relative;
-  border-left: 1px solid var(--line-soft);
-  background: var(--bg);
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  padding: 12px 10px;
+  /* No top padding: the header below is the window's top row now. */
+  padding: 0 2px 2px;
   gap: 10px;
-  width: var(--dock-width);
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  width: 100%;
+  background: var(--bg);
 }
 
-/*
- * The band the native caption buttons are painted into, at the top of the dock.
- *
- * Sized from the measured overlay, not from a guess. Collapsed, the strip is
- * only 46px wide and the whole strip is inside the caption band, so the spacer
- * still has to be tall enough to clear it: subtracting the dock's own padding and
- * the flex gap from `--titlebar-height` is what puts the first tile below the
- * buttons instead of under them.
- */
-.dock-titlebar {
-  flex: 0 0 auto;
-  height: var(--titlebar-height);
-  /* Cancels the dock's own padding so the drag band reaches the window edges;
-     a band inset by 12px leaves 12px of unclickable dead space above it. */
-  margin: -12px -10px 0;
-}
-
-.dock[data-platform="darwin"] .dock-titlebar {
-  display: none;
-}
-
-/*
- * Collapsed padding is 10px, not 12, and the flex gap is 10, so the spacer has
- * to be 26 to put the first tile at y=46 — clear of the 34px caption band. (At
- * 24 the tile landed at 32, still two pixels under a window button, which is
- * exactly the kind of "almost" that leaves a control unclickable.)
- */
-.dock.collapsed .dock-titlebar {
-  height: 26px;
-}
-
-/* Animating width is fine here: the dock has no native child, only text rows. */
-.dock:not(.resizing) {
-  transition: width var(--motion-slow) var(--ease-out);
-}
-
+/* The sidebar animates its own width; the dock only carries the resizing state
+   so its rows can drop hover styling while a drag is in flight. */
 .dock.resizing {
   user-select: none;
   cursor: col-resize;
@@ -1054,45 +986,16 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
    invisible anyway. */
 .dock-main.hidden {
   position: absolute;
-  inset: 10px 4px;
+  inset: 2px;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
 }
 
-/* Straddles the border from the inside: the dock clips its own overflow, so a
-   handle hanging outside the panel would never be hit. */
-.dock-resize {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 2;
-}
-
-.dock-resize::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: transparent;
-  transition: background var(--motion-base) var(--ease-out);
-}
-
-.dock-resize:hover::after,
-.dock.resizing .dock-resize::after {
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
-}
-
 /* The collapsed strip still animates, so expanding and collapsing read as one
    motion instead of the panel popping in. */
 .dock.collapsed {
-  width: 46px;
-  padding: 10px 4px;
+  padding: 0;
   align-items: center;
 }
 
@@ -1161,16 +1064,17 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 }
 
 .mini-tab:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  background: var(--selected);
   color: var(--text-secondary);
 }
 
-/* Selected instance: accent tint and accent glyph, no outline. An outline around
-   a rounded tile is a raised-button cue, and the collapsed strip is a column of
-   flat targets. Derived from `--accent` rather than from a gray step, because a
-   gray step means "raised" in one theme and "recessed" in the other. */
+/* Selected instance: a neutral raised step, no outline, no accent. An outline
+   around a rounded tile is a raised-button cue, and the collapsed strip is a
+   column of flat targets. The accent is deliberately not used here: amber reads
+   as "warning" or "switched on", while this only means "this is the page the
+   stage shows". */
 .mini-tab.current {
-  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+  background: var(--selected-strong);
   color: var(--text);
 }
 
@@ -1196,13 +1100,16 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 
 /* Same tile as an instance, pinned at the top of the strip: the position the
    collapse control occupies when the panel is open, so expanding and collapsing
-   are one control in one place rather than two ends of the window. */
+   are one control in one place rather than two ends of the window.
+   It borrows the title bar's height, not the 32px of a row below it: this tile
+   sits exactly where the header sits when the panel is open, so the collapsed
+   column starts on the same line as the tab strip beside it. */
 .expand {
   position: relative;
   display: grid;
   place-items: center;
   width: 34px;
-  height: 32px;
+  height: var(--titlebar-height);
   flex: 0 0 auto;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--text) 9%, var(--bg));
@@ -1211,7 +1118,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
 }
 
 .expand:hover {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  background: var(--selected);
   color: var(--text);
 }
 
@@ -1235,6 +1142,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   align-items: center;
   gap: 7px;
   flex: 0 0 auto;
+  /* The window's title bar height, because that is what this row is: the drag
+     band the sidebar used to reserve above itself. Matching the tab strip
+     beside it is what makes the two columns start on the same line. */
+  height: var(--titlebar-height);
+  padding: 0 6px;
+  box-sizing: border-box;
 }
 
 .dock-title {
@@ -1362,8 +1275,11 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   color: var(--text);
 }
 
+/* Active blocks mark themselves through the selected row inside them. The dot
+   used to get an amber halo, which put a second, competing "selected" marker on
+   the header while the row already said it. */
 .view-block.active > .block-head .view-dot {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: none;
 }
 
 .view-block.drop-into {
@@ -1506,12 +1422,12 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-/* The selected row is a filled surface. Its left edge used to carry a 2px accent
-   bar, which on a rounded row is a straight line running into two rounded
-   corners — an ornament, not structure. The fill says the same thing, and the
-   row keeps the accent through its text colour instead. */
+/* The selected row is a neutral filled surface. Its left edge used to carry a
+   2px accent bar, which on a rounded row is a straight line running into two
+   rounded corners — an ornament, not structure, and amber read as an alert. The
+   fill says "this is the page on stage" without borrowing the accent. */
 .tab-row.focused {
-  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  background: var(--selected);
 }
 
 .tab-row.focused .tab-label {

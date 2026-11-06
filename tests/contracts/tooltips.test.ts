@@ -25,6 +25,7 @@ const read = (path: string): string => readFileSync(join(process.cwd(), path), "
 
 const browser = read("src/renderer/src/components/BrowserPage.vue");
 const dock = read("src/renderer/src/components/RunDock.vue");
+const sidebar = read("src/renderer/src/components/AppSidebar.vue");
 const directive = read("src/renderer/src/directives/tooltip.ts");
 
 describe("hover labels", () => {
@@ -66,7 +67,7 @@ describe("hover labels", () => {
       "t('app.browserReload')",
       "t('app.browserFind')",
       "t('app.downloads')",
-      "t('app.openConsole')",
+      "t('app.appMenu')",
     ]) {
       expect(browser, `${value} must be a drawn tooltip`).toContain(`v-tooltip="${value}"`);
     }
@@ -75,11 +76,23 @@ describe("hover labels", () => {
   it("gives every icon-only dock control a label through the directive", () => {
     expect(dock).toContain('v-tooltip="t(\'app.browserCollapseDock\')"');
     expect(dock).toContain('v-tooltip="t(\'app.browserExpandDock\')"');
-    expect(dock).toContain('v-tooltip="t(\'app.browserResizeDock\')"');
     expect(dock).toContain('v-tooltip="t(\'app.browserCloseView\')"');
     // The collapsed strip's tiles carry a computed label with a placement, since
-    // they sit against the window's right edge.
+    // they sit against the column's edge.
     expect(dock).toContain("placement: 'top'");
+  });
+
+  it("labels the column's resize handle, which the dock no longer owns", () => {
+    // The handle moved to the sidebar when the dock stopped being the whole
+    // right-hand column: one box owns the width, so one box owns the grip.
+    expect(sidebar).toContain('v-tooltip="t(\'app.browserResizeDock\')"');
+    expect(dock).not.toContain("dock-resize");
+  });
+
+  it("labels every navigation row in the column", () => {
+    // Rows collapse to icons, so the label is all that is left at 46px.
+    expect(sidebar).toContain('v-tooltip="t(\'app.browser\')"');
+    expect(sidebar).toContain("v-tooltip=\"entry.label\"");
   });
 
   it("routes the shared icon button's hint through the directive", () => {

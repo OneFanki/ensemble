@@ -3,20 +3,14 @@ import type { AppSettings } from "@shared/types";
 /**
  * The in-app guide: what this app is for, and the shortest path to using it.
  *
- * Separate from the guided tour (`tourSteps.ts`) on purpose, because they answer
- * different questions and fail in different ways:
+ * This is both the first-run screen and the handbook. It is a page of its own:
+ * a few short sentences and one diagram of the minimum path, readable in a
+ * minute, and possible to come back to without walking through anything.
  *
- * - The tour points at live controls on the real UI, so it can never be shown to
- *   someone who is not already in the app, and a person who clicks through it
- *   without reading learns only where things are.
- * - This guide is a page of its own: a few short sentences and one diagram of
- *   the minimum path, readable in a minute, and possible to come back to without
- *   walking through anything.
- *
- * The tour is still the first-run experience — it is the only thing that gets a
- * brand-new user from an empty workspace to a first launch. This page is what
- * answers "what is this and what is the least I have to do", and it is what the
- * tour's last step points at.
+ * It replaced a spotlight tour that pointed at live controls. That shape failed
+ * twice: the controls it pointed at kept moving, and a sequence of callouts
+ * teaches where a button is without ever saying what the product is for. One
+ * page answers both, and there is only one introduction to keep current.
  *
  * ## Why the first screen is only two things
  *

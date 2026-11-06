@@ -340,7 +340,6 @@ async function confirmCopy(): Promise<void> {
       <template #actions>
         <AppButton
           variant="primary"
-          data-tour="new-view"
           :disabled="!store.identities.length"
           :title="store.identities.length ? '' : $t('app.emptyViewsNoIdentity')"
           @click="emit('newView')">

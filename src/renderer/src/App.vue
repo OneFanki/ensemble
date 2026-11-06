@@ -13,20 +13,17 @@ import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import GuestPool from "./components/GuestPool.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
-import ConsoleHeader from "./components/ConsoleHeader.vue";
-import ConsoleSidebar from "./components/ConsoleSidebar.vue";
+import AppSidebar, { type AppView } from "./components/AppSidebar.vue";
 import FlowsPage from "./components/FlowsPage.vue";
 import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import LayoutEditor from "./components/LayoutEditor.vue";
 import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
-import RunDock from "./components/RunDock.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
-import SettingsPage from "./components/SettingsPage.vue";
+import SettingsPage, { type SettingsSection } from "./components/SettingsPage.vue";
 import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
-import SpotlightTour from "./components/SpotlightTour.vue";
 import BookmarksPage from "./components/BookmarksPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
@@ -38,26 +35,20 @@ import { type Locale, setLocale, tr } from "./i18n";
 import { type LocaleSetting, resolveLocale } from "@shared/locale";
 import { installWindowControlsWidth } from "./composables/windowControls";
 import { GUIDE_VERSION, guideIsUnread } from "./onboarding/guide";
-import {
-  shouldAutoStartTour,
-  TOUR_STEPS,
-  TOUR_VERSION,
-  type TourView,
-} from "./onboarding/tourSteps";
 import { useConfirmStore } from "./stores/confirm";
 import { useEmbeddedStore } from "./stores/embedded";
 import { useNavigationStore } from "./stores/navigation";
 import { useWorkspaceStore } from "./stores/workspace";
 
-type View =
-  | "browser"
-  | "sites"
-  | "identities"
-  | "views"
-  | "flows"
-  | "tags"
-  | "bookmarks"
-  | "settings";
+/**
+ * Everything that can be on screen.
+ *
+ * `browser` and the assets share one shell — a column of destinations with the
+ * chosen page beside it. `settings` does not: it covers the whole window, with
+ * its own tab bar and its own way back, because it changes the workspace rather
+ * than showing part of it.
+ */
+type View = AppView | "settings";
 
 /**
  * Which of the two shells is on screen.
@@ -68,8 +59,8 @@ type View =
  * page. The model did not change; only its expression did. "Browse" is a
  * browser, and a browser is exactly a 1x1 layout with one instance in it.
  *
- * Browse: tab strip, toolbar, page. No rail, no dock.
- * Bench: the same chrome, plus the run dock and the cells of a multi-cell layout.
+ * Browse: tab strip, toolbar, page. No sidebar.
+ * Bench: the same chrome, plus the sidebar and the cells of a multi-cell layout.
  *
  * The mode follows the layout unless the user pins it: entering a multi-cell
  * layout is the act of asking for a workbench, and collapsing back to one cell
@@ -83,19 +74,28 @@ const confirm = useConfirmStore();
 const navigation = useNavigationStore();
 const view = ref<View>("browser");
 const mode = ref<ShellMode>(store.settings.shellMode ?? "browse");
-/** True while the management console covers the browser. */
-const consoleOpen = computed(() => view.value !== "browser");
+/**
+ * The sidebar is up while the workbench is, and while any management page is.
+ *
+ * It used to be two separate things that each owned their own half of this:
+ * the run dock appeared with the workbench, and the console drew its own rail
+ * whenever it covered the browser. Merged, the rule is one sentence: the column
+ * is present whenever there is something beside the page to navigate from. In
+ * plain browsing — a tab strip, a toolbar, a page — it is absent, because that
+ * is what a browser looks like.
+ */
+const sidebarOpen = computed(
+  () =>
+    view.value !== "settings" && (mode.value === "bench" || view.value !== "browser"),
+);
 const siteDraft = ref<SiteDraft | null>(null);
 const identityDraft = ref<IdentityDraft | null>(null);
 const viewDraft = ref<ViewDraft | null>(null);
 const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; viewId?: string } | null>(
   null,
 );
-const tourOpen = ref(false);
-/** The in-app guide: a page of its own, not the spotlight tour. */
+/** The in-app guide: the only first-run introduction and the readable handbook. */
 const guideOpen = ref(false);
-/** Remount the tour on replay so it cannot keep the previous step index. */
-const tourSession = ref(0);
 const healthOpen = ref(false);
 /** True while an HTML overlay covers the browser stage. */
 const stageObscured = ref(false);
@@ -105,16 +105,6 @@ const identitySiteSeed = ref<{ origin: string; path: string } | null>(null);
 const updatePrompt = ref<UpdateCheckResult | null>(null);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
-
-/**
- * Whether the first-run tour starts by itself.
- *
- * Off during the 2.0 shell work: the tour points at live controls, and the
- * controls are moving. It is a single flag rather than a deletion so the tour can
- * come back without rebuilding it — the steps, the version bookkeeping and the
- * Settings replay entry all stay in place.
- */
-const AUTO_TOUR_ENABLED = false;
 
 /**
  * The language actually rendered: `settings.locale` with "system" resolved.
@@ -147,7 +137,6 @@ const overlayOpen = computed(
         layoutEditor.value ||
         healthOpen.value ||
         updatePrompt.value ||
-        tourOpen.value ||
         guideOpen.value,
     ),
 );
@@ -183,17 +172,21 @@ onMounted(async () => {
     if (view.value !== "browser") switchView("browser");
   });
   /*
-   * The first-run tour is deliberately off while 2.0 is in progress.
+   * First run: the guide opens by itself, once.
    *
-   * The tour points at live controls, and the shell it was written against is
-   * being replaced — a spotlight on a moved button is worse than nothing. The
-   * code paths and the stored version stay untouched so the tour can be turned
-   * back on with this one flag once the interface settles, and the Settings entry
-   * that replays it still works for anyone who asks for it.
+   * It used to be a spotlight tour that pointed at live controls, and that was
+   * the wrong shape here twice over: the UI it pointed at kept moving, and a
+   * series of callouts teaches where a button is without ever saying what the
+   * product is for. The guide answers both in one page, and it is the same page
+   * the title-bar dot and the Settings entry open later — so there is exactly
+   * one introduction to keep current.
+   *
+   * Deferred a frame so the shell has painted: opening it before the browser
+   * page exists makes the backdrop flash over an empty window.
    */
-  if (AUTO_TOUR_ENABLED && shouldAutoStartTour(store.settings)) {
+  if (guideIsUnread(store.settings)) {
     window.setTimeout(() => {
-      tourOpen.value = true;
+      void openGuide();
     }, 350);
   }
   // The main process restores the last view itself; the renderer only reports it
@@ -211,7 +204,9 @@ onMounted(async () => {
     updatePrompt.value = result;
   });
   // Cmd+, arrives from the native menu; the renderer never binds the key itself.
-  window.ensemble.onOpenSettings(() => openSettings());
+  // Defaulting the section keeps "wherever I was" for this entry: the user asked
+  // for settings, not for a particular pane.
+  window.ensemble.onOpenSettings(() => openSettings(settingsSection.value));
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -249,16 +244,46 @@ function switchView(next: View) {
 }
 
 /**
- * The browser's one door into the console.
+ * The browser toolbar's way into the management pages.
  *
- * It lands on Settings, not on Sites. The control is a gear (see
- * `BrowserPage.vue`), and a gear that opens a table of sites is a promise the
- * shape does not keep: the thing people reach for when they see a gear is the
- * place where preferences live. Everything else in the console is one click away
- * from its rail.
+ * The menu names a destination; without one it lands on Settings, because the
+ * menu's other rows are already there to be clicked instead.
  */
-function openConsole() {
+function openConsole(target: "sites" | "bookmarks" | "settings" = "settings") {
+  if (target === "settings") {
+    openSettings("general");
+    return;
+  }
+  switchView(target);
+}
+
+/**
+ * Opens Settings at a named section.
+ *
+ * Settings covers the window, so it is a view of its own rather than a series of
+ * sidebar rows. The section travels as a request (with a counter) rather than as
+ * a prop the page mirrors: the page stays mounted, and coming back to the same
+ * section after the user picked another one has to count as a new request.
+ */
+function openSettings(section: SettingsSection = "general") {
+  settingsSection.value = section;
+  settingsSectionSeq.value += 1;
   switchView("settings");
+}
+
+/**
+ * The menu's "open the workbench": show the sidebar, nothing else.
+ *
+ * It used to also force a 2×1 layout onto the focused view, which meant asking
+ * for the sidebar silently rearranged the stage — and the button that was
+ * supposed to undo it ("back to one cell") only hid the column, leaving the
+ * split behind. The sidebar and the layout are two separate answers: this one
+ * is "I want the list and the navigation", and the layout picker stays the only
+ * thing that decides how many cells the stage has.
+ */
+function openWorkspace() {
+  setMode("bench");
+  switchView("browser");
 }
 
 /**
@@ -300,108 +325,33 @@ function setMode(next: ShellMode): void {
   if (mode.value === next) return;
   mode.value = next;
   void store.saveSettings({ shellMode: next });
-  if (next === "bench") void enterBenchLayout();
 }
 
 /**
- * Give the focused view a multi-cell layout.
+ * Which settings tab is on screen.
  *
- * The dock exists to show what is running across cells, so opening the workbench
- * with a 1x1 layout would be a column of tool chrome beside a page with nothing
- * to arrange. 2x1 is the smallest honest grid; the layout picker is right there
- * for anything else.
+ * State rather than a prop the page owns, because three callers outside the page
+ * pick a section — the AI entry, the update prompt, and the native menu — and two
+ * of them mean "that specific tab" while the third means "wherever I was".
  */
-async function enterBenchLayout(): Promise<void> {
-  const active = embedded.activeView;
-  if (!active) return;
-  const slots = embedded.slots(active);
-  if (slots > 1) return;
-  await window.ensemble.setEmbeddedViewSlots(active.id, [
-    { x: 0, y: 0, width: 0.5, height: 1 },
-    { x: 0.5, y: 0, width: 0.5, height: 1 },
-  ]);
-}
+const settingsSection = ref<SettingsSection>("general");
+/** Bumped per request; a repeated request for the same tab still has to land. */
+const settingsSectionSeq = ref(0);
 
-/** Which settings tab a status-bar entry point should land on. */
-const settingsTab = ref<"general" | "engines" | "vault" | "data" | "mcp" | "about">("general");
-/**
- * Bumped on every navigation request.
- *
- * The settings page is not remounted between visits, so the tab alone is not
- * enough: clicking the entry twice, with a manual tab change in between, would
- * leave the prop unchanged and the page would stay where the user put it.
- */
-const settingsTabSeq = ref(0);
-
-/**
- * Status-bar shortcut into Settings → AI access.
- *
- * Retargets the tab every time: the settings page keeps its own active tab
- * across visits, so a plain `view = "settings"` would land on whatever was open
- * last and leave the user hunting for the endpoint address.
- */
+/** Status-bar shortcut into Settings → AI access. */
 function openMcpSettings() {
-  settingsTab.value = "mcp";
-  settingsTabSeq.value += 1;
-  view.value = "settings";
+  openSettings("mcp");
 }
 
 // The toolbar's AI entry lives three components down; this is how it reaches
 // Settings without every layer in between having to forward a handler.
 navigation.bind((next, tab) => {
-  if (tab) {
-    settingsTab.value = tab as typeof settingsTab.value;
-    settingsTabSeq.value += 1;
+  if (next === "settings") {
+    openSettings((tab as SettingsSection | undefined) ?? settingsSection.value);
+    return;
   }
   switchView(next as View);
 });
-/**
- * Settings page from the native menu (Cmd+, on macOS).
- *
- * Unlike `openMcpSettings` this does not retarget the tab: the user asked for
- * "settings", not for a particular pane, so whatever they opened last is what
- * they expect to see.
- */
-function openSettings() {
-  view.value = "settings";
-}
-function startTour() {
-  tourSession.value += 1;
-  tourOpen.value = true;
-}
-
-async function finishTour(completed: boolean): Promise<void> {
-  tourOpen.value = false;
-  // Both endings land on the browser page, whoever started the tour and
-  // wherever it stopped.
-  //
-  // The reason is the empty views page: the step before the last one is "create
-  // a view", so a tour that ended there — or a user who pressed skip while on
-  // it — left a newcomer staring at a page of nothing and reading it as "I must
-  // create a view before anything can happen". The browser page is where the
-  // work starts, and it is also where the run dock the last step explained is
-  // visible. Replaying the tour from Settings therefore also ends here rather
-  // than dropping the user back into Settings.
-  view.value = "browser";
-  if ((store.settings.onboardingVersion ?? 0) < TOUR_VERSION) {
-    await store.saveSettings({ onboardingVersion: TOUR_VERSION });
-  }
-  // A finished tour hands over to the guide; a skipped one does not.
-  //
-  // The tour shows a newcomer where things are, one control at a time, and ends
-  // without ever stating the point: three steps, and the AI can do all of them.
-  // Someone who clicked through it (or read it) gets that summary immediately,
-  // which is the one moment they are paying attention. Someone who pressed skip
-  // asked not to be walked through anything, so nothing is pushed at them — the
-  // unread dot on the title bar stays there instead.
-  if (completed && guideIsUnread(store.settings)) {
-    await openGuide();
-  }
-}
-
-function handleTourNavigate(next: TourView) {
-  view.value = next;
-}
 
 /**
  * Opens the guide and marks it read.
@@ -740,47 +690,72 @@ async function handleLocale(locale: LocaleSetting) {
     </div>
 
     <!--
-      The browser, and only the browser.
+      One shell for everything except settings: a column of destinations on the
+      left, the chosen page on the right.
 
-      There is no rail and no dock here: a browser is a tab strip, a toolbar and
-      a page. Everything management-shaped lives in the console, which covers
-      this surface when opened. A single-cell layout with one instance *is* a
-      browser, so this mode needs no special case.
+      This replaces the pair that used to exist — a "browser" shell with a
+      right-hand run dock, and a separate console window with its own left rail.
+      Two shells meant the same question, "where am I and what else is there",
+      got answered on a different side of the screen depending on how you
+      arrived. Now the sidebar holds the running instances (top) and the
+      destinations (bottom), and the pane beside it is whichever one is selected.
     -->
-    <div v-else-if="!consoleOpen" class="workspace">
-      <BrowserPage
-        :obscured="overlayOpen"
-        :bench="mode === 'bench'"
-        @open-console="openConsole"
-        @switch-mode="setMode"
+    <!--
+      Settings covers the window rather than sitting beside the column.
+
+      Every other management page is a destination you visit while staying
+      oriented in the workspace: the column of pages stays up and the pane shows
+      the chosen one. Settings changes the workspace itself, so it takes the whole
+      window — its own tab bar, its own way back — the way a browser's own
+      settings page leaves the browser's chrome behind.
+    -->
+    <SettingsPage
+      v-if="view === 'settings'"
+      :section="settingsSection"
+      :section-seq="settingsSectionSeq"
+      @back="switchView('browser')"
+      @theme="handleTheme"
+      @locale="handleLocale"
+      @open-guide="openGuide"
+      @update-found="(result) => (updatePrompt = result)"
+    />
+
+    <div v-else class="shell">
+      <AppSidebar
+        v-if="sidebarOpen"
+        :view="view"
+        @navigate="switchView"
+        @settings="switchView('settings')"
       />
 
-      <!--
-        The run dock appears only when a multi-cell layout is on stage. In a
-        1x1 layout it would be a column of tool chrome beside a page — which is
-        the admin-console look this shell exists to leave behind.
-      -->
-      <RunDock v-if="mode === 'bench'" class="shell-dock" />
-    </div>
+      <main class="pane" :class="{ 'pane-console': view !== 'browser' }">
+        <!--
+          The band the native window controls own.
 
-    <!--
-      The management console: a full-window destination, the way browser
-      settings are. The tabs it offers are the 1.0 navigation, unchanged — the
-      pages themselves did not need rewriting, only a home of their own.
-    -->
-    <div v-else class="console">
-      <ConsoleHeader @back="switchView('browser')" />
-      <!--
-        Title bar across the full width, then a rail and the page side by side.
-        The rail is the console's navigation; putting it in the same row as the
-        content is what lets the title bar stay a drag band shared with the
-        browser shell.
-      -->
-      <div class="console-body">
-        <ConsoleSidebar :view="view" @navigate="switchView" />
-        <main class="console-pane">
+          Management pages are ordinary in-flow HTML with a 24px top padding, so
+          their first row — the page title and its action buttons — landed right
+          under the caption buttons drawn by the OS, and the right-hand button
+          was clipped in half. This band reserves the caption area and is the
+          draggable strip a frameless window needs; without it the whole page
+          has no way to move the window at all.
+        -->
+        <div
+          v-if="view !== 'browser'"
+          class="pane-band drag-region"
+          :data-platform="platform"
+          aria-hidden="true"
+        ></div>
+        <BrowserPage
+          v-if="view === 'browser'"
+          :obscured="overlayOpen"
+          :bench="mode === 'bench'"
+          @open-console="openConsole"
+          @switch-mode="setMode"
+          @open-workspace="openWorkspace"
+          @update-found="(result) => (updatePrompt = result)"
+        />
         <SitesPage
-          v-if="view === 'sites'"
+          v-else-if="view === 'sites'"
           @new-site="openNewSite"
           @edit-site="openEditSite"
           @open-site="openSite"
@@ -801,18 +776,8 @@ async function handleLocale(locale: LocaleSetting) {
         />
         <FlowsPage v-else-if="view === 'flows'" />
         <TagsPage v-else-if="view === 'tags'" />
-        <BookmarksPage v-else-if="view === 'bookmarks'" />
-        <SettingsPage
-          v-else
-          :tab="settingsTab"
-          :tab-seq="settingsTabSeq"
-          @theme="handleTheme"
-          @locale="handleLocale"
-          @start-tour="startTour"
-          @update-found="(result) => (updatePrompt = result)"
-        />
-        </main>
-      </div>
+        <BookmarksPage v-else />
+      </main>
     </div>
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
@@ -881,17 +846,6 @@ async function handleLocale(locale: LocaleSetting) {
       @delete="layoutEditor.preset ? deleteLayout(layoutEditor.preset) : null"
     />
 
-    <SpotlightTour
-      :key="tourSession"
-      :open="tourOpen"
-      :steps="TOUR_STEPS"
-      @navigate="handleTourNavigate"
-      @close="finishTour"
-    />
-
-    <!-- Above the tour in the tree, below it in z-order only when both are open,
-         which cannot happen: the guide is opened from the title bar or the tour's
-         last step, never while the tour is still running. -->
     <GuideDialog v-if="guideOpen" @close="guideOpen = false" />
   </div>
 </template>
@@ -940,67 +894,81 @@ async function handleLocale(locale: LocaleSetting) {
 }
 
 /*
- * The browser and its dock, side by side.
+ * Sidebar and pane, side by side.
  *
- * A row container rather than two children of the shell: the shell is a column,
- * and putting the dock directly in it stacked the dock *under* the page instead
- * of beside it — which also left the stage measuring the full window width while
- * a dock column sat over nothing.
+ * A row container, not two children of the shell: the shell is a column, and
+ * putting the sidebar directly in it stacked it *under* the page instead of
+ * beside it — which also left the stage measuring the full window width while a
+ * column sat over nothing.
  */
-.workspace {
+.shell {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   display: flex;
   align-items: stretch;
+  background: var(--content);
 }
 
 /*
- * The run dock rides beside the stage, and only while a multi-cell layout is on
- * stage. It is a sibling of the browser rather than a child because the browser
- * measures its own stage from its own box: nesting the dock inside would make
- * that measurement depend on the dock's existence.
+ * The content pane: the browser page, or a management page in its place.
+ *
+ * One element for both is the point of the merged shell. A management page is
+ * not a different screen any more — it is this pane showing something else,
+ * which is why switching to one no longer hides the window's chrome.
+ *
+ * No background and no stacking of its own: pages are real compositing surfaces
+ * stacked at `z-index: 1` at the app root, so a pane that painted a background
+ * would cover the very page it is framing. The management pages get their own
+ * covering surface below, only while one of them is showing.
  */
-.shell-dock {
-  flex: 0 0 auto;
-  min-width: 0;
-}
-
-.console {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--content);
-  /*
-   * Above the page pool, by number rather than by arrival order.
-   *
-   * Every page is a real compositing surface stacked at `z-index: 1` at the app
-   * root. Parking them when this view opens is a timing bet: the guest layer can
-   * still be composited for a frame after its element has been moved, which
-   * showed up as the page and the settings panel swapping places twice on the
-   * way in. Claiming a higher layer here means no ordering mistake upstream can
-   * ever put a page in front of the console.
-   */
-  position: relative;
-  z-index: 2;
-}
-
-/* Rail and page share the row under the title bar. */
-.console-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  min-width: 0;
-}
-
-.console-pane {
+.pane {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/*
+ * A management page, holding the pane.
+ *
+ * This is where the covering surface belongs: the page has to paint over the
+ * parked guests, and it is the one case where an opaque layer is correct. Above
+ * the pool by number rather than by arrival order — parking the guests when the
+ * view changes is a timing bet, and the guest layer can still be composited for
+ * a frame after its element has moved, which showed up as the two swapping
+ * places twice on the way in.
+ */
+.pane-console {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--content);
+  position: relative;
+  z-index: 2;
+  overflow: hidden;
+}
+
+/*
+ * The caption band above a management page.
+ *
+ * Same height as the browser's tab strip, so switching between the browser and a
+ * management page does not move the window's own buttons or the page's first row.
+ * The right padding is what keeps page-head-actions out from under the caption
+ * buttons.
+ */
+.pane-band {
+  flex: 0 0 auto;
+  height: var(--titlebar-height);
+}
+
+/* The band inherits the pane's background so it reads as part of the page frame
+   rather than as a second toolbar. */
+.pane-console > .pane-band {
+  background: var(--frame);
 }
 
 /*

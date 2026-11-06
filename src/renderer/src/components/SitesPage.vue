@@ -121,7 +121,7 @@ import IconButton from "./ui/IconButton.vue";
           :all-collapsed="allCollapsed"
           @toggle="groupCollapse.toggleAll(groupKeys)"
         />
-        <AppButton variant="primary" data-tour="new-site" @click="emit('newSite')">
+        <AppButton variant="primary" @click="emit('newSite')">
           <Plus :size="13" />
           {{ $t("app.newSite") }}
         </AppButton>

@@ -5,6 +5,7 @@ import type { ConnectivityProbeResult } from "@shared/proxy";
 import type { ImportPreview, ImportResult } from "@shared/transfer";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
+  ArrowLeft,
   Bot,
   Copy,
   Database,
@@ -31,9 +32,19 @@ import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
-type SettingsTab = "general" | "engines" | "vault" | "data" | "mcp" | "about";
+/**
+ * The settings section on screen.
+ *
+ * Settings is a page of its own rather than a pane beside the navigation column:
+ * it covers the whole window, the sidebar included, and carries its own tab bar
+ * and its own way back. Every other management page is somewhere you go while
+ * staying oriented in the workspace; settings is where you change the workspace
+ * itself, and leaving a column of destinations on screen next to it would keep
+ * offering trips away from the thing being changed.
+ */
+export type SettingsSection = "general" | "engines" | "vault" | "data" | "mcp" | "about";
 
-const tabs: Array<{ id: SettingsTab; labelKey: string; icon: Component }> = [
+const tabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = [
   { id: "general", labelKey: "app.settingsTabGeneral", icon: SlidersHorizontal },
   { id: "engines", labelKey: "app.settingsTabEngines", icon: Monitor },
   { id: "vault", labelKey: "app.settingsTabVault", icon: ShieldCheck },
@@ -42,28 +53,29 @@ const tabs: Array<{ id: SettingsTab; labelKey: string; icon: Component }> = [
   { id: "about", labelKey: "app.settingsTabAbout", icon: Info },
 ];
 
-const activeTab = ref<SettingsTab>("general");
+const activeTab = ref<SettingsSection>("general");
 
 /**
- * A tab requested from outside (the status bar's AI entry).
+ * A section requested from outside (the toolbar's AI entry, the update prompt).
  *
- * Keyed on the request counter, not the tab id: the settings page stays mounted,
- * so returning to the requested tab after a manual change has to be a new
- * request even though the prop still names the same tab.
+ * Keyed on the request counter, not the section id: the page stays mounted while
+ * the view is settings, so returning to the requested section after a manual
+ * change has to be a new request even though the prop still names the same one.
  */
-const props = defineProps<{ tab?: SettingsTab; tabSeq?: number }>();
+const props = defineProps<{ section?: SettingsSection; sectionSeq?: number }>();
 watch(
-  () => props.tabSeq,
+  () => props.sectionSeq,
   () => {
-    if (props.tab) activeTab.value = props.tab;
+    if (props.section) activeTab.value = props.section;
   },
   { immediate: true },
 );
 
 const emit = defineEmits<{
+  back: [];
   theme: [theme: "dark" | "light" | "system"];
   locale: [locale: LocaleSetting];
-  startTour: [];
+  openGuide: [];
   updateFound: [result: UpdateCheckResult];
 }>();
 
@@ -399,1012 +411,1131 @@ async function submitMaster() {
 
 <template>
   <section class="page settings">
-    <PageHeader :title="$t('app.settings')" :note="$t('app.settingsSubtitle')" />
-
-    <nav class="tabs" role="tablist" :aria-label="$t('app.settings')">
+    <!--
+      Its own title bar and its own way back: settings covers the window. The
+      band is the drag region, and it reserves the caption buttons on the right
+      exactly like the browser's tab strip, so switching into settings does not
+      move the window controls.
+    -->
+    <header class="settings-head drag-region" :data-platform="store.snapshot?.platform ?? 'win32'">
       <button
-        v-for="tab in tabs"
-        :key="tab.id"
         type="button"
-        role="tab"
-        class="tab"
-        :class="{ active: activeTab === tab.id }"
-        :aria-selected="activeTab === tab.id"
-        @click="activeTab = tab.id"
+        class="back no-drag"
+        :aria-label="$t('app.consoleBack')"
+        v-tooltip="$t('app.consoleBack')"
+        @click="emit('back')"
       >
-        <component :is="tab.icon" :size="13" />
-        <span>{{ $t(tab.labelKey) }}</span>
+        <ArrowLeft :size="14" />
+        <span class="back-label">{{ $t("app.consoleBack") }}</span>
       </button>
-    </nav>
+    </header>
 
-    <div class="scroll">
-      <section v-if="activeTab === 'engines'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.engineList") }}</h2>
-            <p>{{ $t("app.engineHint") }}</p>
-          </div>
-          <div class="block-actions">
-            <AppButton :disabled="scanning" @click="store.addManualEngine()">
-              <Plus :size="12" />
-              {{ $t("app.addManual") }}
-            </AppButton>
-            <AppButton :disabled="scanning" @click="store.scanEngines()">
-              <RefreshCw :size="12" :class="{ spin: scanning }" />
-              {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
-            </AppButton>
-          </div>
-        </div>
+    <div class="settings-body">
+      <!--
+        Settings' own navigation column.
 
-        <!-- The one browser external launches use. It replaced a per-site field:
-             the title bar shows a single browser, so the setting behind it has
-             to be single too, or the same switch routes differently per account. -->
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.defaultBrowser") }}</span>
-          <div class="select-slot wide-select">
-            <SelectField
-              :model-value="store.settings.defaultEngineId ?? '__auto__'"
-              :options="defaultBrowserOptions"
-              @update:model-value="
-                store.saveSettings({
-                  defaultEngineId: $event === '__auto__' ? undefined : $event,
-                })
-              "
-            />
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.defaultBrowserNote") }}</p>
+        Not the app's sidebar: this one belongs to the page and dies with it. A
+        row of tabs across the top grew sideways with every section added, and
+        the horizontal rule it drew competed with the page's own title; a column
+        reads like a table of contents and has room for the sections still to
+        come.
+      -->
+      <nav class="settings-nav" role="tablist" :aria-label="$t('app.settings')" aria-orientation="vertical">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ active: activeTab === tab.id }"
+          :aria-selected="activeTab === tab.id"
+          :data-section="tab.id"
+          @click="activeTab = tab.id"
+        >
+          <component :is="tab.icon" :size="13" />
+          <span>{{ $t(tab.labelKey) }}</span>
+        </button>
+      </nav>
 
-        <div class="engine-table">
-          <div class="engine-head">
-            <span>{{ $t("app.tableBrowser") }}</span>
-            <span>{{ $t("app.tableVersion") }}</span>
-            <span>{{ $t("app.tableCapability") }}</span>
-            <span>{{ $t("app.tableSource") }}</span>
-            <span></span>
-          </div>
-          <div v-for="engine in engines" :key="engine.id" class="engine-row">
-            <span class="e-brand">
-              <span class="e-dot" :class="{ blocked: engine.status === 'blocked' }"></span>
-              {{ engine.brand }}
-            </span>
-            <span class="mono e-version">{{ engine.version ?? "—" }}</span>
-            <span class="e-capability">
-              <span v-if="engine.status === 'blocked'" class="cap blocked">{{ statusLabel(engine.status) }}</span>
-              <span v-else-if="engine.cdp" class="cap cdp">CDP</span>
-              <span v-else class="cap external">{{ $t("app.externalOnly") }}</span>
-            </span>
-            <span class="mono e-source">{{ engine.source }}</span>
-            <span class="e-actions">
-              <button
-                v-if="engine.source === 'manual'"
-                class="link"
-                type="button"
-                @click="store.removeManualEngine(engine.exePath)"
-              >
-                ▲
-              </button>
-            </span>
-          </div>
-          <div v-if="!engines.length && !store.enginesReady" class="engine-empty">
-            <RefreshCw :size="18" class="spin" />
-            <span>{{ $t("app.scanningInstalled") }}</span>
-          </div>
-          <div v-else-if="!engines.length" class="engine-empty">
-            <Monitor :size="18" />
-            <span>{{ $t("app.noBrowsersHint") }}</span>
-            <div class="links">
-              <a href="https://www.google.com/chrome/" target="_blank" rel="noreferrer">
-                <Download :size="11" /> Chrome
-              </a>
-              <a href="https://www.microsoft.com/edge" target="_blank" rel="noreferrer">
-                <Download :size="11" /> Edge
-              </a>
-              <a href="https://brave.com/download/" target="_blank" rel="noreferrer">
-                <Download :size="11" /> Brave
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <p class="fineprint">
-          {{ $t("app.engineCapabilityNote") }}
-        </p>
-      </section>
-
-      <section v-if="activeTab === 'general'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.appearanceTitle") }}</h2>
-            <p>{{ $t("app.appearanceNote") }}</p>
-          </div>
-        </div>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.theme") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.theme === 'dark' }"
-              @click="emit('theme', 'dark')"
-            >
-              {{ $t("app.themeDark") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.theme === 'light' }"
-              @click="emit('theme', 'light')"
-            >
-              {{ $t("app.themeLight") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.theme === 'system' }"
-              @click="emit('theme', 'system')"
-            >
-              {{ $t("app.themeSystem") }}
-            </button>
-          </div>
-        </div>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.language") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.locale === 'system' }"
-              :title="$t('app.languageSystemHint')"
-              @click="emit('locale', 'system')"
-            >
-              {{ $t("app.languageSystem") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.locale === 'zh' }"
-              @click="emit('locale', 'zh')"
-            >
-              {{ $t("app.languageZh") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.locale === 'en' }"
-              @click="emit('locale', 'en')"
-            >
-              English
-            </button>
-          </div>
-        </div>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.defaultLayout") }}</span>
-          <div class="select-slot">
-            <SelectField
-              :model-value="store.settings.layout"
-              :options="
-                store.layoutPresets.map((preset) => ({
-                  value: preset.id,
-                  label: store.presetName(preset),
-                }))
-              "
-              @update:model-value="
-                store.saveSettings({ layout: $event ?? store.settings.layout })
-              "
-            />
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.browserZoomSetting") }}</span>
-          <div class="interval">
-            <input
-              class="input mono interval-input"
-              type="number"
-              min="50"
-              max="200"
-              step="5"
-              :value="store.settings.browserZoom"
-              @change="
-                store.saveSettings({
-                  browserZoom: Math.min(
-                    200,
-                    Math.max(
-                      50,
-                      Math.round(Number(($event.target as HTMLInputElement).value)) || 100,
-                    ),
-                  ),
-                })
-              "
-            />
-            <span class="unit mono">%</span>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.browserZoomNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.searchEngineSetting") }}</span>
-          <div class="select-slot">
-            <SelectField
-              :model-value="store.settings.searchEngineId"
-              :options="
-                store.searchEngines.map((engine) => ({ value: engine.id, label: engine.name }))
-              "
-              @update:model-value="
-                store.saveSettings({
-                  searchEngineId: $event ?? store.settings.searchEngineId,
-                })
-              "
-            />
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.searchEngineNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.bookmarkShowTitle") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.newTabBookmarks }"
-              @click="store.saveSettings({ newTabBookmarks: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.newTabBookmarks }"
-              @click="store.saveSettings({ newTabBookmarks: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.bookmarkShowHint") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.launchInterval") }}</span>
-          <div class="interval">
-            <input
-              class="input mono interval-input"
-              type="number"
-              min="0"
-              max="5000"
-              step="50"
-              :value="store.settings.launchIntervalMs"
-              @change="
-                store.saveSettings({
-                  launchIntervalMs: Math.min(
-                    5000,
-                    Math.max(0, Number(($event.target as HTMLInputElement).value) || 0),
-                  ),
-                })
-              "
-            />
-            <span class="unit mono">ms</span>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.launchIntervalNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.autoFillOnLaunch }"
-              @click="store.saveSettings({ autoFillOnLaunch: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.autoFillOnLaunch }"
-              @click="store.saveSettings({ autoFillOnLaunch: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">
-          {{ $t("app.autoFillLaunchNote") }}
-        </p>
-        <!--
-          Auto-submit is its own switch, next to autofill but not part of it:
-          "type my password in" and "press the button for me" are two decisions,
-          and someone may want the first without the second (a site with a
-          captcha, or one that locks the account after a couple of tries). A site
-          can override this in its own dialog; that override is the exception, so
-          the normal answer belongs here.
-        -->
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.autoSubmitLabel") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.autoSubmitLogin }"
-              @click="store.saveSettings({ autoSubmitLogin: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.autoSubmitLogin }"
-              @click="store.saveSettings({ autoSubmitLogin: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">
-          {{ $t("app.autoSubmitNote") }}
-        </p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.restoreView") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.restoreLastView }"
-              @click="store.saveSettings({ restoreLastView: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.restoreLastView }"
-              @click="store.saveSettings({ restoreLastView: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.restoreViewNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.autoCheckUpdates }"
-              @click="store.saveSettings({ autoCheckUpdates: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.autoCheckUpdates }"
-              @click="store.saveSettings({ autoCheckUpdates: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.autoUpdateNote") }}</p>
-        <!-- Network proxy: one setting for update checks, downloads and the
-             pages in the built-in browser, because all three use Chromium's
-             session. "Follow system" is the default and covers the common case
-             (Clash with the system proxy on); manual exists for setups that
-             never reach the OS settings. -->
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.proxySetting") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.proxyMode === 'system' }"
-              @click="store.saveSettings({ proxyMode: 'system' })"
-            >
-              {{ $t("app.proxySystem") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.proxyMode === 'off' }"
-              @click="store.saveSettings({ proxyMode: 'off' })"
-            >
-              {{ $t("app.proxyOff") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.proxyMode === 'manual' }"
-              @click="store.saveSettings({ proxyMode: 'manual' })"
-            >
-              {{ $t("app.proxyManual") }}
-            </button>
-          </div>
-        </div>
-        <div v-if="store.settings.proxyMode === 'manual'" class="option-row proxy-fields">
-          <label class="option-label" for="proxy-url">{{ $t("app.proxyUrlLabel") }}</label>
-          <input
-            id="proxy-url"
-            class="input mono proxy-input"
-            :value="store.settings.proxyUrl ?? ''"
-            :placeholder="'http://127.0.0.1:7890'"
-            spellcheck="false"
-            @change="saveProxyUrl(($event.target as HTMLInputElement).value)"
-          />
-        </div>
-        <p v-if="store.settings.proxyMode === 'manual' && !proxyUrlUsable" class="fineprint warn">
-          {{ $t("app.proxyManualInvalid") }}
-        </p>
-        <div v-if="store.settings.proxyMode !== 'system'" class="option-row proxy-fields">
-          <label class="option-label" for="proxy-bypass">{{ $t("app.proxyBypassLabel") }}</label>
-          <input
-            id="proxy-bypass"
-            class="input mono proxy-input"
-            :value="store.settings.proxyBypass ?? ''"
-            :placeholder="$t('app.proxyBypassHint')"
-            spellcheck="false"
-            @change="saveProxyBypass(($event.target as HTMLInputElement).value)"
-          />
-        </div>
-        <p class="fineprint">{{ $t("app.proxyNote") }}</p>
-        <div class="option-row proxy-fields">
-          <span class="option-label">{{ $t("app.proxyTestLabel") }}</span>
-          <AppButton size="sm" :disabled="probing" @click="runConnectivityTest">
-            {{ probing ? $t("app.proxyTestRunning") : $t("app.proxyTestButton") }}
-          </AppButton>
-        </div>
-        <ul v-if="probeResults" class="probe-results">
-          <li v-for="result in probeResults" :key="result.id" class="probe-row">
-            <span class="probe-dot" :class="result.status"></span>
-            <span class="probe-name">
-              {{ $t(result.id === "updateApi" ? "app.probeUpdateApi" : "app.probeProxyExit") }}
-            </span>
-            <span class="mono probe-detail">
-              {{
-                result.status === "ok"
-                  ? $t("app.probeOk", { ms: result.ms })
-                  : $t("app.probeFail", { message: result.message ?? "" })
-              }}
-            </span>
-          </li>
-        </ul>
-        <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.overlaySetting") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.overlayEnabled }"
-              @click="store.saveSettings({ overlayEnabled: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.overlayEnabled }"
-              @click="store.saveSettings({ overlayEnabled: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.overlaySettingNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.focusLabelSetting") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.focusLabelEnabled }"
-              @click="store.saveSettings({ focusLabelEnabled: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.focusLabelEnabled }"
-              @click="store.saveSettings({ focusLabelEnabled: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.focusLabelSettingNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.headlessUaSetting") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.headlessCheckUa === 'desktop' }"
-              @click="store.saveSettings({ headlessCheckUa: 'desktop' })"
-            >
-              {{ $t("app.headlessUaDesktop") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.headlessCheckUa === 'headless' }"
-              @click="store.saveSettings({ headlessCheckUa: 'headless' })"
-            >
-              {{ $t("app.headlessUaHeadless") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.headlessUaNote") }}</p>
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.tourLabel") }}</span>
-          <AppButton @click="emit('startTour')">
-            {{ $t("app.tourReplay") }}
-          </AppButton>
-        </div>
-        <p class="fineprint">{{ $t("app.tourReplayNote") }}</p>
-      </section>
-
-      <section v-if="activeTab === 'vault'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.vaultTitle") }}</h2>
-            <p>{{ $t("app.vaultNote") }}</p>
-          </div>
-        </div>
-        <div class="vault-row">
-          <ShieldCheck v-if="store.credentials?.secure" :size="16" class="vault-icon ok" />
-          <ShieldAlert v-else :size="16" class="vault-icon warn" />
-          <div class="vault-copy">
-            <span class="vault-title">
-              {{ store.credentials?.secure ? $t("app.secure") : $t("app.insecure") }}
-            </span>
-            <span class="mono vault-backend">{{ store.credentials?.backend ?? "unknown" }}</span>
-          </div>
-          <span v-if="store.credentials?.warning" class="vault-warning">
-            {{ store.credentials.warning }}
-          </span>
-        </div>
-
-        <div v-if="store.credentials?.locked" class="vault-unlock">
-          <input
-            v-model="unlockPassword"
-            type="password"
-            class="input mono"
-            :placeholder="$t('app.vaultUnlockPlaceholder')"
-            autocomplete="current-password"
-            @keyup.enter="submitUnlock"
-          />
-          <AppButton variant="primary" :disabled="!unlockPassword" @click="submitUnlock">
-            {{ $t("app.unlock") }}
-          </AppButton>
-        </div>
-
-        <div v-else-if="store.credentials?.mode === 'master'" class="vault-actions">
-          <AppButton @click="toggleMasterForm('change')">{{ $t("app.changeMaster") }}</AppButton>
-          <AppButton @click="store.lockVault()">{{ $t("app.lockNow") }}</AppButton>
-          <AppButton v-if="store.credentials.canManageMaster"
-            @click="store.removeMasterPassword()">
-            {{ $t("app.backToKeychain") }}
-          </AppButton>
-        </div>
-
-        <div v-else-if="store.credentials?.canManageMaster" class="vault-actions">
-          <AppButton @click="toggleMasterForm('set')">{{ $t("app.setMaster") }}</AppButton>
-        </div>
-
-        <div v-if="masterForm" class="master-form">
-          <input
-            v-if="masterForm === 'change'"
-            v-model="currentPassword"
-            type="password"
-            class="input mono"
-            :placeholder="$t('app.currentMaster')"
-            autocomplete="current-password"
-          />
-          <input
-            v-model="nextPassword"
-            type="password"
-            class="input mono"
-            :placeholder="masterForm === 'set' ? $t('app.setMasterPlaceholder') : $t('app.newMaster')"
-            autocomplete="new-password"
-          />
-          <input
-            v-model="confirmPassword"
-            type="password"
-            class="input mono"
-            :placeholder="$t('app.repeatPassword')"
-            autocomplete="new-password"
-          />
-          <div class="vault-actions">
-            <AppButton variant="primary" :disabled="!canSubmitMaster" @click="submitMaster">
-              {{ masterForm === "set" ? $t("app.enableMaster") : $t("app.saveNewMaster") }}
-            </AppButton>
-            <AppButton @click="resetMasterForm">{{ $t("app.cancel") }}</AppButton>
-          </div>
-          <p v-if="masterError" class="error" role="alert">{{ masterError }}</p>
-        </div>
-
-        <p class="fineprint">
-          {{ $t("app.vaultExplainer") }}
-        </p>
-      </section>
-
-      <section v-if="activeTab === 'data'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.dataTitle") }}</h2>
-            <p>{{ $t("app.dataNote") }}</p>
-          </div>
-        </div>
-
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.closeToTray") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: store.settings.closeToTray }"
-              @click="store.saveSettings({ closeToTray: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: !store.settings.closeToTray }"
-              @click="store.saveSettings({ closeToTray: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.closeToTrayNote") }}</p>
-
-        <div class="transfer">
-          <div class="transfer-col">
-            <h3>{{ $t("app.exportTitle") }}</h3>
-            <label class="check">
-              <input v-model="includeSecrets" type="checkbox" />
-              <span>{{ $t("app.exportIncludeSecrets") }}</span>
-            </label>
-            <input
-              v-if="includeSecrets"
-              v-model="exportPassphrase"
-              type="password"
-              class="input mono"
-              :placeholder="$t('app.exportPassphrasePlaceholder')"
-              autocomplete="new-password"
-            />
-            <AppButton variant="primary" :disabled="store.busy === 'transfer'" @click="doExport">
-              <Download :size="12" />
-              {{ $t("app.exportAction") }}
-            </AppButton>
-            <p class="fineprint">{{ $t("app.exportNote") }}</p>
-          </div>
-
-          <div class="transfer-col">
-            <h3>{{ $t("app.importTitle") }}</h3>
-            <div v-if="importPreview" class="preview-box">
-              <p class="preview-name mono">{{ importPreview.path }}</p>
-              <dl class="preview-counts">
-                <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ importPreview.preview.sites }}</dd></div>
-                <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ importPreview.preview.identities }}</dd></div>
-                <div><dt>{{ $t("app.views") }}</dt><dd class="mono">{{ importPreview.preview.views }}</dd></div>
-                <div><dt>{{ $t("app.layoutPresets") }}</dt><dd class="mono">{{ importPreview.preview.layoutPresets }}</dd></div>
-              </dl>
-              <input
-                v-if="importPreview.preview.hasSecrets"
-                v-model="importPassphrase"
-                type="password"
-                class="input mono"
-                :placeholder="$t('app.importPassphrasePlaceholder')"
-                autocomplete="current-password"
-              />
-              <div class="vault-actions">
-                <AppButton variant="primary" :disabled="store.busy === 'transfer'"
-                  @click="doApplyImport">
-                  {{ $t("app.importApply") }}
+      <div class="settings-main">
+        <PageHeader :title="$t('app.settings')" :note="$t('app.settingsSubtitle')" />
+        <div class="scroll">
+          <section v-if="activeTab === 'engines'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.engineList") }}</h2>
+                <p>{{ $t("app.engineHint") }}</p>
+              </div>
+              <div class="block-actions">
+                <AppButton :disabled="scanning" @click="store.addManualEngine()">
+                  <Plus :size="12" />
+                  {{ $t("app.addManual") }}
                 </AppButton>
-                <AppButton @click="importPreview = null">
-                  {{ $t("app.cancel") }}
+                <AppButton :disabled="scanning" @click="store.scanEngines()">
+                  <RefreshCw :size="12" :class="{ spin: scanning }" />
+                  {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
                 </AppButton>
               </div>
             </div>
-            <AppButton v-else :disabled="store.busy === 'transfer'" @click="doPickImport">
-              <Upload :size="12" />
-              {{ $t("app.importPick") }}
-            </AppButton>
-            <p v-if="importResult" class="fineprint">
-              {{
-                $t("app.importResult", {
-                  added: importResult.added,
-                  updated: importResult.updated,
-                  skipped: importResult.skipped,
-                })
-              }}
-            </p>
-            <p class="fineprint">{{ $t("app.importNote") }}</p>
-          </div>
 
-          <!-- A colleague's shared logins. Not a workspace file: it lands by
-               site URL and username, and carries only the accounts they chose. -->
-          <div class="transfer-col">
-            <h3>{{ $t("app.accountsImportTitle") }}</h3>
-            <div v-if="accountsPreview" class="preview-box">
-              <p class="preview-name mono">{{ accountsPreview.path }}</p>
-              <dl class="preview-counts">
-                <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ accountsPreview.preview.sites }}</dd></div>
-                <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ accountsPreview.preview.accounts }}</dd></div>
+            <!-- The one browser external launches use. It replaced a per-site field:
+                 the title bar shows a single browser, so the setting behind it has
+                 to be single too, or the same switch routes differently per account. -->
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.defaultBrowser") }}</span>
+              <div class="select-slot wide-select">
+                <SelectField
+                  :model-value="store.settings.defaultEngineId ?? '__auto__'"
+                  :options="defaultBrowserOptions"
+                  @update:model-value="
+                    store.saveSettings({
+                      defaultEngineId: $event === '__auto__' ? undefined : $event,
+                    })
+                  "
+                />
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.defaultBrowserNote") }}</p>
+
+            <div class="engine-table">
+              <div class="engine-head">
+                <span>{{ $t("app.tableBrowser") }}</span>
+                <span>{{ $t("app.tableVersion") }}</span>
+                <span>{{ $t("app.tableCapability") }}</span>
+                <span>{{ $t("app.tableSource") }}</span>
+                <span></span>
+              </div>
+              <div v-for="engine in engines" :key="engine.id" class="engine-row">
+                <span class="e-brand">
+                  <span class="e-dot" :class="{ blocked: engine.status === 'blocked' }"></span>
+                  {{ engine.brand }}
+                </span>
+                <span class="mono e-version">{{ engine.version ?? "—" }}</span>
+                <span class="e-capability">
+                  <span v-if="engine.status === 'blocked'" class="cap blocked">{{ statusLabel(engine.status) }}</span>
+                  <span v-else-if="engine.cdp" class="cap cdp">CDP</span>
+                  <span v-else class="cap external">{{ $t("app.externalOnly") }}</span>
+                </span>
+                <span class="mono e-source">{{ engine.source }}</span>
+                <span class="e-actions">
+                  <button
+                    v-if="engine.source === 'manual'"
+                    class="link"
+                    type="button"
+                    @click="store.removeManualEngine(engine.exePath)"
+                  >
+                    ▲
+                  </button>
+                </span>
+              </div>
+              <div v-if="!engines.length && !store.enginesReady" class="engine-empty">
+                <RefreshCw :size="18" class="spin" />
+                <span>{{ $t("app.scanningInstalled") }}</span>
+              </div>
+              <div v-else-if="!engines.length" class="engine-empty">
+                <Monitor :size="18" />
+                <span>{{ $t("app.noBrowsersHint") }}</span>
+                <div class="links">
+                  <a href="https://www.google.com/chrome/" target="_blank" rel="noreferrer">
+                    <Download :size="11" /> Chrome
+                  </a>
+                  <a href="https://www.microsoft.com/edge" target="_blank" rel="noreferrer">
+                    <Download :size="11" /> Edge
+                  </a>
+                  <a href="https://brave.com/download/" target="_blank" rel="noreferrer">
+                    <Download :size="11" /> Brave
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <p class="fineprint">
+              {{ $t("app.engineCapabilityNote") }}
+            </p>
+          </section>
+
+          <section v-if="activeTab === 'general'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.appearanceTitle") }}</h2>
+                <p>{{ $t("app.appearanceNote") }}</p>
+              </div>
+            </div>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.theme") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.theme === 'dark' }"
+                  @click="emit('theme', 'dark')"
+                >
+                  {{ $t("app.themeDark") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.theme === 'light' }"
+                  @click="emit('theme', 'light')"
+                >
+                  {{ $t("app.themeLight") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.theme === 'system' }"
+                  @click="emit('theme', 'system')"
+                >
+                  {{ $t("app.themeSystem") }}
+                </button>
+              </div>
+            </div>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.language") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.locale === 'system' }"
+                  :title="$t('app.languageSystemHint')"
+                  @click="emit('locale', 'system')"
+                >
+                  {{ $t("app.languageSystem") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.locale === 'zh' }"
+                  @click="emit('locale', 'zh')"
+                >
+                  {{ $t("app.languageZh") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.locale === 'en' }"
+                  @click="emit('locale', 'en')"
+                >
+                  English
+                </button>
+              </div>
+            </div>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.defaultLayout") }}</span>
+              <div class="select-slot">
+                <SelectField
+                  :model-value="store.settings.layout"
+                  :options="
+                    store.layoutPresets.map((preset) => ({
+                      value: preset.id,
+                      label: store.presetName(preset),
+                    }))
+                  "
+                  @update:model-value="
+                    store.saveSettings({ layout: $event ?? store.settings.layout })
+                  "
+                />
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.browserZoomSetting") }}</span>
+              <div class="interval">
+                <input
+                  class="input mono interval-input"
+                  type="number"
+                  min="50"
+                  max="200"
+                  step="5"
+                  :value="store.settings.browserZoom"
+                  @change="
+                    store.saveSettings({
+                      browserZoom: Math.min(
+                        200,
+                        Math.max(
+                          50,
+                          Math.round(Number(($event.target as HTMLInputElement).value)) || 100,
+                        ),
+                      ),
+                    })
+                  "
+                />
+                <span class="unit mono">%</span>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.browserZoomNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.searchEngineSetting") }}</span>
+              <div class="select-slot">
+                <SelectField
+                  :model-value="store.settings.searchEngineId"
+                  :options="
+                    store.searchEngines.map((engine) => ({ value: engine.id, label: engine.name }))
+                  "
+                  @update:model-value="
+                    store.saveSettings({
+                      searchEngineId: $event ?? store.settings.searchEngineId,
+                    })
+                  "
+                />
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.searchEngineNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.bookmarkShowTitle") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.newTabBookmarks }"
+                  @click="store.saveSettings({ newTabBookmarks: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.newTabBookmarks }"
+                  @click="store.saveSettings({ newTabBookmarks: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.bookmarkShowHint") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.launchInterval") }}</span>
+              <div class="interval">
+                <input
+                  class="input mono interval-input"
+                  type="number"
+                  min="0"
+                  max="5000"
+                  step="50"
+                  :value="store.settings.launchIntervalMs"
+                  @change="
+                    store.saveSettings({
+                      launchIntervalMs: Math.min(
+                        5000,
+                        Math.max(0, Number(($event.target as HTMLInputElement).value) || 0),
+                      ),
+                    })
+                  "
+                />
+                <span class="unit mono">ms</span>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.launchIntervalNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.autoFillOnLaunch }"
+                  @click="store.saveSettings({ autoFillOnLaunch: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.autoFillOnLaunch }"
+                  @click="store.saveSettings({ autoFillOnLaunch: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">
+              {{ $t("app.autoFillLaunchNote") }}
+            </p>
+            <!--
+              Auto-submit is its own switch, next to autofill but not part of it:
+              "type my password in" and "press the button for me" are two decisions,
+              and someone may want the first without the second (a site with a
+              captcha, or one that locks the account after a couple of tries). A site
+              can override this in its own dialog; that override is the exception, so
+              the normal answer belongs here.
+            -->
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.autoSubmitLabel") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.autoSubmitLogin }"
+                  @click="store.saveSettings({ autoSubmitLogin: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.autoSubmitLogin }"
+                  @click="store.saveSettings({ autoSubmitLogin: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">
+              {{ $t("app.autoSubmitNote") }}
+            </p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.restoreView") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.restoreLastView }"
+                  @click="store.saveSettings({ restoreLastView: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.restoreLastView }"
+                  @click="store.saveSettings({ restoreLastView: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.restoreViewNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.autoCheckUpdates }"
+                  @click="store.saveSettings({ autoCheckUpdates: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.autoCheckUpdates }"
+                  @click="store.saveSettings({ autoCheckUpdates: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.autoUpdateNote") }}</p>
+            <!-- Network proxy: one setting for update checks, downloads and the
+                 pages in the built-in browser, because all three use Chromium's
+                 session. "Follow system" is the default and covers the common case
+                 (Clash with the system proxy on); manual exists for setups that
+                 never reach the OS settings. -->
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.proxySetting") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.proxyMode === 'system' }"
+                  @click="store.saveSettings({ proxyMode: 'system' })"
+                >
+                  {{ $t("app.proxySystem") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.proxyMode === 'off' }"
+                  @click="store.saveSettings({ proxyMode: 'off' })"
+                >
+                  {{ $t("app.proxyOff") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.proxyMode === 'manual' }"
+                  @click="store.saveSettings({ proxyMode: 'manual' })"
+                >
+                  {{ $t("app.proxyManual") }}
+                </button>
+              </div>
+            </div>
+            <div v-if="store.settings.proxyMode === 'manual'" class="option-row proxy-fields">
+              <label class="option-label" for="proxy-url">{{ $t("app.proxyUrlLabel") }}</label>
+              <input
+                id="proxy-url"
+                class="input mono proxy-input"
+                :value="store.settings.proxyUrl ?? ''"
+                :placeholder="'http://127.0.0.1:7890'"
+                spellcheck="false"
+                @change="saveProxyUrl(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <p v-if="store.settings.proxyMode === 'manual' && !proxyUrlUsable" class="fineprint warn">
+              {{ $t("app.proxyManualInvalid") }}
+            </p>
+            <div v-if="store.settings.proxyMode !== 'system'" class="option-row proxy-fields">
+              <label class="option-label" for="proxy-bypass">{{ $t("app.proxyBypassLabel") }}</label>
+              <input
+                id="proxy-bypass"
+                class="input mono proxy-input"
+                :value="store.settings.proxyBypass ?? ''"
+                :placeholder="$t('app.proxyBypassHint')"
+                spellcheck="false"
+                @change="saveProxyBypass(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+            <p class="fineprint">{{ $t("app.proxyNote") }}</p>
+            <div class="option-row proxy-fields">
+              <span class="option-label">{{ $t("app.proxyTestLabel") }}</span>
+              <AppButton size="sm" :disabled="probing" @click="runConnectivityTest">
+                {{ probing ? $t("app.proxyTestRunning") : $t("app.proxyTestButton") }}
+              </AppButton>
+            </div>
+            <ul v-if="probeResults" class="probe-results">
+              <li v-for="result in probeResults" :key="result.id" class="probe-row">
+                <span class="probe-dot" :class="result.status"></span>
+                <span class="probe-name">
+                  {{ $t(result.id === "updateApi" ? "app.probeUpdateApi" : "app.probeProxyExit") }}
+                </span>
+                <span class="mono probe-detail">
+                  {{
+                    result.status === "ok"
+                      ? $t("app.probeOk", { ms: result.ms })
+                      : $t("app.probeFail", { message: result.message ?? "" })
+                  }}
+                </span>
+              </li>
+            </ul>
+            <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.overlaySetting") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.overlayEnabled }"
+                  @click="store.saveSettings({ overlayEnabled: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.overlayEnabled }"
+                  @click="store.saveSettings({ overlayEnabled: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.overlaySettingNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.focusLabelSetting") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.focusLabelEnabled }"
+                  @click="store.saveSettings({ focusLabelEnabled: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.focusLabelEnabled }"
+                  @click="store.saveSettings({ focusLabelEnabled: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.focusLabelSettingNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.headlessUaSetting") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.headlessCheckUa === 'desktop' }"
+                  @click="store.saveSettings({ headlessCheckUa: 'desktop' })"
+                >
+                  {{ $t("app.headlessUaDesktop") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.headlessCheckUa === 'headless' }"
+                  @click="store.saveSettings({ headlessCheckUa: 'headless' })"
+                >
+                  {{ $t("app.headlessUaHeadless") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.headlessUaNote") }}</p>
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.guideTitle") }}</span>
+              <AppButton @click="emit('openGuide')">
+                {{ $t("app.guideShow") }}
+              </AppButton>
+            </div>
+            <p class="fineprint">{{ $t("app.guideShowNote") }}</p>
+          </section>
+
+          <section v-if="activeTab === 'vault'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.vaultTitle") }}</h2>
+                <p>{{ $t("app.vaultNote") }}</p>
+              </div>
+            </div>
+            <div class="vault-row">
+              <ShieldCheck v-if="store.credentials?.secure" :size="16" class="vault-icon ok" />
+              <ShieldAlert v-else :size="16" class="vault-icon warn" />
+              <div class="vault-copy">
+                <span class="vault-title">
+                  {{ store.credentials?.secure ? $t("app.secure") : $t("app.insecure") }}
+                </span>
+                <span class="mono vault-backend">{{ store.credentials?.backend ?? "unknown" }}</span>
+              </div>
+              <span v-if="store.credentials?.warning" class="vault-warning">
+                {{ store.credentials.warning }}
+              </span>
+            </div>
+
+            <div v-if="store.credentials?.locked" class="vault-unlock">
+              <input
+                v-model="unlockPassword"
+                type="password"
+                class="input mono"
+                :placeholder="$t('app.vaultUnlockPlaceholder')"
+                autocomplete="current-password"
+                @keyup.enter="submitUnlock"
+              />
+              <AppButton variant="primary" :disabled="!unlockPassword" @click="submitUnlock">
+                {{ $t("app.unlock") }}
+              </AppButton>
+            </div>
+
+            <div v-else-if="store.credentials?.mode === 'master'" class="vault-actions">
+              <AppButton @click="toggleMasterForm('change')">{{ $t("app.changeMaster") }}</AppButton>
+              <AppButton @click="store.lockVault()">{{ $t("app.lockNow") }}</AppButton>
+              <AppButton v-if="store.credentials.canManageMaster"
+                @click="store.removeMasterPassword()">
+                {{ $t("app.backToKeychain") }}
+              </AppButton>
+            </div>
+
+            <div v-else-if="store.credentials?.canManageMaster" class="vault-actions">
+              <AppButton @click="toggleMasterForm('set')">{{ $t("app.setMaster") }}</AppButton>
+            </div>
+
+            <div v-if="masterForm" class="master-form">
+              <input
+                v-if="masterForm === 'change'"
+                v-model="currentPassword"
+                type="password"
+                class="input mono"
+                :placeholder="$t('app.currentMaster')"
+                autocomplete="current-password"
+              />
+              <input
+                v-model="nextPassword"
+                type="password"
+                class="input mono"
+                :placeholder="masterForm === 'set' ? $t('app.setMasterPlaceholder') : $t('app.newMaster')"
+                autocomplete="new-password"
+              />
+              <input
+                v-model="confirmPassword"
+                type="password"
+                class="input mono"
+                :placeholder="$t('app.repeatPassword')"
+                autocomplete="new-password"
+              />
+              <div class="vault-actions">
+                <AppButton variant="primary" :disabled="!canSubmitMaster" @click="submitMaster">
+                  {{ masterForm === "set" ? $t("app.enableMaster") : $t("app.saveNewMaster") }}
+                </AppButton>
+                <AppButton @click="resetMasterForm">{{ $t("app.cancel") }}</AppButton>
+              </div>
+              <p v-if="masterError" class="error" role="alert">{{ masterError }}</p>
+            </div>
+
+            <p class="fineprint">
+              {{ $t("app.vaultExplainer") }}
+            </p>
+          </section>
+
+          <section v-if="activeTab === 'data'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.dataTitle") }}</h2>
+                <p>{{ $t("app.dataNote") }}</p>
+              </div>
+            </div>
+
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.closeToTray") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.closeToTray }"
+                  @click="store.saveSettings({ closeToTray: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.closeToTray }"
+                  @click="store.saveSettings({ closeToTray: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.closeToTrayNote") }}</p>
+
+            <div class="transfer">
+              <div class="transfer-col">
+                <h3>{{ $t("app.exportTitle") }}</h3>
+                <label class="check">
+                  <input v-model="includeSecrets" type="checkbox" />
+                  <span>{{ $t("app.exportIncludeSecrets") }}</span>
+                </label>
+                <input
+                  v-if="includeSecrets"
+                  v-model="exportPassphrase"
+                  type="password"
+                  class="input mono"
+                  :placeholder="$t('app.exportPassphrasePlaceholder')"
+                  autocomplete="new-password"
+                />
+                <AppButton variant="primary" :disabled="store.busy === 'transfer'" @click="doExport">
+                  <Download :size="12" />
+                  {{ $t("app.exportAction") }}
+                </AppButton>
+                <p class="fineprint">{{ $t("app.exportNote") }}</p>
+              </div>
+
+              <div class="transfer-col">
+                <h3>{{ $t("app.importTitle") }}</h3>
+                <div v-if="importPreview" class="preview-box">
+                  <p class="preview-name mono">{{ importPreview.path }}</p>
+                  <dl class="preview-counts">
+                    <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ importPreview.preview.sites }}</dd></div>
+                    <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ importPreview.preview.identities }}</dd></div>
+                    <div><dt>{{ $t("app.views") }}</dt><dd class="mono">{{ importPreview.preview.views }}</dd></div>
+                    <div><dt>{{ $t("app.layoutPresets") }}</dt><dd class="mono">{{ importPreview.preview.layoutPresets }}</dd></div>
+                  </dl>
+                  <input
+                    v-if="importPreview.preview.hasSecrets"
+                    v-model="importPassphrase"
+                    type="password"
+                    class="input mono"
+                    :placeholder="$t('app.importPassphrasePlaceholder')"
+                    autocomplete="current-password"
+                  />
+                  <div class="vault-actions">
+                    <AppButton variant="primary" :disabled="store.busy === 'transfer'"
+                      @click="doApplyImport">
+                      {{ $t("app.importApply") }}
+                    </AppButton>
+                    <AppButton @click="importPreview = null">
+                      {{ $t("app.cancel") }}
+                    </AppButton>
+                  </div>
+                </div>
+                <AppButton v-else :disabled="store.busy === 'transfer'" @click="doPickImport">
+                  <Upload :size="12" />
+                  {{ $t("app.importPick") }}
+                </AppButton>
+                <p v-if="importResult" class="fineprint">
+                  {{
+                    $t("app.importResult", {
+                      added: importResult.added,
+                      updated: importResult.updated,
+                      skipped: importResult.skipped,
+                    })
+                  }}
+                </p>
+                <p class="fineprint">{{ $t("app.importNote") }}</p>
+              </div>
+
+              <!-- A colleague's shared logins. Not a workspace file: it lands by
+                   site URL and username, and carries only the accounts they chose. -->
+              <div class="transfer-col">
+                <h3>{{ $t("app.accountsImportTitle") }}</h3>
+                <div v-if="accountsPreview" class="preview-box">
+                  <p class="preview-name mono">{{ accountsPreview.path }}</p>
+                  <dl class="preview-counts">
+                    <div><dt>{{ $t("app.sites") }}</dt><dd class="mono">{{ accountsPreview.preview.sites }}</dd></div>
+                    <div><dt>{{ $t("app.identities") }}</dt><dd class="mono">{{ accountsPreview.preview.accounts }}</dd></div>
+                    <div>
+                      <dt>{{ $t("app.accountsImportWithPasswords") }}</dt>
+                      <dd class="mono">{{ accountsPreview.preview.withPasswords }}</dd>
+                    </div>
+                  </dl>
+                  <p v-if="accountsPreview.preview.matchingSites.length" class="fineprint">
+                    {{ $t("app.accountsImportMatching", { names: accountsPreview.preview.matchingSites.join("、") }) }}
+                  </p>
+                  <input
+                    v-if="accountsPreview.preview.hasSecrets"
+                    v-model="accountsPassphrase"
+                    type="password"
+                    class="input mono"
+                    :placeholder="$t('app.importPassphrasePlaceholder')"
+                    autocomplete="current-password"
+                  />
+                  <div class="vault-actions">
+                    <AppButton variant="primary" @click="applyAccountsImport">
+                      {{ $t("app.importApply") }}
+                    </AppButton>
+                    <AppButton @click="accountsPreview = null">
+                      {{ $t("app.cancel") }}
+                    </AppButton>
+                  </div>
+                </div>
+                <AppButton v-else @click="pickAccountsImport">
+                  <Upload :size="12" />
+                  {{ $t("app.accountsImportPick") }}
+                </AppButton>
+                <p v-if="accountsResult" class="fineprint">
+                  {{
+                    $t("app.accountsImportResult", {
+                      added: accountsResult.accountsAdded,
+                      updated: accountsResult.accountsUpdated,
+                      passwords: accountsResult.passwordsWritten,
+                    })
+                  }}
+                </p>
+                <p class="fineprint">{{ $t("app.accountsImportNote") }}</p>
+              </div>
+            </div>
+            <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
+          </section>
+
+          <section v-if="activeTab === 'mcp'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.mcpTitle") }}</h2>
+                <p>{{ $t("app.mcpNote") }}</p>
+              </div>
+              <div class="block-actions">
+                <span class="status-chip" :class="{ on: mcp?.running }">
+                  {{
+                    mcp?.running
+                      ? $t("app.mcpRunning")
+                      : mcp?.starting
+                        ? $t("app.mcpStarting")
+                        : $t("app.mcpStopped")
+                  }}
+                </span>
+              </div>
+            </div>
+
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.mcpEnable") }}</span>
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: mcp?.enabled }"
+                  @click="refreshMcp({ enabled: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: mcp ? !mcp.enabled : false }"
+                  @click="refreshMcp({ enabled: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+            </div>
+
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.mcpPort") }}</span>
+              <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
+              <AppButton @click="updatePort">{{ $t("app.mcpApplyPort") }}</AppButton>
+            </div>
+
+            <div class="option-row">
+              <span class="option-label">{{ $t("app.mcpPermissions") }}</span>
+              <div class="perm-row">
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    :checked="mcp?.allowWrite"
+                    @change="refreshMcp({ allowWrite: ($event.target as HTMLInputElement).checked })"
+                  />
+                  <span>{{ $t("app.mcpAllowWrite") }}</span>
+                </label>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    :checked="mcp?.allowRun"
+                    @change="refreshMcp({ allowRun: ($event.target as HTMLInputElement).checked })"
+                  />
+                  <span>{{ $t("app.mcpAllowRun") }}</span>
+                </label>
+                <label class="check danger">
+                  <input
+                    type="checkbox"
+                    :checked="mcp?.allowDelete"
+                    @change="refreshMcp({ allowDelete: ($event.target as HTMLInputElement).checked })"
+                  />
+                  <span>{{ $t("app.mcpAllowDelete") }}</span>
+                </label>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
+
+            <!--
+              Origins where the AI may act inside the daily profile. Listed here as
+              well as in the browser toolbar because this is where the user thinks
+              about what the AI is allowed to do; the toolbar entry exists because
+              that is where they notice it needs granting.
+            -->
+            <div v-if="mcp" class="origin-block">
+              <span class="origin-label">{{ $t("app.mcpAiOrigins") }}</span>
+              <div class="origin-list">
+                <span v-if="!mcp.aiOrigins.length" class="origin-empty">
+                  {{ $t("app.mcpAiOriginsEmpty") }}
+                </span>
+                <span v-for="origin in mcp.aiOrigins" :key="origin" class="origin-chip mono">
+                  {{ origin }}
+                  <button
+                    type="button"
+                    class="origin-remove"
+                    :aria-label="$t('app.mcpAiOriginRevoke')"
+                    @click="refreshMcp({ aiOrigin: { origin, allowed: false } })"
+                  >
+                    <X :size="10" />
+                  </button>
+                </span>
+              </div>
+            </div>
+            <p class="fineprint">{{ $t("app.mcpAiOriginsNote") }}</p>
+
+            <div v-if="mcp" class="mcp-endpoint">
+              <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
+              <dl class="conn">
                 <div>
-                  <dt>{{ $t("app.accountsImportWithPasswords") }}</dt>
-                  <dd class="mono">{{ accountsPreview.preview.withPasswords }}</dd>
+                  <dt>{{ $t("app.mcpFieldUrl") }}</dt>
+                  <dd class="mono url-cell">{{ mcp.url }}</dd>
+                </div>
+                <div>
+                  <dt>{{ $t("app.mcpFieldAuth") }}</dt>
+                  <dd class="mono">{{ $t("app.mcpFieldAuthValue") }}</dd>
+                </div>
+                <div>
+                  <dt>{{ $t("app.mcpFieldToken") }}</dt>
+                  <dd class="mono token-hidden">{{ "•".repeat(24) }}</dd>
                 </div>
               </dl>
-              <p v-if="accountsPreview.preview.matchingSites.length" class="fineprint">
-                {{ $t("app.accountsImportMatching", { names: accountsPreview.preview.matchingSites.join("、") }) }}
-              </p>
-              <input
-                v-if="accountsPreview.preview.hasSecrets"
-                v-model="accountsPassphrase"
-                type="password"
-                class="input mono"
-                :placeholder="$t('app.importPassphrasePlaceholder')"
-                autocomplete="current-password"
-              />
-              <div class="vault-actions">
-                <AppButton variant="primary" @click="applyAccountsImport">
-                  {{ $t("app.importApply") }}
+              <p class="conn-note">{{ $t("app.mcpTokenHidden") }}</p>
+              <div class="conn-actions">
+                <AppButton variant="primary" data-copy-config @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
+                  <Copy :size="11" />
+                  {{ $t("app.mcpCopyConfig") }}
                 </AppButton>
-                <AppButton @click="accountsPreview = null">
-                  {{ $t("app.cancel") }}
+                <AppButton @click="copyText(mcp.url, 'app.toastUrlCopied')">
+                  <Copy :size="11" />
+                  {{ $t("app.copyUrl") }}
+                </AppButton>
+                <AppButton variant="danger" @click="refreshMcp({ rotateToken: true })">
+                  {{ $t("app.mcpRotate") }}
+                </AppButton>
+              </div>
+              <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
+            </div>
+            <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
+          </section>
+
+          <section v-if="activeTab === 'about'" class="block">
+            <div class="block-head">
+              <div>
+                <h2>{{ $t("app.about") }}</h2>
+                <p>{{ $t("app.aboutTagline") }}</p>
+              </div>
+              <div class="block-actions">
+                <AppButton variant="danger" @click="quitApp">{{ $t("app.quitApp") }}</AppButton>
+              </div>
+            </div>
+            <dl class="about">
+              <div><dt>{{ $t("app.version") }}</dt><dd class="mono">{{ store.snapshot?.appVersion }}</dd></div>
+              <div><dt>{{ $t("app.platform") }}</dt><dd class="mono">{{ store.snapshot?.platform }}</dd></div>
+              <div><dt>{{ $t("app.dataDir") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}</dd></div>
+              <div><dt>{{ $t("app.profileRoot") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}\profiles</dd></div>
+            </dl>
+
+            <div class="update-row">
+              <div class="update-copy">
+                <p class="update-state" :class="updateTone">
+                  {{ updateText }}
+                </p>
+                <p v-if="update?.status === 'available'" class="update-hint">
+                  {{ $t("app.updateManualHint") }}
+                </p>          </div>
+              <div class="update-actions">
+                <AppButton :disabled="checkingUpdate"
+                  @click="checkUpdate">
+                  <RefreshCw :size="12" :class="{ spinning: checkingUpdate }" />
+                  {{ checkingUpdate ? $t("app.updateChecking") : $t("app.updateCheck") }}
+                </AppButton>
+                <AppButton @click="openExternal(update?.url ?? RELEASES_PAGE_URL)">
+                  <ExternalLink :size="12" />
+                  {{ $t("app.openReleases") }}
+                </AppButton>
+                <AppButton @click="openExternal(REPOSITORY_URL)">
+                  <Github :size="12" />
+                  {{ $t("app.openRepository") }}
                 </AppButton>
               </div>
             </div>
-            <AppButton v-else @click="pickAccountsImport">
-              <Upload :size="12" />
-              {{ $t("app.accountsImportPick") }}
-            </AppButton>
-            <p v-if="accountsResult" class="fineprint">
-              {{
-                $t("app.accountsImportResult", {
-                  added: accountsResult.accountsAdded,
-                  updated: accountsResult.accountsUpdated,
-                  passwords: accountsResult.passwordsWritten,
-                })
-              }}
-            </p>
-            <p class="fineprint">{{ $t("app.accountsImportNote") }}</p>
-          </div>
+          </section>
         </div>
-        <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
-      </section>
-
-      <section v-if="activeTab === 'mcp'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.mcpTitle") }}</h2>
-            <p>{{ $t("app.mcpNote") }}</p>
-          </div>
-          <div class="block-actions">
-            <span class="status-chip" :class="{ on: mcp?.running }">
-              {{
-                mcp?.running
-                  ? $t("app.mcpRunning")
-                  : mcp?.starting
-                    ? $t("app.mcpStarting")
-                    : $t("app.mcpStopped")
-              }}
-            </span>
-          </div>
-        </div>
-
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.mcpEnable") }}</span>
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: mcp?.enabled }"
-              @click="refreshMcp({ enabled: true })"
-            >
-              {{ $t("app.on") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: mcp ? !mcp.enabled : false }"
-              @click="refreshMcp({ enabled: false })"
-            >
-              {{ $t("app.off") }}
-            </button>
-          </div>
-        </div>
-
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.mcpPort") }}</span>
-          <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
-          <AppButton @click="updatePort">{{ $t("app.mcpApplyPort") }}</AppButton>
-        </div>
-
-        <div class="option-row">
-          <span class="option-label">{{ $t("app.mcpPermissions") }}</span>
-          <div class="perm-row">
-            <label class="check">
-              <input
-                type="checkbox"
-                :checked="mcp?.allowWrite"
-                @change="refreshMcp({ allowWrite: ($event.target as HTMLInputElement).checked })"
-              />
-              <span>{{ $t("app.mcpAllowWrite") }}</span>
-            </label>
-            <label class="check">
-              <input
-                type="checkbox"
-                :checked="mcp?.allowRun"
-                @change="refreshMcp({ allowRun: ($event.target as HTMLInputElement).checked })"
-              />
-              <span>{{ $t("app.mcpAllowRun") }}</span>
-            </label>
-            <label class="check danger">
-              <input
-                type="checkbox"
-                :checked="mcp?.allowDelete"
-                @change="refreshMcp({ allowDelete: ($event.target as HTMLInputElement).checked })"
-              />
-              <span>{{ $t("app.mcpAllowDelete") }}</span>
-            </label>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
-
-        <!--
-          Origins where the AI may act inside the daily profile. Listed here as
-          well as in the browser toolbar because this is where the user thinks
-          about what the AI is allowed to do; the toolbar entry exists because
-          that is where they notice it needs granting.
-        -->
-        <div v-if="mcp" class="origin-block">
-          <span class="origin-label">{{ $t("app.mcpAiOrigins") }}</span>
-          <div class="origin-list">
-            <span v-if="!mcp.aiOrigins.length" class="origin-empty">
-              {{ $t("app.mcpAiOriginsEmpty") }}
-            </span>
-            <span v-for="origin in mcp.aiOrigins" :key="origin" class="origin-chip mono">
-              {{ origin }}
-              <button
-                type="button"
-                class="origin-remove"
-                :aria-label="$t('app.mcpAiOriginRevoke')"
-                @click="refreshMcp({ aiOrigin: { origin, allowed: false } })"
-              >
-                <X :size="10" />
-              </button>
-            </span>
-          </div>
-        </div>
-        <p class="fineprint">{{ $t("app.mcpAiOriginsNote") }}</p>
-
-        <div v-if="mcp" class="mcp-endpoint">
-          <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
-          <dl class="conn">
-            <div>
-              <dt>{{ $t("app.mcpFieldUrl") }}</dt>
-              <dd class="mono url-cell">{{ mcp.url }}</dd>
-            </div>
-            <div>
-              <dt>{{ $t("app.mcpFieldAuth") }}</dt>
-              <dd class="mono">{{ $t("app.mcpFieldAuthValue") }}</dd>
-            </div>
-            <div>
-              <dt>{{ $t("app.mcpFieldToken") }}</dt>
-              <dd class="mono token-hidden">{{ "•".repeat(24) }}</dd>
-            </div>
-          </dl>
-          <p class="conn-note">{{ $t("app.mcpTokenHidden") }}</p>
-          <div class="conn-actions">
-            <AppButton variant="primary" data-copy-config @click="copyText(mcpSnippet, 'app.toastSnippetCopied')">
-              <Copy :size="11" />
-              {{ $t("app.mcpCopyConfig") }}
-            </AppButton>
-            <AppButton @click="copyText(mcp.url, 'app.toastUrlCopied')">
-              <Copy :size="11" />
-              {{ $t("app.copyUrl") }}
-            </AppButton>
-            <AppButton variant="danger" @click="refreshMcp({ rotateToken: true })">
-              {{ $t("app.mcpRotate") }}
-            </AppButton>
-          </div>
-          <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
-        </div>
-        <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
-      </section>
-
-      <section v-if="activeTab === 'about'" class="block">
-        <div class="block-head">
-          <div>
-            <h2>{{ $t("app.about") }}</h2>
-            <p>{{ $t("app.aboutTagline") }}</p>
-          </div>
-          <div class="block-actions">
-            <AppButton variant="danger" @click="quitApp">{{ $t("app.quitApp") }}</AppButton>
-          </div>
-        </div>
-        <dl class="about">
-          <div><dt>{{ $t("app.version") }}</dt><dd class="mono">{{ store.snapshot?.appVersion }}</dd></div>
-          <div><dt>{{ $t("app.platform") }}</dt><dd class="mono">{{ store.snapshot?.platform }}</dd></div>
-          <div><dt>{{ $t("app.dataDir") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}</dd></div>
-          <div><dt>{{ $t("app.profileRoot") }}</dt><dd class="mono">{{ store.snapshot?.userDataDir }}\profiles</dd></div>
-        </dl>
-
-        <div class="update-row">
-          <div class="update-copy">
-            <p class="update-state" :class="updateTone">
-              {{ updateText }}
-            </p>
-            <p v-if="update?.status === 'available'" class="update-hint">
-              {{ $t("app.updateManualHint") }}
-            </p>          </div>
-          <div class="update-actions">
-            <AppButton :disabled="checkingUpdate"
-              @click="checkUpdate">
-              <RefreshCw :size="12" :class="{ spinning: checkingUpdate }" />
-              {{ checkingUpdate ? $t("app.updateChecking") : $t("app.updateCheck") }}
-            </AppButton>
-            <AppButton @click="openExternal(update?.url ?? RELEASES_PAGE_URL)">
-              <ExternalLink :size="12" />
-              {{ $t("app.openReleases") }}
-            </AppButton>
-            <AppButton @click="openExternal(REPOSITORY_URL)">
-              <Github :size="12" />
-              {{ $t("app.openRepository") }}
-            </AppButton>
-          </div>
-        </div>
-      </section>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
 /*
- * No `overflow` here on purpose: `overflow-x: auto` also computes overflow-y to
- * auto, and the 1px negative margin used to overlap the active underline made
- * the row 1px taller than its box — enough to render a vertical scrollbar that
- * covered the bottom rule. Wrapping keeps every tab reachable on narrow windows.
+ * Settings is a covering surface, not a pane beside the column.
+ *
+ * The pages underneath are `<webview>` guests at `z-index: 1` at the app root,
+ * so this has to paint its own background on a positioned layer above them —
+ * otherwise the browser page shows through the settings form.
  */
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  border-bottom: 1px solid var(--line-soft);
-  flex: 0 0 auto;
-  overflow: visible;
+.page.settings {
+  position: relative;
+  z-index: 2;
+  background: var(--content);
 }
 
-.tab {
+/*
+ * The band that holds the way back and the drag region.
+ *
+ * Same height and same caption reserve as the browser's tab strip: the native
+ * window buttons are painted over that corner by the main process, and they must
+ * not move when the user switches between browsing and settings.
+ */
+.settings-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: var(--titlebar-height);
+  margin: -24px -28px 0;
+  padding: 0 calc(var(--window-controls-width, 138px) + 8px) 0 14px;
+  background: var(--frame);
+}
+
+.settings-head[data-platform="darwin"] {
+  padding-left: 86px;
+}
+
+.back {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 11px;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px;
-  color: var(--faint);
-  font-size: 11.5px;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  flex: 0 0 auto;
+}
+
+.back:hover {
+  background: var(--chrome);
+  color: var(--text);
+}
+
+@media (max-width: 1000px) {
+  .back-label {
+    display: none;
+  }
+}
+
+/*
+ * The page is a two-column frame: settings' own directory on the left, the
+ * section on the right.
+ *
+ * Replaces the header with a row of tabs. A horizontal row grows to the right
+ * with every section and ends up as wide as the window; a column reads as a
+ * table of contents, has room to grow, and keeps the section title as the only
+ * heading on the screen.
+ */
+.settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-8);
+  padding: var(--space-6) var(--space-8) 0 0;
+}
+
+/* Padding is on the body, not on the tab column: the column's own background
+   has to run edge to edge against the title bar above it. */
+.settings-nav {
+  flex: 0 0 auto;
+  width: 164px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: var(--space-1);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.settings-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: left;
   white-space: nowrap;
 }
 
 .tab:hover {
-  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
 }
 
 /*
- * The active tab is marked by the underline plus color, not by a filled pill:
- * with six tabs a pill per item made the row look like a button bar.
+ * The selected row is a filled surface, the same one the app's own navigation
+ * uses for its current item — settings is part of the same window even while it
+ * covers it.
  */
 .tab.active {
+  background: var(--chrome);
   color: var(--text);
-  border-bottom-color: var(--accent);
+}
+
+.tab.active svg {
+  color: var(--accent);
 }
 
 .scroll {
-  margin-top: 14px;
+  padding: var(--space-2) 0 var(--space-6);
   overflow-y: auto;
   min-height: 0;
   display: flex;

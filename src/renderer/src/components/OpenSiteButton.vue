@@ -199,30 +199,29 @@ function chooseIdentity(identityId: string): void {
 }
 
 /*
- * Tinted, unlike every other control on this row.
+ * A plain toolbar button.
  *
- * Its "+" is not "another tab" — it asks which account the page should open as,
- * which is the one thing this browser does that a browser does not. A plain
- * glyph here sat 34px below the tab strip's own "+" and looked interchangeable
- * with it; the tint says "this one creates something" without a label.
+ * It used to be tinted amber to distinguish it from the tab strip's own "+".
+ * Two amber-filled controls above the page pull the eye away from the page, and
+ * "this one asks who to open as" is already carried by its position and its
+ * tooltip — the size and the place distinguish it, not a second accent.
  */
 .split-main {
   display: grid;
   place-items: center;
   width: 32px;
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--text-secondary);
+  background: transparent;
   cursor: pointer;
   border-radius: var(--radius);
 }
 
 .split-main:hover {
-  color: var(--accent-strong);
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
-/* Dock headers and empty cells are denser than the toolbar, and the tint would
-   make a small "+" shout inside a cell. */
+/* Dock headers and empty cells are denser than the toolbar. */
 .split.compact .split-main {
   width: 22px;
   color: var(--text-secondary);
@@ -242,19 +241,20 @@ function chooseIdentity(identityId: string): void {
   position: fixed;
   z-index: 71;
   /* The panel waits for the stage to be parked (about 100ms) before it renders,
-     so it arrives complete. A short fade turns that wait into an opening
-     animation instead of a pause. */
-  animation: panel-in var(--motion-fast) var(--ease-out);
+     so it arrives complete. A base-length fade-and-lift turns that wait into an
+     opening animation instead of a pause; at the fast token it read as a snap. */
+  animation: panel-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
 }
 
 @keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateY(calc(-1 * var(--motion-shift)));
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 </style>

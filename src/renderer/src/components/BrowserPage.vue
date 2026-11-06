@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { EmbeddedTab, EmbeddedView, StageRect } from "@shared/embedded";
+import type { UpdateCheckResult } from "@shared/update";
 import {
   EMBEDDED_DEVTOOLS_GRIP,
+  EMBEDDED_DEVTOOLS_HEAD,
   EMBEDDED_DIVIDER,
   EMBEDDED_SLOT_HEADER,
   embeddedSlotRects,
@@ -24,22 +26,31 @@ import type {
   SlotRect,
 } from "@shared/types";
 import {
+  AppWindow,
   ArrowLeft,
   ArrowRight,
+  Bookmark as BookmarkIcon,
   Bug,
+  Check,
   Copy,
   CornerDownLeft,
   Download,
+  Eraser,
   FolderOpen,
+  Info,
   KeyRound,
   LayoutGrid,
   Minus,
   Monitor,
+  MoreHorizontal,
   Plus,
+  Power,
+  RefreshCw,
   RotateCw,
   Search,
   Settings,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   Star,
   Trash2,
@@ -68,20 +79,24 @@ const props = defineProps<{
   /** An HTML overlay (for example the site menu) covers the stage. */
   obscured?: boolean;
   /**
-   * Multi-cell layout is on stage: the cell headers and the run dock are shown.
+   * The sidebar is on screen.
    *
-   * The top tab strip is drawn either way — a browser always has one. In bench
-   * mode it names the focused cell's account, because every cell of the same
-   * app shows the same page titles.
+   * The top tab strip is drawn either way — a browser always has one. With the
+   * column up it also names the focused cell's account, because every cell of
+   * the same app shows the same page titles.
    */
   bench?: boolean;
 }>();
 
 const emit = defineEmits<{
-  /** Open the management console (the app's own pages). */
-  openConsole: [];
+  /** Open a management page; `null` means "settings", the menu's default. */
+  openConsole: [view?: "sites" | "bookmarks" | "settings"];
   /** Single cell ↔ workbench. */
   switchMode: [mode: "browse" | "bench"];
+  /** The app menu's "open the workbench" — same action as the layout button. */
+  openWorkspace: [];
+  /** A manual update check from the menu found something to install. */
+  updateFound: [result: UpdateCheckResult];
 }>();
 
 /**
@@ -138,11 +153,91 @@ function openMcpSettings(): void {
 }
 
 /**
- * Whether the cell headers and the run dock are drawn.
+ * The app menu, at the toolbar's right end.
+ *
+ * It replaces a bare gear. A gear says "settings" and nothing else, which left
+ * every other infrequent action with no home — and, more importantly, left no
+ * place to put a second door into the workbench. The workbench is the whole
+ * reason this is not a plain browser, but its only entry was a grid glyph beside
+ * the first tab that a newcomer has no reason to try.
+ *
+ * The frequent things stay outside the menu: password fill, the AI entry, zoom,
+ * downloads and the bookmark star all remain visible in the toolbar. What lives
+ * here is what people look for once and would otherwise hunt for — settings,
+ * bookmarks, updates, quitting, and that second workbench door.
+ */
+const appMenuOpen = ref(false);
+useFloatingLayer(appMenuOpen);
+
+// Same dismissal the AI menu needed: the toolbar is a drag region in its empty
+// parts, so without the floating-layer flag a click on that empty space never
+// reaches the document at all.
+watch(appMenuOpen, (open) => {
+  if (open) window.addEventListener("pointerdown", onAppMenuOutside, true);
+  else window.removeEventListener("pointerdown", onAppMenuOutside, true);
+});
+
+function onAppMenuOutside(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest(".app-menu-anchor")) return;
+  appMenuOpen.value = false;
+}
+
+/** How the window was asked to quit; the main process owns what that means. */
+const appPlatform = computed(() => workspace.snapshot?.platform ?? "win32");
+
+function openWorkspaceFromMenu(): void {
+  appMenuOpen.value = false;
+  emit("openWorkspace");
+}
+
+function openPageFromMenu(view: "sites" | "bookmarks" | "settings"): void {
+  appMenuOpen.value = false;
+  emit("openConsole", view);
+}
+
+async function checkForUpdates(): Promise<void> {
+  appMenuOpen.value = false;
+  const result = await window.ensemble.checkUpdate();
+  // Handed to the shell, which owns the update dialog: the menu and the settings
+  // page must not each draw their own copy of it.
+  if (result.status === "available") emit("updateFound", result);
+}
+
+async function quitApp(): Promise<void> {
+  appMenuOpen.value = false;
+  await window.ensemble.quitApp();
+}
+
+/**
+ * Which surface every launch goes to.
+ *
+ * It lives in this menu because the switch is one decision that applies to every
+ * entry — a per-page button made the same action look like several features. It
+ * used to sit in the window's title bar; that row is gone, and with it the only
+ * way to change the setting, which left the app permanently on whatever it was
+ * last set to. The clean session below reads the same value, so the hint names
+ * the surface it will actually use.
+ */
+const launchTarget = computed(() => workspace.settings.launchTarget ?? "embedded");
+
+function chooseLaunchTarget(target: "embedded" | "external"): void {
+  appMenuOpen.value = false;
+  if (target === launchTarget.value) return;
+  void workspace.saveSettings({ launchTarget: target });
+}
+
+async function openCleanFromMenu(): Promise<void> {
+  appMenuOpen.value = false;
+  await workspace.openCleanSession();
+}
+
+/**
+ * Whether the sidebar is up.
  *
  * Read from the prop when the parent has an opinion, and from the layout
- * otherwise: a multi-cell layout is on stage because someone opened a workbench,
- * and a stale prop should not hide the cells of the layout it is showing.
+ * otherwise: a multi-cell layout is on stage because someone opened the
+ * workbench, and a stale prop should not hide the column beside a grid.
  */
 const bench = computed(() => {
   if (props.bench !== undefined) return props.bench;
@@ -208,17 +303,24 @@ function openWindowPageMenu(page: EmbeddedTab, event: MouseEvent): void {
   openTabMenu(page, event);
 }
 
-/** The strip's "+": another page in the same instance, asked as which account. */
+/**
+ * The strip's "+": another page in the same instance, asked as which account.
+ *
+ * With no page open there is no instance to grow, which made this a button that
+ * did nothing at the exact moment it was the only page control on screen. It
+ * falls back to a fresh loose tab — the same thing the toolbar's "+" does.
+ */
 function addWindowPage(): void {
   if (windowInstanceId.value) void store.openTabInInstance(windowInstanceId.value);
+  else void store.openLooseTab();
 }
 
 /**
- * Single cell ↔ workbench.
+ * Show ↔ hide the sidebar.
  *
- * The parent owns the mode: the shell decides whether the run dock is on screen,
- * and the browser only reports what was clicked. Shrinking does not close
- * anything — every page keeps running and stays reachable from the run dock.
+ * The parent owns the mode: the shell decides whether the column is on screen,
+ * and the browser only reports what was clicked. Hiding does not close anything —
+ * every page keeps running and is still reachable when the column comes back.
  */
 function toggleBench(): void {
   emit("switchMode", bench.value ? "browse" : "bench");
@@ -1005,14 +1107,16 @@ function endResize(): void {
 }
 
 /**
- * Pages with a docked DevTools panel, and the gutter their handle sits in.
+ * Pages with a docked DevTools panel: the seam its handle sits in, and the band
+ * across its top where the app's own close button lives.
  *
- * The panel is a native surface laid out by main, so this only draws the seam.
- * The arithmetic has to match `placeDevTools` in the main process pixel for
- * pixel or the handle lands beside the gap it is supposed to fill — both sides
- * read `EMBEDDED_DEVTOOLS_GRIP` and round the same way.
+ * The panel is a native surface laid out by main, so this only draws the seam and
+ * the band. The arithmetic has to match `placeDevTools` in the main process pixel
+ * for pixel or the handle lands beside the gap it is supposed to fill — both
+ * sides read `EMBEDDED_DEVTOOLS_GRIP` / `EMBEDDED_DEVTOOLS_HEAD` and round the
+ * same way.
  */
-const devtoolsGrips = computed(() => {
+const devtoolsPanels = computed(() => {
   const view = activeView.value;
   const cells = slotChrome.value;
   const stages: Array<{ id: string; tabId: string; rect: StageRect; width: number }> = [];
@@ -1033,16 +1137,29 @@ const devtoolsGrips = computed(() => {
   return stages.map((entry) => {
     const split = Math.round(entry.rect.width * (1 - entry.width));
     const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
+    const panelX = entry.rect.x + left + EMBEDDED_DEVTOOLS_GRIP;
     return {
       key: entry.id,
       tabId: entry.tabId,
-      left: entry.rect.x + left,
-      top: entry.rect.y,
-      width: EMBEDDED_DEVTOOLS_GRIP,
-      height: entry.rect.height,
+      grip: {
+        left: entry.rect.x + left,
+        top: entry.rect.y,
+        width: EMBEDDED_DEVTOOLS_GRIP,
+        height: entry.rect.height,
+      },
+      head: {
+        left: panelX,
+        top: entry.rect.y,
+        width: Math.max(1, entry.rect.width - left - EMBEDDED_DEVTOOLS_GRIP),
+        height: EMBEDDED_DEVTOOLS_HEAD,
+      },
     };
   });
 });
+
+const devtoolsGrips = computed(() =>
+  devtoolsPanels.value.map((panel) => ({ key: panel.key, tabId: panel.tabId, ...panel.grip })),
+);
 
 function startDevToolsResize(tabId: string, event: PointerEvent): void {
   event.preventDefault();
@@ -1332,6 +1449,58 @@ function reload(): void {
   if (tab) window.ensemble.reloadEmbeddedTab(tab.id);
 }
 
+/**
+ * Reload actions on the refresh button, reached by right-click.
+ *
+ * A plain reload is already the left click, so the menu exists for the one
+ * variation a user cannot otherwise reach: dropping the HTTP cache first. It is
+ * a real context menu (pointer position, Escape and outside clicks dismiss it)
+ * rather than a second button, because it is a rare action and the toolbar has
+ * no room for a permanent split control.
+ */
+const reloadMenu = ref<{ x: number; y: number } | null>(null);
+const reloadMenuOpen = computed(() => reloadMenu.value !== null);
+useFloatingLayer(reloadMenuOpen);
+
+function openReloadMenu(event: MouseEvent): void {
+  const width = 216;
+  const height = 78;
+  reloadMenu.value = {
+    x: Math.min(event.clientX, window.innerWidth - width - 8),
+    y: Math.min(event.clientY, window.innerHeight - height - 8),
+  };
+  window.addEventListener("pointerdown", onReloadMenuPointerDown, true);
+  window.addEventListener("keydown", onReloadMenuKeydown, true);
+}
+
+function closeReloadMenu(): void {
+  window.removeEventListener("pointerdown", onReloadMenuPointerDown, true);
+  window.removeEventListener("keydown", onReloadMenuKeydown, true);
+  reloadMenu.value = null;
+}
+
+function onReloadMenuPointerDown(event: PointerEvent): void {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.closest(".reload-menu")) return;
+  closeReloadMenu();
+}
+
+function onReloadMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") closeReloadMenu();
+}
+
+function reloadFromMenu(): void {
+  closeReloadMenu();
+  reload();
+}
+
+async function clearCacheReload(): Promise<void> {
+  const tab = activeTab.value;
+  closeReloadMenu();
+  if (!tab) return;
+  await window.ensemble.clearCacheReloadEmbeddedTab(tab.id);
+}
+
 function openDevTools(tabId: string): void {
   void window.ensemble.openEmbeddedDevTools(tabId);
 }
@@ -1509,12 +1678,22 @@ function fillMessage(reason?: string): string {
       difference between a browser and a web app that draws tabs.
     -->
     <div class="tabstrip drag-region" :data-platform="platform">
+      <!--
+        Shows and hides the sidebar — nothing else.
+
+        It used to also give a one-cell view a 2×1 layout on the way in, so
+        "open the workbench" silently rearranged the stage and there was no
+        gesture that put it back. The column is its own answer: with it up you
+        get the run dock and the navigation, and how many cells the stage is
+        split into is the layout picker's business.
+      -->
       <button
         type="button"
         class="layout-btn no-drag"
         :class="{ 'is-bench': bench }"
-        v-tooltip="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
-        :aria-label="bench ? t('app.layoutBackToSingle') : t('app.layoutOpenBench')"
+        v-tooltip="bench ? t('app.layoutHideSidebar') : t('app.layoutShowSidebar')"
+        :aria-label="bench ? t('app.layoutHideSidebar') : t('app.layoutShowSidebar')"
+        :aria-expanded="bench"
         @click="toggleBench"
       >
         <LayoutGrid :size="14" />
@@ -1600,7 +1779,10 @@ function fillMessage(reason?: string): string {
         class="icon"
         v-tooltip="t('app.browserReload')"
         :aria-label="t('app.browserReload')"
+        :aria-haspopup="'menu'"
+        data-reload-button
         @click="reload"
+        @contextmenu.prevent.stop="openReloadMenu"
       >
         <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
       </button>
@@ -1611,7 +1793,6 @@ function fillMessage(reason?: string): string {
           type="text"
           spellcheck="false"
           :placeholder="t('app.browserAddress')"
-          data-tour="browser-address"
           @focus="suggestionsOpen = true"
           @input="suggestionsOpen = true"
           @blur="suggestionsOpen = false"
@@ -1872,6 +2053,7 @@ function fillMessage(reason?: string): string {
         type="button"
         class="icon"
         :class="{ active: activeTab?.devtoolsOpen }"
+        :disabled="!activeTab || isBlankTab(activeTab)"
         v-tooltip="
           activeTab?.devtoolsOpen ? t('app.browserDevToolsClose') : t('app.browserDevTools')
         "
@@ -1927,26 +2109,125 @@ function fillMessage(reason?: string): string {
         @open-identity="openIdentityBookmark"
       />
       <!--
-        The console entry, at the toolbar's right end where every application
-        puts its settings.
+        The app menu, at the toolbar's right end where every application puts it.
 
-        It used to sit in the tab strip, between the last tab and the window
-        buttons, drawn as `Table2` — "the tables behind the browser". Two things
-        were wrong with that. The strip's middle is a flex spacer, so on a wide
-        window the button floated in an empty band far from anything it belonged
-        to; and a grid-of-records glyph at 14px is indistinguishable from the
-        layout control at the strip's other end. People looking for settings look
-        for a gear in the toolbar, so that is what this is and where it lives.
+        It used to be a bare gear, which said "settings" and nothing else: every
+        other infrequent action had no home, and — the part that mattered — there
+        was nowhere to put a second door into the sidebar. Frequent controls stay
+        in the toolbar; this menu is the once-in-a-while list.
       -->
-      <button
-        type="button"
-        class="icon console-btn"
-        :aria-label="t('app.openConsole')"
-        v-tooltip="t('app.openConsole')"
-        @click="emit('openConsole')"
-      >
-        <Settings :size="15" />
-      </button>
+      <div class="app-menu-anchor">
+        <button
+          type="button"
+          class="icon app-menu-btn"
+          :class="{ active: appMenuOpen }"
+          :aria-label="t('app.appMenu')"
+          :aria-expanded="appMenuOpen"
+          v-tooltip="t('app.appMenu')"
+          data-app-menu
+          @click="appMenuOpen = !appMenuOpen"
+        >
+          <MoreHorizontal :size="16" />
+        </button>
+        <div v-if="appMenuOpen" class="app-menu" role="menu">
+          <!--
+            The second door to the sidebar. The first is the grid glyph at the
+            left of the tab strip — invisible as a concept to anyone who did not
+            already know what this app does, which is exactly the audience the
+            menu is for.
+          -->
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="workspace"
+            @click="openWorkspaceFromMenu"
+          >
+            <LayoutGrid :size="14" />
+            <span>{{ t("app.layoutOpenBench") }}</span>
+          </button>
+          <div class="app-menu-rule" role="separator"></div>
+          <!--
+            Where launches go, and the throwaway session beside it: both are
+            "how this browser behaves", not a page to visit.
+          -->
+          <p class="app-menu-title">{{ t("app.launchTargetTitle") }}</p>
+          <button
+            type="button"
+            role="menuitemradio"
+            class="app-menu-item"
+            :aria-checked="launchTarget === 'embedded'"
+            data-menu-item="launch-embedded"
+            @click="chooseLaunchTarget('embedded')"
+          >
+            <Monitor :size="14" />
+            <span>{{ t("app.launchTargetEmbedded") }}</span>
+            <Check v-if="launchTarget === 'embedded'" :size="13" class="app-menu-check" />
+          </button>
+          <button
+            type="button"
+            role="menuitemradio"
+            class="app-menu-item"
+            :aria-checked="launchTarget === 'external'"
+            data-menu-item="launch-external"
+            @click="chooseLaunchTarget('external')"
+          >
+            <AppWindow :size="14" />
+            <span>{{ t("app.launchTargetExternal") }}</span>
+            <Check v-if="launchTarget === 'external'" :size="13" class="app-menu-check" />
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="clean-session"
+            @click="openCleanFromMenu"
+          >
+            <ShieldOff :size="14" />
+            <span>{{ t("app.cleanSession") }}</span>
+          </button>
+          <div class="app-menu-rule" role="separator"></div>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="bookmarks"
+            @click="openPageFromMenu('bookmarks')"
+          >
+            <BookmarkIcon :size="14" />
+            <span>{{ t("app.bookmarks") }}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="settings"
+            @click="openPageFromMenu('settings')"
+          >
+            <Settings :size="14" />
+            <span>{{ t("app.settings") }}</span>
+          </button>
+          <div class="app-menu-rule" role="separator"></div>
+          <button type="button" role="menuitem" class="app-menu-item" @click="checkForUpdates">
+            <RefreshCw :size="14" />
+            <span>{{ t("app.checkUpdate") }}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            @click="openPageFromMenu('settings')"
+          >
+            <Info :size="14" />
+            <span>{{ t("app.about") }}</span>
+          </button>
+          <div class="app-menu-rule" role="separator"></div>
+          <button type="button" role="menuitem" class="app-menu-item danger" @click="quitApp">
+            <Power :size="14" />
+            <span>{{ t("app.quitApp") }}</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div v-if="findOpen" class="findbar">
@@ -2192,6 +2473,38 @@ function fillMessage(reason?: string): string {
       ></div>
 
       <!--
+        The strip above a docked panel. The panel is a native surface, so the
+        close button cannot be drawn on top of it — it lives here instead, in the
+        26px the panel gives up at its top (see `EMBEDDED_DEVTOOLS_HEAD`).
+      -->
+      <div
+        v-for="panel in devtoolsPanels"
+        :key="`devtools-head-${panel.key}`"
+        class="devtools-head"
+        :style="{
+          left: `${panel.head.left}px`,
+          top: `${panel.head.top}px`,
+          width: `${panel.head.width}px`,
+          height: `${panel.head.height}px`,
+        }"
+      >
+        <span class="devtools-head-label">
+          <Bug :size="11" />
+          {{ t("app.browserDevTools") }}
+        </span>
+        <button
+          type="button"
+          class="devtools-head-close"
+          :aria-label="t('app.browserDevToolsClose')"
+          v-tooltip="t('app.browserDevToolsClose')"
+          :data-devtools-close="panel.tabId"
+          @click="closeDevTools(panel.tabId)"
+        >
+          <X :size="12" />
+        </button>
+      </div>
+
+      <!--
         The empty stage, and only when nothing else on it says what to do.
 
         A view with empty cells already draws each one as a dashed "add a tab
@@ -2211,6 +2524,25 @@ function fillMessage(reason?: string): string {
         </button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="reloadMenu"
+        class="reload-menu"
+        role="menu"
+        :style="{ left: `${reloadMenu.x}px`, top: `${reloadMenu.y}px` }"
+      >
+        <button type="button" role="menuitem" class="tab-menu-item" @click="reloadFromMenu">
+          <RotateCw :size="12" />
+          {{ t("app.browserReload") }}
+        </button>
+        <button type="button" role="menuitem" class="tab-menu-item" @click="clearCacheReload">
+          <Eraser :size="12" />
+          {{ t("app.browserClearCacheReload") }}
+        </button>
+        <p class="reload-menu-note">{{ t("app.browserClearCacheReloadHint") }}</p>
+      </div>
+    </Teleport>
 
     <!--
       Page actions. Positioned at the click point in viewport coordinates; the
@@ -2601,26 +2933,104 @@ function fillMessage(reason?: string): string {
   height: 100%;
 }
 
-/* The console entry is a full toolbar button; these rules only place it. Its
+/* The app menu entry is a full toolbar button; these rules only place it. Its
    size, hover and icon colour come from `.icon`, which is what keeps it looking
    like the controls beside it rather than like a second kind of button. */
-.console-btn {
+.app-menu-anchor {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.app-menu-btn {
   margin-left: 2px;
   margin-right: 4px;
 }
 
-/* The native window controls are drawn over the window's top-right corner. With
-   no dock that corner belongs to this strip, so it reserves the band; with the
-   dock open the dock meets the corner and reserves it, and keeping the strip's
-   reservation too would leave a 138px hole of dead space between the last tab
-   and the dock. */
+/*
+ * Anchored above the toolbar's bottom edge, right-aligned to its button.
+ *
+ * Right rather than left: the menu is the last control before the window
+ * controls, so a left-anchored panel would run off the window on the right.
+ */
+.app-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--z-menu, 60);
+  min-width: 208px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  display: flex;
+  flex-direction: column;
+  /* Same entry as every other anchored panel: it hangs off the button, so it
+     grows down and out of it rather than fading in place. */
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
+}
+
+@keyframes app-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+.app-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.app-menu-item:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.app-menu-item.danger {
+  color: var(--red);
+}
+
+.app-menu-item.danger:hover {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.app-menu-rule {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+
+/* A caption inside the menu, not an item: the launch options below it are one
+   choice with several values, and the caption is what says so. */
+.app-menu-title {
+  margin: 0;
+  padding: 4px 9px 2px;
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+}
+
+.app-menu-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* The native window controls are drawn over the window's top-right corner, and
+   that corner now belongs to this strip in both shells — the sidebar is on the
+   left, so nothing else reaches the right end. */
 .tabstrip[data-platform="win32"],
 .tabstrip[data-platform="linux"] {
   padding-right: calc(var(--window-controls-width, 138px) + 2px);
-}
-
-.browser.bench .tabstrip {
-  padding-right: 4px;
 }
 
 .tabstrip[data-platform="darwin"] {
@@ -2660,8 +3070,12 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
+/* The AI entry is a plain toolbar button. It used to tint itself amber whenever
+   the endpoint was running, which made a status light look like a primary
+   action and pulled the eye to the far end of the row; the dot on the corner
+   carries the state, and the glyph is just an icon. */
 .ai-btn.on {
-  background: var(--accent-soft);
+  background: transparent;
 }
 
 .ai-label {
@@ -2670,7 +3084,7 @@ function fillMessage(reason?: string): string {
 }
 
 .ai-btn.on .ai-label {
-  color: var(--accent);
+  color: var(--text-secondary);
 }
 
 .ai-btn:hover .ai-label {
@@ -2680,7 +3094,11 @@ function fillMessage(reason?: string): string {
 .ai-mark {
   display: grid;
   place-items: center;
-  color: var(--accent);
+  color: var(--text-secondary);
+}
+
+.ai-btn:hover .ai-mark {
+  color: var(--text);
 }
 
 /* The dot answers "is it listening" without a word, and it lives on the
@@ -2707,6 +3125,8 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
 }
 
 .ai-menu-head {
@@ -2875,6 +3295,8 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
 }
 
 /* The line that separates "default for every page" from "set one page": without
@@ -2909,6 +3331,8 @@ function fillMessage(reason?: string): string {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden;
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top center;
 }
 
 /* Downloads: the panel hangs off its toolbar button, so it stays glued to the
@@ -2952,6 +3376,8 @@ function fillMessage(reason?: string): string {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden auto;
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
 }
 
 .downloads-head {
@@ -3336,6 +3762,8 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
 }
 
 .slot-identity-item {
@@ -3429,6 +3857,52 @@ function fillMessage(reason?: string): string {
 .devtools-grip:hover::before,
 .devtools-grip:active::before {
   background: var(--accent);
+}
+
+/*
+ * The strip the app owns above a docked panel.
+ *
+ * It fills the 26px hole `placeDevTools` leaves at the panel's top, so it has to
+ * be painted (not transparent) or the stage behind shows through the gap.
+ */
+.devtools-head {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 8px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.devtools-head-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.devtools-head-close {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 4px;
+  color: var(--faint);
+}
+
+.devtools-head-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .slot-index {
@@ -3528,6 +4002,29 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
+}
+
+/* The reload menu is the same object; it just carries a note line, so the
+   width is pinned to keep that line on two rows instead of one long one. */
+.reload-menu {
+  position: fixed;
+  z-index: 95;
+  width: 216px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-dialog);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
+}
+
+.reload-menu-note {
+  margin: 0;
+  padding: 4px 8px 6px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--faint);
 }
 
 .tab-menu-item {

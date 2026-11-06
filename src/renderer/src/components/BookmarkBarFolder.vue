@@ -3,14 +3,16 @@ import type { Bookmark, BookmarkFolder } from "@shared/types";
 import { ChevronDown, Folder, Globe } from "lucide-vue-next";
 import { computed, onBeforeUnmount, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useBookmarkFlyout } from "./bookmarkFlyout";
 
 /**
  * One folder in the new-tab bookmark bar, with its flyout.
  *
- * A folder opens on hover and stays open while the pointer is anywhere inside
- * it — the flyout is a DOM child of the same row, so moving into it does not
- * count as leaving, and leaving towards it is given a grace period (see `hide`).
- * That is what makes a path four folders deep walkable without a click.
+ * Which panel is open is not this component's own state: the bar keeps one path
+ * (see `bookmarkFlyout.ts`), so opening a sibling closes the previous branch
+ * instead of stacking panels, while a child keeps its ancestors. The grace
+ * period below still covers the one crossing the path cannot help with — the
+ * pointer travelling from a row into that row's own panel.
  *
  * Rendered recursively: a folder's children are the same component one level
  * deeper, so the depth limit is the data's, not the markup's. `ancestors`
@@ -26,11 +28,20 @@ const props = defineProps<{
   ancestors: string[];
 }>();
 
-const emit = defineEmits<{ open: [bookmark: Bookmark] }>();
+const emit = defineEmits<{
+  open: [bookmark: Bookmark];
+  /** Right-click: the bar owns the menu, this only reports which row. */
+  menu: [entity: { kind: "folder" | "bookmark"; id: string }, event: MouseEvent];
+}>();
 
 const { t } = useI18n();
 
-const open = ref(false);
+const flyout = useBookmarkFlyout();
+/** Used only when this row is rendered outside a bar. */
+const localOpen = ref(false);
+const open = computed(() =>
+  flyout ? flyout.path.value.includes(props.folder.id) : localOpen.value,
+);
 /** Open to the left instead of the right when there is no room. */
 const flip = ref(false);
 const root = ref<HTMLElement | null>(null);
@@ -64,25 +75,24 @@ function show(): void {
   // in the right third of the window has to open towards the middle.
   const rect = root.value?.getBoundingClientRect();
   flip.value = Boolean(rect && rect.left + 240 > window.innerWidth);
-  open.value = true;
+  if (flyout) flyout.open(props.folder.id, props.ancestors);
+  else localOpen.value = true;
 }
 
 /**
- * Close after a short grace period, not immediately.
+ * Start the grace period.
  *
- * A flyout sits a few pixels away from its row (and nested ones a few pixels
- * beside it). The pointer has to cross that gap, and while it is inside the gap
- * it is over neither element — so an immediate close shut the panel exactly as
- * the user started moving towards it. That is the "hover it and the panel is
- * already gone" behaviour. The gap is bridged with a transparent strip as well
- * (see `.bb-flyout::before`); this timer covers the rest: a diagonal move, a
- * one-frame overshoot, a jittery trackpad.
+ * When this row lost the pointer because another folder opened, the shared path
+ * no longer contains it and there is nothing to wait for — the reopen below is
+ * guarded by the path, so this timer only ever runs for the one journey it is
+ * meant for: leaving a row towards its own panel across the gap.
  */
 function hide(): void {
   cancelClose();
   closeTimer = window.setTimeout(() => {
     closeTimer = 0;
-    open.value = false;
+    if (flyout) flyout.close(props.folder.id);
+    else localOpen.value = false;
   }, 180);
 }
 
@@ -98,11 +108,18 @@ onBeforeUnmount(cancelClose);
 
 function toggle(): void {
   cancelClose();
-  open.value = !open.value;
+  if (open.value) {
+    if (flyout) flyout.close(props.folder.id);
+    else localOpen.value = false;
+    return;
+  }
+  if (flyout) flyout.open(props.folder.id, props.ancestors);
+  else localOpen.value = true;
 }
 
 function pick(bookmark: Bookmark): void {
-  open.value = false;
+  flyout?.closeAll();
+  localOpen.value = false;
   emit("open", bookmark);
 }
 </script>
@@ -122,6 +139,7 @@ function pick(bookmark: Bookmark): void {
       :aria-haspopup="true"
       :title="folder.name"
       @click="toggle"
+      @contextmenu.prevent.stop="emit('menu', { kind: 'folder', id: folder.id }, $event)"
       @keydown.esc="hide"
     >
       <Folder :size="13" class="bb-icon folder-icon" aria-hidden="true" />
@@ -145,6 +163,7 @@ function pick(bookmark: Bookmark): void {
             :level="level + 1"
             :ancestors="[...ancestors, folder.id]"
             @open="emit('open', $event)"
+            @menu="(entity, event) => emit('menu', entity, event)"
           />
           <button
             v-else
@@ -153,6 +172,7 @@ function pick(bookmark: Bookmark): void {
             class="bb-entry bb-row"
             :title="`${entry.bookmark!.name}\n${entry.bookmark!.url}`"
             @click="pick(entry.bookmark!)"
+            @contextmenu.prevent.stop="emit('menu', { kind: 'bookmark', id: entry.bookmark!.id }, $event)"
           >
             <img
               v-if="entry.bookmark!.favicon"

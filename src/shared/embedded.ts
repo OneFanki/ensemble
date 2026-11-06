@@ -185,8 +185,19 @@ export interface StageRect {
   height: number;
 }
 
-/** Height of the per-slot header the chrome draws above each embedded view. */
-export const EMBEDDED_SLOT_HEADER = 26;
+/**
+ * Height of the per-slot header the chrome draws above each embedded view.
+ *
+ * 32, not the 26 it started at. The header carries an account name and that
+ * instance's page tabs, and at 26 both were squeezed smaller than the new-tab
+ * bookmark strip then was — a row of chrome with less room than a row of links.
+ * The relationship is now the other way round on purpose: 32 here against the
+ * strip's 28, because the strip decorates a blank page while this band names the
+ * account and holds the page tabs. It is shared by the main process and the
+ * renderer, so the page inside the cell and the header above it can never
+ * disagree about where the boundary is.
+ */
+export const EMBEDDED_SLOT_HEADER = 32;
 
 /**
  * Width of the draggable gutter between adjacent slots.
@@ -206,6 +217,17 @@ export const EMBEDDED_DIVIDER = 8;
  * handle on top of the gap it drags.
  */
 export const EMBEDDED_DEVTOOLS_GRIP = 7;
+
+/**
+ * Height of the app-owned title band above a docked DevTools panel.
+ *
+ * The panel is a native `WebContentsView`, so no HTML can be drawn on top of
+ * it — which means the app cannot place a close button over the tools. Instead
+ * the panel gives up this band at its top and the renderer draws the band: the
+ * panel's name on the left, a close button on the right. Both sides read this
+ * one value, so the band and the hole in the panel cannot drift apart.
+ */
+export const EMBEDDED_DEVTOOLS_HEAD = 26;
 
 /**
  * How far the docked panel may go, as a fraction of the cell.
@@ -309,6 +331,16 @@ export function guestNodeRect(input: {
       height: bounds.height,
     };
   }
+  /*
+   * A page that is on stage but has no box yet is parked, not stretched.
+   *
+   * It used to fall through to the window-sized fallback below, which put a
+   * brand-new page at (0,0) covering the whole window — on top of whatever was
+   * already there. During a view launch that is several pages arriving at once,
+   * so the stage flashed full-window images over itself for a few frames.
+   * Parking it keeps the node sized (the 0×0 viewport problem) without putting
+   * it anywhere a user can see; its real box is one broadcast away.
+   */
   const width = stage && stage.width > 0 ? stage.width : Math.max(1, Math.round(win.width));
   const height = stage && stage.height > 0 ? stage.height : Math.max(1, Math.round(win.height));
   return { x: -width, y: stage?.y ?? 0, width, height };

@@ -221,6 +221,8 @@ export const IPC = {
   embeddedBack: "embedded:back",
   embeddedForward: "embedded:forward",
   embeddedReload: "embedded:reload",
+  /** Reloads after dropping this page's HTTP cache ("empty cache and reload"). */
+  embeddedClearCacheReload: "embedded:clear-cache-reload",
   embeddedViewActivate: "embedded:view-activate",
   /** Creates an empty view container; views are never created by dragging. */
   embeddedViewCreate: "embedded:view-create",
@@ -586,6 +588,8 @@ export interface EnsembleApi {
   embeddedBack(tabId: string): Promise<void>;
   embeddedForward(tabId: string): Promise<void>;
   reloadEmbeddedTab(tabId: string): Promise<void>;
+  /** Reloads with the page's HTTP cache dropped first. */
+  clearCacheReloadEmbeddedTab(tabId: string): Promise<void>;
   /** Brings a view on stage; null returns to the loose tab list. */
   activateEmbeddedView(viewId: string | null): Promise<EmbeddedState>;
   /** Creates an empty view and puts it on stage. */

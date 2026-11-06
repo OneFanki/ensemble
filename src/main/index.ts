@@ -3189,6 +3189,9 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedReload, (tabId: string) => {
     ensureEmbeddedBrowser().reload(String(tabId));
   });
+  handle(IPC.embeddedClearCacheReload, (tabId: string) =>
+    ensureEmbeddedBrowser().clearCacheAndReload(String(tabId)),
+  );
   /** Same rule as a page click: picking a container shows it. */
   handle(IPC.embeddedViewActivate, (viewId: string | null) => {
     const browser = ensureEmbeddedBrowser();
@@ -3224,26 +3227,31 @@ function registerIpc(workspace: WorkspaceService): void {
     // laid out with the current default layout, gone from the workspace when
     // closed. The whole run — creation, pinning, rollback — lives in the main
     // process so a renderer navigation cannot interrupt it halfway.
-    const state = browser.createView({
-      layoutId: service.settingsSnapshot().layout,
+    //
+    // The container is created inside the same held window as the pages: a
+    // broadcast for the new but still empty view is what the stage went blank
+    // for, and the pages arrived one at a time after it.
+    const layout = service.settingsSnapshot().layout;
+    return browser.withoutBroadcasts(async () => {
+      const state = browser.createView({ layoutId: layout });
+      const viewId = state.activeViewId;
+      if (!viewId) throw new Error("批量启动容器创建失败");
+      browser.focusPage();
+      return browser.launchIdentityBatch(
+        members.map((identity) => ({
+          identityId: identity.id,
+          ...(identity.siteId ? { siteId: identity.siteId } : {}),
+          label: identity.name,
+          ...(identity.color ? { color: identity.color } : {}),
+          url: embeddedStartUrl(identity.id),
+        })),
+        viewId,
+        (tab, index) => {
+          const identityId = members[index]?.id;
+          if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
+        },
+      );
     });
-    const viewId = state.activeViewId;
-    if (!viewId) throw new Error("批量启动容器创建失败");
-    browser.focusPage();
-    return browser.launchIdentityBatch(
-      members.map((identity) => ({
-        identityId: identity.id,
-        ...(identity.siteId ? { siteId: identity.siteId } : {}),
-        label: identity.name,
-        ...(identity.color ? { color: identity.color } : {}),
-        url: embeddedStartUrl(identity.id),
-      })),
-      viewId,
-      (tab, index) => {
-        const identityId = members[index]?.id;
-        if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
-      },
-    );
   });
   handle(IPC.embeddedViewLayout, (viewId: string, layoutId: LayoutId) =>
     ensureEmbeddedBrowser().setViewLayout(String(viewId), String(layoutId)),

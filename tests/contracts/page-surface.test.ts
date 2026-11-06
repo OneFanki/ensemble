@@ -73,12 +73,20 @@ describe("the manager addresses pages through a carrier-neutral surface", () => 
     expect(SURFACE).toMatch(/class GuestPageSurface[\s\S]*?getBounds\(\)/);
   });
 
-  it("judges the panel open from its own record, not the page's getter", () => {
+  it("judges the panel open from its own record, and only while it is docked", () => {
     // Handing the tools a webContents of ours makes `isDevToolsOpened()` stay
     // false for a panel that is running and visible (measured on Electron 45),
     // so the toolbar toggle would report a closed panel that is on screen.
+    //
+    // The second half of the rule is what the renderer needs: it draws the drag
+    // seam from this flag, so a panel that exists but is parked (its page left
+    // the stage, or the page is blank and never docks one) has to read as
+    // closed — otherwise the seam hangs over a page with nothing beside it.
     expect(BROWSER).toMatch(
-      /private devtoolsOpen\(tab: TabRecord\): boolean \{\s*return Boolean\(tab\.devtools\);/,
+      /private devtoolsOpen\(tab: TabRecord\): boolean \{\s*return Boolean\(tab\.devtools\) &&/,
+    );
+    expect(BROWSER).toMatch(
+      /private devtoolsOpen\(tab: TabRecord\): boolean \{[\s\S]{0,400}?cellOf\(tab\)/,
     );
   });
 });

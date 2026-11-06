@@ -30,6 +30,7 @@ import {
   desktopUserAgent,
   EMBEDDED_DEVTOOLS_DEFAULT,
   EMBEDDED_DEVTOOLS_GRIP,
+  EMBEDDED_DEVTOOLS_HEAD,
   EMBEDDED_DEVTOOLS_MAX,
   EMBEDDED_DEVTOOLS_MIN,
   EMBEDDED_SLOT_HEADER,
@@ -423,6 +424,20 @@ export class EmbeddedBrowser {
    */
   private lastContentSize: { width: number; height: number } | null = null;
   private pendingState = false;
+  /**
+   * Broadcasts held back while a multi-page operation is in flight.
+   *
+   * A view launch creates several pages one after another, and each page
+   * published its own state: first the new (still empty) view on stage, then one
+   * broadcast per page as it arrived. Every intermediate state is legitimate on
+   * its own, but the renderer draws each one, so the stage went blank for ~120ms
+   * and then filled in cell by cell — what a user sees as the page flickering.
+   *
+   * Counted rather than boolean: launches can overlap with an AI tool opening a
+   * page of its own, and whoever finishes last has to be the one that flushes.
+   */
+  private stateHold = 0;
+  private stateHeld = false;
   private viewSeq = 0;
   /**
    * Rebuilds in flight, one per page at most.
@@ -659,9 +674,16 @@ export class EmbeddedBrowser {
    * are handed a `WebContents` of ours through `setDevToolsWebContents`, Electron
    * no longer reports them as "this page's DevTools" and the getter stays false
    * for a panel that is running and visible. Measured on Electron 45.
+   *
+   * Reported as open only while the panel is actually docked. A panel whose page
+   * left the stage is parked at 0×0 — it still exists, so `tab.devtools` is the
+   * wrong answer: the renderer draws the drag seam from this flag, and a seam
+   * over a page with no panel beside it is a handle that moves nothing. A blank
+   * page never docks one at all (`cellOf` refuses: the app draws that surface,
+   * not the guest), so it reports closed however many times it was clicked.
    */
   private devtoolsOpen(tab: TabRecord): boolean {
-    return Boolean(tab.devtools);
+    return Boolean(tab.devtools) && this.cellOf(tab) !== undefined;
   }
 
   private describeView(view: ViewRecord): EmbeddedView {
@@ -869,11 +891,17 @@ export class EmbeddedBrowser {
    * Views are only ever created explicitly: dropping tabs together reorders them
    * instead. An empty container therefore has to survive, or a newly created one
    * would vanish before the user could drag anything into it.
+   *
+   * "No layout" is the default: a container is usually made to receive a handful
+   * of pages one at a time, and a 2×1 default meant the first page arrived
+   * squeezed into half the stage beside an empty cell the user never asked for.
+   * The layout is then chosen by what actually gets dropped in, or by the picker
+   * in the view's header.
    */
   createView(input: { name?: string; layoutId?: LayoutId; color?: RoleColor }): EmbeddedState {
     const view = this.addView({
       name: input.name ?? "",
-      layoutId: input.layoutId ?? "2x1",
+      layoutId: input.layoutId ?? "free",
       ...(input.color ? { color: input.color } : {}),
     });
     this.activeViewId = view.id;
@@ -1162,6 +1190,9 @@ export class EmbeddedBrowser {
     const view = this.requireView(viewId);
     let failed = false;
     let cursor = 0;
+    // Counted from before the first page: the container is already on stage and
+    // empty, so the broadcast for it is the blank frame the user sees.
+    this.stateHold += 1;
     const worker = async (): Promise<void> => {
       while (cursor < inputs.length && !failed) {
         const index = cursor++;
@@ -1196,6 +1227,11 @@ export class EmbeddedBrowser {
       failed = true;
       // The container came from this call, so it goes back with the pages.
       this.closeView(view.id, "all");
+      // A rollback changes the surface too: release the hold before reporting,
+      // or the renderer keeps showing pages that no longer exist.
+      this.stateHold = Math.max(0, this.stateHold - 1);
+      this.stateHeld = false;
+      this.emitState();
       throw failure.reason;
     }
     // No trailing activate(): the old renderer loop never activated during a
@@ -1203,6 +1239,10 @@ export class EmbeddedBrowser {
     // write a slot entry even into a Free layout's empty slot table. Pinning
     // has already focused the page in slot 0 for a slotted layout.
     this.applyLayout();
+    // Release, then publish: the whole batch lands as one frame instead of a
+    // blank stage filling in cell by cell.
+    this.stateHold = Math.max(0, this.stateHold - 1);
+    this.stateHeld = false;
     this.emitState();
     return this.state();
   }
@@ -2009,6 +2049,29 @@ export class EmbeddedBrowser {
     if (this.activeTabId) this.reload(this.activeTabId);
   }
 
+  /**
+   * Drops the page's HTTP cache, then reloads it — "empty cache and reload".
+   *
+   * The cache is per session, not per page: Electron offers no per-URL purge, so
+   * this clears the identity's whole partition cache. That is the honest scope —
+   * other pages in the same profile will re-fetch too — and it is why the menu
+   * item is not a plain refresh.
+   *
+   * The reload waits for the clear: reloading first lets in-flight subresources
+   * be answered from the cache being cleared, which is the exact thing the user
+   * clicked to avoid.
+   */
+  async clearCacheAndReload(tabId: string): Promise<void> {
+    const tab = this.requireTab(tabId);
+    this.wakeTab(tabId);
+    await session.fromPartition(this.partitionOf(tab)).clearCache();
+    if (tab.view.webContents.isDestroyed()) return;
+    tab.crashed = false;
+    // `reloadIgnoringCache` as well: the clear handles what is on disk, this
+    // handles what is already in the renderer's memory cache.
+    tab.view.webContents.reloadIgnoringCache();
+  }
+
   hardReloadActive(): void {
     if (this.activeTabId) this.hardReload(this.activeTabId);
   }
@@ -2525,7 +2588,37 @@ export class EmbeddedBrowser {
 
   private emitState(): void {
     this.options.onStateChange?.(this.state());
+    // Held: remember that something changed and let the operation's final
+    // release flush one broadcast instead of a dozen.
+    if (this.stateHold > 0) {
+      this.stateHeld = true;
+      return;
+    }
     this.sendState();
+  }
+
+  /**
+   * Runs `work` without broadcasting intermediate states.
+   *
+   * The final state is always sent, even when `work` throws: a rollback changes
+   * the surface too, and a renderer left showing pages that no longer exist is
+   * worse than a brief wait.
+   */
+  withoutBroadcasts<T>(work: () => Promise<T>): Promise<T> {
+    return this.withHeldState(work);
+  }
+
+  private async withHeldState<T>(work: () => Promise<T>): Promise<T> {
+    this.stateHold += 1;
+    try {
+      return await work();
+    } finally {
+      this.stateHold = Math.max(0, this.stateHold - 1);
+      if (this.stateHold === 0 && this.stateHeld) {
+        this.stateHeld = false;
+        this.sendState();
+      }
+    }
   }
 
   private sendState(): void {
@@ -3529,11 +3622,20 @@ export class EmbeddedBrowser {
     const split = Math.round(rect.width * (1 - devtools.width));
     const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
     tab.view.setBounds({ ...rect, width: left });
+    /*
+     * The panel gives up a band at its top for the app's own title strip.
+     *
+     * A native view cannot be covered by HTML, so the close button Edge and
+     * Chrome draw inside their tools has no place to live here — the strip is
+     * the area beside it instead. `EMBEDDED_DEVTOOLS_HEAD` is shared with the
+     * renderer, which draws into exactly this hole.
+     */
+    const panelTop = rect.y + EMBEDDED_DEVTOOLS_HEAD;
     devtools.view.setBounds({
       x: rect.x + left + EMBEDDED_DEVTOOLS_GRIP,
-      y: rect.y,
+      y: panelTop,
       width: Math.max(1, rect.width - left - EMBEDDED_DEVTOOLS_GRIP),
-      height: rect.height,
+      height: Math.max(1, rect.height - EMBEDDED_DEVTOOLS_HEAD),
     });
     // A resize after the first paint has been observed to leave the panel's
     // content area unpainted — the chrome draws, the DOM tree does not — until

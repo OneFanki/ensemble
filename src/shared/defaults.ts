@@ -19,7 +19,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
   headlessCheckUa: "desktop",
   focusLabelEnabled: true,
   launchIntervalMs: 0,
-  layout: "2x2",
+  /*
+   * No layout by default.
+   *
+   * Both entry points that use this — "create view" and batch launch — start
+   * with one page, and a 2×2 meant that page sat in a quarter of the stage
+   * beside three empty cells. The default should be the neutral one: the user
+   * picks a layout when they are arranging several accounts, not before they
+   * have any.
+   */
+  layout: "free",
+  // Nothing has been chosen yet, so the factory value above stays authoritative.
+  layoutExplicit: false,
   // The built-in surface is the default: it keeps every account in one window,
   // which is the whole point. Switching to external is one click in the title bar.
   launchTarget: "embedded",
@@ -41,6 +52,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
   newTabBookmarks: true,
   closeToTray: true,
+  // Retired with the spotlight tour: still written here so an older build
+  // reading this file finds the field it expects.
   onboardingVersion: 0,
   // Unread on a fresh install: the dot on the title bar is how the guide is
   // discovered in the first place.

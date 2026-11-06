@@ -463,8 +463,23 @@ export interface AppSettings {
    * Users on a constrained machine can raise it.
    */
   launchIntervalMs: number;
-  /** Preset used when identities are launched outside a view. */
+  /**
+   * Default layout for a new view and for a batch launch.
+   *
+   * `"free"` (no layout) out of the box: both entry points start with a single
+   * page, and a grid default put that page in a quarter of the stage beside
+   * empty cells nobody asked for.
+   */
   layout: LayoutId;
+  /**
+   * Whether {@link AppSettings.layout} was chosen by the user.
+   *
+   * Read only while loading: while it is false the stored `layout` is replaced
+   * with the factory default, so an install created under an older factory
+   * default picks up the new one instead of keeping a value nobody chose. Picking
+   * a layout in Settings sets it to true.
+   */
+  layoutExplicit: boolean;
   /**
    * Where "launch" sends a view or identity.
    *

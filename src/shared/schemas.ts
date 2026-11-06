@@ -177,6 +177,7 @@ export const settingsPatchSchema = z.object({
   focusLabelEnabled: z.boolean().optional(),
   launchIntervalMs: z.number().int().min(0).max(5000).optional(),
   layout: z.string().min(1).max(64).optional(),
+  layoutExplicit: z.boolean().optional(),
   launchTarget: z.enum(["embedded", "external"]).optional(),
   defaultEngineId: z.string().optional(),
   autoFillOnLaunch: z.boolean().optional(),

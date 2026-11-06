@@ -597,7 +597,99 @@ export function sanitizeBookmarksSection(
   }
 
   const bookmarks = sanitizeBookmarks(bookmarksInput, folderIds, legacyToId);
-  return { bookmarks, bookmarkFolders: folders.sort((a, b) => a.order - b.order) };
+  const flattened = collapseImportScaffolding(bookmarks, folders);
+  return {
+    bookmarks: flattened.bookmarks,
+    bookmarkFolders: flattened.bookmarkFolders.sort((a, b) => a.order - b.order),
+  };
+}
+
+/**
+ * Folder names an earlier importer wrapped around the user's own structure.
+ *
+ * `"<Browser> 书签"` was a top-level container the importer added itself; the
+ * rest are the browsers' own roots (bookmark bar, other bookmarks, the toolbar
+ * and menu of Firefox), which the importer used to turn into folders too. The
+ * combination was two levels of scaffolding in front of the first folder the
+ * user had made — "Edge 书签 / 收藏夹栏 / 编程" instead of just "编程".
+ *
+ * Only exact matches are collapsed, and only when the folder holds **no
+ * bookmark of its own**: a folder someone genuinely named after a browser and
+ * filled directly is left alone.
+ */
+const IMPORT_CONTAINER_NAMES = new Set([
+  "书签栏",
+  "收藏夹栏",
+  "书签工具栏",
+  "书签菜单",
+  "其他书签",
+  "移动设备书签",
+  "Bookmarks bar",
+  "Bookmarks Bar",
+  "Other bookmarks",
+  "Other Bookmarks",
+  "Bookmarks Toolbar",
+  "Bookmarks Menu",
+  "Mobile bookmarks",
+  "Mobile Bookmarks",
+]);
+
+function isImportScaffolding(folder: BookmarkFolder): boolean {
+  return (
+    /^(Edge|Chrome|Firefox) 书签$/.test(folder.name) || IMPORT_CONTAINER_NAMES.has(folder.name)
+  );
+}
+
+/**
+ * Dissolves importer-made container folders on load, one level per pass.
+ *
+ * Idempotent: after the pass no container folder has children any more, so a
+ * second load changes nothing. Visible contents move up to the container's own
+ * parent, which is what "the import should have merged straight into the top"
+ * means for a tree that was already written the other way.
+ *
+ * Bookmarks never need rewriting: a container is only dissolved when it holds
+ * no bookmark of its own, so the only folders that move are the ones below it —
+ * and their ids, which is what bookmarks point at, do not change.
+ */
+function collapseImportScaffolding(
+  bookmarks: Bookmark[],
+  folders: BookmarkFolder[],
+): { bookmarks: Bookmark[]; bookmarkFolders: BookmarkFolder[] } {
+  const containers = new Set(
+    folders
+      .filter(
+        (folder) =>
+          isImportScaffolding(folder) &&
+          !bookmarks.some((bookmark) => bookmark.folderId === folder.id),
+      )
+      .map((folder) => folder.id),
+  );
+  if (!containers.size) return { bookmarks, bookmarkFolders: folders };
+  const parentOf = new Map(folders.map((folder) => [folder.id, folder.parentId]));
+  /** Where a folder ends up once every container above it is dissolved. */
+  const resolveParent = (folder: BookmarkFolder): string | undefined => {
+    let parentId = folder.parentId;
+    let climbed = 0;
+    while (parentId && containers.has(parentId)) {
+      parentId = parentOf.get(parentId);
+      climbed += 1;
+    }
+    return climbed ? parentId : folder.parentId;
+  };
+  const now = new Date().toISOString();
+  const nextFolders: BookmarkFolder[] = [];
+  for (const folder of folders) {
+    if (containers.has(folder.id)) continue;
+    const parentId = resolveParent(folder);
+    if (parentId === folder.parentId) {
+      nextFolders.push(folder);
+      continue;
+    }
+    nextFolders.push({ ...folder, ...(parentId ? { parentId } : {}), updatedAt: now });
+    if (!parentId) delete nextFolders[nextFolders.length - 1]!.parentId;
+  }
+  return { bookmarks, bookmarkFolders: nextFolders };
 }
 
 /** First id derived from `base` that no folder in the set is using yet. */

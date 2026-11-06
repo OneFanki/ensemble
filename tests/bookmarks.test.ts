@@ -233,6 +233,48 @@ describe("bookmark storage sanitising", () => {
     expect(reloaded.snapshot().bookmarkFolders[1]?.parentId).toBe(folder.id);
     expect(reloaded.snapshot().bookmarks[0]?.folderId).toBe(child.id);
   });
+
+  /**
+   * The importer used to write two levels of scaffolding around the user's own
+   * folders: a "<Browser> 书签" container, then the browser's own root
+   * (收藏夹栏 / 书签栏). Both were noise — "Edge 书签 / 收藏夹栏 / 编程" instead
+   * of "编程" — so loading a tree that already has them dissolves them.
+   */
+  it("dissolves importer scaffolding folders on load, keeping the user's tree", () => {
+    // The tree as a previous import left it.
+    const { bookmarkFolders: folders, bookmarks: kept } = sanitizeBookmarksSection(
+      [
+        { id: "a", url: "https://fe.example.com", folderId: "front" },
+        { id: "b", url: "https://root.example.com" },
+      ],
+      [
+        { id: "edge", name: "Edge 书签", order: 0 },
+        { id: "bar", name: "收藏夹栏", parentId: "edge", order: 0 },
+        { id: "front", name: "编程", parentId: "bar", order: 0 },
+      ],
+    );
+    expect(folders.map((folder) => folder.name)).toEqual(["编程"]);
+    expect(folders[0]?.parentId).toBeUndefined();
+    // Ids survive, so the bookmark still points at its folder.
+    expect(kept[0]?.folderId).toBe("front");
+    expect(kept[1]?.folderId).toBeUndefined();
+  });
+
+  it("leaves a folder alone when someone named it after a browser and filled it", () => {
+    // A container is only scaffolding when it holds no bookmark of its own:
+    // dissolving a folder the user actually put things in would lose a level
+    // they built by hand.
+    const { bookmarkFolders: folders, bookmarks: kept } = sanitizeBookmarksSection(
+      [{ id: "a", url: "https://a.example.com", folderId: "bar" }],
+      [
+        { id: "bar", name: "收藏夹栏", order: 0 },
+        { id: "inner", name: "编程", parentId: "bar", order: 0 },
+      ],
+    );
+    expect(folders.map((folder) => folder.name)).toEqual(["收藏夹栏", "编程"]);
+    expect(folders.find((folder) => folder.name === "编程")?.parentId).toBe("bar");
+    expect(kept[0]?.folderId).toBe("bar");
+  });
 });
 
 describe("bookmarks in a workspace export", () => {

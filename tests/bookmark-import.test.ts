@@ -71,11 +71,12 @@ describe("chromium bookmark source", () => {
       other: { type: "folder", name: "其他书签", children: [] },
     });
     const tree = parseChromiumBookmarks(file);
-    // Empty branches never make it out of the parser: the import would only
-    // have to prune them, and the count shown in the picker stays honest.
+    // The browser's own roots are walked through, and empty branches never make
+    // it out of the parser: the import would only have to prune them, and the
+    // count shown in the picker stays honest.
     expect(flatten(tree)).toEqual([
-      "书签栏/后台 → https://admin.example.com",
-      "书签栏/深层/文档 → http://docs.example.com/a",
+      "后台 → https://admin.example.com",
+      "深层/文档 → http://docs.example.com/a",
     ]);
   });
 
@@ -95,7 +96,7 @@ describe("chromium bookmark source", () => {
     expect(sources[0]?.count).toBe(1);
   });
 
-  it("imports under a browser folder with structure intact", async () => {
+  it("imports into the top level, with the user's own folder structure", async () => {
     const userDataDir = join(dir, "ud3");
     const file = plantChromium(userDataDir, {
       bookmark_bar: {
@@ -118,19 +119,65 @@ describe("chromium bookmark source", () => {
       profile: "默认配置",
       file,
     });
-    expect(outcome).toEqual({ bookmarks: 2, folders: 2, skipped: 0 });
+    // Two bookmarks, one folder: the browser's own roots (书签栏 / 其他书签) are
+    // scaffolding, so they do not become folders of their own.
+    expect(outcome).toEqual({ bookmarks: 2, folders: 1, skipped: 0 });
     const folders = service.snapshot().bookmarkFolders;
-    const root = folders.find((folder) => folder.name === "Edge 书签");
-    expect(root?.parentId).toBeUndefined();
-    const bar = folders.find((folder) => folder.name === "书签栏");
-    expect(bar?.parentId).toBe(root?.id);
+    expect(folders.map((folder) => folder.name)).toEqual(["深层"]);
     const deep = folders.find((folder) => folder.name === "深层");
-    expect(deep?.parentId).toBe(bar?.id);
+    expect(deep?.parentId).toBeUndefined();
     const bookmarks = service.snapshot().bookmarks;
-    expect(bookmarks.find((item) => item.name === "后台")?.folderId).toBe(bar?.id);
+    // A bookmark directly on the bar lands at the root, i.e. unfiled.
+    expect(bookmarks.find((item) => item.name === "后台")?.folderId).toBeUndefined();
     expect(bookmarks.find((item) => item.name === "文档")?.folderId).toBe(deep?.id);
-    // The empty 其他书签 group was pruned on the way in.
-    expect(folders.find((folder) => folder.name === "其他书签")).toBeUndefined();
+  });
+
+  it("merges into folders the workspace already has instead of duplicating them", async () => {
+    service.saveBookmarkFolder({ name: "编程" });
+    const first = service.snapshot().bookmarkFolders.find((folder) => folder.name === "编程");
+    const alice = join(dir, "ud3a");
+    await service.importBookmarksFromSource({
+      kind: "edge",
+      browser: "Edge",
+      profile: "默认配置",
+      file: plantChromium(alice, {
+        bookmark_bar: {
+          type: "folder",
+          name: "书签栏",
+          children: [
+            {
+              type: "folder",
+              name: "编程",
+              children: [{ type: "url", name: "前端", url: "https://fe.example.com" }],
+            },
+          ],
+        },
+      }),
+    });
+    const bob = join(dir, "ud3b");
+    await service.importBookmarksFromSource({
+      kind: "chrome",
+      browser: "Chrome",
+      profile: "默认配置",
+      file: plantChromium(bob, {
+        bookmark_bar: {
+          type: "folder",
+          name: "Bookmarks bar",
+          children: [
+            {
+              type: "folder",
+              name: "编程",
+              children: [{ type: "url", name: "后端", url: "https://be.example.com" }],
+            },
+          ],
+        },
+      }),
+    });
+    const folders = service.snapshot().bookmarkFolders.filter((folder) => folder.name === "编程");
+    expect(folders).toHaveLength(1);
+    expect(folders[0]?.id).toBe(first?.id);
+    const inside = service.snapshot().bookmarks.filter((item) => item.folderId === first?.id);
+    expect(inside.map((item) => item.name).sort()).toEqual(["前端", "后端"]);
   });
 
   it("skips urls the workspace already has, and prunes what that empties", async () => {
@@ -152,7 +199,7 @@ describe("chromium bookmark source", () => {
       profile: "默认配置",
       file,
     });
-    expect(outcome).toEqual({ bookmarks: 1, folders: 1, skipped: 1 });
+    expect(outcome).toEqual({ bookmarks: 1, folders: 0, skipped: 1 });
     expect(service.snapshot().bookmarks.map((item) => item.name).sort()).toEqual(["后台", "新页"]);
   });
 
@@ -168,10 +215,11 @@ describe("chromium bookmark source", () => {
     const source = { kind: "edge" as const, browser: "Edge", profile: "默认配置", file };
     const first = await service.importBookmarksFromSource(source);
     expect(first.bookmarks).toBe(1);
+    expect(first.folders).toBe(0);
     const before = service.snapshot();
     const second = await service.importBookmarksFromSource(source);
     expect(second).toEqual({ bookmarks: 0, folders: 0, skipped: 1 });
-    // The tree is byte-for-byte the same shape: no stacked "书签栏 (2)".
+    // The tree is byte-for-byte the same shape: no stacked folder of any kind.
     expect(service.snapshot().bookmarkFolders.map((folder) => folder.name)).toEqual(
       before.bookmarkFolders.map((folder) => folder.name),
     );
@@ -220,7 +268,7 @@ describe("firefox bookmark source", () => {
     expect(sources[0]?.count).toBe(-1);
   });
 
-  it("imports the fixed roots as folders with positions kept", async () => {
+  it("imports the toolbar contents with positions kept", async () => {
     const profilesDir = join(dir, "ff-profiles2");
     const profileDir = plantFirefox(profilesDir);
     const outcome = await service.importBookmarksFromSource({
@@ -229,18 +277,16 @@ describe("firefox bookmark source", () => {
       profile: "abc123",
       file: join(profileDir, "places.sqlite"),
     });
-    // 一 and 二 import; the javascript: row is filtered, not imported.
-    expect(outcome).toEqual({ bookmarks: 2, folders: 2, skipped: 0 });
+    // 一 and 二 import; the javascript: row is filtered, not imported. The
+    // toolbar root is scaffolding, so 一 lands at the top level and only 子夹
+    // survives as a folder.
+    expect(outcome).toEqual({ bookmarks: 2, folders: 1, skipped: 0 });
     const folders = service.snapshot().bookmarkFolders;
-    const root = folders.find((folder) => folder.name === "Firefox 书签");
-    const toolbar = folders.find((folder) => folder.name === "书签工具栏");
-    const nested = folders.find((folder) => folder.name === "子夹");
-    expect(toolbar?.parentId).toBe(root?.id);
-    expect(nested?.parentId).toBe(toolbar?.id);
-    // 书签菜单 holds nothing valid, so it never lands.
-    expect(folders.find((folder) => folder.name === "书签菜单")).toBeUndefined();
+    expect(folders.map((folder) => folder.name)).toEqual(["子夹"]);
+    const nested = folders[0];
+    expect(nested?.parentId).toBeUndefined();
     const bookmarks = service.snapshot().bookmarks;
-    expect(bookmarks.find((item) => item.name === "一")?.folderId).toBe(toolbar?.id);
+    expect(bookmarks.find((item) => item.name === "一")?.folderId).toBeUndefined();
     expect(bookmarks.find((item) => item.name === "二")?.folderId).toBe(nested?.id);
   });
 });

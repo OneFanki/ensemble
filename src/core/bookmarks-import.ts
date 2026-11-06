@@ -103,16 +103,30 @@ export function parseChromiumBookmarks(file: string): BookmarkImportNode[] {
   }
   const roots = (data as Record<string, Record<string, unknown>> | null)?.["roots"];
   if (!roots || typeof roots !== "object") return [];
-  // The three standard roots are folders in their own right — the file already
-  // names them (书签栏 / 其他书签 / 移动设备书签 in the browser's own locale),
-  // so they are walked directly instead of being wrapped in another label.
+  /*
+   * The three standard roots are containers the user never created: the bar,
+   * "other bookmarks" and the mobile set. Importing them as folders is what
+   * produced the "Edge 书签 / 收藏夹栏 / 编程 / 前端" staircase — two levels of
+   * scaffolding in front of the first folder the user actually made.
+   *
+   * Their *children* are the user's own structure, so that is what an import
+   * returns: the roots are walked through, not wrapped.
+   */
   const out: BookmarkImportNode[] = [];
   for (const key of ["bookmark_bar", "other", "synced"]) {
     const root = roots[key];
     if (!root || typeof root !== "object") continue;
-    out.push(...walkChromium(root));
+    out.push(...walkChromiumChildren(root));
   }
   return out;
+}
+
+/** A container node's children, without the container itself. */
+function walkChromiumChildren(node: unknown): BookmarkImportNode[] {
+  const record = node as Record<string, unknown> | null;
+  if (!record || typeof record !== "object") return [];
+  const children = Array.isArray(record["children"]) ? record["children"] : [];
+  return children.flatMap(walkChromium);
 }
 
 function walkChromium(node: unknown): BookmarkImportNode[] {
@@ -168,11 +182,8 @@ function chromiumSources(
   return out;
 }
 
-const FIREFOX_ROOT_GUIDS: Array<{ guid: string; label: string }> = [
-  { guid: "toolbar_____", label: "书签工具栏" },
-  { guid: "menu________", label: "书签菜单" },
-  { guid: "unfiled_____", label: "其他书签" },
-];
+/** The browser's three standard roots, by guid. Their names are not used. */
+const FIREFOX_ROOT_GUIDS: string[] = ["toolbar_____", "menu________", "unfiled_____"];
 
 interface PlacesRow {
   id: number;
@@ -225,12 +236,13 @@ export async function parseFirefoxBookmarks(file: string): Promise<BookmarkImpor
       // Sibling order is the stored position, not row order.
       for (const list of childrenOf.values()) list.sort((a, b) => a.position - b.position);
 
+      // Same rule as the Chromium reader: the toolbar / menu / unfiled roots are
+      // the browser's own scaffolding, so only their contents come over.
       const roots: BookmarkImportNode[] = [];
-      for (const root of FIREFOX_ROOT_GUIDS) {
-        const row = rows.find((item) => item.guid === root.guid);
+      for (const guid of FIREFOX_ROOT_GUIDS) {
+        const row = rows.find((item) => item.guid === guid);
         if (!row) continue;
-        const children = walkFirefox(row.id, childrenOf);
-        if (children.length) roots.push({ name: root.label, children });
+        roots.push(...walkFirefox(row.id, childrenOf));
       }
       return roots;
     } finally {

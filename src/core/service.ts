@@ -207,7 +207,10 @@ export class WorkspaceService {
       () => ({ version: 1, scannedAt: "", engines: [] }),
     );
     this.data = sanitizeWorkspace(this.store.read());
-    this.settings = { ...DEFAULT_SETTINGS, ...this.settingsStore.read() };
+    this.settings = this.adoptDefaultLayout({
+      ...DEFAULT_SETTINGS,
+      ...this.settingsStore.read(),
+    });
 
     const vaultStore = new JsonStore<VaultFile>(join(options.userDataDir, "vault.json"), () => ({
       version: 2,
@@ -1165,15 +1168,23 @@ export class WorkspaceService {
   }
 
   /**
-   * Merges one browser profile's bookmarks under a top-level folder named
-   * after the browser.
+   * Merges one browser profile's bookmarks into the workspace tree.
    *
-   * Import is deliberately structure-faithful and idempotent: the browser's own
-   * group folders (书签栏, 书签工具栏…) come over as folders, urls already in
-   * the workspace are skipped, and folders whose subtree lost every bookmark
-   * to that dedupe are pruned — so importing the same profile twice leaves the
-   * tree as if it had been imported once. A repeated import merges into the
-   * existing browser folder rather than stacking a second copy of it.
+   * Import is deliberately structure-faithful to the user's own folders and
+   * idempotent. Two things are dropped on the way in:
+   *
+   * - **The browser's scaffolding.** No "Edge 书签" folder, no "收藏夹栏" level:
+   *   the importer walks through those containers (see `parseChromiumBookmarks`)
+   *   and lands their contents at the top. Two levels of scaffolding in front of
+   *   the first folder the user made is exactly the staircase nobody wants.
+   * - **URLs already in the workspace.** A stored URL carries
+   *   `safeExternalUrl`'s normalization, so both sides go through the same
+   *   canonical form.
+   *
+   * Folders merge by name at the same level: re-importing a profile, or
+   * importing Chrome after Edge, fills the existing "编程" folder instead of
+   * creating "编程 (2)". Folders that lose every bookmark to the dedupe are
+   * pruned, so importing twice leaves the tree as if it had been imported once.
    */
   async importBookmarksFromSource(source: {
     kind: BookmarkSourceKind;
@@ -1187,36 +1198,42 @@ export class WorkspaceService {
         : parseChromiumBookmarks(source.file);
     if (!tree.length) throw new Error("这个配置里没有可导入的书签");
     const now = new Date().toISOString();
-    const browserLabel = `${source.browser} 书签`;
-
-    const existingRoot = this.data.bookmarkFolders.find(
-      (folder) => !folder.parentId && folder.name === browserLabel,
-    );
-    const rootWasNew = !existingRoot;
-    let root = existingRoot;
-    if (!root) {
-      const siblings = this.data.bookmarkFolders.filter((folder) => !folder.parentId);
-      root = {
-        id: randomUUID(),
-        name: browserLabel,
-        order: siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1,
-        createdAt: now,
-        updatedAt: now,
-      };
-      this.data.bookmarkFolders.push(root);
-    }
 
     const seen = new Set(this.data.bookmarks.map((bookmark) => canonicalBookmarkUrl(bookmark.url)));
     const created: BookmarkFolder[] = [];
     let bookmarksAdded = 0;
     let skipped = 0;
     let nextOrder = this.data.bookmarks.reduce((max, item) => Math.max(max, item.order), -1) + 1;
+    /**
+     * The folder this level already has under `name`, or a new one.
+     *
+     * Root level is `""` — unfiled bookmarks live there, so a folder found at
+     * the root is a sibling of them, not a child of anything.
+     */
+    const folderFor = (name: string, parentId: string): BookmarkFolder => {
+      const label = name.slice(0, 60) || "未命名文件夹";
+      const existing = this.data.bookmarkFolders.find(
+        (folder) => (folder.parentId ?? "") === parentId && folder.name === label,
+      );
+      if (existing) return existing;
+      const siblings = this.data.bookmarkFolders.filter(
+        (folder) => (folder.parentId ?? "") === parentId,
+      );
+      const folder: BookmarkFolder = {
+        id: randomUUID(),
+        name: label,
+        ...(parentId ? { parentId } : {}),
+        order: siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.data.bookmarkFolders.push(folder);
+      created.push(folder);
+      return folder;
+    };
     const walk = (nodes: BookmarkImportNode[], parentId: string): void => {
       for (const node of nodes) {
         if (node.url) {
-          // Both sides go through the same canonical form: a stored URL carries
-          // safeExternalUrl's normalization (trailing slash, host case), and a
-          // raw comparison would import the same address twice.
           const key = canonicalBookmarkUrl(node.url);
           if (seen.has(key)) {
             skipped += 1;
@@ -1227,7 +1244,7 @@ export class WorkspaceService {
             id: randomUUID(),
             name: node.name || new URL(node.url).host,
             url: safeExternalUrl(node.url) ?? node.url,
-            folderId: parentId,
+            ...(parentId ? { folderId: parentId } : {}),
             order: nextOrder++,
             createdAt: now,
             updatedAt: now,
@@ -1236,23 +1253,11 @@ export class WorkspaceService {
           continue;
         }
         if (!node.children?.length) continue;
-        const siblings = this.data.bookmarkFolders.filter(
-          (folder) => folder.parentId === parentId,
-        );
-        const folder: BookmarkFolder = {
-          id: randomUUID(),
-          name: node.name.slice(0, 60) || "未命名文件夹",
-          parentId,
-          order: siblings.reduce((max, item) => Math.max(max, item.order), -1) + 1,
-          createdAt: now,
-          updatedAt: now,
-        };
-        this.data.bookmarkFolders.push(folder);
-        created.push(folder);
+        const folder = folderFor(node.name, parentId);
         walk(node.children, folder.id);
       }
     };
-    walk(tree, root.id);
+    walk(tree, "");
 
     // A folder is only worth keeping if something landed in its subtree; the
     // dedupe above can empty whole branches of an already-imported profile.
@@ -1267,9 +1272,6 @@ export class WorkspaceService {
       this.data.bookmarkFolders = this.data.bookmarkFolders.filter(
         (folder) => !emptyIds.has(folder.id),
       );
-    }
-    if (rootWasNew && !hasContent(root.id)) {
-      this.data.bookmarkFolders = this.data.bookmarkFolders.filter((folder) => folder.id !== root?.id);
     }
 
     this.persist();
@@ -1961,10 +1963,26 @@ export class WorkspaceService {
   // ---------- settings ----------
 
   saveSettings(patch: SettingsPatch): AppSettings {
-    this.settings = { ...this.settings, ...patch };
+    // Choosing a layout is what makes it the user's choice, so the load-time
+    // default-adoption below stops overriding it.
+    const withIntent = patch.layout ? { ...patch, layoutExplicit: true } : patch;
+    this.settings = { ...this.settings, ...withIntent };
     this.settingsStore.write(this.settings);
     this.emit();
     return this.settingsSnapshot();
+  }
+
+  /**
+   * Takes the factory default layout while the user has never picked one.
+   *
+   * The default changed from 2×2 to no-layout: without this, every existing
+   * install keeps a value it never chose (it came from the old factory default)
+   * and the new default would only apply to fresh installs. Once anything picks
+   * a layout, `layoutExplicit` is written and this stops touching the field.
+   */
+  private adoptDefaultLayout(loaded: AppSettings): AppSettings {
+    if (loaded.layoutExplicit) return loaded;
+    return { ...loaded, layout: DEFAULT_SETTINGS.layout };
   }
 
   // ---------- credentials ----------

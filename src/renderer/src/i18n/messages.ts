@@ -480,7 +480,6 @@ export const messages = {
       noteExample: "例如：这个账号开了双因素验证",
       identityFieldsScope:
         "只对这个账号生效。租户名、公司码这类每个人不一样的登录值都放这里；值留空表示不填这一项。",
-      identityFieldCount: "{count} 个额外字段",
       rebuildProfile: "重建 Profile",
       rebuildConfirm:
         "会删除该身份的浏览器 Profile 目录（Cookie、登录态、扩展数据），下次启动是全新未登录状态。\n保存的账号密码不受影响。确定继续？",
@@ -1528,7 +1527,6 @@ export const messages = {
       noteExample: "e.g. This account has 2FA enabled",
       identityFieldsScope:
         "Applies to this account only. Per-person login values such as a tenant or company code go here; an empty value skips the field.",
-      identityFieldCount: "{count} extra fields",
       rebuildProfile: "Rebuild profile",
       rebuildConfirm:
         "This deletes the browser profile for this identity (cookies, session, extension data). The next launch starts signed out.\nSaved credentials are kept. Continue?",

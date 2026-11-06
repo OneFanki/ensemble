@@ -377,6 +377,22 @@ function passwordLabel(identity: Identity): string {
   if (!store.identityPasswordSet(identity)) return t("app.passwordNotSet");
   return identity.passwordMode === "custom" ? t("app.passwordCustom") : t("app.passwordInherit");
 }
+
+/**
+ * The facts the card folds into "+N".
+ *
+ * Only things a user set on purpose: a browser that differs from the default,
+ * and each extra login field by its label. The list is also the chip's tooltip,
+ * so folding them never hides what they are — it only stops them from reflowing
+ * the grid.
+ */
+function extraFacts(identity: Identity): string[] {
+  const facts: string[] = [];
+  const brand = identity.engineId ? store.engineFor(identity)?.brand : undefined;
+  if (brand) facts.push(brand);
+  for (const field of identity.extraFields ?? []) facts.push(field.label);
+  return facts;
+}
 </script>
 
 <template>
@@ -387,7 +403,7 @@ function passwordLabel(identity: Identity): string {
         <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
       </template>
       <template #actions>
-        <AppButton variant="primary" data-tour="new-identity" @click="emit('newIdentity')">
+        <AppButton variant="primary" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
         </AppButton>
@@ -665,22 +681,29 @@ function passwordLabel(identity: Identity): string {
             </div>
 
             <!--
-              One line, three facts, all of them things a user actually asks
-              about a card: which role it is, whether a password is stored, and
-              (only when it differs from the default) which browser it opens in.
-              The old layout spent three rows on a password-dots decoration and a
-              role/engine chip pair, with the same information to say.
+              Two facts always, the rest counted.
+              
+              Every account answers "which role" and "is a password stored" —
+              those are what a grid of accounts is compared on, so they always
+              get a chip. Everything else (a non-default browser, extra login
+              fields) folds into one "+N" chip whose tooltip names them. Showing
+              them inline made a four-chip card either wrap to a second line —
+              which made its whole grid row taller — or truncate every label into
+              "未…" and "Micr…". Neither is worth a fact the user did not come to
+              this page for.
             -->
             <div class="meta-row">
-              <span class="tag">{{ identity.role }}</span>
+              <span class="tag tag-role" :title="identity.role">{{ identity.role }}</span>
               <span class="tag plain" :class="{ missing: !store.identityPasswordSet(identity) }">
                 {{ passwordLabel(identity) }}
               </span>
-              <span v-if="identity.engineId" class="tag plain">
-                {{ store.engineFor(identity)?.brand ?? "—" }}
-              </span>
-              <span v-if="identity.extraFields?.length" class="tag plain">
-                {{ $t("app.identityFieldCount", { count: identity.extraFields.length }) }}
+              <span
+                v-if="extraFacts(identity).length"
+                class="tag plain more"
+                :title="extraFacts(identity).join(' · ')"
+                :aria-label="extraFacts(identity).join(' · ')"
+              >
+                +{{ extraFacts(identity).length }}
               </span>
             </div>
 
@@ -1212,12 +1235,29 @@ function passwordLabel(identity: Identity): string {
   background: var(--accent);
 }
 
+/*
+ * Facts stay on ONE line, and the card stays the same height whatever an account
+ * carries.
+ *
+ * The row used to wrap. That looked harmless while every seed account had the
+ * same three chips, but a real workspace has accounts with a long role label, a
+ * custom engine and several extra fields — those cards grew a second chip line
+ * and a second action line, the whole grid row stretched to match, and every
+ * neighbouring card got a band of empty space under its actions. Three fixed
+ * rows (identity, facts, actions) is what makes a grid of accounts comparable at
+ * a glance, which is the only reason this page exists.
+ *
+ * So the row holds exactly what always fits: the role (given its natural width,
+ * it is the fact people scan for) and the password state. Anything else becomes
+ * a "+N" chip (see `extraFacts`).
+ */
 .meta-row {
   display: flex;
   align-items: center;
   gap: 5px;
-  flex-wrap: wrap;
-  min-height: 0;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  min-height: 18px;
 }
 
 .tag {
@@ -1229,9 +1269,23 @@ function passwordLabel(identity: Identity): string {
   color: color-mix(in srgb, var(--role) 72%, var(--text-secondary));
   background: color-mix(in srgb, var(--role) 7%, transparent);
   white-space: nowrap;
-  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The role is the one chip that may push the others aside rather than being cut:
+   "数据管理员 · 读写" truncated to "数据管理…" is the same as no label at all. */
+.meta-row > .tag-role {
+  flex: 0 1 auto;
+  max-width: 62%;
+}
+
+/* The counter never shrinks: a half-drawn "+" is worse than a missing chip. */
+.meta-row > .tag.more {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .tag.plain {
@@ -1254,11 +1308,18 @@ function passwordLabel(identity: Identity): string {
  * the pointer crossed it, so a grid of cards reflowed as the mouse moved. A
  * stable card is worth more than the ~18px it saves, and three rows is the size
  * the page was designed around anyway.
+ *
+ * The row does not wrap, for the same reason the facts row does not: one
+ * account with an extra action ("stop" instead of "switch") must not make its
+ * card one line taller than the rest. "Edit" is pinned to the right edge so the
+ * destructive-looking actions never share a line with it.
  */
 .card-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 3px 11px;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px 10px;
+  overflow: hidden;
   font-size: 11px;
   color: var(--muted);
 }
@@ -1267,6 +1328,12 @@ function passwordLabel(identity: Identity): string {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.card-actions > span.edit {
+  margin-left: auto;
 }
 
 .card-actions > span:hover {
@@ -1275,10 +1342,6 @@ function passwordLabel(identity: Identity): string {
 
 .launch {
   color: color-mix(in srgb, var(--role) 76%, var(--text));
-}
-
-.edit {
-  margin-left: auto;
 }
 
 /* Dialog footer layout. Scoped styles do not reach Modal's own slots, so the

@@ -199,13 +199,16 @@ function addPage(): void {
   flex: 0 1 auto;
   min-width: 54px;
   max-width: 170px;
-  height: 20px;
+  /* 24 inside a 32px band: the page tabs are what the cell's header is for, so
+     they get the room. A blank page's bookmark strip above is 28px tall with
+     22px rows — this one has to read as the taller of the two. */
+  height: 24px;
   padding: 0 4px 0 6px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
   font-size: 10px;
-  line-height: 18px;
+  line-height: 22px;
   color: var(--faint);
   white-space: nowrap;
   cursor: pointer;
@@ -265,11 +268,11 @@ function addPage(): void {
 .slot-tab-add {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 3px;
   color: var(--faint);
-  flex: 0 0 18px;
+  flex: 0 0 20px;
 }
 
 .slot-tab-add:hover {
@@ -282,11 +285,11 @@ function addPage(): void {
 .slot-tab-merge {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 3px;
   color: var(--faint);
-  flex: 0 0 18px;
+  flex: 0 0 20px;
 }
 
 .slot-tab-merge:hover {

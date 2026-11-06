@@ -759,6 +759,7 @@ async function handleLocale(locale: LocaleSetting) {
           @new-site="openNewSite"
           @edit-site="openEditSite"
           @open-site="openSite"
+          @add-identity="openNewIdentity"
         />
         <IdentitiesPage
           v-else-if="view === 'identities'"

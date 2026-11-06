@@ -57,6 +57,30 @@ const resizing = ref(false);
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
 const reservesControls = computed(() => platform.value !== "darwin");
 
+/**
+ * Where you can go, in two groups.
+ *
+ * The first group is the browser itself plus the bookmarks — both are about
+ * *going somewhere*: the page you have open, and the addresses you keep. The
+ * second is the workspace's own assets.
+ *
+ * Bookmarks used to sit in the asset group, beside sites, and that pairing was
+ * the whole confusion: a site is a login recipe for a system you keep accounts
+ * in, a bookmark is one address. Reading them as two entries of one list made
+ * people ask what the difference was. They answer different questions, so they
+ * no longer share a list.
+ */
+const browserEntries = computed<Array<{ view: AppView; label: string; icon: Component; count: number }>>(
+  () => [
+    {
+      view: "bookmarks",
+      label: t("app.bookmarks"),
+      icon: Bookmark,
+      count: workspace.bookmarks.length,
+    },
+  ],
+);
+
 const assetEntries = computed<Array<{ view: AppView; label: string; icon: Component; count: number }>>(
   () => [
     { view: "sites", label: t("app.sites"), icon: Globe, count: workspace.sites.length },
@@ -69,12 +93,6 @@ const assetEntries = computed<Array<{ view: AppView; label: string; icon: Compon
     { view: "views", label: t("app.views"), icon: LayoutGrid, count: workspace.views.length },
     { view: "flows", label: t("app.flows"), icon: Workflow, count: workspace.flows.length },
     { view: "tags", label: t("app.tags"), icon: Tag, count: workspace.snapshot?.tags.length ?? 0 },
-    {
-      view: "bookmarks",
-      label: t("app.bookmarks"),
-      icon: Bookmark,
-      count: workspace.bookmarks.length,
-    },
   ],
 );
 
@@ -185,6 +203,23 @@ function startResize(event: PointerEvent): void {
       >
         <Globe :size="14" class="nav-icon" />
         <span class="nav-label">{{ t("app.browser") }}</span>
+      </button>
+
+      <!-- The rest of "going somewhere": the addresses you keep. -->
+      <button
+        v-for="entry in browserEntries"
+        :key="entry.view"
+        type="button"
+        class="nav-item"
+        :class="{ active: view === entry.view }"
+        :aria-current="view === entry.view ? 'page' : undefined"
+        :data-nav="entry.view"
+        v-tooltip="entry.label"
+        @click="emit('navigate', entry.view)"
+      >
+        <component :is="entry.icon" :size="14" class="nav-icon" />
+        <span class="nav-label">{{ entry.label }}</span>
+        <span v-if="entry.count" class="nav-count mono">{{ entry.count }}</span>
       </button>
 
       <div class="nav-group">

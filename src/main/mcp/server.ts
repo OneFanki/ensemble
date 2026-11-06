@@ -381,7 +381,7 @@ const writableSettingsProps = (): Record<string, unknown> => ({
   browserZoom: integer("内置浏览器默认缩放百分比，50–200"),
   searchEngineId: string("新标签页搜索与地址栏兜底使用的搜索引擎 id"),
   newTabBackground: string("新标签页背景预设 id"),
-  newTabBookmarks: { type: "boolean", description: "新标签页是否显示书签网格" },
+  newTabBookmarks: { type: "boolean", description: "新标签页是否显示书签栏" },
   restoreLastView: { type: "boolean", description: "启动时恢复上次启动的视图" },
   overlayEnabled: { type: "boolean", description: "是否显示置顶的实例切换浮层" },
   focusLabelEnabled: { type: "boolean", description: "切换窗口后短暂显示账号名" },
@@ -1703,7 +1703,7 @@ export class McpServer {
       {
         name: "list_bookmarks",
         description:
-          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是日常档案里已有的登录。",
+          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认档案里已有的登录。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -2420,7 +2420,7 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该身份独立的会话分区，登录态持久保存且与其他身份隔离；不传则是一次性干净会话，退出即消失，也不进用户的日常档案。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该身份独立的会话分区，登录态持久保存且与其他身份隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
           url: string("要打开的地址；省略则打开空白页"),

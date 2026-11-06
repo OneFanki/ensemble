@@ -97,7 +97,7 @@ export function aiWriteDenialMessage(denial: AiWriteDenial, origin: string): str
       return "这个标签页当前不是可操作的 http(s) 页面，不能发送输入。";
     case "daily-origin-unauthorized":
       return (
-        `来源 ${origin} 在「日常档案」里，AI 默认只读。` +
+        `来源 ${origin} 在「默认档案」里，AI 默认只读。` +
         "要让 AI 在这里操作，请在浏览器工具栏的 AI 权限里允许这个来源。"
       );
   }

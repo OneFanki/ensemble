@@ -20,7 +20,7 @@ export const messages = {
       consoleBack: "返回浏览器",
       consoleGroupWorkspace: "工作区",
       cleanSession: "干净会话",
-      dailyProfile: "日常档案",
+      dailyProfile: "默认档案",
       cleanSessionInEmbedded: "内置浏览器里的一个一次性页面",
       cleanSessionInExternal: "单独开一个浏览器窗口",
       cleanSessionNoEnv: "空白干净会话",
@@ -280,7 +280,7 @@ export const messages = {
       guidePathTitle: "核心流程",
       guidePathBody: "建站点 → 录账号 → 启动。任何一步都可以交给 AI 代做，手工做也只是三步。",
       guideAiTitle: "接入 AI",
-      guideAiBody: "底栏右下角有「AI 接入」入口，打开后设置页会显示端点地址与 Token。\n把配置片段粘进支持 MCP 的客户端，AI 会自己说明它需要什么。\n日常档案里的页面默认对 AI 只读——要让它点按输入，先在工具栏的盾牌按钮里允许该来源。",
+      guideAiBody: "底栏右下角有「AI 接入」入口，打开后设置页会显示端点地址与 Token。\n把配置片段粘进支持 MCP 的客户端，AI 会自己说明它需要什么。\n默认档案里的页面默认对 AI 只读——要让它点按输入，先在工具栏的盾牌按钮里允许该来源。",
       guideViewsTitle: "视图",
       guideViewsBody: "视图是一组账号和一个布局：选四五个身份，摆成 2×2，一次全部打开。它不是必须的，一个人单独启动也一样能用；它的用处是在多个账号之间来回对照。",
       guideViewsDiagramAlt: "四个账号并排显示在 2×2 网格里",
@@ -467,7 +467,7 @@ export const messages = {
 
       // Site view
       sitesSubtitle:
-        "站点是登录配方和归属：一个地址、登录路径与默认密码。账号页按站点分组，视图可以跨站点。",
+        "站点是一套登录配方，也是它下面那组账号的归属：一个地址、登录路径与默认密码。",
       emptySites: "还没有站点。新建账号时也可以直接选「新建站点」，不必先来这里。",
       switchSite: "切换站点",
       manageSites: "管理站点",
@@ -680,10 +680,10 @@ export const messages = {
       mcpAllowWrite: "允许创建与修改",
       mcpAllowRun: "允许启动与停止窗口",
       mcpAllowDelete: "允许删除",
-      mcpAiOrigins: "日常档案里允许 AI 操作的来源",
+      mcpAiOrigins: "默认档案里允许 AI 操作的来源",
       mcpAiOriginsEmpty: "还没有授权任何来源",
       mcpAiOriginsNote:
-        "日常档案是你自己的登录态，AI 默认只能读页面、截图和切换标签，不能点击或输入。" +
+        "默认档案是你随手浏览用的登录态，AI 默认只能读页面、截图和切换标签，不能点击或输入。" +
         "要用 AI 操作某个站点，在浏览器工具栏的「AI 权限」里允许它的来源；账号页与干净会话里的页面不受此限制。",
       mcpAiOriginRevoke: "撤销这个来源的 AI 操作权限",
       mcpPermissionNote: "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉站点、身份或视图。",
@@ -835,10 +835,10 @@ export const messages = {
       newPageAs: "新建页面 · 用哪个账号",
       noMatchingSites: "没有匹配的站点",
       openBlankPage: "空白页",
-      openBlankPageHint: "不加账号，用日常档案自己登录",
-      openSiteDaily: "日常打开",
-      openSiteDailyHint: "用日常档案，已登录的站点直接进",
-      openSiteClean: "干净打开",
+      openBlankPageHint: "不加账号，用默认档案自己登录",
+      openSiteDaily: "默认档案",
+      openSiteDailyHint: "用你平时浏览的登录态，已登录的站点直接进",
+      openSiteClean: "干净会话",
       openSiteCleanHint: "一次性会话，用完不留登录状态",
       openSiteAccounts: "用账号打开",
       openSiteNoAccounts: "这个站点还没有账号",
@@ -934,12 +934,12 @@ export const messages = {
       bookmarkRename: "改名",
       bookmarkRemove: "删除书签",
       bookmarkAdd: "收藏当前页",
-      bookmarkAddHint: "把当前页收进新标签页的书签里",
+      bookmarkAddHint: "把当前页收进书签",
       bookmarkAdded: "已收藏「{name}」",
       bookmarkExists: "这个地址已经收藏过了",
       bookmarkRemoved: "已删除书签「{name}」",
-      bookmarkShowTitle: "书签",
-      bookmarkShowHint: "在新标签页显示书签",
+      bookmarkShowTitle: "书签栏",
+      bookmarkShowHint: "在新标签页顶部显示书签栏",
       bookmarkBar: "书签栏",
       bookmarkBarMore: "更多书签",
       aiOriginTitle: "AI 权限",
@@ -1014,7 +1014,7 @@ export const messages = {
       consoleBack: "Back to the browser",
       consoleGroupWorkspace: "Workspace",
       cleanSession: "Clean session",
-      dailyProfile: "Daily profile",
+      dailyProfile: "Default profile",
       cleanSessionInEmbedded: "One throwaway page inside the built-in browser",
       cleanSessionInExternal: "A separate browser window",
       cleanSessionNoEnv: "Blank clean session",
@@ -1286,7 +1286,7 @@ export const messages = {
         "Add a site → add accounts → launch. Any step can be handed to the AI; doing it by hand is also just three steps.",
       guideAiTitle: "Connecting an AI client",
       guideAiBody:
-        "The status bar has an AI access entry; opening it shows the endpoint and token in Settings.\nPaste the config snippet into any MCP-capable client and it will tell you what it needs.\nPages in the daily profile are read-only for the AI until you allow that origin with the shield button in the toolbar.",
+        "The status bar has an AI access entry; opening it shows the endpoint and token in Settings.\nPaste the config snippet into any MCP-capable client and it will tell you what it needs.\nPages in the default profile are read-only for the AI until you allow that origin with the shield button in the toolbar.",
       guideViewsTitle: "Views",
       guideViewsBody:
         "A view is a set of accounts plus a layout: pick four or five identities, arrange them 2×2, and open them all at once. It is optional — launching one account works the same way — and its purpose is comparing several accounts side by side.",
@@ -1490,7 +1490,7 @@ export const messages = {
 
       // Site view
       sitesSubtitle:
-        "A site is a login recipe and an owner: one address, a login path and a default password. Accounts are grouped by site, and a view may span several.",
+        "A site is a login recipe, and the home of the accounts under it: one address, a login path and a default password.",
       emptySites:
         "No sites yet. The new-identity form can create one inline; you do not have to start here.",
       switchSite: "Switch site",
@@ -1718,10 +1718,10 @@ export const messages = {
       mcpAllowWrite: "Create and edit",
       mcpAllowRun: "Launch and stop windows",
       mcpAllowDelete: "Delete",
-      mcpAiOrigins: "Origins the AI may operate in the daily profile",
+      mcpAiOrigins: "Origins the AI may operate in the default profile",
       mcpAiOriginsEmpty: "No origin authorized yet",
       mcpAiOriginsNote:
-        "The daily profile is your own signed-in browsing, so an AI can read, screenshot and switch tabs there but cannot click or type. " +
+        "The default profile is your own signed-in browsing, so an AI can read, screenshot and switch tabs there but cannot click or type. " +
         "To let it operate a site, allow that origin from the browser toolbar; pages in the identities page and clean sessions are never restricted.",
       mcpAiOriginRevoke: "Revoke the AI's permission for this origin",
       mcpPermissionNote:
@@ -1882,10 +1882,10 @@ export const messages = {
       noMatchingSites: "No matching sites",
       newPageAs: "New page as…",
       openBlankPage: "Blank page",
-      openBlankPageHint: "No account; sign in yourself in the daily profile",
-      openSiteDaily: "Open daily",
-      openSiteDailyHint: "Uses the daily profile, so signed-in sites go straight in",
-      openSiteClean: "Open clean",
+      openBlankPageHint: "No account; sign in yourself in the default profile",
+      openSiteDaily: "Default profile",
+      openSiteDailyHint: "Uses your everyday login state, so signed-in sites go straight in",
+      openSiteClean: "Clean session",
       openSiteCleanHint: "A throwaway session; no login state left behind",
       openSiteAccounts: "Open as an account",
       openSiteNoAccounts: "No accounts on this site yet",
@@ -1984,12 +1984,12 @@ export const messages = {
       bookmarkRename: "Rename",
       bookmarkRemove: "Remove bookmark",
       bookmarkAdd: "Bookmark this page",
-      bookmarkAddHint: "Add the current page to the new-tab bookmarks",
+      bookmarkAddHint: "Add the current page to your bookmarks",
       bookmarkAdded: "Bookmarked “{name}”",
       bookmarkExists: "That address is already bookmarked",
       bookmarkRemoved: "Removed bookmark “{name}”",
-      bookmarkShowTitle: "Bookmarks",
-      bookmarkShowHint: "Show bookmarks on the new-tab page",
+      bookmarkShowTitle: "Bookmark bar",
+      bookmarkShowHint: "Show the bookmark bar at the top of a new tab",
       bookmarkBar: "Bookmark bar",
       bookmarkBarMore: "More bookmarks",
       aiOriginTitle: "AI permissions",

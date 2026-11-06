@@ -14,6 +14,8 @@ const emit = defineEmits<{
   newSite: [];
   editSite: [id: string];
   openSite: [id: string];
+  /** The card's main action: another account on this system. */
+  addIdentity: [siteId: string];
 }>();
 
 const store = useWorkspaceStore();
@@ -211,7 +213,20 @@ import IconButton from "./ui/IconButton.vue";
                 </span>
               </div>
 
+              <!--
+                The card's main action is another account on this system.
+                "Open the site" used to be here as the primary button, which made
+                a site look like a place to visit — the same kind of thing as a
+                bookmark. It is not: a site is a login recipe and the header of a
+                group of accounts, and the thing people do with it is add one
+                more. Opening still exists, as the quiet button beside it.
+              -->
               <div class="card-foot">
+                <AppButton size="sm" variant="primary" :title="$t('app.newIdentityHere')"
+                  @click="emit('addIdentity', site.id)">
+                  <Plus :size="12" />
+                  {{ $t("app.newIdentity") }}
+                </AppButton>
                 <AppButton size="sm" :title="$t('app.openSiteHint')"
                   @click="store.markSiteUsed(site.id); emit('openSite', site.id)">
                   <Globe :size="12" />

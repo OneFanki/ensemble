@@ -18,17 +18,22 @@ import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkBar from "./BookmarkBar.vue";
-import BookmarkGrid from "./BookmarkGrid.vue";
 import Logo from "./Logo.vue";
 import AppButton from "./ui/AppButton.vue";
 
 /**
  * What a blank page shows instead of an empty white rectangle.
  *
- * One field, one engine picker, and — when the user has any — a grid of plain
- * bookmarks. It resolves whatever is typed — a domain, an IP, `localhost:3000`
- * or a scheme navigates directly, everything else goes to the selected engine —
- * so it never needs a second input or a row of buttons explaining the rule.
+ * One field, one engine picker, and the bookmark strip across the top. It
+ * resolves whatever is typed — a domain, an IP, `localhost:3000` or a scheme
+ * navigates directly, everything else goes to the selected engine — so it never
+ * needs a second input or a row of buttons explaining the rule.
+ *
+ * There is no tile grid here any more. It was bookmarks arranged a second way,
+ * and it read as "pinned shortcuts" while actually being a view of the bookmark
+ * tree: removing a bookmark changed it, reordering it changed the bookmarks'
+ * stored order. A pinned row is its own feature with its own data, and until
+ * that exists the strip and the search box are the whole surface.
  *
  * The backdrop is a preset, not an image file: this surface has to paint before
  * any network call, and the choice is a settings string that survives export.
@@ -60,11 +65,11 @@ const preview = computed(() => enginePreview(draftTemplate.value, "示例 query"
 const backdrop = computed(() => newTabBackdrop(workspace.settings.newTabBackground));
 /**
  * Bookmarks are shown only when both sides agree: the setting is on, and there
- * is something to show. An empty grid would be a permanently empty box.
+ * is something to show. An empty strip would be a permanently empty row.
  */
 const bookmarks = computed(() => (workspace.settings.newTabBookmarks ? workspace.bookmarks : []));
-/** Folders follow the same switch, or the grid would show folder tiles alone. */
-const gridFolders = computed(() =>
+/** Folders follow the same switch, or the strip would show bookmarks without them. */
+const stripFolders = computed(() =>
   workspace.settings.newTabBookmarks ? workspace.bookmarkFolders : [],
 );
 
@@ -188,7 +193,7 @@ async function saveEngine(): Promise<void> {
 }
 
 /**
- * A bookmark tile opens in this tab.
+ * A bookmark opens in this tab.
  *
  * Navigating the existing page rather than opening a new one is what a new-tab
  * page does in every browser: the blank tab is the destination, not a launcher.
@@ -196,30 +201,6 @@ async function saveEngine(): Promise<void> {
 function openBookmark(bookmark: Bookmark): void {
   query.value = "";
   emit("openBookmark", bookmark);
-}
-
-async function renameBookmark(bookmark: Bookmark, name: string): Promise<void> {
-  await workspace.saveBookmark({ id: bookmark.id, name, url: bookmark.url });
-}
-
-async function removeBookmark(bookmark: Bookmark): Promise<void> {
-  await workspace.deleteBookmark(bookmark.id);
-  workspace.notify(t("app.bookmarkRemoved", { name: bookmark.name }), "success");
-}
-
-async function moveBookmark(bookmark: Bookmark, toIndex: number): Promise<void> {
-  await workspace.moveBookmark(bookmark.id, toIndex);
-}
-
-/** Dropping a tile on a folder tile or breadcrumb crumb files it there. */
-async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void> {
-  await workspace.saveBookmark({
-    id: bookmark.id,
-    name: bookmark.name,
-    url: bookmark.url,
-    // An empty id is the root crumb: "unfile", not "store an empty label".
-    folderId: folderId || undefined,
-  });
 }
 </script>
 
@@ -232,9 +213,9 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
       the one on screen.
     -->
     <BookmarkBar
-      v-if="bookmarks.length || gridFolders.length"
+      v-if="bookmarks.length || stripFolders.length"
       :bookmarks="bookmarks"
-      :folders="gridFolders"
+      :folders="stripFolders"
       @open="openBookmark"
     />
     <div class="nt-inner">
@@ -371,17 +352,6 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
         </AppButton>
       </form>
 
-      <BookmarkGrid
-        v-if="bookmarks.length || gridFolders.length"
-        :bookmarks="bookmarks"
-        :folders="gridFolders"
-        @open="openBookmark"
-        @rename="renameBookmark"
-        @remove="removeBookmark"
-        @move="moveBookmark"
-        @file="fileBookmark"
-      />
-
       <p v-if="error" class="nt-error">{{ error }}</p>
     </div>
 
@@ -424,7 +394,12 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   position: absolute;
   inset: 0;
   display: flex;
+  /* One column: the strip on top, then the block. The block is centred by auto
+     margins inside the space the strip leaves. */
   flex-direction: column;
+  /* `hidden` rather than `auto`: the surface fills its slot exactly, and a
+     scrollbar here was the browser drawing one for a page that does not scroll —
+     it also made the whole column 15px narrower than the layout around it. */
   overflow: hidden;
   background: var(--bg);
 }
@@ -439,15 +414,22 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   mask-image: radial-gradient(120% 100% at 50% 45%, #000 55%, transparent 100%);
 }
 
+/*
+ * The block, centred. Not a scroll container.
+ *
+ * It used to carry `max-height: 100%; overflow-y: auto` so a short window could
+ * scroll. But the search box's engine menu is a child of this element, and a
+ * scroll container clips absolutely positioned descendants — a dropdown that
+ * hung past the block's right edge was cut in half. The surface never actually
+ * needs to scroll: its content is one box, a strip and two short forms, and the
+ * window can always grow. Centring with `margin: auto` is all this needs.
+ */
 .nt-inner {
   position: relative;
   width: min(560px, 100%);
-  /* Auto margins centre the block in the space the bookmark strip leaves, and
-     the height cap keeps a short window scrollable instead of clipped. */
   margin: auto;
   padding: 24px;
-  max-height: 100%;
-  overflow-y: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -538,17 +520,33 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
   transform: rotate(180deg);
 }
 
+/*
+ * The menu opens leftwards from the picker.
+ *
+ * It used to anchor `left: 0`, which put its left edge at the picker — but the
+ * picker sits at the field's *right* edge, so the panel hung past the box and
+ * off the window. Aligning to the picker's right edge keeps it under the field.
+ */
 .nt-engine-menu {
   position: absolute;
   z-index: 2;
   top: calc(100% + 6px);
-  left: 0;
+  right: 0;
   min-width: 180px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
+  animation: nt-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
+}
+
+@keyframes nt-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
 }
 
 .nt-engine-item {

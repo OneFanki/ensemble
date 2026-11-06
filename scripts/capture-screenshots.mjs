@@ -16,6 +16,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const VIEWPORT = { width: 1440, height: 900, deviceScaleFactor: 2 };
 const OUTPUT_DIR = "docs/screenshots";
@@ -175,11 +176,19 @@ const SHOTS = [
   { name: "identities-en", locale: "en", view: "identities" },
   { name: "views", locale: "zh", view: "views" },
   { name: "views-en", locale: "en", view: "views" },
-  { name: "settings", locale: "zh", view: "settings" },
-  { name: "settings-en", locale: "en", view: "settings" },
+  { name: "settings", locale: "zh", view: "settings-general" },
+  { name: "settings-en", locale: "en", view: "settings-general" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
   { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-main"] },
+  {
+    // The app menu: the once-in-a-while list, including the launch-surface
+    // switch that has no other home now that the title bar is gone.
+    name: "app-menu",
+    locale: "zh",
+    view: "browser",
+    clicks: ["[data-app-menu]"],
+  },
   {
     name: "site-dialog",
     locale: "zh",
@@ -220,20 +229,17 @@ const SHOTS = [
   {
     name: "settings-data",
     locale: "zh",
-    view: "settings",
-    clicks: ['[role="tab"]:nth-child(4)'],
+    view: "settings-data",
   },
   {
     name: "settings-mcp",
     locale: "zh",
-    view: "settings",
-    clicks: ['[role="tab"]:nth-child(5)'],
+    view: "settings-mcp",
   },
   {
     name: "settings-about",
     locale: "zh",
-    view: "settings",
-    clicks: ['[role="tab"]:nth-child(6)'],
+    view: "settings-about",
   },
   {
     name: "layout-editor",
@@ -407,10 +413,9 @@ async function seed(userData, locale, theme = "dark") {
         theme,
         locale,
         lastView: "browser",
-        layout: "2x2",
         autoFillOnLaunch: true,
         closeToTray: true,
-        onboardingVersion: 1,
+        guideVersion: 1,
         autoCheckUpdates: false,
       },
       null,
@@ -636,11 +641,10 @@ async function capture(shot) {
         return true;
       })()`);
     } else {
-      // The app opens on the browser page, so every other shot has to navigate
-      // there explicitly — including identities, which used to be the default.
-      await client.evaluate(
-        `(() => { const el = document.querySelector('[data-nav="${shot.view}"]'); if (el) el.click(); return Boolean(el); })()`,
-      );
+      // The app opens on the browser page, and the sidebar only appears once
+      // something beside the page is open — so the app menu is what brings the
+      // navigation on screen, then the row does the navigating.
+      await client.evaluate(openNav(shot.view));
       await wait(900);
     }
 

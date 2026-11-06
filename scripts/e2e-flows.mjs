@@ -19,6 +19,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -123,7 +124,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "flows", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "flows", guideVersion: 1 }),
 );
 writeFileSync(
   join(userData, "mcp.json"),
@@ -434,10 +435,7 @@ try {
   check("app window is a debug target", Boolean(renderer));
   if (renderer) {
     const client = await connect(renderer.webSocketDebuggerUrl);
-    await client.evaluate(`(() => {
-      document.querySelector('[data-nav="flows"]')?.click();
-      return true;
-    })()`);
+    await client.evaluate(openNav("flows"));
     await wait(700);
     const pageState = await client.evaluate(`(() => {
       const section = document.querySelector('.flows');

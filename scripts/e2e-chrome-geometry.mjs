@@ -55,7 +55,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const electron =
@@ -134,13 +134,11 @@ try {
   const client = await connect(target.webSocketDebuggerUrl);
   await wait(3400);
 
-  // Two groups: one view with two accounts, plus a loose tab. That is the
-  // smallest arrangement with a boundary in the dock.
+  // A workbench with two accounts in one view, plus a loose tab: none of the
+  // geometry below exists until the shell is actually up.
   await client.evaluate(`(async () => {
     const api = window.ensemble;
     await api.createEmbeddedView({ layoutId: "2x1", name: "权限矩阵" });
-    // The runtime container id is what every later call takes; the id in
-    // \`activeViewId\` is the definition id, a different namespace.
     const state = await api.getEmbeddedState();
     const viewId = state.activeViewId;
     await api.openEmbeddedTabInSlot(viewId, 0);
@@ -149,14 +147,18 @@ try {
   })()`);
   await wait(2200);
   await client.evaluate(`(async () => {
-    // A page outside any view gives the dock its second block.
     await window.ensemble.openEmbeddedTab({});
     return true;
   })()`);
   await wait(1500);
 
-  // --- 1. The controls reserve the caption band -----------------------------
-  const corner = await client.evaluate(`(() => {
+  // --- 1. The sidebar owns the window's left edge ---------------------------
+  //
+  // The column moved from the right to the left, which is what makes it one
+  // navigation surface instead of a dock plus a separate console rail. That
+  // move is the thing to assert: the column's right edge is where the page
+  // starts, and the caption band at the very top belongs to the column now.
+  const layout = await client.evaluate(`(() => {
     const controls = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--window-controls-width') || '0',
     );
@@ -169,135 +171,194 @@ try {
     return {
       controlsWidth: controls,
       innerWidth: window.innerWidth,
-      titlebar: box('.dock-titlebar'),
+      platform: document.querySelector('.sidebar')?.dataset.platform ?? null,
+      sidebar: box('.sidebar'),
       dockHead: box('.dock-head'),
-      addView: box('.add-view'),
-      collapse: box('.dock-head .collapse-btn'),
+      tabstrip: box('.tabstrip'),
+      nav: box('.sidebar-nav'),
+      pane: box('.pane'),
+      stage: box('.stage'),
       bench: document.querySelector('.browser')?.classList.contains('bench') ?? false,
-      // The dock's own top padding is where a header would start without a
-      // reserved band, so the assertion can name the actual failure.
-      dockPaddingTop: (() => {
-        const dock = document.querySelector('.dock');
-        return dock ? Number.parseFloat(getComputedStyle(dock).paddingTop) : null;
-      })(),
     };
   })()`);
 
-  check("the window reports how wide its caption buttons are", corner?.controlsWidth > 0, corner);
-  check("the run dock is open", corner?.bench === true, corner);
-
-  // The measurement itself: everything in the dock's first row starts below the
-  // band the caption buttons occupy — not merely somewhere positive. Comparing
-  // against the band rather than against zero is what makes this fail when the
-  // reservation is missing.
-  const bandBottom = 34;
+  check("the window reports how wide its caption buttons are", layout?.controlsWidth > 0, layout);
+  check("the workbench is open", layout?.bench === true, layout);
+  check("the sidebar is on the left", layout?.sidebar?.x === 0, layout);
   check(
-    "a drag band occupies the corner above the dock's header",
-    corner?.titlebar?.h > 0 && corner?.titlebar?.y === 0,
-    corner,
+    "the sidebar reaches the window's top edge",
+    layout?.sidebar?.y === 0 && layout?.sidebar?.h > 0,
+    layout,
+  );
+  // The corner used to hold a blank 34px band: the column reserved the caption
+  // area even though the OS paints its buttons on the right. The first row is
+  // now the column's own title bar, and it has to line up with the tab strip
+  // beside it — a column that starts a full title bar lower reads as a hole.
+  check(
+    "the column's first row is the top row, level with the tab strip",
+    layout?.dockHead?.y === 0 &&
+      layout?.tabstrip?.y === 0 &&
+      layout?.dockHead?.h === layout?.tabstrip?.h,
+    layout,
   );
   check(
-    "the dock's header sits below the caption buttons",
-    corner?.dockHead !== null &&
-      corner?.dockHead?.y >= bandBottom &&
-      corner?.addView !== null &&
-      corner?.addView?.y >= bandBottom,
-    corner,
+    "the pane starts where the sidebar ends",
+    layout?.pane?.x === layout?.sidebar?.w,
+    layout,
   );
   check(
-    "创建视图 is not underneath a window button",
-    corner?.addView !== null &&
-      corner.addView.w > 0 &&
-      corner.addView.x + corner.addView.w <= corner.innerWidth,
-    corner,
-  );
-  check("a drag band occupies the corner instead", corner?.titlebar?.h > 0, corner);
-
-  // Collapsed, the whole 46px strip is inside the caption band, so its first
-  // tile has to start below it too — otherwise the expand control and its count
-  // badge sit under a window button and cannot be clicked.
-  const collapsed = await client.evaluate(`(async () => {
-    document.querySelector('.dock-head .collapse-btn')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const strip = document.querySelector('.dock');
-    const first = document.querySelector('.mini .expand');
-    const box = first?.getBoundingClientRect();
-    const stripBox = strip?.getBoundingClientRect();
-    return {
-      isCollapsed: strip?.classList.contains('collapsed') ?? false,
-      stripWidth: stripBox ? Math.round(stripBox.width) : null,
-      firstTileTop: box ? Math.round(box.top) : null,
-      firstTileWidth: box ? Math.round(box.width) : null,
-    };
-  })()`);
-  check("collapsing keeps the strip", collapsed?.isCollapsed === true, collapsed);
-  check(
-    "the collapsed strip's first tile clears the caption buttons",
-    collapsed?.firstTileTop !== null && collapsed.firstTileTop >= bandBottom,
-    collapsed,
+    "the stage is as wide as the pane",
+    layout?.stage?.w === layout?.pane?.w,
+    layout,
   );
 
-  // Reopen for the remaining checks.
-  await client.evaluate(`(async () => {
-    document.querySelector('.mini .expand')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    return true;
-  })()`);
-
-  // --- 2. No dead hole between the last tab and the dock --------------------
-  const strip = await client.evaluate(`(() => {
+  // --- 2. The caption reservation lives on the left, not the tab strip ------
+  //
+  // The window buttons are painted over the *right* end. With the column on the
+  // left, nothing else competes for it — so the strip keeps its reservation in
+  // both shells, and the column never needs one.
+  const reservation = await client.evaluate(`(() => {
     const strip = document.querySelector('.tabstrip');
-    const dock = document.querySelector('.dock');
-    if (!strip || !dock) return null;
-    const tabs = [...strip.querySelectorAll('.tab')];
-    const lastTab = tabs[tabs.length - 1];
-    const addition = strip.querySelector('.strip-add');
-    const gear = strip.querySelector('.console-btn');
-    const dockBox = dock.getBoundingClientRect();
-    const stripBox = strip.getBoundingClientRect();
+    const sidebar = document.querySelector('.sidebar');
     return {
-      stripRight: Math.round(stripBox.right),
-      dockLeft: Math.round(dockBox.left),
-      stripPaddingRight: getComputedStyle(strip).paddingRight,
-      // The UI lives in the toolbar, so the gear is not in the strip at all.
-      gearInStrip: Boolean(gear),
-      gapToDock: Math.round(dockBox.left - stripBox.right),
-      lastTabRight: lastTab ? Math.round(lastTab.getBoundingClientRect().right) : null,
-      additionRight: addition ? Math.round(addition.getBoundingClientRect().right) : null,
+      stripPaddingRight: strip ? getComputedStyle(strip).paddingRight : null,
+      sidebarPaddingRight: sidebar ? getComputedStyle(sidebar).paddingRight : null,
+      stripRight: strip ? Math.round(strip.getBoundingClientRect().right) : null,
+      innerWidth: window.innerWidth,
     };
   })()`);
   check(
-    "the tab strip gives its caption reservation back to the dock",
-    strip !== null && Number.parseFloat(strip.stripPaddingRight) < 10,
-    strip,
+    "the tab strip reserves the caption band",
+    Number.parseFloat(reservation?.stripPaddingRight ?? "0") >=
+      (layout?.controlsWidth ?? 0) - 4,
+    reservation,
   );
-  check("the strip ends where the dock begins", strip?.gapToDock === 0, strip);
 
-  // --- 3. The console entry is a gear in the toolbar ------------------------
+  // --- 2b. Showing the sidebar does not rearrange the stage -----------------
+  //
+  // The glyph beside the first tab is the sidebar's switch. It used to also give
+  // a one-cell view a 2×1 layout on the way in, so turning the column on split
+  // the stage and nothing put it back. The two answers are separate now: this one
+  // controls whether the column is on screen, the layout picker controls cells.
+  const noRearrange = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const api = window.ensemble;
+    // A one-cell view, the case that used to get split.
+    const created = await api.createEmbeddedView({ name: "单格" });
+    await wait(700);
+    const viewId = created.activeViewId;
+    const before = (await api.getEmbeddedState()).views.find((v) => v.id === viewId);
+    const btn = document.querySelector('.tabstrip .layout-btn');
+    // Hide, then show, through the button itself.
+    btn?.click();
+    await wait(700);
+    const hidden = !document.querySelector('.sidebar');
+    btn?.click();
+    await wait(800);
+    const after = (await api.getEmbeddedState()).views.find((v) => v.id === viewId);
+    return {
+      shownAgain: Boolean(document.querySelector('.sidebar')),
+      hidden,
+      // Cell count, not filled cells: a fresh view has empty slots and the split
+      // is exactly what would show up as more of them.
+      slotsBefore: before?.slotTabs?.length ?? null,
+      slotsAfter: after?.slotTabs?.length ?? null,
+      layoutAfter: after?.layoutId ?? null,
+    };
+  })()`);
+  check("the glyph hides and shows the column", noRearrange?.hidden === true && noRearrange?.shownAgain === true, noRearrange);
+  check(
+    "showing the column does not split the stage",
+    noRearrange?.slotsAfter === 1 && noRearrange?.layoutAfter === "free",
+    noRearrange,
+  );
+
+  // --- 3. The app menu replaces the bare gear -------------------------------
   const entry = await client.evaluate(`(() => {
-    const inToolbar = document.querySelector('.toolbar .console-btn');
-    const inStrip = document.querySelector('.tabstrip .console-btn');
+    const inToolbar = document.querySelector('.toolbar [data-app-menu]');
     const icon = inToolbar?.querySelector('svg');
-    // Lucide ships one path per glyph; the gear's is the one with the tooth ring
-    // plus a knurled circle. What matters is that this is no longer the grid.
     return {
       inToolbar: Boolean(inToolbar),
-      inStrip: Boolean(inStrip),
       label: inToolbar?.getAttribute('aria-label') ?? null,
       nativeTitle: inToolbar?.getAttribute('title') ?? null,
-      iconPaths: icon ? icon.querySelectorAll('path, circle, rect').length : 0,
-      iconClass: icon?.getAttribute('class') ?? null,
+      iconParts: icon ? icon.querySelectorAll('path, circle, rect').length : 0,
     };
   })()`);
-  check("the console entry lives in the toolbar", entry?.inToolbar === true, entry);
-  check("nothing interactive sits in the tab strip's dead band", entry?.inStrip === false, entry);
-  check("the console entry is named", Boolean(entry?.label), entry);
-  check("the console entry has no native title", entry?.nativeTitle === null, entry);
+  check("the app menu lives in the toolbar", entry?.inToolbar === true, entry);
+  check("the app menu is named", Boolean(entry?.label), entry);
+  check("the app menu has no native title", entry?.nativeTitle === null, entry);
 
-  // --- 4. A drawn tooltip, not the OS one ----------------------------------
+  // --- 4. The menu carries a second door into the workbench -----------------
+  //
+  // The grid glyph beside the first tab is the quiet entry; someone who has
+  // never seen this app has no reason to try it, and the workbench is the whole
+  // product. The menu row is that door, and it has to actually land somewhere.
+  const menu = await client.evaluate(`(async () => {
+    const button = document.querySelector('[data-app-menu]');
+    if (!button) return { error: 'no menu button' };
+    button.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const rows = [...document.querySelectorAll('.app-menu [data-menu-item]')].map(
+      (el) => el.dataset.menuItem,
+    );
+    const anchored = document.querySelector('.app-menu')?.getBoundingClientRect();
+    return {
+      rows,
+      insideWindow: anchored ? anchored.right <= window.innerWidth + 1 : false,
+      floating: document.documentElement.dataset.floating ?? null,
+    };
+  })()`);
+  check(
+    "the menu offers the workbench as a row",
+    Array.isArray(menu?.rows) && menu.rows.includes("workspace"),
+    menu,
+  );
+  check("the menu stays inside the window", menu?.insideWindow === true, menu);
+  check(
+    "an open menu lets the header's empty space be clicked",
+    menu?.floating === "1",
+    menu,
+  );
+
+  // --- 4a. Where launches go is switchable from the menu --------------------
+  //
+  // The switch used to live in the window's title bar. Deleting that row took
+  // the switch with it, and nothing failed: every page kept reading the setting,
+  // so the app simply stayed on whatever surface it was last set to and the
+  // regression had no symptom until someone wanted the other one. Assert both
+  // halves — the rows exist, and choosing one actually writes the setting.
+  const launch = await client.evaluate(`(async () => {
+    const was = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
+    const pick = document.querySelector('[data-menu-item="' + (was === 'embedded' ? 'launch-external' : 'launch-embedded') + '"]');
+    if (!pick) return { error: 'no launch rows', rows: [...document.querySelectorAll('.app-menu [data-menu-item]')].map((el) => el.dataset.menuItem) };
+    pick.click();
+    await new Promise((r) => setTimeout(r, 600));
+    const after = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
+    // Put it back: later suites read the same setting.
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    document.querySelector('[data-menu-item="' + (was === 'embedded' ? 'launch-embedded' : 'launch-external') + '"]')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const restored = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
+    return { was, after, restored, rows: [...document.querySelectorAll('.app-menu [data-menu-item]')].length };
+  })()`);
+  check(
+    "the menu carries both launch surfaces",
+    launch?.after !== undefined && launch.after !== launch.was,
+    launch,
+  );
+  check(
+    "choosing a launch surface writes it back",
+    launch?.restored === launch?.was,
+    launch,
+  );
+
+  // --- 4b. A drawn tooltip, not the OS one ---------------------------------
   const tip = await client.evaluate(`(async () => {
-    const button = document.querySelector('.toolbar .console-btn');
+    const button = document.querySelector('[data-app-menu]');
     if (!button) return null;
+    button.click();
+    await new Promise((r) => setTimeout(r, 200));
     button.dispatchEvent(new PointerEvent('pointerenter'));
     await new Promise((r) => setTimeout(r, 700));
     const host = document.querySelector('.app-tooltip');
@@ -308,7 +369,6 @@ try {
       text: host?.textContent ?? null,
       visible: host?.classList.contains('visible') ?? false,
       opacity: style?.opacity ?? null,
-      zIndex: style?.zIndex ?? null,
       pointerEvents: style?.pointerEvents ?? null,
       insideWindow: box ? box.left >= 0 && box.right <= window.innerWidth : false,
     };
@@ -317,13 +377,17 @@ try {
     return { ...result, closedOnLeave: !document.querySelector('.app-tooltip.visible') };
   })()`);
   check(
-    "hovering the gear draws the app's own label",
+    "hovering the menu button draws the app's own label",
     tip?.visible === true && tip?.opacity === "1" && Boolean(tip?.text),
     tip,
   );
   check("the label sits inside the window", tip?.insideWindow === true, tip);
   check("the label cannot steal the pointer", tip?.pointerEvents === "none", tip);
   check("the label clears on pointer leave", tip?.closedOnLeave === true, tip);
+
+  // Close the menu before the colour checks below.
+  await client.evaluate(`document.querySelector('[data-app-menu]')?.click()`);
+  await wait(300);
 
   // --- 5. Groups are separated, in both themes -----------------------------
   for (const theme of ["dark", "light"]) {

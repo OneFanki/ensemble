@@ -44,7 +44,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "browser",
-    onboardingVersion: 1,
+    guideVersion: 1,
     // On from the first launch: the check is that a cold start replays the view
     // into the built-in surface, not that the toggle itself saves.
     restoreLastView: true,

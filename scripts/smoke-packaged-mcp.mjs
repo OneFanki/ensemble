@@ -36,7 +36,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const exe = resolve(process.env.ENSEMBLE_UNPACKED ?? "release/win-unpacked/Ensemble.exe");

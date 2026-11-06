@@ -73,7 +73,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const electron =
@@ -181,14 +181,26 @@ try {
   //    Vue renders on a microtask, so the console cannot be in the DOM yet.
   //    That is the whole point: the pages have to be parked *before* the render
   //    that draws the console, not as a consequence of it.
+  // The menu has to be open first — a row cannot be clicked before Vue has
+  // rendered it. Opening the menu does not change the view, so the check below
+  // still measures "one click on a navigation row", not a two-step sequence.
+  //
+  // Bookmarks rather than settings: settings is a page of its own that replaces
+  // the whole window, so it cannot serve as the sample for "the pane that covers
+  // the stage while the navigation column stays up".
+  await client.evaluate(`(async () => {
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return true;
+  })()`);
   const afterClick = await client.evaluate(`(() => {
-    const button = document.querySelector('.console-btn');
-    if (!button) return { error: 'no console button' };
-    button.click();
+    const row = document.querySelector('[data-menu-item="bookmarks"]');
+    if (!row) return { error: 'no bookmarks row' };
+    row.click();
     const nodes = [...document.querySelectorAll('webview')];
     return {
       clicked: true,
-      consoleInDom: Boolean(document.querySelector('.console-pane')),
+      consoleInDom: Boolean(document.querySelector('.pane-console')),
       nodes: nodes.map((node) => ({
         tabId: node.dataset.tabId,
         left: node.style.left,
@@ -211,7 +223,7 @@ try {
   const settled = await client.evaluate(`(async () => {
     await new Promise((r) => requestAnimationFrame(r));
     return {
-      consoleInDom: Boolean(document.querySelector('.console-pane')),
+      consoleInDom: Boolean(document.querySelector('.pane-console')),
       nodes: [...document.querySelectorAll('webview')].map((node) => ({
         left: node.style.left,
         opacity: node.style.opacity,
@@ -235,7 +247,7 @@ try {
         position: getComputedStyle(element).position,
       };
     };
-    return { console: z('.console'), pool: z('.guest-pool'), titlebar: z('.titlebar') };
+    return { console: z('.pane-console'), pool: z('.guest-pool') };
   })()`);
   check(
     "the console sits above the page pool by layer number",
@@ -246,8 +258,8 @@ try {
 
   // 5. Going back must put the page on stage again — parking must not be one-way.
   const back = await client.evaluate(`(async () => {
-    const control = document.querySelector('.console-head .back');
-    if (!control) return { error: 'no back control' };
+    const control = document.querySelector('[data-nav="browser"]');
+    if (!control) return { error: 'no browser row' };
     control.click();
     await new Promise((r) => setTimeout(r, 900));
     const nodes = [...document.querySelectorAll('webview')];

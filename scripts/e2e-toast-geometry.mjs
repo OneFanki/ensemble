@@ -5,13 +5,13 @@
  * The toast stack is `position: fixed; right: 18px`, which is viewport-relative
  * only while no ancestor carries a transform / contain / will-change. One such
  * ancestor silently re-anchors the stack to that element — the stack then lays
- * out at the dock's width and every card clips its own text on both edges
- * (2026-10-31, 8-account batch launch). Two facts guard it:
+ * out at whatever width that ancestor has and every card clips its own text on
+ * both edges (2026-10-31, 8-account batch launch). Two facts guard it:
  *
  * 1. `offsetParent` of a fixed element is null unless the containing block was
  *    stolen by an ancestor — the direct hijack detector.
- * 2. The stack's right edge must sit exactly at `viewport - 18` and inside the
- *    viewport on every side, with full card text unclipped.
+ * 2. The stack's right edge must sit exactly at `viewport - 18`, inside the
+ *    viewport on every side, clear of the sidebar, with full card text unclipped.
  *
  * A mock site signs in-and-fails on purpose (the check endpoint always answers
  * 401), so a batch launch produces the same warning toasts the user saw.
@@ -230,6 +230,20 @@ try {
   })()`);
   check("batch launched", launched?.ok === true && launched.tabs >= names.length, launched);
 
+  // Open the workbench before measuring.
+  //
+  // The claim below is "clear of the sidebar", so the sidebar has to be on
+  // screen. A batch used to land in the workbench by itself because the default
+  // layout was 2×2; the default is now "no layout", which is a single-cell stage
+  // and therefore browse mode. Opening the column is a click, and it keeps this
+  // assertion about what it says it is about instead of quietly weakening it.
+  await client.evaluate(`(async () => {
+    const button = document.querySelector('.tabstrip .layout-btn');
+    if (button && !button.classList.contains('is-bench')) button.click();
+    await new Promise((done) => setTimeout(done, 900));
+    return Boolean(document.querySelector('.sidebar'));
+  })()`);
+
   // Wait out the login-failure reports (fill ≈2s + 20s confirm deadline).
   //
   // The budget is deliberately generous. Each identity gets its own confirm
@@ -242,7 +256,7 @@ try {
       const doc = document.documentElement;
       const stack = document.querySelector('.toast-stack');
       const rect = stack?.getBoundingClientRect();
-      const dock = document.querySelector('.dock')?.getBoundingClientRect();
+      const dock = document.querySelector('.sidebar')?.getBoundingClientRect();
       return {
         count: document.querySelectorAll('.toast').length,
         viewportW: doc.clientWidth,
@@ -279,17 +293,20 @@ try {
       toasts.stack.bottom <= viewportH,
     { stack: toasts.stack, viewportH },
   );
-  // The assertion that actually matches what the user sees: the stage's native
-  // page view paints over every HTML layer, so any part of the stack hanging
-  // past the dock's left edge is unpainted — invisible text with no DOM symptom
-  // (getBoundingClientRect cannot know about native occlusion). The stack must
-  // therefore sit entirely inside the dock's rectangle.
+  // The stack sits over the page now, so the geometry claim is about the
+  // viewport, not about the dock: fixed to the bottom-right corner of the
+  // window, clear of the sidebar, and readable end to end.
+  //
+  // It used to be confined to the dock's rectangle because a native page view
+  // painted over every HTML layer. The carrier is a `<webview>` guest now — an
+  // ordinary composited layer — which is why the stack can float over the page
+  // at all.
   check(
-    "toast stack stays inside the dock rectangle (native views cover the stage)",
+    "toast stack floats over the page, clear of the sidebar",
     Boolean(toasts.stack && toasts.dock) &&
-      toasts.stack.left >= toasts.dock.left - 1 &&
-      toasts.stack.right <= toasts.dock.right + 1,
-    { stack: toasts.stack, dock: toasts.dock },
+      toasts.stack.left >= (toasts.dock?.right ?? 0) - 1 &&
+      toasts.stack.right <= toasts.viewportW,
+    { stack: toasts.stack, dock: toasts.dock, viewportW: toasts.viewportW },
   );
 
   client.close();

@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PROBE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-connectivity-"));
@@ -57,7 +58,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "sites",
-    onboardingVersion: 1,
+    guideVersion: 1,
     proxyMode: "manual",
     proxyUrl: "http://127.0.0.1:1",
   }),
@@ -159,7 +160,7 @@ try {
   const client = await connect(target.webSocketDebuggerUrl);
   await wait(3000);
 
-  await client.evaluate(`document.querySelector('[data-nav="settings"]')?.click()`);
+  await client.evaluate(openNav("settings-general"));
   check(
     "settings page rendered with the test button",
     await waitFor(

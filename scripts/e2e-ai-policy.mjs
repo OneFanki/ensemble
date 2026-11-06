@@ -106,7 +106,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 writeFileSync(
   join(userData, "mcp.json"),
@@ -248,15 +248,30 @@ try {
   const client = await connectRenderer();
   check("renderer reachable", Boolean(client));
 
-  /** Reads the click counter inside the embedded page itself. */
+  /**
+   * Reads the click counter inside the embedded page itself.
+   *
+   * Retried rather than read once: the counter can be asked for in the same
+   * turn the tab was opened, and the guest target only appears in `/json/list`
+   * once the page has an execution context. A single attempt returned -1 for a
+   * page that was simply still attaching, which then read as "the page never
+   * loaded" in three different assertions.
+   */
   async function hits(tabId) {
-    const pageClient = await findPageTarget();
-    if (!pageClient) return -1;
-    const value = await pageClient.evaluate(
-      `Number(document.getElementById('hits')?.textContent ?? -1)`,
-    );
-    pageClient.close();
-    return Number(value);
+    const deadline = Date.now() + 4_000;
+    do {
+      const pageClient = await findPageTarget();
+      if (pageClient) {
+        const value = await pageClient.evaluate(
+          `Number(document.getElementById('hits')?.textContent ?? -1)`,
+        );
+        pageClient.close();
+        const number = Number(value);
+        if (number >= 0) return number;
+      }
+      await wait(150);
+    } while (Date.now() < deadline);
+    return -1;
   }
 
   async function findPageTarget() {
@@ -488,14 +503,16 @@ try {
 
     const number = el.textContent.trim();
 
-    // Worst case first: drag the dock to its minimum width.
-    const handle = document.querySelector('.dock-resize');
+    // Worst case first: drag the column to its minimum width. The column is on
+    // the left, so narrowing means dragging its right edge towards the window
+    // edge; the handle is the column's now, not the dock's.
+    const handle = document.querySelector('.sidebar-resize');
     if (handle) {
       const grip = handle.getBoundingClientRect();
       const at = { bubbles: true, pointerId: 1, isPrimary: true };
       handle.dispatchEvent(new PointerEvent('pointerdown', { ...at, clientX: grip.left }));
-      window.dispatchEvent(new PointerEvent('pointermove', { ...at, clientX: grip.left + 400 }));
-      window.dispatchEvent(new PointerEvent('pointerup', { ...at, clientX: grip.left + 400 }));
+      window.dispatchEvent(new PointerEvent('pointermove', { ...at, clientX: grip.left - 400 }));
+      window.dispatchEvent(new PointerEvent('pointerup', { ...at, clientX: grip.left - 400 }));
       await wait(400);
     }
 
@@ -532,7 +549,7 @@ try {
       nativeTitle: el.getAttribute('title'),
       hasTip: Boolean(tip),
       tipText: tip?.textContent.trim() ?? null,
-      dockWidth: Math.round(document.querySelector('.dock')?.getBoundingClientRect().width ?? 0),
+      dockWidth: Math.round(document.querySelector('.sidebar')?.getBoundingClientRect().width ?? 0),
       tipWidth: Math.round(tipBox?.width ?? 0),
       otherLanguageWidth: otherWidth,
       roomToTheLeft: Math.round(box.left - (document.querySelector('.dock')?.getBoundingClientRect().left ?? 0)),

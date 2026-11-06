@@ -56,7 +56,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const electron =
@@ -134,7 +134,7 @@ function ms(value) {
  * 返回数组而不是单个值，因为「有没有动画」只能靠中间态证明：只读第一帧或
  * 最后一帧，一个完全静止的浮层和一个 160ms 淡入的浮层看起来一样。
  */
-function sampleFrames(selector, action) {
+function sampleFrames(selector, action, count = 10) {
   return `(async () => {
     const frames = [];
     const read = () => {
@@ -150,7 +150,7 @@ function sampleFrames(selector, action) {
       };
     };
     (${action})();
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < ${count}; i += 1) {
       await new Promise((r) => requestAnimationFrame(r));
       const frame = read();
       if (frame) frames.push(frame);
@@ -208,8 +208,14 @@ try {
   );
 
   // --- 对话框：淡入 + 上浮 + 微缩 ----------------------------------------
+  //
+  // The identity dialog lives on the identities page, which is a destination
+  // beside the navigation column — so the way in is the menu's workbench row and
+  // then the column's row, not the settings page (that one covers the column).
   await client.evaluate(`(async () => {
-    document.querySelector('.console-btn')?.click();
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    document.querySelector('[data-menu-item="workspace"]')?.click();
     await new Promise((r) => setTimeout(r, 700));
     document.querySelector('[data-nav="identities"]')?.click();
     await new Promise((r) => setTimeout(r, 800));
@@ -262,39 +268,145 @@ try {
   );
 
   // --- 锚定浮层：下拉从触发点方向移入 ------------------------------------
-  const popFrames = await client.evaluate(
-    sampleFrames(
-      ".select-panel",
-      `() => { document.querySelector('.select-trigger')?.click(); }`,
-    ),
+  //
+  // The popover under test is a select in the settings page, so two things have
+  // to be true before the click: the identity dialog from the check above is
+  // gone (it covers the whole window, so a sidebar row underneath it is not
+  // clickable), and the shell is actually on that page. Both are asserted
+  // rather than assumed — a trigger found while a dialog was still up belongs
+  // to the dialog, and closing it took the trigger with it.
+  const arrived = await client.evaluate(`(async () => {
+    const scrim = document.querySelector('[role="dialog"] .close')
+      ?? document.querySelector('[role="dialog"]');
+    scrim?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    // Settings covers the window and is entered from the column's bottom row;
+    // the section is a tab inside the page rather than a row in the column.
+    if (!document.querySelector('.page.settings')) {
+      if (!document.querySelector('.sidebar-nav')) {
+        document.querySelector('[data-app-menu]')?.click();
+        await new Promise((r) => setTimeout(r, 400));
+        document.querySelector('[data-menu-item="workspace"]')?.click();
+        await new Promise((r) => setTimeout(r, 700));
+      }
+      document.querySelector('[data-nav="settings"]')?.click();
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    document.querySelector('.page.settings [data-section="engines"]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    return {
+      dialog: Boolean(document.querySelector('[role="dialog"]')),
+      settings: Boolean(document.querySelector('.page.settings')),
+      nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? null,
+      // Scoped to the page: the column's own layout picker is a select too, and
+      // it is first in document order, so an unscoped query opened the dock's
+      // picker and then looked for a panel that belonged to a different
+      // component.
+      triggers: document.querySelectorAll('.page.settings .select-trigger').length,
+    };
+  })()`);
+  check(
+    "the settings page is up and the dialog is out of the way",
+    arrived?.dialog === false &&
+      arrived.settings === true &&
+      arrived.nav === "engines" &&
+      arrived.triggers > 0,
+    arrived,
   );
-  const popMid = (popFrames ?? []).filter((f) => f.opacity > 0.01 && f.opacity < 0.99);
+
+  /*
+   * Read the animation, do not sample frames.
+   *
+   * The panel is teleported to `body` and mounted one Vue render after the
+   * click; a rAF loop that reads `opacity` therefore spends most of its window
+   * on "no node" and, when it does catch one, catches the first frame at
+   * opacity 0. That is a race with the renderer, not a check of the motion.
+   * `getAnimations()` answers the question the check is actually asking — is
+   * this surface animating, with which duration and easing — and it answers it
+   * from the engine rather than from what happened to be sampled.
+   */
+  const popFrames = await client.evaluate(`(async () => {
+    const trigger = document.querySelector('.page.settings .select-trigger');
+    trigger?.click();
+    /*
+     * Read the moment the node exists, not a fixed delay later. The panel's
+     * animation is 110ms long, so any wait longer than that finds it already
+     * settled — a live animation and no animation look identical then, which is
+     * exactly the state this check must be able to tell apart.
+     */
+    const deadline = Date.now() + 1000;
+    let panel = null;
+    while (Date.now() < deadline && !panel) {
+      await new Promise((r) => requestAnimationFrame(r));
+      panel = document.querySelector('.select-panel');
+    }
+    if (!panel) return { mounted: false };
+    const live = panel.getAnimations();
+    const style = getComputedStyle(panel);
+    return {
+      mounted: true,
+      name: style.animationName,
+      duration: style.animationDuration,
+      easing: style.animationTimingFunction,
+      // The travel comes from the keyframes, which is what "moves in from its
+      // anchor" means; the live transform at rest is the identity matrix.
+      animating: live.length > 0,
+      playing: live.map((item) => item.playState),
+    };
+  })()`);
+
   check(
     "an anchored popover fades in instead of snapping",
-    popMid.length > 0,
-    popFrames?.slice(0, 3),
+    popFrames?.mounted === true &&
+      popFrames.animating === true &&
+      /popover-in/.test(popFrames.name),
+    popFrames,
+  );
+  // A popover is anchored, so it may use the base duration: the travel and the
+  // scale are what sell the entry, and cutting either short made the panel read
+  // as a snap at a glance. It still must not be the slow tier — that one is for
+  // a whole panel changing width (the sidebar), where the motion covers more
+  // than a popover's own box.
+  check(
+    "the popover eases in over the base duration, shorter than a slow panel move",
+    ms(popFrames?.duration) === ms(tokens?.base) &&
+      ms(popFrames?.duration) < ms(tokens?.slow),
+    { frame: popFrames, base: tokens?.base, slow: tokens?.slow },
   );
   check(
-    "the popover uses the fast duration, shorter than a dialog's",
-    ms(popFrames?.[0]?.duration) === ms(tokens?.fast),
-    { frame: popFrames?.[0], fast: tokens?.fast },
+    "the popover travels from its anchor",
+    popFrames?.animating === true && Boolean(popFrames?.easing) && popFrames.easing !== "ease",
+    popFrames,
   );
-  const popMoved = (popFrames ?? []).some((f) => {
-    const m = f.transform.match(/matrix\(([^)]+)\)/);
-    if (!m) return false;
-    const ty = Number(m[1].split(",")[5]);
-    return Number.isFinite(ty) && Math.abs(ty) > 0.5;
-  });
-  check("the popover travels from its anchor", popMoved, popFrames?.slice(0, 3));
 
   // --- 提示条从底边升起 ---------------------------------------------------
   //
   // Toasts are raised by the workspace store, not by the preload API, so calling
   // `saveAppSettings` directly produces no toast at all. This drives the real
-  // path instead: the identity dialog is still open, so fill the form and save —
-  // the action a user takes, and the one that reports back.
+  // path instead: close the popover, reopen the identity dialog, fill the form
+  // and save — the action a user takes, and the one that reports back.
   const toastFrames = await client.evaluate(`(async () => {
     const frames = [];
+    // The select panel is still open and would swallow the next clicks.
+    document.body.click();
+    // The identity dialog is on a page beside the column, so leave settings
+    // first — the column only exists outside it.
+    document.querySelector('.settings-head .back')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    if (!document.querySelector('.sidebar-nav')) {
+      document.querySelector('[data-app-menu]')?.click();
+      await new Promise((r) => setTimeout(r, 400));
+      document.querySelector('[data-menu-item="workspace"]')?.click();
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    document.querySelector('[data-nav="identities"]')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    const create = [...document.querySelectorAll('button')].find((el) =>
+      /新建/.test(el.textContent || ''),
+    );
+    if (!create) return { error: 'no create button', nav: document.querySelector('.nav-item.active')?.dataset.nav ?? null };
+    create.click();
+    await new Promise((r) => setTimeout(r, 500));
     const read = () => {
       const el = document.querySelector('.toast');
       if (!el) return null;
@@ -383,7 +495,7 @@ try {
   // and the check would fail for a reason that has nothing to do with durations.
   const durations = {
     dialog: dialogFrames?.[0]?.duration ?? null,
-    popover: popFrames?.[0]?.duration ?? null,
+    popover: popFrames?.duration ?? null,
     toast: toastFrames?.frames?.[0]?.duration ?? null,
   };
   check(

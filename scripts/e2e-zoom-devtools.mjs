@@ -69,7 +69,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "browser",
-    onboardingVersion: 1,
+    guideVersion: 1,
     browserZoom: 100,
   }),
 );
@@ -392,12 +392,18 @@ try {
     await new Promise((r) => setTimeout(r, 900));
     const state = await window.ensemble.getEmbeddedState();
     const tab = state.tabs.find((item) => item.id === '${opened.a}');
+    const head = document.querySelector('.devtools-head');
     return {
       open: tab?.devtoolsOpen === true,
       width: tab?.devtoolsWidth ?? null,
       widthBefore: before?.bounds?.width ?? null,
       widthAfter: tab?.bounds?.width ?? null,
       grip: Boolean(document.querySelector('.devtools-grip')),
+      // The panel is a native view and HTML cannot paint over it, so the app
+      // gives up a band at the panel's top and draws the close button there.
+      head: head ? Math.round(head.getBoundingClientRect().height) : null,
+      headTop: head ? Math.round(head.getBoundingClientRect().y) : null,
+      close: Boolean(document.querySelector('[data-devtools-close]')),
     };
   })()`);
   check("DevTools open for a page", docked?.open === true, docked);
@@ -414,6 +420,14 @@ try {
     { ...docked, cellWidth },
   );
   check("the page and the panel have a draggable seam", docked?.grip === true, docked);
+  // The band exists so the panel can be closed from where the pointer already
+  // is, like the real thing; it must be the app's own height, not whatever the
+  // native panel happens to leave.
+  check(
+    "the panel carries an app-drawn title band with its close button",
+    docked?.head === 26 && docked?.close === true,
+    docked,
+  );
 
   // The front-end has to be running: a toggle that reports open while the panel
   // never loaded is worse than one that fails.
@@ -440,16 +454,25 @@ try {
     toolbarState,
   );
 
-  // Closing from the app must clear the toggle; closing from DevTools' own
-  // header is covered by the devtools-closed listener wired in the browser.
+  // Closing from the app must clear the toggle. The click goes through the
+  // band's own button — the gesture a user reaching for the corner actually
+  // makes — and the band and seam have to disappear with the panel.
   const closed = await client.evaluate(`(async () => {
-    await window.ensemble.closeEmbeddedDevTools('${opened.a}');
+    document.querySelector('[data-devtools-close]')?.click();
     await new Promise((r) => setTimeout(r, 800));
     const state = await window.ensemble.getEmbeddedState();
     const tab = state.tabs.find((item) => item.id === '${opened.a}');
-    return { open: tab?.devtoolsOpen ?? null };
+    return {
+      open: tab?.devtoolsOpen ?? null,
+      head: Boolean(document.querySelector('.devtools-head')),
+      grip: Boolean(document.querySelector('.devtools-grip')),
+    };
   })()`);
-  check("closing DevTools clears the open state", closed?.open === false, closed);
+  check(
+    "the band's close button shuts DevTools down",
+    closed?.open === false && closed?.head === false && closed?.grip === false,
+    closed,
+  );
 
   // --- F12 toggles from the page ------------------------------------------
   const f12 = await client.evaluate(`(async () => {

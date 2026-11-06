@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-sort-"));
 const port = await freePort();
@@ -87,7 +88,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", guideVersion: 1 }),
 );
 
 const electronBinary =
@@ -184,7 +185,7 @@ async function dragRow(client, itemSelector, sourceIndex, targetIndex, options =
 }
 
 async function go(client, view) {
-  await client.evaluate(`document.querySelector('[data-nav="${view}"]')?.click()`);
+  await client.evaluate(openNav(view));
   await wait(350);
 }
 

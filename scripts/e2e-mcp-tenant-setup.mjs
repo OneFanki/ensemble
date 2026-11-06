@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -150,7 +151,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 writeFileSync(
   join(userData, "mcp.json"),
@@ -341,18 +342,11 @@ try {
   // The call must not steal the window either: an AI opening pages to work on
   // them should leave whatever the user is looking at alone, so park the UI on
   // the settings page first and check it is still in front afterwards.
-  await client.evaluate(`(async () => {
-    if (!document.querySelector('.console-nav')) {
-      document.querySelector('.console-btn')?.click();
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    document.querySelector('[data-nav="settings"]')?.click();
-    return true;
-  })()`);
+  await client.evaluate(openNav("settings-mcp"));
   await wait(700);
   const viewBefore = await client.evaluate(`(() => ({
-    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
-    settingsVisible: Boolean(document.querySelector('.settings')),
+    nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? "",
+    settingsVisible: Boolean(document.querySelector('.page.settings')),
   }))()`);
 
   const opened = await tryCall("open_browser_tab", {
@@ -366,13 +360,13 @@ try {
 
   await wait(1500);
   const viewAfter = await client.evaluate(`(() => ({
-    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
-    settingsVisible: Boolean(document.querySelector('.settings')),
+    nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? "",
+    settingsVisible: Boolean(document.querySelector('.page.settings')),
   }))()`);
   check(
     "open_browser_tab leaves the page the user was on in front",
-    viewBefore?.nav === "settings" &&
-      viewAfter?.nav === "settings" &&
+    viewBefore?.nav === "mcp" &&
+      viewAfter?.nav === "mcp" &&
       viewAfter?.settingsVisible === true,
     { before: viewBefore, after: viewAfter },
   );
@@ -588,7 +582,7 @@ try {
   // action. The cells are arranged on the stage, but the window is not raised
   // and the console does not jump back to the browser.
   const beforeView = await client.evaluate(`(() => ({
-    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? "",
   }))()`);
   const openedView = await tryCall("open_browser_view", { viewId: view.value?.id });
   check("open_browser_view puts them on stage", openedView.ok, {
@@ -596,7 +590,7 @@ try {
   });
   await wait(1200);
   const afterOpenView = await client.evaluate(`(() => ({
-    nav: document.querySelector('.console-nav .nav-item.active')?.dataset.nav ?? "",
+    nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? "",
     visible: (() => {
       const state = document.querySelector('.stage');
       return Boolean(state && state.getBoundingClientRect().height > 0);
@@ -604,7 +598,7 @@ try {
   }))()`);
   check(
     "open_browser_view leaves the console where the user left it",
-    beforeView?.nav === "settings" && afterOpenView?.nav === "settings",
+    beforeView?.nav === "mcp" && afterOpenView?.nav === "mcp",
     { before: beforeView, after: afterOpenView },
   );
   const stageReady = await client.evaluate(`(async () => {

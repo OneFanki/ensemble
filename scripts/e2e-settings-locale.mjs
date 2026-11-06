@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-locale-"));
 const port = await freePort();
@@ -38,7 +39,7 @@ writeFileSync(
 // Seeded to "zh" so a successful click visibly flips the stored value.
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", guideVersion: 1 }),
 );
 
 const electronBinary =
@@ -129,7 +130,7 @@ try {
   const client = await connect(target.webSocketDebuggerUrl);
   await wait(3000);
 
-  await client.evaluate(`document.querySelector('[data-nav="settings"]')?.click()`);
+  await client.evaluate(openNav("settings-general"));
   check(
     "settings page rendered with the language picker",
     await waitFor(

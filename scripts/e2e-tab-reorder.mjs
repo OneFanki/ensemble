@@ -90,7 +90,7 @@ writeFileSync(
       layout: "2x1",
       autoFillOnLaunch: false,
       closeToTray: false,
-      onboardingVersion: 1,
+      guideVersion: 1,
       autoCheckUpdates: false,
     },
     null,
@@ -261,6 +261,43 @@ try {
     "dragging the second loose tab above the first reorders them",
     looseOrder?.[0] === loose.b,
     { order: looseOrder, expectedFirst: loose.b },
+  );
+
+  /*
+   * Selecting a row must not move it.
+   *
+   * Rows used to be derived from the slot table, so focusing an instance wrote
+   * a slot entry and that instance jumped to the top of the list. A click looked
+   * like a reshuffle, and because every click rewrote the order, the order the
+   * user had just dragged into place was gone. Row order now comes from the
+   * workspace's instance list; a slot only supplies the row's number.
+   */
+  const selectionOrder = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const read = async () => {
+      const state = await api.getEmbeddedState();
+      const rows = [...document.querySelectorAll('.dock .tab-row')]
+        .filter((row) => !row.classList.contains('ext'))
+        .map((row) => row.getAttribute('data-tab-id'));
+      return { tabs: state.tabs.filter((tab) => !tab.viewId).map((tab) => tab.id), rows };
+    };
+    const before = await read();
+    // Click the *last* row: if selection reordered anything, that is the row
+    // that would have moved to the front.
+    const rows = [...document.querySelectorAll('.dock .tab-row')].filter(
+      (row) => !row.classList.contains('ext'),
+    );
+    rows[rows.length - 1]?.click();
+    await new Promise((done) => setTimeout(done, 500));
+    return { before, after: await read() };
+  })()`);
+  check(
+    "clicking a row focuses it without reordering the list",
+    Array.isArray(selectionOrder?.before?.tabs) &&
+      selectionOrder.before.tabs.length > 1 &&
+      JSON.stringify(selectionOrder.before.tabs) === JSON.stringify(selectionOrder.after.tabs) &&
+      JSON.stringify(selectionOrder.before.rows) === JSON.stringify(selectionOrder.after.rows),
+    selectionOrder,
   );
 
   // Open the saved view; its three members become rows with slot numbers.

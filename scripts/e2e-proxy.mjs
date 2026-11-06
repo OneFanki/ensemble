@@ -83,7 +83,7 @@ async function main() {
       theme: "dark",
       locale: "zh",
       lastView: "browser",
-      onboardingVersion: 1,
+      guideVersion: 1,
       // Manual, pointing at the stub: this is the setting under test.
       proxyMode: "manual",
       proxyUrl: `http://127.0.0.1:${PROXY_PORT}`,

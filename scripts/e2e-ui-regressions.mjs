@@ -158,7 +158,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const electronBinary =
@@ -232,17 +232,42 @@ async function waitFor(client, expression, timeout = 4000) {
 /**
  * Open a management page.
  *
- * 1.0 kept a permanent side rail, so a check could click `[data-nav]` from
- * anywhere. The console is now a destination of its own, reached from the
- * toolbar, and its navigation only exists while it is open — so every page
- * switch has to go through this instead of a bare selector click.
+ * The navigation is the sidebar, and the sidebar is only up once something
+ * beside the page is open — so from a plain browser the app menu is what opens
+ * it. From inside the shell the rows are already there, which is the common
+ * case in a chained check.
  */
 async function openConsolePage(client, view) {
+  // Settings is a page of its own: it replaces the whole window (no navigation
+  // column) and picks its section with a tab bar inside the page. The way in is
+  // its row at the bottom of the column, so the column has to exist first.
+  if (view === "settings") {
+    await client.evaluate(`(async () => {
+      if (!document.querySelector('.sidebar-nav')) {
+        document.querySelector('[data-app-menu]')?.click();
+        await new Promise((r) => setTimeout(r, 350));
+        document.querySelector('[data-menu-item="workspace"]')?.click();
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      document.querySelector('[data-nav="settings"]')?.click();
+      await new Promise((r) => setTimeout(r, 600));
+      return true;
+    })()`);
+    return waitFor(client, `Boolean(document.querySelector('.page.settings'))`, 5000);
+  }
   await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    // The console button lives in the browser's tab strip.
-    if (!document.querySelector('.console-nav')) {
-      document.querySelector('.console-btn')?.click();
+    // Settings has no toolbar at all, so its own back button is the only way out
+    // — the app menu cannot be reached from underneath it.
+    if (document.querySelector('.page.settings')) {
+      document.querySelector('.settings-head .back')?.click();
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    // The sidebar rows are the navigation in every shell now. If it is not up
+    // yet, the app menu's workbench row is the way in.
+    if (!document.querySelector('.sidebar-nav')) {
+      document.querySelector('[data-app-menu]')?.click();
+      await new Promise((r) => setTimeout(r, 300));
+      document.querySelector('[data-menu-item="workspace"]')?.click();
       await new Promise((r) => setTimeout(r, 500));
     }
     const entry = document.querySelector('[data-nav="${view}"]');
@@ -250,15 +275,20 @@ async function openConsolePage(client, view) {
       entry.click();
       await new Promise((r) => setTimeout(r, 350));
     }
-    return Boolean(document.querySelector('.console-nav'));
+    return Boolean(document.querySelector('.sidebar-nav'));
   })()`);
-  return waitFor(client, `Boolean(document.querySelector('.console-pane'))`, 5000);
+  return waitFor(client, `Boolean(document.querySelector('.pane-console'))`, 5000);
 }
 
 /** Back to the browser surface. */
 async function backToBrowser(client) {
   await client.evaluate(`(async () => {
-    document.querySelector('.console-head .back')?.click();
+    if (document.querySelector('.page.settings')) {
+      document.querySelector('.settings-head .back')?.click();
+      await new Promise((r) => setTimeout(r, 450));
+      return true;
+    }
+    document.querySelector('[data-nav="browser"]')?.click();
     await new Promise((r) => setTimeout(r, 450));
     return true;
   })()`);
@@ -675,15 +705,17 @@ try {
   await waitFor(client, `Boolean(document.querySelector('.dock'))`, 6000);
 
   // Read the animation intent before transitions are switched off below.
+  //
+  // The dock is the top half of the left column now, and the column owns the
+  // width and the handle: a child that kept its own `<aside>`, border and
+  // resize handle would draw a second edge beside the navigation under it.
   const dockMotion = await client.evaluate(`(() => {
-    const dock = document.querySelector('.dock');
+    const column = document.querySelector('.sidebar');
+    const handle = document.querySelector('.sidebar-resize');
     return {
-      transition: dock ? getComputedStyle(dock).transitionProperty : null,
-      handle: Boolean(document.querySelector('.dock-resize')),
-      cursor: (() => {
-        const handle = document.querySelector('.dock-resize');
-        return handle ? getComputedStyle(handle).cursor : null;
-      })(),
+      transition: column ? getComputedStyle(column).transitionProperty : null,
+      handle: Boolean(handle),
+      cursor: handle ? getComputedStyle(handle).cursor : null,
     };
   })()`);
 
@@ -947,8 +979,9 @@ try {
     downloadsClosed,
   );
 
-  const dockBefore = await client.evaluate(`(() => {    const dock = document.querySelector('.dock');
-    return { width: dock ? Math.round(dock.getBoundingClientRect().width) : null };
+  const dockBefore = await client.evaluate(`(() => {
+    const column = document.querySelector('.sidebar');
+    return { width: column ? Math.round(column.getBoundingClientRect().width) : null };
   })()`);
   check(
     "the dock offers a resize handle on its edge",
@@ -961,7 +994,8 @@ try {
     dockMotion,
   );
 
-  // Drag the handle 80px to the left: the dock must grow by the same amount.
+  // Drag the handle 80px to the right: the column must grow by the same amount.
+  // It is on the left now, so widening means dragging away from the window edge.
   //
   // Dispatched as a real drag — several moves, with a pressed-button state on
   // each — rather than one synthetic jump. A page is a native surface even as a
@@ -970,7 +1004,7 @@ try {
   // the same instant as the press is therefore still routed to the page. No
   // pointer produces that sequence: a hand always moves for more than a frame.
   const dockBox = await client.evaluate(`(() => {
-    const handle = document.querySelector('.dock-resize');
+    const handle = document.querySelector('.sidebar-resize');
     if (!handle) return null;
     const r = handle.getBoundingClientRect();
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 120) };
@@ -987,7 +1021,7 @@ try {
     for (let step = 1; step <= 8; step += 1) {
       await client.send("Input.dispatchMouseEvent", {
         type: "mouseMoved",
-        x: dockBox.x - step * 10,
+        x: dockBox.x + step * 10,
         y: dockBox.y,
         button: "left",
         buttons: 1,
@@ -997,7 +1031,7 @@ try {
     await wait(80);
     await client.send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
-      x: dockBox.x - 80,
+      x: dockBox.x + 80,
       y: dockBox.y,
       button: "left",
       buttons: 0,
@@ -1006,9 +1040,9 @@ try {
     await wait(400);
   }
   const dockAfter = await client.evaluate(`(() => {
-    const dock = document.querySelector('.dock');
+    const column = document.querySelector('.sidebar');
     return {
-      width: dock ? Math.round(dock.getBoundingClientRect().width) : null,
+      width: column ? Math.round(column.getBoundingClientRect().width) : null,
       stored: window.localStorage.getItem("ensemble.runtimeDock.width"),
     };
   })()`);
@@ -1031,15 +1065,15 @@ try {
   })()`);
   await wait(700);
   const collapsed = await client.evaluate(`(() => {
-    const dock = document.querySelector('.dock');
+    const column = document.querySelector('.sidebar');
     const main = document.querySelector('.dock-main');
-    const pane = document.querySelector('.main-pane');
+    const pane = document.querySelector('.pane');
     const stage = document.querySelector('.stage');
     return {
-      width: dock ? Math.round(dock.getBoundingClientRect().width) : null,
-      collapsed: dock?.classList.contains('collapsed') ?? null,
+      width: column ? Math.round(column.getBoundingClientRect().width) : null,
+      collapsed: column?.classList.contains('collapsed') ?? null,
       mainHidden: main ? getComputedStyle(main).visibility === "hidden" : null,
-      transition: dock ? getComputedStyle(dock).transitionProperty : null,
+      transition: column ? getComputedStyle(column).transitionProperty : null,
       // The reclaimed width has to reach the stage: a 46px strip beside a stage
       // that kept the expanded layout leaves a dead band on screen.
       paneWidth: pane ? Math.round(pane.getBoundingClientRect().width) : null,
@@ -1210,8 +1244,9 @@ try {
   })()`);
   await wait(500);
   const expanded = await client.evaluate(`(() => {
-    const dock = document.querySelector('.dock');
-    return { width: dock ? Math.round(dock.getBoundingClientRect().width) : null };
+    // The column is the box that owns the width; the dock fills it minus padding.
+    const column = document.querySelector('.sidebar');
+    return { width: column ? Math.round(column.getBoundingClientRect().width) : null };
   })()`);
   check(
     "expanding restores the dragged width",
@@ -1966,7 +2001,7 @@ try {
     return Boolean(tab);
   })()`);
   await client.evaluate(
-    `(async () => { if (!document.querySelector('.console-nav')) { document.querySelector('.console-btn')?.click(); await new Promise((r) => setTimeout(r, 500)); } document.querySelector('[data-nav="identities"]')?.click(); await new Promise((r) => setTimeout(r, 400)); return true; })()`,
+    `(async () => { if (!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); await new Promise((r) => setTimeout(r, 300)); document.querySelector('[data-menu-item="settings"]')?.click(); await new Promise((r) => setTimeout(r, 500)); } document.querySelector('[data-nav="identities"]')?.click(); await new Promise((r) => setTimeout(r, 400)); return true; })()`,
   );
   await wait(1200);
 
@@ -2046,8 +2081,8 @@ try {
   const dockSwitch = await client.evaluate(`(async () => {
     // The dock shares the screen with the stage, so this check starts from the
     // browser in bench mode rather than from a console page.
-    if (document.querySelector('.console-nav')) {
-      document.querySelector('.console-head .back')?.click();
+    if (document.querySelector('.pane-console')) {
+      document.querySelector('[data-nav="browser"]')?.click();
       await new Promise((r) => setTimeout(r, 500));
     }
     if (!document.querySelector('.dock')) {
@@ -2268,7 +2303,7 @@ try {
     };
 
     const before = await window.ensemble.getWorkspace();
-    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="sites"]')?.click(); })();
+    (async function(){ if(!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); } await new Promise((r) => setTimeout(r, 500)); document.querySelector('[data-nav="sites"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 400));
 
     await openForm();
@@ -2527,7 +2562,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 400));
-    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="views"]')?.click(); })();
+    (async function(){ if(!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); } await new Promise((r) => setTimeout(r, 500)); document.querySelector('[data-nav="views"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 800));
     if (!document.querySelector('.views')) return { error: "views page did not open" };
 
@@ -2588,7 +2623,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 400));
-    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="views"]')?.click(); })();
+    (async function(){ if(!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); } await new Promise((r) => setTimeout(r, 500)); document.querySelector('[data-nav="views"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 800));
     const chip = [...document.querySelectorAll('.views .filters .filter-chip')].find(
       (el) => el.textContent.trim() === tagName,
@@ -2628,7 +2663,7 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 500));
-    (function(){ if(!document.querySelector('.console-nav')) document.querySelector('.console-btn')?.click(); document.querySelector('[data-nav="flows"]')?.click(); })();
+    (async function(){ if(!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); } await new Promise((r) => setTimeout(r, 500)); document.querySelector('[data-nav="flows"]')?.click(); })();
     await new Promise((r) => setTimeout(r, 700));
     const heads = () => [...document.querySelectorAll('.flows .group-head')];
     const rows = () => document.querySelectorAll('.flows .flow-row').length;
@@ -2788,15 +2823,17 @@ try {
     rawKeys,
   );
 
-  // Settings stays mounted, so a manual tab change must not stick to the page.
+  // Settings is a page of its own, so "a manual tab change must not stick" is
+  // about the request reaching the page, not about a sidebar row staying lit:
+  // pick another tab, leave, and ask the AI entry for the MCP section again.
   await client.evaluate(
-    `(() => { document.querySelector('[role="tab"]:nth-child(1)')?.click(); return true; })()`,
+    `(() => { document.querySelector('.page.settings [data-section="general"]')?.click(); return true; })()`,
   );
   await wait(400);
   await client.evaluate(`(async () => {
     // Back to the browser first: the AI entry is part of the browser's toolbar,
-    // so this also proves the console can be left and re-entered.
-    document.querySelector('.console-head .back')?.click();
+    // and settings has no toolbar at all.
+    document.querySelector('.settings-head .back')?.click();
     await new Promise((r) => setTimeout(r, 500));
     document.querySelector('.ai-btn')?.click();
     await new Promise((r) => setTimeout(r, 300));
@@ -2808,6 +2845,85 @@ try {
   check("the AI entry retargets the tab after a manual change", returned === true, {
     returned,
   });
+
+  // --- Empty stage: the strip's "+" must still do something -----------------
+  // It grows the focused instance, and with no page open there is no instance —
+  // so it was a dead button exactly when it was the only control left.
+  await backToBrowser(client);
+  const emptyPlus = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    for (const tab of (await api.getEmbeddedState()).tabs) await api.closeEmbeddedTab(tab.id);
+    await new Promise((done) => setTimeout(done, 700));
+    const before = (await api.getEmbeddedState()).tabs.length;
+    document.querySelector('.tabstrip .strip-add')?.click();
+    await new Promise((done) => setTimeout(done, 1200));
+    return { before, after: (await api.getEmbeddedState()).tabs.length };
+  })()`);
+  check(
+    "the strip's plus opens a page even when nothing is open",
+    emptyPlus?.before === 0 && emptyPlus?.after === 1,
+    emptyPlus,
+  );
+
+  // --- Accounts of different shapes keep one card height --------------------
+  // A long role, a non-default browser and extra fields used to wrap a card to a
+  // second chip line, which stretched its grid row and left every neighbour with
+  // a band of empty space under its actions.
+  const wordySeed = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const snap = await api.getWorkspace();
+    const site = snap.sites[0];
+    await api.saveIdentity({
+      siteId: site.id,
+      name: "长描述账号",
+      username: "verbose@example.internal",
+      role: "数据管理员 · 读写 · 跨区域",
+      color: "teal",
+      passwordMode: "custom",
+      password: "e2e-placeholder-password",
+      extraFields: [
+        { label: "租户", value: "acme" },
+        { label: "区域", value: "cn-north" },
+      ],
+    });
+    return { ok: true, siteId: site.id };
+  })()`);
+  await openConsolePage(client, "identities");
+  await waitFor(client, `document.querySelectorAll('.id-card').length >= 2`);
+  const heights = await client.evaluate(`(() => {
+    const cards = [...document.querySelectorAll('.id-card')];
+    const rows = new Map();
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      const y = Math.round(rect.y);
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push(Math.round(rect.height));
+    }
+    const groups = [...rows.values()].filter((list) => list.length > 1);
+    const wordy = cards.find((card) => card.querySelector('.name')?.textContent?.includes('长描述'));
+    const chips = wordy ? [...wordy.querySelectorAll('.meta-row > .tag')] : [];
+    return {
+      cardCount: cards.length,
+      // Cards sharing a grid row share a height.
+      uniform: groups.length > 0 && groups.every((list) => new Set(list).size === 1),
+      groups: groups.length,
+      chips: chips.length,
+      // One line means every chip shares a top edge.
+      oneLine: chips.length > 0 && new Set(chips.map((chip) => Math.round(chip.getBoundingClientRect().top))).size === 1,
+      folded: chips.find((chip) => chip.classList.contains('more'))?.getAttribute('title') ?? '',
+    };
+  })()`);
+  check(
+    "accounts of different shapes keep one card height",
+    wordySeed?.ok === true && heights?.uniform === true && heights?.oneLine === true,
+    heights,
+  );
+  // Folding must not hide: the counter carries the names it swallowed.
+  check(
+    "the facts a card folds away stay readable from its counter",
+    typeof heights?.folded === "string" && heights.folded.length > 0,
+    heights,
+  );
 
   client.close();
 } catch (error) {

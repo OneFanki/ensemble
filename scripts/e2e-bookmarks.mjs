@@ -24,6 +24,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -81,7 +82,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", onboardingVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
 );
 
 const electronBinary =
@@ -454,16 +455,9 @@ try {
   );
 
   // --- Management page: tree, dialogs, nesting ------------------------------
-  // The console is a destination that covers the browser now, so the nav entry
-  // only exists once the console is open. Opening it is a step of its own.
-  await client.evaluate(`(async () => {
-    if (!document.querySelector('.console-nav')) {
-      document.querySelector('.console-btn')?.click();
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    document.querySelector('[data-nav="bookmarks"]')?.click();
-    return true;
-  })()`);
+  // The navigation is the sidebar, which only exists once something is open
+  // beside the page — so reaching this row is a step of its own.
+  await client.evaluate(openNav("bookmarks"));
   const pageReady = await waitFor(client, `Boolean(document.querySelector('.bookmarks-page .tree'))`);
   check("the management page opens with its folder tree", pageReady === true);
 
@@ -755,17 +749,28 @@ try {
     rows[0]?.click();
     await wait(300);
     const before = (await window.ensemble.getWorkspace()).bookmarks.length;
+    const rootFoldersBefore = (await window.ensemble.getWorkspace()).bookmarkFolders.filter(
+      (folder) => !folder.parentId,
+    ).length;
     [...(document.querySelector('.content')?.querySelectorAll('.foot .btn') ?? [])]
       .find((button) => button.textContent.trim() === '导入')
       ?.click();
     await wait(3000);
     const after = await window.ensemble.getWorkspace();
     const lastToast = [...document.querySelectorAll('.toast')].pop()?.textContent?.trim() ?? '';
+    // The import is supposed to be a merge, not a shapshot of the browser's own
+    // tree: no folder named after a browser and none of the browsers' root
+    // containers may appear at the top level.
+    const scaffolding = /^(Edge|Chrome|Firefox) 书签$|^(书签栏|收藏夹栏|书签工具栏|书签菜单|其他书签|移动设备书签|Bookmarks bar|Other bookmarks|Bookmarks Toolbar|Bookmarks Menu|Mobile bookmarks)$/i;
     return {
       listed: sources.length,
       imported: true,
       grew: after.bookmarks.length >= before,
-      browserFolder: (after.bookmarkFolders ?? []).some((folder) => /书签$/.test(folder.name)),
+      rootFoldersBefore,
+      rootFoldersAfter: (after.bookmarkFolders ?? []).filter((folder) => !folder.parentId).length,
+      scaffoldingAtRoot: (after.bookmarkFolders ?? [])
+        .filter((folder) => !folder.parentId && scaffolding.test(folder.name))
+        .map((folder) => folder.name),
       lastToast,
     };
   })()`);
@@ -775,15 +780,15 @@ try {
     imported,
   );
   check(
-    "importing a real browser profile lands a browser folder",
+    "importing a real browser profile merges into the top level",
     imported?.imported === true &&
       imported?.grew === true &&
-      (imported?.browserFolder === true || (imported?.lastToast ?? '').includes('没有可导入')),
+      (imported?.scaffoldingAtRoot?.length === 0 || (imported?.lastToast ?? '').includes('没有可导入')),
     imported,
   );
 
   // Back on a blank start page, the strip shows the surviving folder only.
-  await client.evaluate(`document.querySelector('.console-head .back')?.click()`);
+  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
   await client.evaluate(`window.ensemble.openEmbeddedTab({})`);
   // The start page navigates one level at a time: top-level folders appear as
   // tiles, the strip above them is the breadcrumb.
@@ -880,7 +885,11 @@ try {
     // Polled, not a fixed wait: a guest page is carried through the renderer, so
     // opening a bookmark has one more hop than a native view had. What the check
     // asserts is that the new-tab surface eventually goes away.
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    //
+    // The budget is generous because the bookmark points at a host that does not
+    // resolve: Chromium spends a DNS timeout on it before the document exists,
+    // and on a loaded machine that outran a four-second window.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       if (!document.querySelector('.blank-slot .new-tab')) break;
       await wait(150);
     }
@@ -890,6 +899,201 @@ try {
     "searching the new-tab box surfaces a deep bookmark and opening it navigates",
     search?.ok === true && search?.newTabGone === true,
     search,
+  );
+
+  // --- Bookmark bar on the new-tab page ------------------------------------
+  // Every assertion below runs on a fresh blank page, because the strip is a
+  // property of that surface: the checks above ended on a loaded page.
+  const bar = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const outer = await window.ensemble.saveBookmarkFolder({ name: '栏文件夹' });
+    const outerId = outer.bookmarkFolders.find((folder) => folder.name === '栏文件夹')?.id;
+    const inner = await window.ensemble.saveBookmarkFolder({ name: '栏子文件夹', parentId: outerId });
+    const innerId = inner.bookmarkFolders.find((folder) => folder.name === '栏子文件夹')?.id;
+    await window.ensemble.saveBookmark({ name: '深层栏书签', url: 'https://example.invalid/deep', folderId: innerId });
+    // 20 root bookmarks: enough to overflow a 1320px strip even with short names.
+    for (let index = 0; index < 20; index += 1) {
+      await window.ensemble.saveBookmark({
+        name: '栏书签' + String(index).padStart(2, '0'),
+        url: 'https://example.invalid/bar' + index,
+      });
+    }
+    await window.ensemble.openEmbeddedTab({ url: 'about:blank' });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (document.querySelector('.bookmark-bar')) break;
+      await wait(150);
+    }
+    const strip = document.querySelector('.bookmark-bar');
+    const cells = [...(strip?.querySelectorAll('.bb-cell') ?? [])];
+    const box = strip?.getBoundingClientRect();
+    const rows = cells.map((cell) => {
+      const entry = cell.querySelector('.bb-entry');
+      const cellBox = cell.getBoundingClientRect();
+      const entryBox = entry?.getBoundingClientRect();
+      return {
+        label: cell.textContent.trim(),
+        right: cellBox.right,
+        cellWidth: cellBox.width,
+        entryWidth: entryBox?.width ?? 0,
+      };
+    });
+    return {
+      present: Boolean(strip),
+      cells: cells.length,
+      height: box ? Math.round(box.height) : null,
+      labels: cells.map((cell) => cell.textContent.trim()),
+      overflow: Boolean(strip?.querySelector('.bb-more')),
+      // The fit is measured, so a row whose right edge is past the strip was
+      // declared to fit and does not: it would be clipped instead of moving
+      // into the overflow menu.
+      spilling: rows
+        .filter((row) => row.right > (box?.right ?? 0) + 0.5)
+        .map((row) => row.label),
+      // A row wider than its own cell means the flex pass narrowed the cell
+      // under its content — the rows then overlap each other, and the widths
+      // the measuring pass read were the squeezed ones, so the fit came out
+      // too generous.
+      pressed: rows
+        .filter((row) => row.entryWidth > row.cellWidth + 0.5)
+        .map((row) => row.label + ':' + Math.round(row.entryWidth) + '>' + Math.round(row.cellWidth)),
+    };
+  })()`);
+  check(
+    "the new-tab page carries a bookmark strip with its root rows",
+    bar?.present === true && bar?.labels?.includes("栏文件夹"),
+    bar,
+  );
+  // The strip belongs to a blank page and must read lighter than a cell's own
+  // header (32px), which carries the account name and the page tabs.
+  check(
+    "the strip is shorter than a workbench cell header",
+    typeof bar?.height === "number" && bar.height <= 28,
+    bar,
+  );
+  // Overflow is measured, not guessed: a strip too narrow for every row keeps
+  // the tail behind "more" instead of clipping it out of reach. The row count
+  // itself is not asserted — how many root rows exist depends on what earlier
+  // checks (and the import above) put there; what matters is that the newest
+  // tail row is behind the menu and that nothing was left hanging past the edge.
+  check(
+    "a strip that cannot fit every row collapses the tail into an overflow menu",
+    bar?.overflow === true &&
+      !bar?.labels?.includes("栏书签19") &&
+      bar?.spilling?.length === 0 &&
+      bar?.pressed?.length === 0,
+    bar,
+  );
+
+  const hover = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const entry = [...document.querySelectorAll('.bookmark-bar .bb-folder.level-root')].find(
+      (node) => node.querySelector('.bb-name')?.textContent?.trim() === '栏文件夹',
+    );
+    if (!entry) return { ok: false, step: 'entry' };
+    entry.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+    await wait(320);
+    const first = entry.querySelector(':scope > .bb-flyout');
+    const firstRows = [...(first?.querySelectorAll('.bb-name') ?? [])].map((n) => n.textContent.trim());
+    // Cross the gap the way a pointer does: leave the row, sit in the empty
+    // strip between row and panel for a moment, come back in. The panel used to
+    // close on that first leave, which is the "it vanishes before I get there"
+    // complaint — so surviving the crossing is the behaviour under test.
+    entry.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    await wait(60);
+    const survivedGap = Boolean(entry.querySelector(':scope > .bb-flyout'));
+    entry.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+    const nested = first?.querySelector('.bb-folder');
+    nested?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+    await wait(320);
+    const second = nested?.querySelector(':scope > .bb-flyout');
+    const secondRows = [...(second?.querySelectorAll('.bb-name') ?? [])].map((n) => n.textContent.trim());
+    const firstBox = first?.getBoundingClientRect();
+    const secondBox = second?.getBoundingClientRect();
+    // Leaving for good still closes it — the grace period is a grace period,
+    // not a panel that stays on screen after the pointer is gone.
+    entry.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+    await wait(320);
+    const closedAfterLeaving = !entry.querySelector(':scope > .bb-flyout');
+    return {
+      ok: true,
+      firstRows,
+      secondRows,
+      survivedGap,
+      closedAfterLeaving,
+      // The nested panel opens beside its row, not stacked underneath it.
+      beside: Boolean(firstBox && secondBox && secondBox.left >= firstBox.right - 1),
+    };
+  })()`);
+  check(
+    "hovering a folder opens its contents and a nested folder opens beside it",
+    hover?.ok === true &&
+      hover?.firstRows?.includes("栏子文件夹") &&
+      hover?.secondRows?.includes("深层栏书签") &&
+      hover?.beside === true,
+    hover,
+  );
+  check(
+    "the panel survives crossing the gap to it",
+    hover?.survivedGap === true && hover?.closedAfterLeaving === true,
+    hover,
+  );
+
+  const offSurface = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    // The focused tab, not the first one flagged active: several instances each
+    // keep their own active page, and only this one is on the stage.
+    const state = await window.ensemble.getEmbeddedState();
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    await window.ensemble.navigateEmbeddedTab(tab.id, 'https://example.invalid/loaded');
+    // Polled rather than a fixed wait: the blank surface goes away when the
+    // page reports a URL, which is one broadcast later than the navigate call.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!document.querySelector('.blank-slot .new-tab')) break;
+      await wait(150);
+    }
+    return {
+      blankSurface: Boolean(document.querySelector('.blank-slot .new-tab')),
+      bar: Boolean(document.querySelector('.bookmark-bar')),
+    };
+  })()`);
+  check(
+    "the strip is gone once the page has navigated away from the blank surface",
+    offSurface?.blankSurface === false && offSurface?.bar === false,
+    offSurface,
+  );
+
+  // --- Reload menu ----------------------------------------------------------
+  // The reload button's left click stays a plain reload; the menu exists for
+  // the cache-clearing variant, which has no other affordance.
+  const reloadMenu = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const button = document.querySelector('[data-reload-button]');
+    if (!button) return { ok: false, step: 'button' };
+    button.dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 90 }),
+    );
+    await wait(250);
+    const menu = document.querySelector('.reload-menu');
+    const labels = [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].map((item) =>
+      item.textContent.trim(),
+    );
+    const clear = [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].find((item) =>
+      item.textContent.includes('清空缓存'),
+    );
+    clear?.click();
+    await wait(1_200);
+    const state = await window.ensemble.getEmbeddedState();
+    const tab = state.tabs.find((item) => item.id === state.activeTabId);
+    return { ok: true, labels, closed: !document.querySelector('.reload-menu'), url: tab?.url ?? '' };
+  })()`);
+  check(
+    "right-clicking reload offers an empty-cache reload and it returns to the page",
+    reloadMenu?.ok === true &&
+      reloadMenu?.labels?.length === 2 &&
+      reloadMenu.labels[1].includes("清空缓存") &&
+      reloadMenu?.closed === true &&
+      reloadMenu?.url?.includes("example.invalid/loaded"),
+    reloadMenu,
   );
 
   client.close();

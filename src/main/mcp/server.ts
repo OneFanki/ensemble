@@ -330,7 +330,7 @@ const targetProps = (extra: Record<string, unknown> = {}): Record<string, unknow
  * - credentials and vault state. MCP is write-only for secrets and has no
  *   read-back; a settings tool that could touch them would be that hole by
  *   another name.
- * - UI bookkeeping (`onboardingVersion`, `lastView` / `lastSiteId` /
+ * - UI bookkeeping (`guideVersion`, `lastView` / `lastSiteId` /
  *   `dismissedUpdateVersion`). Harmless, but not a stable contract an AI should
  *   depend on.
  */

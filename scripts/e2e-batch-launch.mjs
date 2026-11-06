@@ -462,6 +462,99 @@ try {
       envelopeInfos?.[0]?.title.includes("已登录"),
     envelopeInfos,
   );
+
+  // --- Arrival is one frame, not a page at a time ---------------------------
+  // Two separate defects used to show here:
+  //
+  // 1. `createView` and then every `createTab` each broadcast a state, so the
+  //    stage went blank for a beat between the container and its pages.
+  // 2. Each new page installs its login listener through `evaluate`, and the
+  //    presentation step that makes a background page readable used to *show*
+  //    it — so several pages were painted full-window over each other.
+  //
+  // The assertion samples every animation frame of a launch: no two visible
+  // guest nodes may overlap, and the visible count may not dip to nothing.
+  // A batch has to stay inside one site, so two more identities join alpha/beta
+  // on the same site before a four-page 2×2 launch.
+  const delta = await call("create_identity", {
+    siteId: site.id,
+    name: "账号丁",
+    username: "user-delta",
+    role: "成员",
+    color: "rose",
+    passwordMode: "inherit",
+    startPath: "/delta",
+  });
+  const epsilon = await call("create_identity", {
+    siteId: site.id,
+    name: "账号戊",
+    username: "user-epsilon",
+    role: "成员",
+    color: "blue",
+    passwordMode: "inherit",
+    startPath: "/epsilon",
+  });
+  await client.evaluate(`window.ensemble.saveAppSettings({ layout: "2x2" })`);
+  await wait(300);
+  const arrival = await client.evaluate(`(async () => {
+    const frames = [];
+    let running = true;
+    const sample = () => {
+      const boxes = [...document.querySelectorAll('.guest-pool webview')]
+        .map((node) => {
+          const style = getComputedStyle(node);
+          const visible =
+            style.opacity !== '0' && style.visibility !== 'hidden' && style.display !== 'none';
+          const rect = node.getBoundingClientRect();
+          return {
+            visible,
+            x: Math.round(rect.x), y: Math.round(rect.y),
+            w: Math.round(rect.width), h: Math.round(rect.height),
+          };
+        })
+        // A node parked outside the window is off screen, not painted.
+        .filter((box) => box.visible && box.w > 0 && box.x + box.w > 0 && box.x < innerWidth);
+      let clashes = 0;
+      for (let i = 0; i < boxes.length; i += 1) {
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const a = boxes[i], b = boxes[j];
+          if (Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x) + 4 &&
+              Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y) + 4) clashes += 1;
+        }
+      }
+      frames.push({ onScreen: boxes.length, clashes });
+    };
+    const tick = () => {
+      if (!running) return;
+      sample();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+
+    const ids = ${JSON.stringify([alpha.id, beta.id, delta.id, epsilon.id])};
+    const tabs = await window.ensemble.launchEmbeddedIdentities(ids);
+    await new Promise((done) => setTimeout(done, 4000));
+    running = false;
+    return {
+      frames: frames.length,
+      overlapFrames: frames.filter((frame) => frame.clashes > 0).length,
+      // Count changes across the launch; the launch itself is one change.
+      steps: frames
+        .map((frame) => frame.onScreen)
+        .filter((count, index, all) => index === 0 || count !== all[index - 1]),
+      launched: Boolean(tabs?.views?.length),
+    };
+  })()`);
+  check(
+    "a batch arrives without two pages ever painted over each other",
+    arrival?.launched === true && arrival?.frames > 30 && arrival?.overlapFrames === 0,
+    arrival,
+  );
+  check(
+    "the stage fills in one step instead of emptying first",
+    Array.isArray(arrival?.steps) && arrival.steps.length <= 3 && !arrival.steps.includes(0),
+    arrival,
+  );
 } catch (error) {
   check("run completed", false, String(error));
 } finally {

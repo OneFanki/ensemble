@@ -150,7 +150,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "browser",
-    onboardingVersion: 1,
+    guideVersion: 1,
     autoFillOnLaunch: true,
   }),
 );

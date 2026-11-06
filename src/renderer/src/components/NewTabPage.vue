@@ -17,6 +17,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import BookmarkBar from "./BookmarkBar.vue";
 import BookmarkGrid from "./BookmarkGrid.vue";
 import Logo from "./Logo.vue";
 import AppButton from "./ui/AppButton.vue";
@@ -225,6 +226,17 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
 <template>
   <div class="new-tab">
     <div class="nt-bg" :style="{ background: workspace.newTabBackdropStyle }"></div>
+    <!--
+      The bookmark strip belongs to the blank page, not to the browser chrome:
+      it sits at the top of this surface and exists only while a blank page is
+      the one on screen.
+    -->
+    <BookmarkBar
+      v-if="bookmarks.length || gridFolders.length"
+      :bookmarks="bookmarks"
+      :folders="gridFolders"
+      @open="openBookmark"
+    />
     <div class="nt-inner">
       <!--
         The product's own name, above the field.
@@ -411,10 +423,9 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
 .new-tab {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -431,6 +442,12 @@ async function fileBookmark(bookmark: Bookmark, folderId: string): Promise<void>
 .nt-inner {
   position: relative;
   width: min(560px, 100%);
+  /* Auto margins centre the block in the space the bookmark strip leaves, and
+     the height cap keeps a short window scrollable instead of clipped. */
+  margin: auto;
+  padding: 24px;
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 16px;

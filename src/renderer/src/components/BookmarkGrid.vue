@@ -755,6 +755,15 @@ function onDropIntoFolder(id: string): void {
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
+  animation: popover-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
 }
 
 .menu-row {

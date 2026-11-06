@@ -427,7 +427,7 @@ function onDropOnNothing(): void {
 </script>
 
 <template>
-  <section class="page bookmarks-page" data-tour="bookmarks-page" @dragleave.self="onDropOnNothing">
+  <section class="page bookmarks-page" @dragleave.self="onDropOnNothing">
     <PageHeader :title="t('app.bookmarksPageTitle')" :note="t('app.bookmarksPageHint')">
       <template #actions>
         <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
@@ -703,7 +703,16 @@ function onDropOnNothing(): void {
   border-radius: var(--radius);
   background: var(--bg);
   padding: 4px;
-  min-height: 0;
+  /*
+   * Grow to the content; the pane scrolls.
+   *
+   * As a flex item with the default `flex: 0 1 auto` inside a scrolling column,
+   * the tree was shrunk to the pane's height and its remaining rows simply
+   * painted outside the bordered box — a long tree looked like two lists, one
+   * inside a frame and one spilling below it. The list column already owns the
+   * scroll (`SplitPane`), so this box must not be shortened at all.
+   */
+  flex: 0 0 auto;
 }
 
 .list {

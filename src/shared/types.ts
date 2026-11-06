@@ -569,14 +569,13 @@ export interface AppSettings {
    * every AI client mid-task.
    */
   closeToTray: boolean;
-  /** Version of the onboarding tour the user has already seen. */
-  onboardingVersion: number;
   /**
    * Version of the in-app guide the user has already read.
    *
-   * Separate from `onboardingVersion`: the guided tour walks the live UI, while
-   * the guide is a page. A user can skip the tour and still read the guide, or
-   * read the guide and never run the tour — one counter cannot answer both.
+   * One counter for one introduction: the guide is both the first-run screen and
+   * the handbook the title-bar dot and Settings open later. A file written by an
+   * older build may still carry `onboardingVersion` from the retired spotlight
+   * tour; it is ignored on load and dropped on the next save.
    */
   guideVersion: number;
   /**
@@ -801,7 +800,6 @@ export type SettingsPatch = Partial<
     | "newTabBackground"
     | "newTabBookmarks"
     | "closeToTray"
-    | "onboardingVersion"
     | "guideVersion"
     | "autoCheckUpdates"
     | "dismissedUpdateVersion"

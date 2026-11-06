@@ -226,7 +226,6 @@ export const settingsPatchSchema = z.object({
   newTabBackground: z.string().min(1).max(32).optional(),
   newTabBookmarks: z.boolean().optional(),
   closeToTray: z.boolean().optional(),
-  onboardingVersion: z.number().int().min(0).max(999).optional(),
   guideVersion: z.number().int().min(0).max(999).optional(),
   autoCheckUpdates: z.boolean().optional(),
   dismissedUpdateVersion: z.string().max(32).optional(),

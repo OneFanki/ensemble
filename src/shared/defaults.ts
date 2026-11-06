@@ -52,9 +52,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   newTabBackground: DEFAULT_NEW_TAB_BACKDROP,
   newTabBookmarks: true,
   closeToTray: true,
-  // Retired with the spotlight tour: still written here so an older build
-  // reading this file finds the field it expects.
-  onboardingVersion: 0,
   // Unread on a fresh install: the dot on the title bar is how the guide is
   // discovered in the first place.
   guideVersion: 0,

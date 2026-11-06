@@ -89,13 +89,15 @@ real browser — a separate path, triggered explicitly.
 
 Site 1—N identities, site 1—N views. A view is optional: without one the surface behaves like a plain browser, and views are created explicitly from the running dock. Isolation is unchanged — one profile per identity, sessions never cross sites — but the site is no longer a global filter: the identities page groups every account by site, and a view may span several. One tag namespace is shared by sites, accounts and views, and an account also matches its site's tags.
 
+The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from Settings whenever you like.
+
 <p align="center">
   <img src="docs/screenshots/browser-en.png" alt="Browser page: a 2×2 view and the running dock" width="900" />
 </p>
 
-**The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock on the right lists which accounts are open and in which slot — on every page, always. The left rail collapses to an icon strip by default and expands when the pointer reaches the left edge.
+**The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, sites, identities, views, flows, tags, bookmarks, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch: it only shows or hides the column, and never changes how many cells the stage is split into.
 
-With no view open, startup lands on one blank page whose surface is a search box: type an address or words and press enter. The stage still carries a page strip along the top, just like a cell of a view. Collapsed, the dock keeps one site icon per running instance and hands the width back to the page:
+With no view open, startup lands on one blank page whose surface is a search box: type an address or words and press enter. A bookmark bar runs along the top of that blank page — one row of bookmarks and folders, folders open on hover and nest to any depth, and rows that do not fit move into an overflow menu at the right; it exists only on the blank surface. The stage still carries a page strip along the top, just like a cell of a view. Collapsed, the column keeps one site icon per running instance and hands the width back to the page:
 
 <p align="center">
   <img src="docs/screenshots/new-tab.png" alt="The blank page: one search field and a built-in backdrop" width="440" />
@@ -133,8 +135,9 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Daily profile**: identity-less pages — new tabs, bookmarks, addresses typed into the bar — share one persistent personal profile, so signing in once keeps working across restarts. That is what lets an assistant act on a page you are already signed in to
 - **Save a hand-typed login**: sign in yourself in the built-in browser and the app offers to save it, like the browser's own password bubble; accepting opens the account form pre-filled, and the password only ever passes through the main process into the vault
 - **A site is just “where and how to log in”**: there is no global “current site”; accounts are grouped by site, a view may span sites, and one tag namespace is shared by sites, accounts and views. Tag management lives in Settings → Tags, where each tag shows how many sites, accounts and views use it; the tag filter strip is a single scrolling row, so a dozen tags never push the cards down.
-- **Running dock**: views, loose tabs and external instances in one place; views are blocks, instances are rows, collapsible as a whole; one click brings the page or window to the front. Collapsed, it keeps one site icon per running instance with the group boundaries still visible — click an icon to switch to it, so the width goes back to the page instead of hiding how many windows are running. Expanding and collapsing are the same control in the same place
-- **The blank page is the search box**: startup opens one blank page whose landing surface is a single field — an address opens directly, words go to the selected engine (Bing by default, custom engines accepted) — with a row of bookmarks beneath it: double-click to rename, right-click to remove, drag to reorder, and a star in the address bar bookmarks the page you are on. The surface ships with built-in backdrops, switchable from the bottom-right corner and carried with the workspace on export
+- **Running dock**: views, loose tabs and external instances in one place, in the upper half of the left column; views are blocks, instances are rows, collapsible as a whole; one click brings the page or window to the front. Row order is the workspace's order — selecting an instance focuses it without moving it to the top. Collapsed, it keeps one site icon per running instance with the group boundaries still visible — click an icon to switch to it, so the width goes back to the page instead of hiding how many windows are running. Expanding and collapsing are the same control in the same place
+- **The blank page is the search box**: startup opens one blank page whose landing surface is a single field — an address opens directly, words go to the selected engine (Bing by default, custom engines accepted) — with a bookmark bar along the top (folders open on hover, nested to any depth) and a row of bookmarks beneath it: double-click to rename, right-click to remove, drag to reorder, and a star in the address bar bookmarks the page you are on. The surface ships with built-in backdrops, switchable from the bottom-right corner and carried with the workspace on export
+- **Empty cache and reload**: right-click the reload button to drop the identity's web cache before reloading, for a page stuck on stale assets; the left click stays a plain reload
 - **Two browser surfaces**: the built-in one is the main surface, the external real browser is the fidelity check; both share the same accounts, credentials and layouts
 - **Identity references**: an identity can reference one on another site — username, password, display name and role stay in sync while sessions and profiles stay independent; detach when they need to differ
 - **Address-change detection**: a site remembers the address that last signed in successfully; if it changes, filling the password requires one explicit confirmation
@@ -142,7 +145,7 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Real browser isolation**: each identity has its own profile, so sessions, cookies and extensions never mix
 - **View orchestration**: launch a group of identities, tiled edge to edge with no wasted margin
 - **Place windows by role**: drag a member onto a slot to decide who sits where; open windows move with it
-- **Custom layouts**: external windows use the built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`; the built-in browser uses `No layout (= 1×1) / 2×1 / 1×2 / 2×2 / 3×1` and lets you drag the seams between slots. Either way you can draw your own layout and save it as a preset; boxes snap to the stage edges and to each other, with alignment guides
+- **Custom layouts**: external windows use the built-in `No layout / 1×1 / 2×1 / 1×2 / 2×2 / 3×1`; the built-in browser uses `No layout (= 1×1) / 2×1 / 1×2 / 2×2 / 3×1` and lets you drag the seams between slots. A new view and a batch launch both start with **no layout** — the first page takes the whole stage — and you pick a grid when you actually want to compare several. Either way you can draw your own layout and save it as a preset; boxes snap to the stage edges and to each other, with alignment guides
 - **No-layout mode**: on a small screen, every window opens full size and overlaps — switch with the taskbar instead of shrinking four windows into tiles too small to use
 - **Reopen a single member**: closed one identity by mistake? Reopen just that window from the view detail instead of relaunching the whole group
 - **Session health**: one screen shows who is signed in, who expired and who is unconfirmed across every account; check everyone with one click, or open the login page and fill credentials for every expired account. Accounts with no window open are checked in a hidden browser that reads their own profile and closes again
@@ -151,7 +154,7 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Clean sessions**: in external mode, throwaway windows with their own profile directory, deleted on close. In the built-in surface each clean open gets its own in-memory session — gone when the process exits, and two clean opens never see each other. The entry lives in the title bar's browser menu and follows that switch
 - **Daily profile**: in the built-in surface, identity-less pages share one persistent profile, so signing in once lasts. It is a separate world from a clean session, and a bookmark opens using the login it already holds
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
-- **One entry per job**: the rail navigates browser / sites / identities / views / tags / flows / settings; the title bar only switches sites
+- **One entry per job**: the left column navigates browser / sites / identities / views / flows / tags / bookmarks, with Settings alone at the bottom; the toolbar's right-hand menu holds the infrequent entries — show the sidebar, launch target (built-in / external), clean session, bookmarks, settings, check for updates, about, quit. Password fill, the AI entry, zoom, downloads and the bookmark star stay in the toolbar
 - **Let an AI do the data entry**: a built-in MCP endpoint receives sites, identities and views from your AI client; it also drives the built-in browser, so given a test URL and a super-admin login it can create the tenant accounts, save them and put them on stage
 - **Flows are reusable assets**: an AI (or you) can save a page operation that worked as a flow — a list of parameterised steps that reruns in one call instead of being worked out again. A flow is steps, not a script, so it stays readable, editable and adjustable in the UI
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
@@ -164,6 +167,8 @@ The identities page is where most of the day is spent: one card per identity wit
 <p align="center">
   <img src="docs/screenshots/settings-en.png" alt="Settings and credential storage" width="900" />
 </p>
+
+Settings is a page of its own: it covers the whole window, the left column included, and carries its own vertical category list plus a back-to-browser button. Changing the workspace and moving around inside it are two different things, which is why settings are not spread out as six entries in the navigation column.
 
 With a dozen windows open there is no need to hunt through the taskbar: the running-instances overlay stays on top, and one click raises the window for that account.
 When it is in the way, collapse it into a small square that shows only the window count, takes almost no room, and snaps to the screen edge after you drag it; click it to expand again. "Close all" at the bottom of the list closes every window at once.
@@ -285,7 +290,7 @@ Creating a tenant again. The first time, the AI feels its way through the form w
 ```
 
 Changing the name or the plan afterwards is one call:
-`run_flow({ id, params: { tenant: "Customer B", kind: "Pro" } })`. The Flows page in the rail lists
+`run_flow({ id, params: { tenant: "Customer B", kind: "Pro" } })`. The Flows page in the left column lists
 these assets grouped by site, expands the steps, runs them from a parameter form (defaults filled in,
 secret parameters masked), and lets you edit steps and their order in the UI.
 

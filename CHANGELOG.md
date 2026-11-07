@@ -37,6 +37,8 @@
 - 运行坞里不属于任何视图的分组更名为「实例」：它们各自是独立的浏览器实例，而不是同一个窗口里的标签页。
 - 修复：批量启动时部分账号会先闪现在「实例」分组，随后才进入新视图——现在页面从创建起就归属目标视图，逐格点亮的过程不再路过实例分组。
 - 修复：登录弹窗里服务器返回的中文保护区域说明显示为乱码，现在自动还原。
+- 浅色主题的主色重做：按钮和高亮改用亮琥珀配深色文字，链接与彩色文字用专门的金色，不再是浑浊的深褐色。
+- 设置页的常规选项按「外观 / 浏览 / 启动与填充 / 应用 / 工具」分节，长列表有了层次。
 
 ### English
 
@@ -55,6 +57,8 @@
 - The group in the run dock for browser instances outside any view is now called "Instances": each row is an independent browser session, not a tab of one window.
 - Fixed: during a batch launch some accounts briefly flashed under the loose "Instances" group before joining the new view — pages now belong to their view from creation, and the cell-by-cell lighting no longer detours through the loose group.
 - Fixed: the sign-in dialog showed a server's non-ASCII realm as mojibake; it is now recovered automatically.
+- The light theme's accent is redone: buttons and highlights use bright amber with dark text, links and coloured text use a dedicated deep gold — no more muddy brown.
+- The settings page's general options are grouped into sections (Appearance / Browsing / Launch & fill / Application / Tools), giving the long list some hierarchy.
 
 ## [1.4.0] - 2026-11-03
 

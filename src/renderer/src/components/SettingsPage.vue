@@ -620,6 +620,7 @@ async function submitMaster() {
                 </button>
               </div>
             </div>
+            <h3 class="group-title">{{ $t("app.settingsGroupBrowsing") }}</h3>
             <div class="option-row">
               <span class="option-label">{{ $t("app.defaultLayout") }}</span>
               <div class="select-slot">
@@ -703,6 +704,7 @@ async function submitMaster() {
               </div>
             </div>
             <p class="fineprint">{{ $t("app.bookmarkShowHint") }}</p>
+            <h3 class="group-title">{{ $t("app.settingsGroupLaunch") }}</h3>
             <div class="option-row">
               <span class="option-label">{{ $t("app.launchInterval") }}</span>
               <div class="interval">
@@ -804,6 +806,7 @@ async function submitMaster() {
               </div>
             </div>
             <p class="fineprint">{{ $t("app.restoreViewNote") }}</p>
+            <h3 class="group-title">{{ $t("app.settingsGroupApp") }}</h3>
             <div class="option-row">
               <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
               <div class="segmented">
@@ -908,6 +911,7 @@ async function submitMaster() {
               </li>
             </ul>
             <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
+            <h3 class="group-title">{{ $t("app.settingsGroupExtras") }}</h3>
             <div class="option-row">
               <span class="option-label">{{ $t("app.overlaySetting") }}</span>
               <div class="segmented">
@@ -1531,7 +1535,7 @@ async function submitMaster() {
 }
 
 .tab.active svg {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .scroll {
@@ -1582,6 +1586,25 @@ async function submitMaster() {
 .block > .option-row:first-child {
   border-top: 0;
   padding-top: 0;
+}
+
+/*
+ * Section titles inside one tab. The rows are one flat list otherwise — a
+ * dozen unrelated settings in a row reads as a wall. A group title is a quiet
+ * label, not another card: it opens a section with whitespace and carries the
+ * first row's separator itself, so no double line appears.
+ */
+.group-title {
+  margin: 26px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.group-title + .option-row {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 10px;
 }
 
 .block-head {
@@ -1701,7 +1724,7 @@ async function submitMaster() {
 }
 
 .cap.external {
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
 }
 
@@ -1913,7 +1936,7 @@ async function submitMaster() {
 }
 
 .vault-icon.warn {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .vault-copy {
@@ -1936,7 +1959,7 @@ async function submitMaster() {
   max-width: 55%;
   font-size: 11px;
   line-height: 1.5;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .vault-unlock,
@@ -2317,7 +2340,7 @@ async function submitMaster() {
 }
 
 .update-state.warn {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .update-state.error {

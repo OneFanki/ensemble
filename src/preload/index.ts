@@ -1,5 +1,5 @@
 import type { EmbeddedState } from "@shared/embedded";
-import { type EnsembleApi, IPC } from "@shared/ipc";
+import { type EnsembleApi, type HttpAuthChallenge, IPC } from "@shared/ipc";
 import type {
   AiPageAction,
   AutoFillReport,
@@ -52,6 +52,8 @@ const api: EnsembleApi = {
   saveBookmark: (draft) => ipcRenderer.invoke(IPC.bookmarkSave, draft),
   setBookmarkFavicon: (id, favicon) => ipcRenderer.invoke(IPC.bookmarkFavicon, id, favicon),
   deleteBookmark: (id) => ipcRenderer.invoke(IPC.bookmarkDelete, id),
+  deleteBookmarksBulk: (bookmarkIds, folderIds) =>
+    ipcRenderer.invoke(IPC.bookmarkDeleteBulk, bookmarkIds, folderIds),
   moveBookmark: (id, toIndex) => ipcRenderer.invoke(IPC.bookmarkMove, id, toIndex),
   saveBookmarkFolder: (draft) => ipcRenderer.invoke(IPC.bookmarkFolderSave, draft),
   deleteBookmarkFolder: (id) => ipcRenderer.invoke(IPC.bookmarkFolderDelete, id),
@@ -264,6 +266,15 @@ const api: EnsembleApi = {
   toggleMaximizeWindow: () => ipcRenderer.invoke(IPC.windowToggleMaximize),
   closeWindow: () => ipcRenderer.invoke(IPC.windowClose),
   showWindow: () => ipcRenderer.invoke(IPC.windowShow),
+
+  onHttpAuthChallenge: (listener: (challenge: HttpAuthChallenge) => void) => {
+    const handler = (_event: unknown, challenge: HttpAuthChallenge) => listener(challenge);
+    ipcRenderer.on(IPC.httpAuthChallenge, handler);
+    return () => ipcRenderer.removeListener(IPC.httpAuthChallenge, handler);
+  },
+  httpAuthRespond: (id, username, password) =>
+    ipcRenderer.invoke(IPC.httpAuthRespond, id, username, password),
+  httpAuthCancel: (id) => ipcRenderer.invoke(IPC.httpAuthCancel, id),
 };
 
 contextBridge.exposeInMainWorld("ensemble", api);

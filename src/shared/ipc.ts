@@ -123,6 +123,8 @@ export const IPC = {
   /** Stores the icon a page already showed, so the grid needs no fetch. */
   bookmarkFavicon: "bookmark:favicon",
   bookmarkDelete: "bookmark:delete",
+  /** Deletes a picked set of bookmarks and folders; folders take their subtree. */
+  bookmarkDeleteBulk: "bookmark:delete-bulk",
   /** Moves one bookmark to an explicit index and renumbers the rest. */
   bookmarkMove: "bookmark:move",
   /** Adds a bookmark folder, or renames and moves an existing one. */
@@ -301,7 +303,31 @@ export const IPC = {
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
   windowShow: "window:show",
+  /** Fires when a server demands HTTP authentication (basic/digest, or a proxy). */
+  httpAuthChallenge: "http-auth:challenge",
+  /** Renderer → main: the credentials the user typed for one challenge. */
+  httpAuthRespond: "http-auth:respond",
+  /** Renderer → main: the user dismissed the challenge; the request gets the 401. */
+  httpAuthCancel: "http-auth:cancel",
 } as const;
+
+/**
+ * One HTTP authentication challenge, as shown in the dialog. Only what the user
+ * needs to decide crosses to the renderer — no request details beyond the
+ * origin's address, and the realm only because sites label their areas with it.
+ */
+export interface HttpAuthChallenge {
+  /** Matches one pending challenge in the main process; echo it back. */
+  id: string;
+  host: string;
+  port?: number;
+  /** Protection space the server named; absent when it did not send one. */
+  realm?: string;
+  /** "Basic", "Digest", "Negotiate"… shown as text, never parsed here. */
+  scheme: string;
+  /** True when the challenge comes from a proxy rather than the site. */
+  isProxy: boolean;
+}
 
 export interface EnsembleApi {
   getWorkspace(): Promise<WorkspaceSnapshot>;
@@ -356,6 +382,8 @@ export interface EnsembleApi {
   /** Attaches an already-inlined `data:image/*` icon, or clears it. */
   setBookmarkFavicon(id: string, favicon?: string): Promise<WorkspaceSnapshot>;
   deleteBookmark(id: string): Promise<WorkspaceSnapshot>;
+  /** Deletes a picked set in one pass; picked folders take their whole subtree. */
+  deleteBookmarksBulk(bookmarkIds: string[], folderIds: string[]): Promise<WorkspaceSnapshot>;
   moveBookmark(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   /** Adds a bookmark folder, or renames and moves an existing one. */
   saveBookmarkFolder(draft: BookmarkFolderDraft): Promise<WorkspaceSnapshot>;
@@ -746,4 +774,11 @@ export interface EnsembleApi {
   closeWindow(): Promise<void>;
   /** Shows the window again; used when the app is running in the tray. */
   showWindow(): Promise<void>;
+
+  /** Fires when a server or proxy demands HTTP credentials. */
+  onHttpAuthChallenge(listener: (challenge: HttpAuthChallenge) => void): () => void;
+  /** Answers one challenge. Credentials go straight to the main process. */
+  httpAuthRespond(id: string, username: string, password: string): Promise<void>;
+  /** Dismisses one challenge; the request proceeds to its 401 response. */
+  httpAuthCancel(id: string): Promise<void>;
 }

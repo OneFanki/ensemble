@@ -1122,12 +1122,19 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   color: var(--text);
 }
 
+/*
+ * Sits inside the button's top-right corner, over the icon. Hanging it outside
+ * (`top: -4px`) put it past the dock's top edge — the collapsed strip starts on
+ * the window's top row on purpose (aligned with the tab strip beside it), so
+ * the dock will not find room for an overhanging badge and `overflow: hidden`
+ * clipped it in half.
+ */
 .badge {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 15px;
-  height: 15px;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
   padding: 0 4px;
   border-radius: 999px;
   background: var(--accent);
@@ -1135,6 +1142,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   font-size: 9px;
   display: grid;
   place-items: center;
+  box-shadow: 0 0 0 1px var(--bg);
 }
 
 .dock-head {

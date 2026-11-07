@@ -24,6 +24,7 @@ import {
   type AuthTokenSource,
 } from "@core/cdp/login";
 import type { MissingCredentialReason } from "@core/credentials/vault";
+import { t } from "@core/i18n/translate";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -51,6 +52,7 @@ import {
   planTabClick,
   resolveSlotPages,
   resolveSlotTabs,
+  settleSplitPages,
   type EmbeddedViewport,
   type StageRect,
   viewIsOnScreen,
@@ -696,6 +698,7 @@ export class EmbeddedBrowser {
       ...(view.slotRects?.length ? { slotRects: view.slotRects.map((rect) => ({ ...rect })) } : {}),
       slotTabs: [...view.slotTabs],
       ...(view.slotPages?.some(Boolean) ? { slotPages: [...view.slotPages] } : {}),
+      ...(view.launching ? { launching: { ...view.launching } } : {}),
       collapsed: view.collapsed,
       ...(view.focusedTabId ? { focusedTabId: view.focusedTabId } : {}),
     };
@@ -1066,12 +1069,17 @@ export class EmbeddedBrowser {
      * exactly what the split was meant to avoid. Writing today's page into each
      * sibling's pin keeps the picture stable, and clicking a cell's own strip can
      * still change it, one cell at a time.
+     *
+     * The dropped page itself is excluded: it is about to own the target cell,
+     * and freezing a sibling onto it would pin one page into two cells — one
+     * surface cannot fill both, and the loser of the `setBounds` fight renders
+     * as an empty cell.
      */
     for (let index = 0; index < next.length; index += 1) {
       if (index === slotIndex || pages[index]) continue;
       if (view.slotTabs[index] !== root.id) continue;
       const showing = this.pageForSlot(view, index);
-      if (showing) pages[index] = showing.id;
+      if (showing && showing.id !== page.id) pages[index] = showing.id;
     }
     view.slotTabs = resolveSlotTabs(
       this.viewRoots(view.id).map((item) => item.id),
@@ -1080,7 +1088,35 @@ export class EmbeddedBrowser {
       { allowDuplicates: true },
     );
     pages[slotIndex] = page.id;
-    view.slotPages = pages;
+
+    /**
+     * A pin is not the only way a sibling lands on the dropped page: a stale
+     * pin from an earlier split, or plain following of the instance's active
+     * page, points at it just as well. `settleSplitPages` re-pins those cells
+     * to another page of the instance, or releases them when the instance has
+     * only the one page — releasing means the cell goes back to the slot table
+     * so another instance (or nobody) fills it.
+     */
+    const settled = settleSplitPages({
+      slotTabs: view.slotTabs,
+      slotPages: pages,
+      slotIndex,
+      rootId: root.id,
+      pageId: page.id,
+      instanceActiveId: this.activePageOf(root.instanceId)?.id,
+      otherPages: this.instanceTabs(root.instanceId)
+        .map((item) => item.id)
+        .filter((id) => id !== page.id),
+    });
+    if (settled.released.length > 0) {
+      view.slotTabs = resolveSlotTabs(
+        this.viewRoots(view.id).map((item) => item.id),
+        settled.slotTabs,
+        slotCount,
+        { allowDuplicates: true },
+      );
+    }
+    view.slotPages = settled.slotPages;
 
     view.focusedTabId = root.id;
     this.activeTabId = page.id;
@@ -1174,6 +1210,11 @@ export class EmbeddedBrowser {
    * killing the run. Any failure recycles every page this call created together
    * with the container: a batch is all-or-nothing (same rule as the external
    * launcher).
+   *
+   * The default concurrency covers a whole typical selection at once — a batch
+   * the user picks by hand is small, and queuing a fourth account behind three
+   * finished ones read as "the launch stalled". The cap is memory, not policy:
+   * every page is a full renderer process on its own profile partition.
    */
   async launchIdentityBatch(
     inputs: Array<{
@@ -1185,13 +1226,18 @@ export class EmbeddedBrowser {
     }>,
     viewId: string,
     onCreated?: (tab: EmbeddedTab, index: number) => void,
-    concurrency = 3,
+    concurrency = 8,
   ): Promise<EmbeddedState> {
     const view = this.requireView(viewId);
     let failed = false;
     let cursor = 0;
-    // Counted from before the first page: the container is already on stage and
-    // empty, so the broadcast for it is the blank frame the user sees.
+    // The launch marker is what the stage shows while the cells are still
+    // empty — a free layout has one cell, so without it nothing on screen moves
+    // until the first page lands. It dies with the batch, success or rollback.
+    view.launching = { total: inputs.length, done: 0 };
+    // Held from before the first page so the noisy per-createTab broadcasts
+    // stay merged; the container itself was broadcast by the caller, and every
+    // pin above flushes what is held so the stage fills cell by cell.
     this.stateHold += 1;
     const worker = async (): Promise<void> => {
       while (cursor < inputs.length && !failed) {
@@ -1210,6 +1256,11 @@ export class EmbeddedBrowser {
           });
           onCreated?.(tab, index);
           this.pinBatchTab(view, index, tab.id);
+          // The cell lights up the moment its page is pinned, not when the whole
+          // batch has finished loading: from the accounts page the switch to the
+          // browser page lands first, and this is what the user watches.
+          if (view.launching) view.launching.done += 1;
+          this.flushHeldState();
         } catch (error) {
           // Flag first: sibling workers check it before starting another page.
           failed = true;
@@ -1225,7 +1276,8 @@ export class EmbeddedBrowser {
     const failure = results.find((item) => item.status === "rejected");
     if (failure) {
       failed = true;
-      // The container came from this call, so it goes back with the pages.
+      // The container came from this call, so it goes back with the pages —
+      // the launch marker dies with it.
       this.closeView(view.id, "all");
       // A rollback changes the surface too: release the hold before reporting,
       // or the renderer keeps showing pages that no longer exist.
@@ -1239,8 +1291,9 @@ export class EmbeddedBrowser {
     // write a slot entry even into a Free layout's empty slot table. Pinning
     // has already focused the page in slot 0 for a slotted layout.
     this.applyLayout();
-    // Release, then publish: the whole batch lands as one frame instead of a
-    // blank stage filling in cell by cell.
+    delete view.launching;
+    // Release and publish what is left: intermediate frames went out through the
+    // per-pin flushes above, so this is only the final correction.
     this.stateHold = Math.max(0, this.stateHold - 1);
     this.stateHeld = false;
     this.emitState();
@@ -1408,8 +1461,15 @@ export class EmbeddedBrowser {
    *
    * Called after a reorder inside a view: the sidebar order is the layout order,
    * so keeping old pins would make dragging look like it did nothing.
+   *
+   * A split view is exempt. Its slot table repeats one instance on purpose and
+   * each cell pins a page by position — refilling from the tab order collapses
+   * the duplicate back into one cell and drops the pins. Reordering a split
+   * instance's pages changes which strip pill sits where, not which cell shows
+   * which page, so the grid simply stays as it is.
    */
   private resequenceView(view: ViewRecord): void {
+    if (this.viewHasSplit(view)) return;
     const slotCount = embeddedSlotRects(
       view.layoutId,
       { x: 0, y: 0, width: 1, height: 1 },
@@ -1437,8 +1497,11 @@ export class EmbeddedBrowser {
     const view = this.findView(viewId);
     if (!view) return;
     const root = this.instanceRoot(tab.instanceId) ?? tab;
-    if (root.viewId === view.id) return;
-    if (root.viewId) this.detachFromView(root);
+    // Moving between views detaches first; landing in the view the tab already
+    // names (the normal path — the field is written at creation) keeps
+    // everything and still resolves the slot below, because a fresh tab is not
+    // in any slot yet.
+    if (root.viewId && root.viewId !== view.id) this.detachFromView(root);
     for (const page of this.instanceTabs(root.instanceId)) page.viewId = view.id;
     const slotCount = embeddedSlotRects(
       view.layoutId,
@@ -1526,7 +1589,13 @@ export class EmbeddedBrowser {
       id,
       ...(identityId ? { identityId } : {}),
       ...(siteId ? { siteId } : {}),
-      label: input.label?.trim() || "新标签页",
+      // From the very first broadcast the tab belongs to its view. Writing the
+      // field only after the carrier opened (the old behaviour) left the tab
+      // looking loose during the await — and with a batch's workers interleaving,
+      // another worker's mid-hold flush then showed it under the loose group
+      // before it moved into the view.
+      ...(input.viewId && this.findView(input.viewId) ? { viewId: input.viewId } : {}),
+      label: input.label?.trim() || t("page.untitled"),
       ...(input.color ? { color: input.color } : {}),
       origin: input.origin ?? parent?.origin ?? "manual",
       instanceId,
@@ -2445,7 +2514,10 @@ export class EmbeddedBrowser {
       // `instanceActive` otherwise, so popups reuse the slot instead of adding a
       // cell.
       const page = this.pageForSlot(view, index);
-      if (!page || page.view.webContents.isDestroyed()) return;
+      // Same placeholder hazard as the flat branch: a tab can sit in `slotTabs`
+      // before its carrier exists (assigned at creation, or mid-batch), so the
+      // view may still be the null placeholder here.
+      if (!page || !page.view || page.view.webContents.isDestroyed()) return;
       // Same reason as the flat branch: a blank page keeps its cell for HTML.
       if (isBlankTab(page)) return;
       void this.wakeTab(page.id);
@@ -2606,6 +2678,22 @@ export class EmbeddedBrowser {
    */
   withoutBroadcasts<T>(work: () => Promise<T>): Promise<T> {
     return this.withHeldState(work);
+  }
+
+  /**
+   * Publishes one broadcast while a hold is active, without ending it.
+   *
+   * A batch holds its state so the noisy per-createTab broadcasts stay merged,
+   * but the hold must not blind a launch: each page that lands in its cell
+   * flushes what is held, so the stage fills one cell at a time while the rest
+   * are still loading. `sendState` coalesces bursts, so three workers flushing
+   * within the same tick still produce one frame.
+   */
+  private flushHeldState(): void {
+    if (this.stateHeld) {
+      this.stateHeld = false;
+      this.sendState();
+    }
   }
 
   private async withHeldState<T>(work: () => Promise<T>): Promise<T> {
@@ -3700,6 +3788,11 @@ export class EmbeddedBrowser {
     this.endDevToolsResize();
     const rect = this.cellOf(tab);
     if (!rect) return;
+    // Publishing on every poll tick runs the renderer's full reactive pass at
+    // 60 fps — clicks stop landing and the drag itself feels dead. Twelve
+    // frames a second is still visually live for the page, and the release
+    // below always publishes the exact landing spot.
+    let lastPublish = 0;
     const move = (): void => {
       const live = this.findTab(tabId);
       if (!live?.devtools) {
@@ -3716,6 +3809,15 @@ export class EmbeddedBrowser {
       if (Math.abs(next - live.devtools.width) < 0.001) return;
       live.devtools.width = next;
       this.placeDevTools(live);
+      // The panel is a native view, so placeDevTools moves it for real; the
+      // page is a renderer DOM node whose position follows the state (main's
+      // own setBounds only records). Without publishing here the page keeps its
+      // old width until mouse-up while the panel slides over it live.
+      const now = Date.now();
+      if (now - lastPublish >= 80) {
+        lastPublish = now;
+        this.emitState();
+      }
     };
     const timer = setInterval(move, 16);
     const listeners: Array<{ contents: WebContents; handler: (event: ElectronEvent, input: InputEvent) => void }> = [];

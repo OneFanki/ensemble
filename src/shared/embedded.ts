@@ -135,6 +135,16 @@ export interface EmbeddedView {
   /** Tab id per slot; null for an empty slot. Length always equals the slot count. */
   slotTabs: (string | null)[];
   /**
+   * A batch launch still filling this view's cells.
+   *
+   * Present only while `launchIdentityBatch` is running: `done` counts the
+   * pages already pinned, `total` the ones requested. The stage draws a small
+   * progress marker from it — a free layout has one cell, so "the cells light
+   * up one by one" cannot show progress there, and without a marker the stage
+   * sits still for the whole launch. Cleared when the batch settles.
+   */
+  launching?: { total: number; done: number };
+  /**
    * Page each slot displays, when it differs from the instance's active page.
    *
    * A slot names an *instance*, and normally the instance has one cell and shows
@@ -682,6 +692,56 @@ export function resolveSlotPages(
     pages[index] = pinnedId;
   }
   return pages;
+}
+
+/**
+ * Keeps the dropped page from claiming two cells at once.
+ *
+ * After a split lands, the same instance may still occupy other cells — and one
+ * of them can end up showing the very page that was just dropped into the
+ * target cell, either through its own pin or by following the instance's active
+ * page. One page is one surface: laid out twice, the second `setBounds` simply
+ * overwrites the first, so the other cell goes dark while its strip keeps
+ * naming a page that is not there.
+ *
+ * The rule the target cell forces on its siblings:
+ *
+ * 1. The dropped page owns the target cell.
+ * 2. Any sibling cell of the same instance that would show the dropped page is
+ *    re-pinned to the instance's earliest remaining page, in creation order.
+ * 3. A single-page instance cannot fill two cells: its extra cell releases the
+ *    instance entirely (`released`), and the caller re-resolves the slot table
+ *    so another instance, if one is waiting, can take the cell.
+ *
+ * Pure so the rule can be tested without Electron.
+ */
+export function settleSplitPages(input: {
+  slotTabs: (string | null)[];
+  slotPages: (string | null)[];
+  slotIndex: number;
+  rootId: string;
+  pageId: string;
+  instanceActiveId?: string;
+  otherPages: string[];
+}): { slotTabs: (string | null)[]; slotPages: (string | null)[]; released: number[] } {
+  const slotTabs = [...input.slotTabs];
+  const slotPages = [...input.slotPages];
+  const released: number[] = [];
+  for (let index = 0; index < slotTabs.length; index += 1) {
+    if (index === input.slotIndex) continue;
+    if (slotTabs[index] !== input.rootId) continue;
+    const effective = slotPages[index] ?? input.instanceActiveId;
+    if (effective !== input.pageId) continue;
+    const fallback = input.otherPages[0];
+    if (fallback) {
+      slotPages[index] = fallback;
+    } else {
+      slotTabs[index] = null;
+      slotPages[index] = null;
+      released.push(index);
+    }
+  }
+  return { slotTabs, slotPages, released };
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   viewIsOnScreen,
   resolveSlotPages,
   resolveSlotTabs,
+  settleSplitPages,
 } from "@shared/embedded";
 
 const stage = { x: 0, y: 60, width: 1000, height: 600 };
@@ -108,6 +109,94 @@ describe("slot assignment", () => {
     // A pin from another window is never valid, and neither is a closed page.
     expect(resolveSlotPages(["a", "a"], ["a", "b"], instanceOf)).toEqual(["a", null]);
     expect(resolveSlotPages(["a", "a"], ["a", "gone"], instanceOf)).toEqual(["a", null]);
+  });
+});
+
+describe("settleSplitPages", () => {
+  // Dragging page `a2` of instance `a` into cell 0. Pages `a`/`a2`/`a3` belong
+  // to instance `a` in creation order.
+  const drop = { slotIndex: 0, rootId: "a", pageId: "a2" };
+
+  it("re-pins a sibling whose own pin names the dropped page", () => {
+    // The user dragged a2 out of the cell that pinned it; that cell keeps
+    // showing a page, just not the one that moved.
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "a"],
+      slotPages: ["a2", "a2"],
+      instanceActiveId: "a2",
+      otherPages: ["a"],
+    });
+    expect(settled.slotPages).toEqual(["a2", "a"]);
+    expect(settled.slotTabs).toEqual(["a", "a"]);
+    expect(settled.released).toEqual([]);
+  });
+
+  it("re-pins a sibling that follows the instance's active page onto it", () => {
+    // No pin: the cell would follow the active page, which is the dropped one
+    // right after the drop lands.
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "a"],
+      slotPages: ["a2", null],
+      instanceActiveId: "a2",
+      otherPages: ["a"],
+    });
+    expect(settled.slotPages).toEqual(["a2", "a"]);
+    expect(settled.released).toEqual([]);
+  });
+
+  it("releases the sibling of a single-page instance instead of doubling it", () => {
+    // One page cannot fill two cells; the extra cell lets go so the caller can
+    // re-resolve the slot table and let another instance (or nobody) fill it.
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "a"],
+      slotPages: ["a2", null],
+      instanceActiveId: "a2",
+      otherPages: [],
+    });
+    expect(settled.slotTabs).toEqual(["a", null]);
+    expect(settled.slotPages).toEqual(["a2", null]);
+    expect(settled.released).toEqual([1]);
+  });
+
+  it("leaves a sibling alone when it already shows another page", () => {
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "a"],
+      slotPages: ["a2", "a"],
+      instanceActiveId: "a2",
+      otherPages: ["a"],
+    });
+    expect(settled.slotPages).toEqual(["a2", "a"]);
+    expect(settled.slotTabs).toEqual(["a", "a"]);
+    expect(settled.released).toEqual([]);
+  });
+
+  it("only touches cells of the dragged instance", () => {
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "b"],
+      slotPages: ["a2", null],
+      instanceActiveId: "b1",
+      otherPages: [],
+    });
+    expect(settled.slotTabs).toEqual(["a", "b"]);
+    expect(settled.slotPages).toEqual(["a2", null]);
+    expect(settled.released).toEqual([]);
+  });
+
+  it("releases every duplicated sibling, not just the first", () => {
+    const settled = settleSplitPages({
+      ...drop,
+      slotTabs: ["a", "a", "a"],
+      slotPages: ["a2", "a2", "a2"],
+      instanceActiveId: "a2",
+      otherPages: [],
+    });
+    expect(settled.slotTabs).toEqual(["a", null, null]);
+    expect(settled.released).toEqual([1, 2]);
   });
 });
 

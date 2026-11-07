@@ -296,7 +296,72 @@ function onWindowPageDragStart(page: EmbeddedTab, event: DragEvent): void {
 }
 
 function onWindowPageDragEnd(): void {
+  stripDropHint.value = null;
   store.dragTab(null);
+}
+
+/**
+ * Reordering inside the strip.
+ *
+ * The drag data is the same payload the cells read (`application/x-ensemble-page`),
+ * so a drop here means "this page belongs at this spot in the instance's tab
+ * order" — the same reorder the dock rows perform, arriving via the strip. Only
+ * a page of the same instance qualifies: the strip lists one browser's pages, and
+ * dropping a foreign page between them would splice two windows' tab lists
+ * together. The edge splits at the target's midpoint — left half lands before it,
+ * right half lands after.
+ */
+const stripDropHint = ref<{ tabId: string; edge: "before" | "after" } | null>(null);
+
+function onStripTabDragOver(page: EmbeddedTab, event: DragEvent): void {
+  const dragId = store.draggingTabId;
+  const dragPage = dragId ? store.tabs.find((tab) => tab.id === dragId) : undefined;
+  if (!dragPage || dragPage.instanceId !== page.instanceId || dragId === page.id) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const edge: "before" | "after" = event.clientX - rect.left < rect.width / 2 ? "before" : "after";
+  stripDropHint.value = { tabId: page.id, edge };
+}
+
+function onStripTabDragLeave(page: EmbeddedTab): void {
+  if (stripDropHint.value?.tabId === page.id) stripDropHint.value = null;
+}
+
+/** Insertion marker on the edge the drop would land on; only while a drag is live. */
+function stripDropClass(page: EmbeddedTab): Record<string, boolean> {
+  const hint = stripDropHint.value;
+  if (!store.draggingTabId || !hint || hint.tabId !== page.id) return {};
+  return { [`drop-${hint.edge}`]: true };
+}
+
+async function onStripTabDrop(page: EmbeddedTab, event: DragEvent): Promise<void> {
+  event.preventDefault();
+  const dragId = store.draggingTabId;
+  const hint = stripDropHint.value;
+  stripDropHint.value = null;
+  store.dragTab(null);
+  if (!dragId || dragId === page.id || !hint || hint.tabId !== page.id) return;
+  // Copied into a fresh literal like the dock's drop does: the IPC argument must
+  // be plain data whatever the ref was holding.
+  await store.dropTab(dragId, { kind: "tab", tabId: page.id, edge: hint.edge });
+}
+
+/**
+ * Middle-click closes, the way every browser does it.
+ *
+ * Chromium starts an autoscroll on a middle press, so the mousedown is answered
+ * here with `preventDefault`; the close itself happens on `auxclick`, which a
+ * middle release fires and a plain left click does not.
+ */
+function onWindowPageMouseDown(event: MouseEvent): void {
+  if (event.button === 1) event.preventDefault();
+}
+
+function onWindowPageAuxClick(page: EmbeddedTab, event: MouseEvent): void {
+  if (event.button !== 1) return;
+  event.preventDefault();
+  store.closeTab(page.id);
 }
 
 function openWindowPageMenu(page: EmbeddedTab, event: MouseEvent): void {
@@ -328,6 +393,26 @@ function toggleBench(): void {
 
 const activeTab = computed(() => store.activeTab);
 const activeView = computed(() => store.activeView);
+
+/**
+ * The strip swaps its pages as a set when the selection moves to another
+ * window: every key changes at once, so the enter/leave pair reads as "a new
+ * tab appeared and the old one was closed". Same title, same slot — there is
+ * nothing to animate, and the switch below turns the transition off for that
+ * one frame. New tabs inside one window and reordering keep theirs.
+ *
+ * Declared after `activeView` on purpose: `windowInstanceId` reads it, and a
+ * watch established while it is still in its temporal dead zone would throw
+ * during setup and take the whole page down with it.
+ */
+const stripAnimated = ref(true);
+
+watch(windowInstanceId, () => {
+  stripAnimated.value = false;
+  requestAnimationFrame(() => {
+    stripAnimated.value = true;
+  });
+});
 
 /**
  * Whether the active page is already a bookmark.
@@ -1699,21 +1784,26 @@ function fillMessage(reason?: string): string {
         <LayoutGrid :size="14" />
       </button>
       <div class="tabs no-drag" role="tablist" :aria-label="t('app.browserTabs')">
-        <TransitionGroup name="tab">
+        <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
           <button
             v-for="page in windowPages"
             :key="page.id"
             type="button"
             role="tab"
             class="tab"
-            :class="{ active: page.id === windowActivePageId }"
+            :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
             :aria-selected="page.id === windowActivePageId"
             :data-tab-id="page.id"
             :title="page.url"
             draggable="true"
             @click="activateWindowPage(page.id)"
+            @mousedown="onWindowPageMouseDown"
+            @auxclick="onWindowPageAuxClick(page, $event)"
             @dragstart="onWindowPageDragStart(page, $event)"
             @dragend="onWindowPageDragEnd"
+            @dragover="onStripTabDragOver(page, $event)"
+            @dragleave="onStripTabDragLeave(page)"
+            @drop="onStripTabDrop(page, $event)"
             @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
           >
             <span class="tab-fav">
@@ -2505,6 +2595,18 @@ function fillMessage(reason?: string): string {
       </div>
 
       <!--
+        Batch launch marker: while a batch is still filling this view, the stage
+        itself may not move at all — a free layout has one cell and the first
+        page takes seconds to land. The marker is the difference between "the
+        launch is running" and "the click did nothing". It sits above the guest
+        nodes, which live at z-index 1.
+      -->
+      <div v-if="activeView?.launching" class="batch-marker" role="status">
+        <span class="batch-spinner spin" aria-hidden="true"></span>
+        {{ t("app.batchStarting", { done: activeView.launching.done, total: activeView.launching.total }) }}
+      </div>
+
+      <!--
         The empty stage, and only when nothing else on it says what to do.
 
         A view with empty cells already draws each one as a dashed "add a tab
@@ -2841,6 +2943,27 @@ function fillMessage(reason?: string): string {
 .tab.active::before,
 .tab.active + .tab::before {
   display: none;
+}
+
+/* Where a dragged tab would land: a rule on the near edge of the tab under the
+   pointer, the insertion mark every browser draws while reordering tabs. */
+.tab.drop-before::after,
+.tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.tab.drop-before::after {
+  left: 0;
+}
+
+.tab.drop-after::after {
+  right: 0;
 }
 
 .tab-fav {
@@ -3954,6 +4077,39 @@ function fillMessage(reason?: string): string {
   to {
     transform: rotate(360deg);
   }
+}
+
+/*
+ * Batch launch marker at the stage's foot: the one signal a free layout gets
+ * while a batch is filling it, since a single cell cannot light up cell by
+ * cell. A quiet capsule, not a toast — the launch is progress, not an event.
+ */
+.batch-marker {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 25%);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.batch-spinner {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--accent);
 }
 
 .empty {

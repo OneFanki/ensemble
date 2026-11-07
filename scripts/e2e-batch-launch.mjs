@@ -49,6 +49,17 @@ const page = createServer((req, res) => {
   const signedIn = cookies.session === "e2e-session";
   requestLog.push(`${req.method} ${url.pathname} session=${signedIn ? "y" : "n"}`);
 
+  if (url.pathname === "/slow") {
+    // The launch marker needs a launch that visibly takes time: this page
+    // stalls before answering, so the batch is still mid-run when the frames
+    // are sampled.
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end('<!doctype html><title>/slow</title><h1>/slow</h1>');
+    }, 1500);
+    return;
+  }
+
   if (url.pathname === "/api/session") {
     res.writeHead(signedIn ? 200 : 401, { "content-type": "application/json" });
     res.end(JSON.stringify({ signedIn }));
@@ -483,7 +494,7 @@ try {
     role: "成员",
     color: "rose",
     passwordMode: "inherit",
-    startPath: "/delta",
+    startPath: "/slow",
   });
   const epsilon = await call("create_identity", {
     siteId: site.id,
@@ -495,7 +506,10 @@ try {
     startPath: "/epsilon",
   });
   await client.evaluate(`window.ensemble.saveAppSettings({ layout: "2x2" })`);
-  await wait(300);
+  // The startup starter tab (the daily profile's blank page) is created in a
+  // race with this suite; sampling must begin after it has settled, or its
+  // late arrival would read as a batch page leaking into the loose group.
+  await wait(2000);
   const arrival = await client.evaluate(`(async () => {
     const frames = [];
     let running = true;
@@ -522,7 +536,19 @@ try {
               Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y) + 4) clashes += 1;
         }
       }
-      frames.push({ onScreen: boxes.length, clashes });
+      // Empty cells count as stage content: the dashed placeholders are what
+      // the user watches while the pages are still loading.
+      const cells = document.querySelectorAll('.slot-empty, .slot-header').length;
+      const marker = document.querySelector('.batch-marker')?.textContent?.trim() ?? null;
+      // The loose group in the run dock. A batch's pages belong to their view
+      // from creation; a row flashing here mid-batch is the leak this guards.
+      const looseBlock = document.querySelector('.view-block.loose');
+      const looseRows = looseBlock
+        ? [...looseBlock.querySelectorAll('.rows .instance .row-name, .view-block.loose .row-empty')].map(
+            (node) => node.textContent?.trim() ?? "",
+          )
+        : [];
+      frames.push({ onScreen: boxes.length, cells, clashes, marker, looseRows });
     };
     const tick = () => {
       if (!running) return;
@@ -542,6 +568,20 @@ try {
       steps: frames
         .map((frame) => frame.onScreen)
         .filter((count, index, all) => index === 0 || count !== all[index - 1]),
+      // A frame with neither pages nor cells is the failure this guards: the
+      // switch to the browser page landing on a stage that has nothing on it.
+      blankFrames: frames.filter((frame) => frame.onScreen === 0 && frame.cells === 0).length,
+      // The launch marker: present while the batch runs (the slow page keeps it
+      // alive for over a second), gone after it settles.
+      markerFrames: frames.filter((frame) => frame.marker).length,
+      markerSample: frames.find((frame) => frame.marker)?.marker ?? null,
+      markerAtEnd: frames.at(-1)?.marker ?? null,
+      // Any row ADDED to the loose group during the batch is the leak this
+      // suite guards: a page that briefly looked unassigned before its pin
+      // landed. The starter tab legitimately lives there from before.
+      looseSamples: frames
+        .map((frame) => frame.looseRows.join("|"))
+        .filter((text, index, all) => index === 0 || text !== all[index - 1]),
       launched: Boolean(tabs?.views?.length),
     };
   })()`);
@@ -551,8 +591,23 @@ try {
     arrival,
   );
   check(
-    "the stage fills in one step instead of emptying first",
-    Array.isArray(arrival?.steps) && arrival.steps.length <= 3 && !arrival.steps.includes(0),
+    "no batch page ever flashes under the loose group mid-launch",
+    // One distinct composition across the whole launch: rows may not appear
+    // there, whatever they were before the batch is what they stay.
+    Array.isArray(arrival?.looseSamples) && arrival.looseSamples.length === 1,
+    arrival,
+  );
+  check(
+    "the batch lights the stage cell by cell and never leaves it blank",
+    Array.isArray(arrival?.steps) &&
+      arrival.steps.at(-1) === 4 &&
+      arrival?.blankFrames === 0,
+    arrival,
+  );
+  check(
+    "a launch marker shows progress while the batch runs",
+    (arrival?.markerFrames ?? 0) > 20 && /启动/.test(arrival?.markerSample ?? "") &&
+      arrival?.markerAtEnd === null,
     arrival,
   );
 } catch (error) {

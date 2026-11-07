@@ -97,6 +97,7 @@ import {
   type SaveDialogOptions,
   safeStorage,
   screen,
+  session,
   shell,
   Tray,
   webContents,
@@ -105,6 +106,7 @@ import { EmbeddedBrowser, type GuestHost } from "./embedded/browser";
 import { BrowserGuestManager } from "./embedded/guests";
 import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
+import { fixRealmEncoding, HttpAuthCoordinator } from "./http-auth";
 import { LoginCaptureStore } from "./embedded/login-capture";
 import { McpServer } from "./mcp/server";
 
@@ -593,6 +595,11 @@ async function openEmbeddedView(
   const view = service.findView(viewId);
   if (!view) throw new Error("视图不存在");
   const browser = ensureEmbeddedBrowser();
+  // Reveal first: every member below awaits its own page load, and a
+  // four-account view would hold the switch to the browser page for four loads
+  // if the switch waited for them. The container is activated at the end, so the
+  // stage fills in behind the switch instead of the switch waiting for it.
+  if (reveal) browser.focusPage();
   const containerId = browser.ensureView({
     viewDefinitionId: view.id,
     name: view.name,
@@ -607,7 +614,7 @@ async function openEmbeddedView(
       url,
       identityId,
       siteId: identity?.siteId ?? view.siteId,
-      label: identity?.name ?? "标签页",
+      label: identity?.name ?? t("tab.unnamed"),
       ...(identity?.color ? { color: identity.color } : {}),
       viewId: containerId,
       origin: "view",
@@ -628,7 +635,6 @@ async function openEmbeddedView(
   browser.applySlotAssignments(containerId, slots);
   const next = browser.activateView(containerId);
   service.rememberLaunchedView(view.id);
-  if (reveal) browser.focusPage();
   return next;
 }
 
@@ -2124,6 +2130,8 @@ async function shutdownAndQuit(): Promise<void> {
     // so a tool call cannot start a launch halfway through shutdown.
     await mcpServer?.stop();
     stopUpdateWatcher();
+    // No dialog can outlive the window it was about to answer for.
+    httpAuth.abandonAll();
     tray?.destroy();
     tray = null;
     stopActiveWatcher();
@@ -2398,6 +2406,14 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.bookmarkDelete, (id: string) => {
     workspace.deleteBookmark(String(id));
+    broadcastWorkspace();
+    return workspace.snapshot();
+  });
+
+  handle(IPC.bookmarkDeleteBulk, (bookmarkIds: unknown, folderIds: unknown) => {
+    const bookmarks = Array.isArray(bookmarkIds) ? bookmarkIds.map((id) => String(id)) : [];
+    const folders = Array.isArray(folderIds) ? folderIds.map((id) => String(id)) : [];
+    workspace.deleteBookmarksBulk(bookmarks, folders);
     broadcastWorkspace();
     return workspace.snapshot();
   });
@@ -2874,6 +2890,14 @@ function registerIpc(workspace: WorkspaceService): void {
     showMainWindow();
   });
 
+  handle(IPC.httpAuthRespond, (id: string, username: string, password: string) => {
+    httpAuth.submit(id, username, password);
+  });
+
+  handle(IPC.httpAuthCancel, (id: string) => {
+    httpAuth.cancel(id);
+  });
+
   handle(IPC.overlayResize, (size: { width?: number; height?: number }) => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return;
     overlaySize = clampOverlaySize(
@@ -3137,6 +3161,11 @@ function registerIpc(workspace: WorkspaceService): void {
     if (!identity) throw new Error("账号不存在");
     const browser = ensureEmbeddedBrowser();
     const url = embeddedStartUrl(identity.id);
+    // Switch to the browser page before the page exists: createTab waits out the
+    // carrier attaching and the page's first load, and a click must feel
+    // answered before that. The tab's own record is broadcast as soon as it is
+    // created, so the strip shows a loading tab right behind the switch.
+    browser.focusPage();
     const tab = await browser.createTab({
       ...(url ? { url } : {}),
       identityId: identity.id,
@@ -3145,7 +3174,6 @@ function registerIpc(workspace: WorkspaceService): void {
       ...(identity.color ? { color: identity.color } : {}),
       origin: "manual",
     });
-    browser.focusPage();
     scheduleEmbeddedLogin(tab.id, identity.id);
     return browser.state();
   });
@@ -3228,30 +3256,29 @@ function registerIpc(workspace: WorkspaceService): void {
     // closed. The whole run — creation, pinning, rollback — lives in the main
     // process so a renderer navigation cannot interrupt it halfway.
     //
-    // The container is created inside the same held window as the pages: a
-    // broadcast for the new but still empty view is what the stage went blank
-    // for, and the pages arrived one at a time after it.
+    // The container is broadcast ahead of the pages and outside the hold:
+    // the switch below lands on a stage that already shows the batch taking
+    // shape (empty cells ready to fill) instead of whatever was on stage
+    // before, and every pinned page then lights its cell as it lands.
     const layout = service.settingsSnapshot().layout;
-    return browser.withoutBroadcasts(async () => {
-      const state = browser.createView({ layoutId: layout });
-      const viewId = state.activeViewId;
-      if (!viewId) throw new Error("批量启动容器创建失败");
-      browser.focusPage();
-      return browser.launchIdentityBatch(
-        members.map((identity) => ({
-          identityId: identity.id,
-          ...(identity.siteId ? { siteId: identity.siteId } : {}),
-          label: identity.name,
-          ...(identity.color ? { color: identity.color } : {}),
-          url: embeddedStartUrl(identity.id),
-        })),
-        viewId,
-        (tab, index) => {
-          const identityId = members[index]?.id;
-          if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
-        },
-      );
-    });
+    const state = browser.createView({ layoutId: layout });
+    const viewId = state.activeViewId;
+    if (!viewId) throw new Error("批量启动容器创建失败");
+    browser.focusPage();
+    return browser.launchIdentityBatch(
+      members.map((identity) => ({
+        identityId: identity.id,
+        ...(identity.siteId ? { siteId: identity.siteId } : {}),
+        label: identity.name,
+        ...(identity.color ? { color: identity.color } : {}),
+        url: embeddedStartUrl(identity.id),
+      })),
+      viewId,
+      (tab, index) => {
+        const identityId = members[index]?.id;
+        if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
+      },
+    );
   });
   handle(IPC.embeddedViewLayout, (viewId: string, layoutId: LayoutId) =>
     ensureEmbeddedBrowser().setViewLayout(String(viewId), String(layoutId)),
@@ -3789,6 +3816,52 @@ if (!gotLock) {
     });
   });
 }
+
+/*
+ * HTTP authentication: nginx's basic-auth wall, protected backends, proxy
+ * logins. Without a handler Electron cancels every challenge silently, and the
+ * user stares at a raw 401 page with nowhere to type. The coordinator shows one
+ * dialog per protection space (queued, so a page and its favicon opening the
+ * same origin produce one prompt) and caches answers per browser session for
+ * the rest of the process lifetime — credentials were never asked to be
+ * remembered, so nothing is persisted.
+ */
+const httpAuth = new HttpAuthCoordinator();
+const httpAuthSessions = new Map<Electron.Session, string>();
+let httpAuthSessionSeq = 0;
+
+app.on(
+  "login",
+  (event, webContents, authenticationResponseDetails, authInfo, callback) => {
+    event.preventDefault();
+    const ses = webContents?.session ?? session.defaultSession;
+    let sessionKey = httpAuthSessions.get(ses);
+    if (!sessionKey) {
+      httpAuthSessionSeq += 1;
+      sessionKey = `s${httpAuthSessionSeq}`;
+      httpAuthSessions.set(ses, sessionKey);
+    }
+    let origin = "";
+    try {
+      origin = new URL(authenticationResponseDetails.url).origin;
+    } catch {
+      // A malformed request URL still deserves the dialog; the key just gets
+      // less specific and the credentials less reusable.
+    }
+    const shown = httpAuth.begin(
+      `${authInfo.isProxy ? "proxy" : origin}|${authInfo.host}:${authInfo.port}|${authInfo.realm ?? ""}`,
+      {
+        host: authInfo.host,
+        ...(authInfo.port ? { port: authInfo.port } : {}),
+        ...(authInfo.realm ? { realm: fixRealmEncoding(authInfo.realm) } : {}),
+        scheme: authInfo.scheme,
+        isProxy: authInfo.isProxy,
+      },
+      callback,
+    );
+    if (shown) mainWindow?.webContents.send(IPC.httpAuthChallenge, shown);
+  },
+);
 
 // Registering this listener takes over the quit decision: without an explicit
 // app.quit() here the process stays alive after the last window closes (and a

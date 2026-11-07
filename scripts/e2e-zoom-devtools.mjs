@@ -454,6 +454,31 @@ try {
     toolbarState,
   );
 
+  // A resize round-trip. The live drag polls the real cursor, which a headless
+  // run cannot aim, so this checks the machinery — begin, a few poll ticks with
+  // their state publishes, release — without wedging the split either way.
+  const resized = await client.evaluate(`(async () => {
+    const read = async () =>
+      (await window.ensemble.getEmbeddedState()).tabs.find(
+        (t) => t.id === '${opened.a}',
+      )?.devtoolsWidth ?? null;
+    const before = await read();
+    await window.ensemble.resizeEmbeddedDevTools('${opened.a}');
+    await new Promise((r) => setTimeout(r, 400));
+    const during = await read();
+    await window.ensemble.endEmbeddedDevToolsResize();
+    await new Promise((r) => setTimeout(r, 400));
+    const after = await read();
+    return { before, during, after };
+  })()`);
+  check(
+    "a resize session opens and releases without wedging the split",
+    typeof resized?.before === "number" &&
+      typeof resized?.after === "number" &&
+      Math.abs((resized.after ?? 0) - (resized.before ?? 0)) < 0.5,
+    resized,
+  );
+
   // Closing from the app must clear the toggle. The click goes through the
   // band's own button — the gesture a user reaching for the corner actually
   // makes — and the band and seam have to disappear with the panel.

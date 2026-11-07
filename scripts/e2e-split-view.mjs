@@ -426,6 +426,47 @@ try {
     survive,
   );
 
+  /**
+   * Regression: dragging the page a cell is *showing* onto its own sibling.
+   *
+   * Before the fix both cells ended up naming the dropped page — the freeze
+   * pass pinned it into the source cell while the drop pinned it into the
+   * target, and one page cannot fill two cells: the second setBounds won, the
+   * first cell went dark, and both strips carried the same pill. The sibling
+   * must land on the instance's other page instead, which here means the two
+   * cells swap pages.
+   */
+  const draggedBack = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const state = await api.getEmbeddedState();
+    const view = state.views.find((v) => v.id === state.activeViewId);
+    const cell0 = view.slotPages?.[0] ?? null;
+    const cell1 = view.slotPages?.[1] ?? null;
+    const drag = new DataTransfer();
+    drag.setData('text/plain', cell1);
+    drag.setData('application/x-ensemble-page', cell1);
+    const header = [...document.querySelectorAll('.slot-header')][0];
+    header?.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: drag }));
+    header?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: drag }));
+    await new Promise((r) => setTimeout(r, 1600));
+    const after = await api.getEmbeddedState();
+    const next = after.views.find((v) => v.id === view.id);
+    return {
+      cell0,
+      cell1,
+      slots: next.slotTabs,
+      slotPages: next.slotPages ?? null,
+      duplicates: next.slotTabs.filter((id) => id && id === next.slotTabs[0]).length,
+    };
+  })()`);
+  check(
+    "dragging a shown page onto its sibling keeps one page per cell",
+    draggedBack?.duplicates === 2 &&
+      draggedBack?.slotPages?.[0] === draggedBack?.cell1 &&
+      draggedBack?.slotPages?.[1] === draggedBack?.cell0,
+    draggedBack,
+  );
+
   // Closing the pinned page must not leave the cell pointing at a dead page —
   // nor leave it pointing at the sibling's page, which would be the same picture
   // twice and exactly the duplicate this feature exists to prevent.
@@ -455,6 +496,49 @@ try {
     Boolean(closed?.slots?.[1]) === false,
     closed,
   );
+
+  /**
+   * Regression, single-page branch: with nothing else to show, dragging the
+   * instance's only page to another cell has to *move* the instance. The old
+   * freeze pass pinned the shown page into both cells — impossible to honour,
+   * and the loser rendered as an empty cell. Released here means the source
+   * cell lets go and the instance now lives where it was dropped.
+   */
+  const draggedAlone = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const state = await api.getEmbeddedState();
+    const view = state.views.find((v) => v.id === state.activeViewId);
+    const pageId = view.slotTabs.find(Boolean);
+    const drag = new DataTransfer();
+    drag.setData('text/plain', pageId);
+    drag.setData('application/x-ensemble-page', pageId);
+    const empty = [...document.querySelectorAll('.slot-empty')][0];
+    empty?.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: drag }));
+    empty?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: drag }));
+    await new Promise((r) => setTimeout(r, 1600));
+    const after = await api.getEmbeddedState();
+    const next = after.views.find((v) => v.id === view.id);
+    return {
+      pageId,
+      slots: next.slotTabs,
+      slotPages: next.slotPages ?? null,
+      alive: after.tabs.some((t) => t.id === pageId),
+      headers: document.querySelectorAll('.slot-header').length,
+    };
+  })()`);
+  check(
+    "dragging an instance's only page to another cell moves it there",
+    draggedAlone?.slots?.[0] === null &&
+      draggedAlone?.slots?.[1] === draggedAlone?.pageId &&
+      draggedAlone?.alive === true,
+    draggedAlone,
+  );
+  check(
+    "the vacated cell draws no header band after the move",
+    draggedAlone?.headers === 1,
+    draggedAlone,
+  );
+
 
   client.close();
 } catch (error) {

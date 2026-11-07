@@ -577,6 +577,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
+  /**
+   * Deletes a picked set in one pass; picked folders take their whole subtree.
+   * The counts shown in the confirmation live where the selection is picked —
+   * the renderer computes them from the tree it is already showing.
+   */
+  async function deleteBookmarksBulk(bookmarkIds: string[], folderIds: string[]) {
+    return run("bookmark", async () => {
+      apply(await window.ensemble.deleteBookmarksBulk(bookmarkIds, folderIds));
+      return true;
+    });
+  }
+
   async function moveBookmark(id: string, toIndex: number) {
     return run("bookmark", async () => {
       apply(await window.ensemble.moveBookmark(id, toIndex));
@@ -994,6 +1006,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     saveBookmark,
     setBookmarkFavicon,
     deleteBookmark,
+    deleteBookmarksBulk,
     moveBookmark,
     saveBookmarkFolder,
     bookmarkFolders,

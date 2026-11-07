@@ -92,6 +92,21 @@ function onDragEnd(): void {
   store.dragTab(null);
 }
 
+/**
+ * Middle-click closes, same as the window strip. The press is answered with
+ * `preventDefault` so Chromium does not start an autoscroll; the close waits for
+ * `auxclick`, which only a non-primary button fires.
+ */
+function onPillMouseDown(event: MouseEvent): void {
+  if (event.button === 1) event.preventDefault();
+}
+
+function onPillAuxClick(page: EmbeddedTab, event: MouseEvent): void {
+  if (event.button !== 1) return;
+  event.preventDefault();
+  store.closeTab(page.id);
+}
+
 /** "+" adds a page to this instance; it must never open a second window. */
 function addPage(): void {
   if (props.instanceId) void store.openTabInInstance(props.instanceId);
@@ -111,7 +126,8 @@ function addPage(): void {
       :title="page.url"
       draggable="true"
       @click.stop="emit('select', page.id)"
-      @mousedown.stop
+      @mousedown.stop="onPillMouseDown"
+      @auxclick.stop="onPillAuxClick(page, $event)"
       @dragstart="onDragStart(page, $event)"
       @dragend="onDragEnd"
       @contextmenu.prevent.stop="emit('menu', page, $event)"

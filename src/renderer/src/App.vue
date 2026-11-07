@@ -13,6 +13,8 @@ import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import GuestPool from "./components/GuestPool.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
+import HttpAuthDialog from "./components/HttpAuthDialog.vue";
+import type { HttpAuthChallenge } from "@shared/ipc";
 import AppSidebar, { type AppView } from "./components/AppSidebar.vue";
 import FlowsPage from "./components/FlowsPage.vue";
 import IdentitiesPage from "./components/IdentitiesPage.vue";
@@ -103,6 +105,8 @@ const stageObscured = ref(false);
 const identitySiteSeed = ref<{ origin: string; path: string } | null>(null);
 /** Set by a background check, or by the manual check in Settings. */
 const updatePrompt = ref<UpdateCheckResult | null>(null);
+/** The HTTP authentication challenge awaiting the user, if any. */
+const authChallenge = ref<HttpAuthChallenge | null>(null);
 
 const platform = computed(() => store.snapshot?.platform ?? "win32");
 
@@ -202,6 +206,11 @@ onMounted(async () => {
   // opens from the manual check in Settings, which emits the same event.
   window.ensemble.onUpdateAvailable((result) => {
     updatePrompt.value = result;
+  });
+  // A server demanded HTTP credentials; the main process shows one dialog per
+  // protection space, so this arrives only when the user must actually type.
+  window.ensemble.onHttpAuthChallenge((challenge) => {
+    authChallenge.value = challenge;
   });
   // Cmd+, arrives from the native menu; the renderer never binds the key itself.
   // Defaulting the section keeps "wherever I was" for this entry: the user asked
@@ -830,6 +839,8 @@ async function handleLocale(locale: LocaleSetting) {
     />
 
     <SessionHealthDialog v-if="healthOpen" @close="healthOpen = false" />
+
+    <HttpAuthDialog :challenge="authChallenge" @close="authChallenge = null" />
 
     <UpdateDialog
       v-if="updatePrompt"

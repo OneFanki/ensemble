@@ -460,6 +460,13 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
  * A translucent strip: the backdrop image belongs to the page, and an opaque
  * bar would cut it in half. The rule under it is what separates the strip from
  * the empty space it decorates.
+ *
+ * No `backdrop-filter` on purpose: a filtered element becomes the containing
+ * block for every `position: fixed` descendant, and the folder panels below
+ * the root level are fixed (they must escape the panels' own scroll boxes) —
+ * with a blur here their viewport coordinates would be measured against this
+ * bar instead of the window and every sub-panel would sit a bar-height too low.
+ * The 46% surface tint carries the translucency on its own.
  */
 .bookmark-bar {
   position: relative;
@@ -476,7 +483,6 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
   padding: 0 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--line-soft) 60%, transparent);
   background: color-mix(in srgb, var(--surface) 46%, transparent);
-  backdrop-filter: blur(8px);
 }
 
 .bb-cell {
@@ -633,6 +639,9 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
   color: var(--red);
 }
 
+/* Same as the folder panels: opacity only. The overflow menu holds root-level
+   folders whose sub-panels are viewport-fixed, and an animated transform here
+   would misplace any sub-panel opened while the animation runs. */
 .bb-pop-enter-active {
   animation: bb-in var(--motion-base) var(--ease-out);
 }
@@ -645,14 +654,12 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
 @keyframes bb-in {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.985);
   }
 }
 
 @keyframes bb-out {
   to {
     opacity: 0;
-    transform: translateY(-4px) scale(0.99);
   }
 }
 </style>

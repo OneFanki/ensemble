@@ -46,6 +46,18 @@ const open = computed(() =>
 const flip = ref(false);
 const root = ref<HTMLElement | null>(null);
 
+/*
+ * Viewport coordinates for panels below the root level. Those panels are
+ * `position: fixed`: inside the parent panel's scroll box an `absolute` panel
+ * is clipped by `overflow-y: auto` (a non-visible overflow axis clips both
+ * axes, so the sideways offset is clipped too) and drifts when the parent
+ * scrolls. Fixed panels escape both; the coordinates are read off the row's
+ * rect when the row is entered, which is the only moment they are needed —
+ * scrolling the parent panel collapses the path back to it (see
+ * `onPanelScroll`), closing this panel before it can go stale.
+ */
+const fixedStyle = ref<Record<string, string>>({});
+
 interface Entry {
   kind: "folder" | "bookmark";
   order: number;
@@ -75,8 +87,28 @@ function show(): void {
   // in the right third of the window has to open towards the middle.
   const rect = root.value?.getBoundingClientRect();
   flip.value = Boolean(rect && rect.left + 240 > window.innerWidth);
+  if (rect && props.level > 0) {
+    // The panel's top tracks its row, clamped so a row near the window's edge
+    // still leaves room to read; the panel's own max-height scrolls the rest.
+    const top = Math.min(Math.max(rect.top - 4, 8), window.innerHeight - 72);
+    fixedStyle.value = flip.value
+      ? { top: `${top}px`, right: `${window.innerWidth - rect.left + 4}px` }
+      : { top: `${top}px`, left: `${rect.right + 4}px` };
+  }
   if (flyout) flyout.open(props.folder.id, props.ancestors);
   else localOpen.value = true;
+}
+
+/**
+ * Collapse back to this level when the panel itself scrolls.
+ *
+ * A deeper panel is pinned to the viewport, so scrolling this panel's rows
+ * leaves it pointing at whatever used to be underneath — closing it is the only
+ * honest move (the row it belongs to has moved away). Rows rendered outside a
+ * bar keep local state and never build a chain deep enough to scroll.
+ */
+function onPanelScroll(): void {
+  if (flyout) flyout.open(props.folder.id, props.ancestors);
 }
 
 /**
@@ -151,8 +183,10 @@ function pick(bookmark: Bookmark): void {
         v-if="open"
         class="bb-flyout"
         :class="{ flip }"
+        :style="level > 0 ? fixedStyle : undefined"
         role="menu"
         :aria-label="folder.name"
+        @scroll.passive="onPanelScroll"
       >
         <template v-for="entry in children" :key="entry.kind === 'folder' ? `f:${entry.folder!.id}` : `b:${entry.bookmark!.id}`">
           <BookmarkBarFolder
@@ -270,7 +304,8 @@ function pick(bookmark: Bookmark): void {
 }
 
 /* The panel is a child of the row, which is what keeps the row hovered while
-   the pointer is inside it. */
+   the pointer is inside it. Capped like the bar's overflow menu: a folder with
+   dozens of entries must scroll instead of running past the window's edge. */
 .bb-flyout {
   position: absolute;
   z-index: 6;
@@ -278,6 +313,8 @@ function pick(bookmark: Bookmark): void {
   left: 0;
   min-width: 184px;
   max-width: 260px;
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -309,10 +346,16 @@ function pick(bookmark: Bookmark): void {
 }
 
 /* Past the first level the flyout opens beside its row rather than below it:
-   stacked panels marching down the screen would cover the parent's siblings. */
+   stacked panels marching down the screen would cover the parent's siblings.
+   It is viewport-fixed (coordinates come from `show()`), because a panel that
+   lives inside the parent's scroll box gets clipped by the parent's overflow
+   and drifts when the parent scrolls. The top/left here are only fallbacks —
+   the inline style is always set before the panel renders. */
 .bb-folder:not(.level-root) > .bb-flyout {
+  position: fixed;
   top: -4px;
   left: calc(100% + 4px);
+  max-height: calc(100vh - 16px);
 }
 
 /* Beside, not below: the bridge moves to the panel's left edge. */
@@ -351,7 +394,11 @@ function pick(bookmark: Bookmark): void {
   white-space: nowrap;
 }
 
-/* Enter and leave both animate so a hover chain reads as moving, not swapping. */
+/* Enter and leave both animate so a hover chain reads as moving, not swapping.
+   Opacity only, no transform: an animated transform makes the panel the
+   containing block for its fixed sub-panels while the animation runs, so a
+   sub-panel opened during these ~150ms would sit measured against the parent
+   instead of the window — and jump into place when the animation ends. */
 .bb-pop-enter-active {
   animation: bb-in var(--motion-base) var(--ease-out);
 }
@@ -364,14 +411,12 @@ function pick(bookmark: Bookmark): void {
 @keyframes bb-in {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.985);
   }
 }
 
 @keyframes bb-out {
   to {
     opacity: 0;
-    transform: translateY(-4px) scale(0.99);
   }
 }
 </style>

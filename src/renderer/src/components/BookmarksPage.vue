@@ -2,6 +2,7 @@
 import type { Bookmark, BookmarkDraft, BookmarkFolder, BookmarkFolderDraft } from "@shared/types";
 import {
   Bookmark as BookmarkIcon,
+  Check,
   ChevronRight,
   Folder,
   Globe,
@@ -10,7 +11,7 @@ import {
   Star,
   Trash2,
 } from "lucide-vue-next";
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -248,6 +249,120 @@ async function remove(bookmark: Bookmark): Promise<void> {
   await workspace.deleteBookmark(bookmark.id);
 }
 
+// --- Bulk selection ---------------------------------------------------------
+/**
+ * A picking mode for rows the user wants gone in one confirm.
+ *
+ * Row clicks navigate by default; in picking mode they toggle instead, and the
+ * header actions become the selection controls. A picked folder takes its whole
+ * subtree with it — the point of a selection is "these are unwanted", and
+ * re-parenting survivors (the single-delete rule) would pour the contents of
+ * every picked folder back onto the list being emptied.
+ */
+const picking = ref(false);
+const picked = ref(new Set<string>());
+
+function pickKey(kind: "folder" | "bookmark", id: string): string {
+  return `${kind[0]}:${id}`;
+}
+
+function togglePick(kind: "folder" | "bookmark", id: string): void {
+  const next = new Set(picked.value);
+  const key = pickKey(kind, id);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  picked.value = next;
+}
+
+function startPicking(): void {
+  picking.value = true;
+  picked.value = new Set();
+}
+
+function stopPicking(): void {
+  picking.value = false;
+  picked.value = new Set();
+}
+
+/** Escape leaves picking mode, the way a file manager's selection does. */
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && picking.value) stopPicking();
+}
+
+onMounted(() => window.addEventListener("keydown", onKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+
+function onFolderRowClick(folder: BookmarkFolder): void {
+  if (picking.value) togglePick("folder", folder.id);
+  else selected.value = { kind: "folder", id: folder.id };
+}
+
+/** Folder ids picked outright; the subtree they imply is counted, not listed. */
+const pickedFolderIds = computed(() =>
+  [...picked.value].filter((key) => key.startsWith("f:")).map((key) => key.slice(2)),
+);
+
+/** Whole subtree of the picked folders — the same math the core delete runs. */
+const doomedFolderIds = computed(() => {
+  const doomed = new Set(pickedFolderIds.value);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const folder of folders.value) {
+      if (folder.parentId && doomed.has(folder.parentId) && !doomed.has(folder.id)) {
+        doomed.add(folder.id);
+        grew = true;
+      }
+    }
+  }
+  return doomed;
+});
+
+const pickedCounts = computed(() => ({
+  folders: pickedFolderIds.value.length,
+  bookmarks: bookmarks.value.filter(
+    (bookmark) =>
+      picked.value.has(pickKey("bookmark", bookmark.id)) ||
+      (bookmark.folderId && doomedFolderIds.value.has(bookmark.folderId)),
+  ).length,
+}));
+
+function pickAllVisible(): void {
+  const next = new Set<string>();
+  for (const folder of view.value.folders) next.add(pickKey("folder", folder.id));
+  for (const bookmark of view.value.bookmarks) next.add(pickKey("bookmark", bookmark.id));
+  picked.value = next;
+}
+
+async function removePicked(): Promise<void> {
+  const bookmarkIds = [...picked.value]
+    .filter((key) => key.startsWith("b:"))
+    .map((key) => key.slice(2));
+  const folderIds = pickedFolderIds.value;
+  if (bookmarkIds.length === 0 && folderIds.length === 0) return;
+  const { folders: folderCount, bookmarks: bookmarkCount } = pickedCounts.value;
+  const ok = await confirm.ask({
+    title: t("app.bookmarksBulkDeleteTitle"),
+    body: t("app.bookmarksBulkDeleteBody", {
+      folders: folderCount,
+      bookmarks: bookmarkCount,
+    }),
+    confirmLabel: t("app.delete"),
+    tone: "danger",
+  });
+  if (!ok) return;
+  if (!(await workspace.deleteBookmarksBulk(bookmarkIds, folderIds))) return;
+  workspace.notify(
+    t("app.bookmarksBulkDeleted", { folders: folderCount, bookmarks: bookmarkCount }),
+    "success",
+  );
+  // The open folder may be picked, or live inside one; either way it is gone.
+  if (selected.value.kind === "folder" && doomedFolderIds.value.has(selected.value.id)) {
+    selected.value = { kind: "all" };
+  }
+  stopPicking();
+}
+
 /**
  * Moving between folders is the whole point of this page, so it is a select on
  * the row rather than a submenu: one dropdown change, no dialog.
@@ -430,15 +545,36 @@ function onDropOnNothing(): void {
   <section class="page bookmarks-page" @dragleave.self="onDropOnNothing">
     <PageHeader :title="t('app.bookmarksPageTitle')" :note="t('app.bookmarksPageHint')">
       <template #actions>
-        <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
-        <AppButton @click="openNewFolder(selected.kind === 'folder' ? selected.id : undefined)">
-          <Folder :size="13" />
-          {{ t("app.bookmarksPageNewFolder") }}
-        </AppButton>
-        <AppButton variant="primary" @click="openNewBookmark">
-          <Plus :size="13" />
-          {{ t("app.bookmarksPageNew") }}
-        </AppButton>
+        <!--
+          Picking mode swaps creation for the selection actions: the count, a
+          select-all for the folder being viewed, and the delete that goes with
+          them. New rows can wait; the user asked to remove rows.
+        -->
+        <template v-if="picking">
+          <span class="pick-count mono">{{ t("app.bookmarksPicked", { count: picked.size }) }}</span>
+          <AppButton @click="pickAllVisible">{{ t("app.bookmarksPickAll") }}</AppButton>
+          <AppButton
+            variant="danger"
+            :disabled="picked.size === 0"
+            @click="removePicked"
+          >
+            <Trash2 :size="13" />
+            {{ t("app.delete") }}
+          </AppButton>
+          <AppButton @click="stopPicking">{{ t("app.cancel") }}</AppButton>
+        </template>
+        <template v-else>
+          <AppButton @click="startPicking">{{ t("app.bookmarksPickMode") }}</AppButton>
+          <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
+          <AppButton @click="openNewFolder(selected.kind === 'folder' ? selected.id : undefined)">
+            <Folder :size="13" />
+            {{ t("app.bookmarksPageNewFolder") }}
+          </AppButton>
+          <AppButton variant="primary" @click="openNewBookmark">
+            <Plus :size="13" />
+            {{ t("app.bookmarksPageNew") }}
+          </AppButton>
+        </template>
       </template>
     </PageHeader>
 
@@ -573,23 +709,27 @@ function onDropOnNothing(): void {
             :class="{
               drop: dropFolder === folder.id,
               dragging: dragging?.id === folder.id,
+              picked: picking && picked.has(pickKey('folder', folder.id)),
               'drop-before': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'before',
               'drop-after': dropFolderEdge?.id === folder.id && dropFolderEdge.side === 'after',
             }"
-            draggable="true"
+            :draggable="!picking"
             role="button"
             tabindex="0"
-            @click="selected = { kind: 'folder', id: folder.id }"
-            @keydown.enter.prevent="selected = { kind: 'folder', id: folder.id }"
+            @click="onFolderRowClick(folder)"
+            @keydown.enter.prevent="onFolderRowClick(folder)"
             @dragstart="onDragStart('folder', folder.id, $event)"
             @dragend="onDragEnd"
             @dragover="onDragOverFolder(folder.id, $event)"
             @drop.prevent="onDropOnFolder(folder.id)"
           >
+            <span v-if="picking" class="pick-box" :class="{ on: picked.has(pickKey('folder', folder.id)) }">
+              <Check v-if="picked.has(pickKey('folder', folder.id))" :size="10" />
+            </span>
             <span class="row-icon"><Folder :size="11" /></span>
             <span class="row-name">{{ folder.name }}</span>
             <span class="row-url mono">{{ t("app.bookmarkFolderRowHint", { count: countOf(folder.id) }) }}</span>
-            <span class="tree-actions" @click.stop @keydown.stop>
+            <span v-if="!picking" class="tree-actions" @click.stop @keydown.stop>
               <button
                 type="button"
                 class="icon-btn"
@@ -621,13 +761,24 @@ function onDropOnNothing(): void {
             v-for="bookmark in view.bookmarks"
             :key="bookmark.id"
             class="row"
-            :class="{ drop: dropRow === bookmark.id, dragging: dragging?.id === bookmark.id }"
-            draggable="true"
+            :class="{
+              drop: dropRow === bookmark.id,
+              dragging: dragging?.id === bookmark.id,
+              picked: picking && picked.has(pickKey('bookmark', bookmark.id)),
+            }"
+            :draggable="!picking"
+            role="button"
+            tabindex="0"
+            @click="picking && togglePick('bookmark', bookmark.id)"
+            @keydown.enter.prevent="picking && togglePick('bookmark', bookmark.id)"
             @dragstart="onDragStart('bookmark', bookmark.id, $event)"
             @dragend="onDragEnd"
             @dragover="onDragOverRow(bookmark, $event)"
             @drop.prevent="onDropOnRow(bookmark)"
           >
+            <span v-if="picking" class="pick-box" :class="{ on: picked.has(pickKey('bookmark', bookmark.id)) }">
+              <Check v-if="picked.has(pickKey('bookmark', bookmark.id))" :size="10" />
+            </span>
             <span class="row-icon" :style="bookmark.favicon ? {} : { background: 'var(--surface-3)' }">
               <img v-if="bookmark.favicon" :src="bookmark.favicon" alt="" />
               <Star v-else :size="11" />
@@ -638,6 +789,7 @@ function onDropOnNothing(): void {
                  options label folders by full path, since depth cannot be
                  drawn inside a flat dropdown. -->
             <SelectField
+              v-if="!picking"
               class="row-folder"
               compact
               :model-value="bookmark.folderId ?? ''"
@@ -646,10 +798,11 @@ function onDropOnNothing(): void {
               @update:model-value="moveTo(bookmark, $event ?? '')"
               @click.stop
             />
-            <button type="button" class="icon-btn" :title="t('app.bookmarkEdit')" @click="openEditBookmark(bookmark)">
+            <button v-if="!picking" type="button" class="icon-btn" :title="t('app.bookmarkEdit')" @click="openEditBookmark(bookmark)">
               <Pencil :size="11" />
             </button>
             <button
+              v-if="!picking"
               type="button"
               class="icon-btn danger"
               :title="t('app.bookmarkRemove')"
@@ -854,6 +1007,28 @@ div.tree-row {
   transition: opacity var(--motion-fast) var(--ease-out);
 }
 
+/*
+ * The management list is wider than its content ever is, so pinning the hover
+ * actions to the row's right edge put them a full screen away from the row the
+ * cursor is on. In the list they follow the content instead, and the address
+ * gives up its unlimited stretch for a cap that still fits a real URL; the
+ * gradient is a tree-strip trick and has nothing to sit on here.
+ */
+.rows .row .tree-actions {
+  position: static;
+  padding-left: 0;
+  background: none;
+  flex: none;
+  top: auto;
+  bottom: auto;
+  right: auto;
+}
+
+.rows .row-url {
+  flex: 0 1 auto;
+  max-width: 46%;
+}
+
 .tree-row:hover .tree-actions,
 .row:hover .tree-actions {
   opacity: 1;
@@ -1007,6 +1182,40 @@ div.tree-row {
 
 .icon-btn.danger:hover {
   color: var(--red);
+}
+
+/*
+ * Picking mode: a checkbox column and a lit row.
+ *
+ * The box is a fixed slot even when unchecked, so rows do not reflow when a
+ * check appears; the row itself takes the accent tint, which is how the rest
+ * of this shell marks "this one is selected".
+ */
+.pick-box {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  color: var(--bg);
+}
+
+.pick-box.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.row.picked {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pick-count {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-right: 4px;
 }
 
 /* The page-level empty state: a bordered prompt with its two ways out. The

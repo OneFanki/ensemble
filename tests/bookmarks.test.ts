@@ -510,6 +510,44 @@ describe("bookmark folder tree", () => {
     expect(() => service.saveBookmarkFolder({ id: "missing", name: "x" })).toThrow("文件夹不存在");
     expect(() => service.saveBookmarkFolder({ name: "   " })).toThrow();
   });
+
+  it("deletes a picked set with each picked folder's whole subtree", () => {
+    // The bulk delete is the "these are unwanted" gesture, the opposite of the
+    // single-folder rule above: survivors would pour right back onto the list
+    // being emptied, so picked folders take descendants and their bookmarks.
+    const keep = service.saveBookmarkFolder({ name: "保留" });
+    const kept = service.saveBookmark({ name: "留", url: "https://keep.example.com", folderId: keep.id });
+    const picked = service.saveBookmarkFolder({ name: "编程" });
+    const nested = service.saveBookmarkFolder({ name: "AI", parentId: picked.id });
+    const deep = service.saveBookmark({ name: "a", url: "https://a.example.com", folderId: nested.id });
+    const loose = service.saveBookmark({ name: "b", url: "https://b.example.com" });
+    const result = service.deleteBookmarksBulk([loose.id], [picked.id]);
+    // The nested folder is counted even though only its parent was picked.
+    expect(result).toEqual({ folders: 2, bookmarks: 2 });
+    const snapshot = service.snapshot();
+    expect(snapshot.bookmarks.map((item) => item.id)).toEqual([kept.id]);
+    expect(snapshot.bookmarkFolders.map((item) => item.id)).toEqual([keep.id]);
+    expect(deep.id).toBeTruthy();
+  });
+
+  it("skips unknown ids instead of failing the batch", () => {
+    const bookmark = service.saveBookmark({ name: "a", url: "https://a.example.com" });
+    const result = service.deleteBookmarksBulk(["gone", bookmark.id], ["missing-folder"]);
+    expect(result).toEqual({ folders: 0, bookmarks: 1 });
+    expect(service.snapshot().bookmarks).toEqual([]);
+  });
+
+  it("does not delete a picked bookmark living in an unpicked folder twice", () => {
+    const folder = service.saveBookmarkFolder({ name: "工作" });
+    const one = service.saveBookmark({ name: "a", url: "https://a.example.com", folderId: folder.id });
+    const two = service.saveBookmark({ name: "b", url: "https://b.example.com", folderId: folder.id });
+    // One picked bookmark inside a folder that stays: the folder survives with
+    // its other bookmark, and the count names pages, not folders.
+    const result = service.deleteBookmarksBulk([one.id], []);
+    expect(result).toEqual({ folders: 0, bookmarks: 1 });
+    expect(service.snapshot().bookmarks.map((item) => item.id)).toEqual([two.id]);
+    expect(service.snapshot().bookmarkFolders).toHaveLength(1);
+  });
 });
 
 describe("bookmark and folder ordering", () => {

@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BookmarkSourceKind, Platform } from "@shared/types";
+import { t } from "./i18n/translate";
 
 /**
  * Reads the bookmark files of installed browsers so Ensemble can import them.
@@ -75,7 +76,7 @@ const CHROMIUM_BROWSERS: Array<{
 ];
 
 function labelChromiumProfile(dirName: string): string {
-  if (dirName === "Default") return "默认配置";
+  if (dirName === "Default") return t("bookmarks.defaultProfile");
   const match = /^Profile (.+)$/.exec(dirName);
   return match ? `Profile ${match[1]}` : dirName;
 }
@@ -143,7 +144,7 @@ function walkChromium(node: unknown): BookmarkImportNode[] {
   }
   const mapped = children.flatMap(walkChromium);
   if (!mapped.length) return [];
-  return [{ name: name || "未命名文件夹", children: mapped }];
+  return [{ name: name || t("bookmarks.untitledFolder"), children: mapped }];
 }
 
 /** Chromium profile directories under one User Data root that hold bookmarks. */
@@ -262,7 +263,7 @@ function walkFirefox(parentId: number, childrenOf: Map<number, PlacesRow[]>): Bo
     const name = (row.title ?? "").trim().slice(0, 120);
     if (row.type === 2) {
       const children = walkFirefox(row.id, childrenOf);
-      if (children.length) out.push({ name: name || "未命名文件夹", children });
+      if (children.length) out.push({ name: name || t("bookmarks.untitledFolder"), children });
     } else if (row.type === 1 && row.url && /^https?:\/\//i.test(row.url)) {
       if (name) out.push({ name, url: row.url });
     }

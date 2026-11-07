@@ -1328,6 +1328,48 @@ export class WorkspaceService {
     this.persist();
   }
 
+  /**
+   * Deletes a hand-picked selection in one pass.
+   *
+   * Folders go with their whole subtree. The single-folder rule re-parents
+   * survivors because one delete is a pure reorganisation the user can undo by
+   * hand; a picked *set* is a statement that the entries are unwanted, and
+   * pouring the contents of every picked folder back onto the list the user is
+   * emptying would make clearing a tree a two-step chore. Unknown ids are
+   * skipped, so the caller can send the raw selection without pre-filtering.
+   * One persist for the whole batch.
+   */
+  deleteBookmarksBulk(
+    bookmarkIds: string[],
+    folderIds: string[],
+  ): { folders: number; bookmarks: number } {
+    const doomed = new Set(folderIds);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const folder of this.data.bookmarkFolders) {
+        if (folder.parentId && doomed.has(folder.parentId) && !doomed.has(folder.id)) {
+          doomed.add(folder.id);
+          grew = true;
+        }
+      }
+    }
+    const ids = new Set(bookmarkIds);
+    const bookmarksBefore = this.data.bookmarks.length;
+    const foldersBefore = this.data.bookmarkFolders.length;
+    this.data.bookmarks = this.data.bookmarks.filter(
+      (item) => !ids.has(item.id) && !(item.folderId && doomed.has(item.folderId)),
+    );
+    this.data.bookmarkFolders = this.data.bookmarkFolders.filter((item) => !doomed.has(item.id));
+    this.persist();
+    // Counts come from the arrays themselves: a picked id that names nothing
+    // deletes nothing and must not be counted as a folder.
+    return {
+      folders: foldersBefore - this.data.bookmarkFolders.length,
+      bookmarks: bookmarksBefore - this.data.bookmarks.length,
+    };
+  }
+
   /** Moves a bookmark to an explicit position and renumbers the rest. */
   moveBookmark(id: string, toIndex: number): void {
     const from = this.data.bookmarks.findIndex((item) => item.id === id);

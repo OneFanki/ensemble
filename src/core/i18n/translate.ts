@@ -1,7 +1,15 @@
 export type CoreLocale = "zh" | "en";
 
-const messages = {
+/**
+ * Exported so the test suite can assert both trees stay key-aligned — the
+ * runtime `t()` falls back to zh silently, so a key missing from en would
+ * otherwise ship as Chinese text in the English UI (exactly how the default
+ * tab label did).
+ */
+export const messages = {
   zh: {
+    "page.untitled": "新标签页",
+    "tab.unnamed": "标签页",
     "menu.settings": "设置…",
     "menu.window": "窗口",
     "vault.basicText":
@@ -45,8 +53,12 @@ const messages = {
     "auth.missingFields": "未找到字段：{fields}",
     "auth.unmatchedFields": "页面还有未配置的字段：{fields}",
     "instance.cleanLabel": "干净会话",
+    "bookmarks.defaultProfile": "默认配置",
+    "bookmarks.untitledFolder": "未命名文件夹",
   },
   en: {
+    "page.untitled": "New tab",
+    "tab.unnamed": "Tab",
     "menu.settings": "Settings…",
     "menu.window": "Window",
     "vault.basicText":
@@ -95,6 +107,8 @@ const messages = {
     "auth.missingFields": "Fields not found: {fields}",
     "auth.unmatchedFields": "Unconfigured fields on the page: {fields}",
     "instance.cleanLabel": "Clean session",
+    "bookmarks.defaultProfile": "Default profile",
+    "bookmarks.untitledFolder": "Untitled folder",
   },
 } as const;
 

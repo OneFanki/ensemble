@@ -170,6 +170,13 @@ export interface EmbeddedState {
   activeTabId?: string;
   activeViewId?: string;
   /**
+   * True while docked DevTools panels are stepped aside for a stage-covering
+   * menu (see `setDevtoolsParked`). The panels are native views that no HTML
+   * can stack over, so while the flag holds they are parked off-screen; the
+   * per-tab `devtoolsOpen` flags keep reporting true.
+   */
+  devtoolsParked?: boolean;
+  /**
    * What draws the pages.
    *
    * `native` is a main-process view composited above the app's HTML; `guest` is a

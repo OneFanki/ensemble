@@ -47,6 +47,11 @@ export const useEmbeddedStore = defineStore("embedded", () => {
 
   function setStageMenu(open: boolean): void {
     stageMenuOpen.value = open;
+    // A docked DevTools panel is a native view: HTML stacks under it, so a menu
+    // opening across it would be buried mid-list. The panel steps aside for as
+    // long as any stage-covering menu is up, and returns when the last one
+    // closes (main is idempotent per call).
+    void window.ensemble.setDevtoolsParked(open);
   }
 
   /** Resolves once the stage has been captured and the pages parked. */
@@ -76,6 +81,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
    */
   function coverStage(): Promise<void> {
     stageMenuOpen.value = true;
+    void window.ensemble.setDevtoolsParked(true);
     if (!stageMounted.value || !tabs.value.length) return Promise.resolve();
     return new Promise((done) => {
       coverDone = done;

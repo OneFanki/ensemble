@@ -230,6 +230,8 @@ export const IPC = {
   embeddedViewCreate: "embedded:view-create",
   /** Launches several identities into one scratch view; owned by the main process. */
   embeddedLaunchBatch: "embedded:launch-batch",
+  /** Renderer → main: a stage-covering menu is up; docked DevTools step aside. */
+  embeddedDevtoolsPark: "embedded:devtools-park",
   embeddedViewLayout: "embedded:view-layout",
   /** Groups every loose page into a new view with this layout. */
   embeddedGroupLoose: "embedded:group-loose",
@@ -628,6 +630,12 @@ export interface EnsembleApi {
    * by index, and rolled back together when one fails.
    */
   launchEmbeddedIdentities(identityIds: string[]): Promise<EmbeddedState>;
+  /**
+   * Parks (or restores) every docked DevTools panel. Called while a menu that
+   * reaches the stage is open: the panel is a native view and would bury the
+   * menu's HTML no matter what z-index it claimed.
+   */
+  setDevtoolsParked(parked: boolean): Promise<void>;
   setEmbeddedViewLayout(viewId: string, layoutId: LayoutId): Promise<EmbeddedState>;
   /** Groups every loose page into a new view with this layout; returns its id. */
   groupLooseTabs(layoutId: LayoutId): Promise<string | undefined>;

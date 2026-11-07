@@ -543,6 +543,35 @@ try {
   );
   check("F12 again closes DevTools", f12Closed === false, f12Closed);
 
+  // --- A stage-covering menu parks the docked panel ------------------------
+  //
+  // The panel is a native view stacked over everything the renderer draws, so
+  // a dropdown opening across it would be buried mid-list. The flag surfaces
+  // in the shared state; the panel itself cannot be screenshotted (it is a
+  // main-process view, invisible to the renderer's CDP capture).
+  await pressF12("a");
+  await new Promise((r) => setTimeout(r, 900));
+  const parkedFlag = await client.evaluate(`(async () => {
+    const read = async () => (await window.ensemble.getEmbeddedState()).devtoolsParked ?? false;
+    const before = await read();
+    await window.ensemble.setDevtoolsParked(true);
+    await new Promise((r) => setTimeout(r, 300));
+    const whileParked = await read();
+    await window.ensemble.setDevtoolsParked(false);
+    await new Promise((r) => setTimeout(r, 300));
+    const after = await read();
+    return { before, whileParked, after };
+  })()`);
+  check(
+    "a stage-covering menu parks the docked panel and gives it back",
+    parkedFlag?.before === false &&
+      parkedFlag?.whileParked === true &&
+      parkedFlag?.after === false,
+    parkedFlag,
+  );
+  await pressF12("a");
+  await new Promise((r) => setTimeout(r, 900));
+
   // --- F5 inside the panel reloads the page, not the front-end -------------
   //
   // The gesture has to keep working (Chrome reloads the inspected page when the

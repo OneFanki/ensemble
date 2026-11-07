@@ -39,6 +39,7 @@
 - 修复：登录弹窗里服务器返回的中文保护区域说明显示为乱码，现在自动还原。
 - 浅色主题的主色重做：按钮和高亮改用亮琥珀配深色文字，链接与彩色文字用专门的金色，不再是浑浊的深褐色。
 - 设置页的常规选项按「外观 / 浏览 / 启动与填充 / 应用 / 工具」分节，长列表有了层次。
+- 修复：页面停着开发者工具面板时，工具栏下拉菜单会被面板盖住看不全——菜单打开期间面板自动让位，关闭后回到原位。
 
 ### English
 
@@ -59,6 +60,7 @@
 - Fixed: the sign-in dialog showed a server's non-ASCII realm as mojibake; it is now recovered automatically.
 - The light theme's accent is redone: buttons and highlights use bright amber with dark text, links and coloured text use a dedicated deep gold — no more muddy brown.
 - The settings page's general options are grouped into sections (Appearance / Browsing / Launch & fill / Application / Tools), giving the long list some hierarchy.
+- Fixed: with a docked DevTools panel open, the toolbar's dropdown menu was buried under it — the panel now steps aside while a menu is up and returns to its place when the menu closes.
 
 ## [1.4.0] - 2026-11-03
 

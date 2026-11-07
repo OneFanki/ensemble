@@ -440,6 +440,8 @@ export class EmbeddedBrowser {
    */
   private stateHold = 0;
   private stateHeld = false;
+  /** True while a stage-covering menu has the docked DevTools panels parked. */
+  private devtoolsParked = false;
   private viewSeq = 0;
   /**
    * Rebuilds in flight, one per page at most.
@@ -614,6 +616,7 @@ export class EmbeddedBrowser {
       views: this.views.map((view) => this.describeView(view)),
       ...(this.activeTabId ? { activeTabId: this.activeTabId } : {}),
       ...(this.activeViewId ? { activeViewId: this.activeViewId } : {}),
+      ...(this.devtoolsParked ? { devtoolsParked: true } : {}),
       carrier: "guest",
     };
   }
@@ -3694,6 +3697,13 @@ export class EmbeddedBrowser {
     const devtools = tab.devtools;
     const host = this.host;
     if (!devtools || !host || host.isDestroyed()) return;
+    // A stage-covering menu is up: stay parked until the cover ends (see
+    // `setDevtoolsParked`), or the next layout pass would resurface the panel
+    // right through the menu.
+    if (this.devtoolsParked) {
+      this.parkDevTools(tab);
+      return;
+    }
     let rect = this.cellOf(tab);
     if (!rect && forOpening) {
       const reported = tab.view.getBounds();
@@ -3737,6 +3747,25 @@ export class EmbeddedBrowser {
     const devtools = tab.devtools;
     if (!devtools) return;
     devtools.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  /**
+   * Steps every docked panel aside while a menu that reaches the stage is up.
+   *
+   * The panel is a native `WebContentsView`: it stacks over everything the
+   * renderer draws, so a dropdown opening across it is buried mid-list no
+   * matter what z-index the menu claims (the same physics that once required
+   * the page surface itself to yield). Parked panels come back with the next
+   * layout pass, which is why the flag is checked inside `placeDevTools`.
+   */
+  setDevtoolsParked(parked: boolean): void {
+    if (this.devtoolsParked === parked) return;
+    this.devtoolsParked = parked;
+    for (const tab of this.tabs) {
+      if (!tab.devtools) continue;
+      if (parked) this.parkDevTools(tab);
+      else this.placeDevTools(tab);
+    }
   }
 
   /**

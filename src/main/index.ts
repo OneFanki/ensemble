@@ -3238,8 +3238,11 @@ function registerIpc(workspace: WorkspaceService): void {
     browser.focusPage();
     return state;
   });
-  handle(IPC.embeddedLaunchBatch, async (identityIds: string[]) => {
-    const browser = ensureEmbeddedBrowser();
+  handle(IPC.embeddedDevtoolsPark, (parked: boolean) => {
+    ensureEmbeddedBrowser().setDevtoolsParked(Boolean(parked));
+  });
+
+  handle(IPC.embeddedLaunchBatch, async (identityIds: string[]) => {    const browser = ensureEmbeddedBrowser();
     if (!service) throw new Error("工作区未就绪");
     const members = (Array.isArray(identityIds) ? identityIds : [])
       .map((id) => service?.findIdentity(String(id)))

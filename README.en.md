@@ -92,7 +92,7 @@ Site 1—N identities, site 1—N views. A view is optional: without one the sur
 The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from Settings whenever you like.
 
 <p align="center">
-  <img src="docs/screenshots/browser-en.png" alt="Browser page: a 2×2 view and the running dock" width="900" />
+  <img src="docs/screenshots/browser-en.png" alt="Workbench: four identities side by side in a 2×2 view — admin, member, guest and reviewer each see a different console" width="900" />
 </p>
 
 **The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, sites, identities, views, flows, tags, bookmarks, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch: it only shows or hides the column, and never changes how many cells the stage is split into.

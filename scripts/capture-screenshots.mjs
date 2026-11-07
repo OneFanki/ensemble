@@ -46,10 +46,305 @@ const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"
 <path d="M9 22V10h4l3 7 3-7h4v12h-3v-8l-3 7h-1l-3-7v8z" fill="#fff"/>
 </svg>`;
 
+/**
+ * Four role consoles for the hero shot: the whole product is "same system,
+ * different identities see different things", so the four cells of the 2×2
+ * view each render a different role's console — menus, cards, table rows and
+ * action buttons all differ, and every page carries its identity badge in the
+ * identity colour the running dock uses for the same account.
+ */
+const ROLE_PAGES = {
+  admin: {
+    accent: "#d9a13c",
+    zh: {
+      role: "管理员 · 主账号",
+      heading: "用户管理",
+      menu: ["总览", "用户管理", "订单", "财务", "系统设置"],
+      cards: [
+        ["用户总数", "1,284"],
+        ["今日活跃", "356"],
+        ["本月收入", "¥86,400"],
+        ["异常登录", "2"],
+      ],
+      columns: ["用户", "角色", "状态", ""],
+      rows: [
+        ["李明 · 运营", "成员", "启用", "ok"],
+        ["王芳 · 市场", "成员", "启用", "ok"],
+        ["赵强 · 实习", "访客", "停用", "bad"],
+        ["陈静 · 财务", "审核", "启用", "ok"],
+      ],
+      primary: "新增用户",
+      rowActions: ["编辑", "删除"],
+      rowDanger: "删除",
+    },
+    en: {
+      role: "Admin · primary",
+      heading: "Users",
+      menu: ["Overview", "Users", "Orders", "Billing", "System"],
+      cards: [
+        ["Total users", "1,284"],
+        ["Active today", "356"],
+        ["Revenue MTD", "$86,400"],
+        ["Suspicious logins", "2"],
+      ],
+      columns: ["User", "Role", "Status", ""],
+      rows: [
+        ["Li Ming · Ops", "Member", "Active", "ok"],
+        ["Wang Fang · Growth", "Member", "Active", "ok"],
+        ["Zhao Qiang · Intern", "Guest", "Disabled", "bad"],
+        ["Chen Jing · Finance", "Reviewer", "Active", "ok"],
+      ],
+      primary: "New user",
+      rowActions: ["Edit", "Delete"],
+      rowDanger: "Delete",
+    },
+  },
+  member: {
+    accent: "#2f9e8f",
+    zh: {
+      role: "成员 · 子账号",
+      heading: "我的订单",
+      menu: ["总览", "我的订单", "个人设置"],
+      cards: [
+        ["我的订单", "32"],
+        ["进行中", "5"],
+        ["本月提成", "¥4,280"],
+        ["好评率", "98%"],
+      ],
+      columns: ["订单号", "金额", "状态"],
+      rows: [
+        ["ORD-10241", "¥1,280", "进行中", "warn"],
+        ["ORD-10233", "¥860", "已完成", "ok"],
+        ["ORD-10218", "¥2,400", "已完成", "ok"],
+        ["ORD-10196", "¥540", "已取消", "bad"],
+      ],
+      primary: "导出明细",
+      notice: "部分字段仅管理员可见",
+    },
+    en: {
+      role: "Member",
+      heading: "My orders",
+      menu: ["Overview", "My orders", "Profile"],
+      cards: [
+        ["My orders", "32"],
+        ["In progress", "5"],
+        ["Commission MTD", "$4,280"],
+        ["Approval rate", "98%"],
+      ],
+      columns: ["Order", "Amount", "Status"],
+      rows: [
+        ["ORD-10241", "$1,280", "In progress", "warn"],
+        ["ORD-10233", "$860", "Completed", "ok"],
+        ["ORD-10218", "$2,400", "Completed", "ok"],
+        ["ORD-10196", "$540", "Cancelled", "bad"],
+      ],
+      primary: "Export",
+      notice: "Some fields are only visible to admins",
+    },
+  },
+  review: {
+    accent: "#d05070",
+    zh: {
+      role: "审核员",
+      heading: "审核队列",
+      menu: ["审核队列", "申诉处理"],
+      cards: [
+        ["待审核", "12"],
+        ["今日已审", "34"],
+        ["平均耗时", "4.2 分钟"],
+        ["申诉中", "3"],
+      ],
+      columns: ["条目", "提交人", "操作"],
+      rows: [
+        ["新专辑《回响》封面", "星辰传媒", "ok"],
+        ["单曲《夜航》歌词", "蓝鲸文化", "ok"],
+        ["厂牌主页改版", "南山出版", "warn"],
+        ["活动海报 #4471", "远声唱片", "warn"],
+      ],
+    },
+    en: {
+      role: "Reviewer",
+      heading: "Review queue",
+      menu: ["Review queue", "Appeals"],
+      cards: [
+        ["Pending", "12"],
+        ["Reviewed today", "34"],
+        ["Avg. time", "4.2 min"],
+        ["Appeals", "3"],
+      ],
+      columns: ["Item", "Submitter", "Action"],
+      rows: [
+        ["Album cover “Echo”", "Starline Media", "ok"],
+        ["Lyrics “Night Flight”", "Blue Whale", "ok"],
+        ["Label site revamp", "Nanshan Press", "warn"],
+        ["Poster #4471", "Yuansheng", "warn"],
+      ],
+    },
+  },
+  guest: {
+    accent: "#7d6ee0",
+    zh: {
+      role: "访客",
+      heading: "总览",
+      menu: ["总览"],
+      cards: [
+        ["用户总数", "——"],
+        ["今日活跃", "——"],
+        ["本月收入", "——"],
+        ["异常登录", "——"],
+      ],
+      columns: ["用户", "角色", "状态"],
+      rows: [
+        ["******", "成员", "只读", "muted"],
+        ["******", "成员", "只读", "muted"],
+        ["******", "审核", "只读", "muted"],
+        ["******", "访客", "只读", "muted"],
+      ],
+      notice: "当前为只读身份，数据已脱敏",
+    },
+    en: {
+      role: "Guest",
+      heading: "Overview",
+      menu: ["Overview"],
+      cards: [
+        ["Total users", "——"],
+        ["Active today", "——"],
+        ["Revenue MTD", "——"],
+        ["Suspicious logins", "——"],
+      ],
+      columns: ["User", "Role", "Status"],
+      rows: [
+        ["******", "Member", "Read-only", "muted"],
+        ["******", "Member", "Read-only", "muted"],
+        ["******", "Reviewer", "Read-only", "muted"],
+        ["******", "Guest", "Read-only", "muted"],
+      ],
+      notice: "Read-only identity — data is masked",
+    },
+  },
+};
+
+/**
+ * One role console, sized for the cell it lives in: the 2×2 grid gives each
+ * page roughly 570×370, so the layout is a narrow sidebar, a 2×2 card grid and
+ * a three-to-four column table — no horizontal scroll, nothing clipped. Every
+ * page carries its identity badge in the same colour the running dock uses for
+ * that account, which is what makes the four cells read as four accounts.
+ */
+function renderRole(role, lang) {
+  const page = ROLE_PAGES[role][lang];
+  const t = lang === "en" ? "Back office" : "后台系统";
+
+  const menuItems = page.menu
+    .map(
+      (item, index) =>
+        `<a class="${index === (role === "review" ? 0 : 1) ? "on" : ""}">${index === 0 ? "◈" : "▫"} ${item}</a>`,
+    )
+    .join("");
+
+  const cards = page.cards
+    .map(
+      ([label, value]) =>
+        `<div class="card"><span class="card-label">${label}</span><span class="card-value">${value}</span></div>`,
+    )
+    .join("");
+
+  // Each role's table has its own shape, built per role so the columns stay
+  // readable at this width.
+  const status = (text, tone) => `<span class="status ${tone}"><i></i>${text}</span>`;
+  let rows = "";
+  if (role === "admin") {
+    const actions = `<span class="row-actions"><button class="mini">${page.rowActions[0]}</button><button class="mini danger">${page.rowActions[1]}</button></span>`;
+    rows = page.rows
+      .map(
+        ([who, kind, state, tone]) =>
+          `<tr><td>${who}</td><td>${kind}</td><td>${status(state, tone)}</td><td>${actions}</td></tr>`,
+      )
+      .join("");
+  } else if (role === "member") {
+    rows = page.rows
+      .map(
+        ([order, amount, state, tone]) =>
+          `<tr><td class="mono">${order}</td><td class="mono">${amount}</td><td>${status(state, tone)}</td></tr>`,
+      )
+      .join("");
+  } else if (role === "review") {
+    const actions = `<span class="row-actions"><button class="mini ok">${lang === "en" ? "Approve" : "通过"}</button><button class="mini danger">${lang === "en" ? "Reject" : "驳回"}</button></span>`;
+    rows = page.rows
+      .map(([item, by]) => `<tr><td>${item}</td><td>${by}</td><td>${actions}</td></tr>`)
+      .join("");
+  } else {
+    rows = page.rows
+      .map(([who, kind, state, tone]) => `<tr><td>${who}</td><td>${kind}</td><td>${status(state, tone)}</td></tr>`)
+      .join("");
+  }
+
+  const notice = page.notice ? `<div class="notice"><i>ⓘ</i>${page.notice}</div>` : "";
+  const primary = page.primary
+    ? `<div class="head-actions"><button class="primary">${page.primary}</button></div>`
+    : "";
+
+  return `<!doctype html><html lang="${lang === "en" ? "en" : "zh-CN"}"><head><meta charset="utf-8"><title>${page.role} · ${t}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+*{box-sizing:border-box}
+body{font:11px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:#12161c;color:#e6ecf3;display:flex;height:100vh;overflow:hidden}
+aside{width:92px;flex:none;background:#161b22;border-right:1px solid #232b35;padding:10px 7px;display:flex;flex-direction:column;gap:2px}
+.brand{font-size:11px;font-weight:600;letter-spacing:.3px;padding:1px 7px 10px;color:#e6ecf3;white-space:nowrap}
+.menu{display:flex;flex-direction:column;gap:2px}
+aside a{color:#8b99a9;text-decoration:none;font-size:10.5px;padding:6px 8px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside a.on{background:color-mix(in srgb,{{ACCENT}} 16%,transparent);color:{{ACCENT}};font-weight:600}
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #232b35}
+header h1{font-size:13px;font-weight:600;margin:0}
+.head-actions{display:flex;gap:6px;margin-left:auto}
+.primary{background:{{ACCENT}};color:#141414;border:0;border-radius:6px;padding:4px 11px;font-size:10.5px;font-weight:600}
+.badge{display:flex;align-items:center;gap:6px;background:#1a212a;border:1px solid #2a3340;border-radius:999px;padding:3px 10px 3px 7px;font-size:10.5px;color:#c8d2dd;flex:none;margin-left:${page.primary ? "0" : "auto"}}
+.content{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.card{background:#1a2029;border:1px solid #242d38;border-radius:8px;padding:8px 11px;display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}
+.card-label{font-size:10px;color:#8b99a9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-value{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.notice{display:flex;align-items:center;gap:6px;background:color-mix(in srgb,{{ACCENT}} 10%,#1a2029);border:1px solid color-mix(in srgb,{{ACCENT}} 30%,transparent);border-radius:7px;padding:6px 10px;font-size:10.5px;color:#c8d2dd}
+.notice i{font-style:normal;color:{{ACCENT}}}
+.table{background:#1a2029;border:1px solid #242d38;border-radius:8px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th{text-align:left;font-weight:500;color:#8b99a9;padding:6px 10px;border-bottom:1px solid #242d38;font-size:10px;white-space:nowrap}
+td{padding:6px 10px;border-bottom:1px solid #1d242e;color:#c8d2dd;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.mono{font-variant-numeric:tabular-nums}
+.status{display:inline-flex;align-items:center;gap:5px}
+.status i{width:6px;height:6px;border-radius:50%;flex:none}
+.status.ok i{background:#4caf7d}.status.warn i{background:#d9a13c}.status.bad i{background:#d05070}.status.muted i{background:#5b6672}
+.status.muted{color:#8b99a9}
+.row-actions{display:inline-flex;gap:5px}
+.mini{background:#232b35;color:#c8d2dd;border:0;border-radius:5px;padding:2px 8px;font-size:10px}
+.mini.danger{color:#e08598}
+.mini.ok{color:#6cc49a}
+</style></head><body>
+<aside><div class="brand">${t}</div><nav class="menu">${menuItems}</nav></aside>
+<main><header><h1>${page.heading}</h1>${primary}<span class="badge"><i></i>${page.role}</span></header>
+<div class="content">
+<div class="cards">${cards}</div>
+${notice}
+<div class="table"><table><thead><tr>${page.columns.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>
+</div></main></body></html>`.replaceAll("{{ACCENT}}", ROLE_PAGES[role].accent);
+}
+
+
 const demoPage = createServer((req, res) => {
   if (req.url === "/favicon.svg") {
     res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "max-age=300" });
     res.end(FAVICON_SVG);
+    return;
+  }
+  // Role consoles for the hero shot: /admin /member /guest /review render four
+  // different views of the same system, `?l=en` switches the copy.
+  const roleMatch = (req.url ?? "/").match(/^\/(admin|member|guest|review)\b/);
+  if (roleMatch) {
+    const lang = new URL(req.url ?? "/", `http://127.0.0.1:${PAGE_PORT}`).searchParams.get("l");
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(renderRole(roleMatch[1], lang === "en" ? "en" : "zh"));
     return;
   }
   const who = decodeURIComponent((req.url ?? "/").split("/")[1] || "console");
@@ -261,6 +556,12 @@ async function seed(userData, locale, theme = "dark") {
 
   const siteId = uuid(1);
   const secondId = uuid(9);
+  // Each identity lands on its own role console, so the hero shot's 2×2 shows
+  // four different views of one system — the product's whole claim.
+  const rolePaths =
+    locale === "en"
+      ? ["/admin?l=en", "/member?l=en", "/guest?l=en", "/review?l=en"]
+      : ["/admin", "/member", "/guest", "/review"];
   const identities = demo.people.map(([name, username, role, color], index) => ({
     id: uuid(index + 2),
     siteId,
@@ -270,7 +571,7 @@ async function seed(userData, locale, theme = "dark") {
     color,
     passwordMode: "inherit",
     status: "unknown",
-    startPath: "/",
+    startPath: rolePaths[index],
     // Spread the two extra tags across accounts so the filter strip and the tag
     // page show real usage instead of a row of zeros.
     tagIds: index === 1 ? [uuid(11)] : index === 2 ? [uuid(12)] : [],
@@ -520,7 +821,19 @@ async function capture(shot) {
 
     const client = await connect(target.webSocketDebuggerUrl);
     await wait(3000);
-    await client.send("Emulation.setDeviceMetricsOverride", { ...VIEWPORT, mobile: false });
+    // Before any override, window.devicePixelRatio is the machine's real scale,
+    // and the webview guests run at that same scale. Setting the host override
+    // to *this* value — not to 2 — is what keeps the guests' pixels 1:1 with
+    // the host composite: overriding mid-run after the guests already painted
+    // leaves them magnified, and a guest's own override does not stick.
+    const nativeScale = await client.evaluate(`window.devicePixelRatio`);
+    const deviceScale = typeof nativeScale === "number" && nativeScale > 0 ? nativeScale : 1;
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: VIEWPORT.width,
+      height: VIEWPORT.height,
+      deviceScale,
+      mobile: false,
+    });
     await wait(700);
 
     // Manage the browser page's tabs so the browser shot shows a full 2×2 view.
@@ -623,7 +936,7 @@ async function capture(shot) {
       // (view opened, dock collapsed) moves the stage, and main places the page
       // nodes from the rect it was last given — capturing before that lands
       // leaves every cell at the old width.
-      await client.evaluate(`(async () => {
+      const stageReport = await client.evaluate(`(async () => {
         const stage = document.querySelector('.stage');
         if (!stage) return false;
         const box = stage.getBoundingClientRect();
@@ -638,8 +951,20 @@ async function capture(shot) {
         await new Promise((r) => requestAnimationFrame(r));
         await new Promise((r) => requestAnimationFrame(r));
         await new Promise((r) => setTimeout(r, 600));
-        return true;
+        const nodes = [...document.querySelectorAll('.guest-pool webview')].map((w) => ({
+          src: w.getAttribute('src') ?? '',
+          styleW: w.style.width,
+          styleH: w.style.height,
+          rectW: Math.round(w.getBoundingClientRect().width),
+          dpr: window.devicePixelRatio,
+        }));
+        return { nodes, stageZoom: window.devicePixelRatio };
       })()`);
+      console.log("  stage report:", JSON.stringify(stageReport));
+
+      // webview guests paint at the machine's scale the host override was set
+      // to (see the nativeScale note above), so no per-guest fixup is needed
+      // here — only the stage re-report above, which this shot already did.
     } else {
       // The app opens on the browser page, and the sidebar only appears once
       // something beside the page is open — so the app menu is what brings the

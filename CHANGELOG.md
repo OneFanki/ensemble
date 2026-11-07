@@ -22,11 +22,39 @@
 
 ### 中文
 
-- 暂无
+- 点击账号或视图启动后立即切换到浏览器页，页面在后台继续加载，不再等加载完成才跳转。
+- 多选批量启动同样立即切换：新视图的空格子先出现，四个账号的页面随加载逐格点亮，不再整批静默等待。
+- 书签管理页支持多选批量删除：工具栏进入「多选」，选中多个文件夹和书签一次删除，文件夹连同其中全部内容一起移除。
+- 批量启动时舞台底部显示启动进度（如「正在启动 3/8」），不再静默等待。
+- 书签管理页的行内操作按钮改为跟随行内容显示，宽窗口下不再出现在屏幕最右缘。
+- 修复：拖动 DevTools 停靠分隔条时，被测页面现在实时跟随，不再等松手才对齐。
+- 顶部标签条可以拖动标签调整顺序，鼠标中键点击标签即可关闭（格位里的标签条同样支持中键关闭）。
+- 修复：把某一格正在显示的页拖到同一账号的另一格后，其中一格变成空白。
+- 英文界面下，应用自动生成的默认名称现在跟随界面语言：新标签页、无身份页面的占位名，以及从浏览器导入书签时的「默认配置」「未命名文件夹」，不再固定显示中文。
+- 修复：侧栏收起时的运行数角标被窗口顶边裁掉一半，现在完整显示在按钮右上角内。
+- 书签栏的文件夹面板有了最大高度：条目过多时在窗口内截断并滚动，不再戳出窗口底；二级及更深的面板改为贴着视口定位，父面板滚动时自动收起，不再被裁切或悬错位置。
+- 打开需要登录的网站（nginx 的 401 鉴权、代理认证）现在会弹出账号密码输入框，不再直接显示错误页；同一保护空间只在会话内询问一次，取消后短时间内不再重复打扰。凭据只在本进程内存中保存，退出即清除。
+- 运行坞里不属于任何视图的分组更名为「实例」：它们各自是独立的浏览器实例，而不是同一个窗口里的标签页。
+- 修复：批量启动时部分账号会先闪现在「实例」分组，随后才进入新视图——现在页面从创建起就归属目标视图，逐格点亮的过程不再路过实例分组。
+- 修复：登录弹窗里服务器返回的中文保护区域说明显示为乱码，现在自动还原。
 
 ### English
 
-- Nothing yet
+- Launching an account or a view now switches to the browser page right away while the page keeps loading in the background.
+- A multi-select batch launch switches immediately too: the new view's empty cells appear first and each page lights up as it loads, instead of waiting in silence for the whole batch.
+- The bookmark management page supports multi-select delete: enter "Select" from the toolbar, pick several folders and bookmarks, and remove them in one confirm — a picked folder goes away together with everything inside it.
+- A batch launch now shows its progress at the foot of the stage (like "Starting 3/8") instead of waiting in silence.
+- The bookmark management page's row actions now follow the row's content, so on a wide window they no longer appear at the far edge of the screen.
+- Fixed: while dragging the docked DevTools divider, the page now follows in real time instead of snapping into place on release.
+- Tabs in the top strip can be dragged to reorder, and a middle-click closes a tab (a cell's tab strip closes on middle-click too).
+- Fixed: dragging the page a cell was showing onto another cell of the same account left one cell blank.
+- In the English UI, names the app generates automatically now follow the interface language: the default new-tab label, the placeholder for a page without an identity, and the "Default profile" / "Untitled folder" names used when importing bookmarks — instead of always showing Chinese.
+- Fixed: the run-count badge on the collapsed sidebar was clipped in half by the window's top edge; it now sits fully inside the button's top-right corner.
+- Bookmark-bar folder panels now have a maximum height: long lists truncate inside the window and scroll instead of running past its bottom edge. Panels below the root level are pinned to the viewport and collapse when their parent scrolls, so they are no longer clipped or left behind.
+- Websites that require a sign-in (nginx's 401 authentication, proxy auth) now open a username-and-password dialog instead of showing the bare error page. Each protection space is asked about once per session, and dismissing it stays quiet for a while. Credentials are kept in process memory only and are gone when the app exits.
+- The group in the run dock for browser instances outside any view is now called "Instances": each row is an independent browser session, not a tab of one window.
+- Fixed: during a batch launch some accounts briefly flashed under the loose "Instances" group before joining the new view — pages now belong to their view from creation, and the cell-by-cell lighting no longer detours through the loose group.
+- Fixed: the sign-in dialog showed a server's non-ASCII realm as mojibake; it is now recovered automatically.
 
 ## [1.4.0] - 2026-11-03
 

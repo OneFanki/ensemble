@@ -226,6 +226,6 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .option[aria-selected="true"] {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 </style>

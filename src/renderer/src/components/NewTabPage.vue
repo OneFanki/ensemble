@@ -567,13 +567,13 @@ function openBookmark(bookmark: Bookmark): void {
 }
 
 .nt-engine-item.active {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .nt-check {
   width: 11px;
   flex: 0 0 11px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .nt-engine-item.add {
@@ -676,7 +676,7 @@ function openBookmark(bookmark: Bookmark): void {
   height: 34px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   flex: 0 0 34px;
 }
 

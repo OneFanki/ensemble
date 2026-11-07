@@ -62,7 +62,7 @@ import IconButton from "./ui/IconButton.vue";
   height: 26px;
   border-radius: 7px;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   flex: 0 0 26px;
 }
 

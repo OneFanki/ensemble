@@ -212,7 +212,7 @@ watch(
   align-items: center;
   gap: 4px;
   font-size: 10.5px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .more:hover {
@@ -228,7 +228,7 @@ watch(
 .warn {
   margin: 10px 0 0;
   font-size: 11px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .progress-block {

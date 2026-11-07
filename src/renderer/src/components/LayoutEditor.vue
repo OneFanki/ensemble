@@ -403,7 +403,7 @@ function submit() {
 }
 
 .slot.selected {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
 }
 

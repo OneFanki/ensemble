@@ -137,7 +137,7 @@ const { t } = useI18n();
   height: 30px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   flex: 0 0 30px;
 }
 

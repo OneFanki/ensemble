@@ -1204,7 +1204,7 @@ div.tree-row {
 
 .pick-box.on {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .row.picked {

@@ -336,7 +336,7 @@ import IconButton from "./ui/IconButton.vue";
   align-items: center;
   gap: 4px;
   font-size: 10px;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
   border-radius: 999px;
   padding: 2px 7px 2px 5px;

@@ -80,6 +80,6 @@ const hint = computed(() => props.title ?? props.ariaLabel);
 
 .icon-btn.active {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 </style>

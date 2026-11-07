@@ -855,7 +855,7 @@ async function confirmCopy(): Promise<void> {
 
 .m-open {
   font-size: 10px;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
   border-radius: 999px;
   padding: 1px 6px;
@@ -899,7 +899,7 @@ async function confirmCopy(): Promise<void> {
   align-items: center;
   gap: 5px;
   font-size: 10.5px;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .link-btn:hover {
@@ -932,7 +932,7 @@ async function confirmCopy(): Promise<void> {
 .layout-btn.on {
   color: var(--accent-foreground);
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   font-weight: 500;
 }
 
@@ -981,7 +981,7 @@ async function confirmCopy(): Promise<void> {
 }
 
 .slot.over {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
 }
 

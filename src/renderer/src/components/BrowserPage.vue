@@ -2817,7 +2817,7 @@ function fillMessage(reason?: string): string {
 
 .layout-btn.is-bench {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /*
@@ -3014,7 +3014,7 @@ function fillMessage(reason?: string): string {
   margin-right: 2px;
   border-radius: 50%;
   border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-text);
   animation: tabspin var(--motion-slow) linear infinite;
 }
 
@@ -3145,7 +3145,7 @@ function fillMessage(reason?: string): string {
 
 .app-menu-check {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* The native window controls are drawn over the window's top-right corner, and
@@ -3315,7 +3315,7 @@ function fillMessage(reason?: string): string {
    hovered. */
 .icon.active {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /*
@@ -3347,7 +3347,7 @@ function fillMessage(reason?: string): string {
 }
 
 .zoom-stepper.changed .zoom-value {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .zoom-step {
@@ -3397,7 +3397,7 @@ function fillMessage(reason?: string): string {
 }
 
 .viewport-btn.changed {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .viewport-tag {
@@ -3517,7 +3517,7 @@ function fillMessage(reason?: string): string {
   border: 0;
   background: none;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11px;
   cursor: pointer;
 }
@@ -3568,7 +3568,7 @@ function fillMessage(reason?: string): string {
 }
 
 .download-row.completed .download-name:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .download-sub {
@@ -3661,7 +3661,7 @@ function fillMessage(reason?: string): string {
 .address input:focus,
 .findbar input:focus {
   background: var(--chrome);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -3791,7 +3791,7 @@ function fillMessage(reason?: string): string {
 }
 
 .slot-empty.drop-target {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   box-shadow: inset 0 0 0 1px var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg));
 }
@@ -4064,7 +4064,7 @@ function fillMessage(reason?: string): string {
   width: 8px;
   height: 8px;
   border: 1.5px solid var(--line);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-text);
   border-radius: 50%;
   animation: spin var(--motion-slow) linear infinite;
 }
@@ -4109,7 +4109,7 @@ function fillMessage(reason?: string): string {
   flex: none;
   border-radius: 50%;
   border: 1.5px solid var(--line);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-text);
 }
 
 .empty {
@@ -4220,7 +4220,7 @@ function fillMessage(reason?: string): string {
 }
 
 .tab-menu-item.checked {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .viewport-custom {
@@ -4267,7 +4267,7 @@ function fillMessage(reason?: string): string {
 
 .viewport-apply:hover {
   color: var(--text);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .viewport-error {

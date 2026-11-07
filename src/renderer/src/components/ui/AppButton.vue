@@ -54,7 +54,7 @@ withDefaults(
    accent, because lighter means more prominent in dark and darker does in light. */
 .btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   color: var(--accent-foreground);
   font-weight: 500;
 }

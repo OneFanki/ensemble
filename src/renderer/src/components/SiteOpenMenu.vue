@@ -301,7 +301,7 @@ function openIdentity(identity: Identity): void {
 }
 
 .site-row.active .chev {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .site-icon,

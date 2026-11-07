@@ -50,7 +50,7 @@ textarea::placeholder {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -259,7 +259,7 @@ a {
  */
 .btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   color: var(--accent-foreground);
   font-weight: 500;
 }
@@ -295,7 +295,7 @@ a {
   align-items: center;
   gap: 4px;
   padding: 0;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11.5px;
 }
 

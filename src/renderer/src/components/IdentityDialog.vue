@@ -626,7 +626,7 @@ async function rebuildProfile() {
 .link-btn {
   align-self: flex-start;
   font-size: 11px;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   padding: 0;
 }

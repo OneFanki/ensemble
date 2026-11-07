@@ -293,7 +293,7 @@ function onKeydown(event: KeyboardEvent) {
 
 .check {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--accent-text);
   flex: 0 0 12px;
 }
 

@@ -352,7 +352,7 @@ const active = computed(() => GUIDE_SECTIONS.find((item) => item.id === section.
   flex: none;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent) 20%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 10px;
 }
 
@@ -389,7 +389,7 @@ const active = computed(() => GUIDE_SECTIONS.find((item) => item.id === section.
   flex: none;
   /* No top offset: the 20px icon centered against the title's ~19px line box
      needs none, and an optical nudge read as floating above the text. */
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .ai-copy {

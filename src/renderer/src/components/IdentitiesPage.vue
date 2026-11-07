@@ -805,7 +805,7 @@ function extraFacts(identity: Identity): string[] {
 }
 
 .tab.active .num {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .search {
@@ -846,7 +846,7 @@ function extraFacts(identity: Identity): string[] {
 
 .select-bar .link {
   font-size: 11.5px;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 
@@ -1130,7 +1130,7 @@ function extraFacts(identity: Identity): string[] {
 }
 
 .pick-mark.on {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   background: var(--accent);
 }
 
@@ -1228,7 +1228,7 @@ function extraFacts(identity: Identity): string[] {
 }
 
 .state.warn {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .state.warn .dot {

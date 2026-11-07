@@ -824,7 +824,7 @@ async function saveDraft() {
   padding: 1px 5px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .steps {

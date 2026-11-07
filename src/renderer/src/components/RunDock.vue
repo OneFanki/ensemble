@@ -1208,7 +1208,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   border-radius: var(--radius-sm);
   border: 0;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 10.5px;
   white-space: nowrap;
   cursor: pointer;
@@ -1548,7 +1548,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   flex: none;
   position: relative;
   font-size: 8.5px;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid color-mix(in srgb, var(--line) 55%, var(--accent));
   border-radius: 3px;
   padding: 0 3px;
@@ -1622,7 +1622,7 @@ async function openBlankInView(view: EmbeddedView): Promise<void> {
   width: 8px;
   height: 8px;
   border: 1.5px solid var(--line);
-  border-top-color: var(--accent);
+  border-top-color: var(--accent-text);
   border-radius: 50%;
   animation: spin var(--motion-slow) linear infinite;
   flex: none;

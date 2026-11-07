@@ -428,7 +428,7 @@ function startResize(event: PointerEvent): void {
 }
 
 .nav-item.active .nav-icon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .nav-icon {

@@ -56,6 +56,8 @@
 
   --accent: #e0a05a;
   --accent-strong: #efb571;
+  /* Text and fills are different constraints; on dark, both are the amber. */
+  --accent-text: #e0a05a;
   --accent-foreground: #1a1206;
   --accent-soft: rgb(224 160 90 / 14%);
   --green: #4fc79b;
@@ -213,18 +215,26 @@
   --dim: #6b7580;
   --faint: #7c8691;
 
-  --accent: #b05a20;
-  --accent-strong: #984a15;
-  --accent-foreground: #fffaf5;
-  --accent-soft: rgb(176 90 32 / 10%);
+  /*
+   * The accent on light splits in two, because one colour cannot both fill a
+   * button and carry text on white. Fills take the brand amber (bright, with a
+   * dark foreground on it); anything rendered as text or a glyph takes
+   * --accent-text, a deep gold that clears 4.5:1 on white. Forcing one value to
+   * do both is what made every selected control read as mud.
+   */
+  --accent: #d69a3e;
+  --accent-strong: #e2ab52;
+  --accent-text: #8a5c06;
+  --accent-foreground: #2e1f06;
+  --accent-soft: rgb(214 154 62 / 14%);
   --green: #0f7a57;
-  --amber: #95600f;
+  --amber: #8a5c06;
   --violet: #5b46b0;
   --rose: #b23f5c;
   --blue: #2b5fb8;
   --red: #b0342a;
 
-  --role-amber: #a86512;
+  --role-amber: #9a6a0c;
   --role-teal: #0f7a6c;
   --role-violet: #5b46b0;
   --role-rose: #b23f5c;

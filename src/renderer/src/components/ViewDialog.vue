@@ -495,7 +495,7 @@ function submit() {
 
 .layout-btn.on {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   color: var(--accent-foreground);
   font-weight: 500;
 }

@@ -807,6 +807,101 @@ try {
     dragged,
   );
 
+  // --- Bulk selection & delete ----------------------------------------------
+  // The emptying gesture, scoped to rows the scenario made: pick a folder and a
+  // bookmark, confirm once, and both are gone. A picked folder takes its whole
+  // subtree with it — the nested folder and the bookmark inside it disappear
+  // instead of re-parenting upward. The seeded tree around them survives, which
+  // is what lets the later strip and search scenarios keep running.
+  const bulk = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    // Make the rows this scenario owns, one level deep so the nested folder is
+    // never picked itself: its removal has to come from the subtree rule. The
+    // save calls resolve to snapshots, so the ids come from a fresh read.
+    await window.ensemble.saveBookmarkFolder({ name: '批量甲' });
+    let snap = await window.ensemble.getWorkspace();
+    const parentId = (snap.bookmarkFolders ?? []).find((f) => f.name === '批量甲')?.id;
+    await window.ensemble.saveBookmarkFolder({ name: '批量乙', parentId });
+    snap = await window.ensemble.getWorkspace();
+    const nestedId = (snap.bookmarkFolders ?? []).find((f) => f.name === '批量乙')?.id;
+    await window.ensemble.saveBookmark({
+      name: '批量内页',
+      url: 'https://bulk.example.com/inner',
+      folderId: nestedId,
+    });
+    await window.ensemble.saveBookmark({ name: '批量书签', url: 'https://bulk.example.com/top' });
+    document.querySelector('.bookmarks-page .tree .tree-row.root')?.click();
+    await wait(400);
+    const head = document.querySelector('.bookmarks-page .page-head');
+    [...(head?.querySelectorAll('button') ?? [])]
+      .find((button) => button.textContent.includes('多选'))
+      ?.click();
+    await wait(400);
+    const rows = [...document.querySelectorAll('.bookmarks-page .rows .row')];
+    rows.find((row) => row.querySelector('.row-name')?.textContent?.trim() === '批量甲')?.click();
+    rows.find((row) => row.querySelector('.row-name')?.textContent?.trim() === '批量书签')?.click();
+    await wait(300);
+    const pickedCount = document.querySelector('.bookmarks-page .pick-count')?.textContent?.trim() ?? '';
+    const pickBoxes = document.querySelectorAll('.bookmarks-page .rows .pick-box.on').length;
+    const deleteBtn = [...(head?.querySelectorAll('button') ?? [])].find(
+      (button) => button.textContent.trim() === '删除',
+    );
+    const deleteDisabled = deleteBtn?.disabled ?? null;
+    deleteBtn?.click();
+    await wait(600);
+    const confirmText = document.querySelector('.content')?.textContent ?? '';
+    const confirmBtns = [...document.querySelectorAll('.content .actions .btn')].map((button) =>
+      button.textContent.trim(),
+    );
+    [...document.querySelectorAll('.content .actions .btn')]
+      .find((button) => button.textContent.trim() === '删除')
+      ?.click();
+    await wait(800);
+    const state = await window.ensemble.getWorkspace();
+    const leftNames = (state.bookmarkFolders ?? []).map((folder) => folder.name);
+    const leftBookmarks = (state.bookmarks ?? []).map((item) => item.name);
+    const lastToast = [...document.querySelectorAll('.toast')].pop()?.textContent?.trim() ?? '';
+    const backToManage = [
+      ...(document.querySelector('.bookmarks-page .page-head')?.querySelectorAll('button') ?? []),
+    ].some((button) => button.textContent.includes('新建书签'));
+    return {
+      pickedCount,
+      pickBoxes,
+      deleteDisabled,
+      confirmText: confirmText.slice(0, 160),
+      confirmBtns,
+      confirmSaysPickedFolder: confirmText.includes('1 个文件夹'),
+      confirmSaysTwoBookmarks: confirmText.includes('2 个书签'),
+      leftNames,
+      leftBookmarks,
+      lastToast,
+      bulkGone:
+        !leftNames.includes('批量甲') &&
+        !leftNames.includes('批量乙') &&
+        !leftBookmarks.includes('批量内页') &&
+        !leftBookmarks.includes('批量书签'),
+      seedAlive: leftNames.includes('工作') && leftBookmarks.includes('改名后的书签'),
+      backToManage,
+    };
+  })()`);
+  check(
+    "picking mode selects the clicked rows and reports the count",
+    bulk?.pickedCount?.includes('2') === true && bulk?.pickBoxes === 2,
+    bulk,
+  );
+  check(
+    "the confirmation names the folders and the bookmarks it will remove",
+    bulk?.confirmSaysPickedFolder === true && bulk?.confirmSaysTwoBookmarks === true,
+    bulk,
+  );
+  check(
+    "one confirm takes the picked rows and the picked folder's subtree",
+    bulk?.bulkGone === true,
+    bulk,
+  );
+  check("the seeded tree around the selection survives the bulk delete", bulk?.seedAlive === true, bulk);
+  check("picking mode exits after the delete", bulk?.backToManage === true, bulk);
+
   // --- Import from an installed browser --------------------------------------
   // This machine has real Edge/Firefox profiles, so the dialog lists real
   // sources and importing one exercises the actual file parsing, sqlite copy

@@ -40,6 +40,8 @@
 - 浅色主题的主色重做：按钮和高亮改用亮琥珀配深色文字，链接与彩色文字用专门的金色，不再是浑浊的深褐色。
 - 设置页的常规选项按「外观 / 浏览 / 启动与填充 / 应用 / 工具」分节，长列表有了层次。
 - 修复：页面停着开发者工具面板时，工具栏下拉菜单会被面板盖住看不全——菜单打开期间面板自动让位，关闭后回到原位。
+- 新建页面的选择器底部现在并排提供「空白页」和「干净会话」：可以建一个用一次性会话的空标签页，用完即弃、不留登录状态。
+- 浅色主题的主色再提亮为明快的金黄（深色文字不变），按钮与选中态更清爽。
 
 ### English
 
@@ -61,6 +63,8 @@
 - The light theme's accent is redone: buttons and highlights use bright amber with dark text, links and coloured text use a dedicated deep gold — no more muddy brown.
 - The settings page's general options are grouped into sections (Appearance / Browsing / Launch & fill / Application / Tools), giving the long list some hierarchy.
 - Fixed: with a docked DevTools panel open, the toolbar's dropdown menu was buried under it — the panel now steps aside while a menu is up and returns to its place when the menu closes.
+- The page chooser's footer now offers "Blank page" and "Clean session" side by side: a blank tab in a throwaway session is a thing you can ask for, and nothing it picks up survives.
+- The light theme's accent is raised to a bright gold (the dark text on it unchanged), so buttons and selected states read crisp instead of muddy.
 
 ## [1.4.0] - 2026-11-03
 

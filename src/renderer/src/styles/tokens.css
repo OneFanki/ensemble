@@ -217,16 +217,18 @@
 
   /*
    * The accent on light splits in two, because one colour cannot both fill a
-   * button and carry text on white. Fills take the brand amber (bright, with a
-   * dark foreground on it); anything rendered as text or a glyph takes
-   * --accent-text, a deep gold that clears 4.5:1 on white. Forcing one value to
-   * do both is what made every selected control read as mud.
+   * button and carry text on white. Fills take the bright brand gold — the
+   * foreground on them is dark, so the fill is free to be luminous; anything
+   * rendered as text or a glyph takes --accent-text, a deep gold that clears
+   * 4.5:1 on white. Forcing one value to do both is what made every selected
+   * control read as mud. Hover goes *darker* on light (the more extreme
+   * direction), which keeps a pressed control reading as pressed.
    */
-  --accent: #d69a3e;
-  --accent-strong: #e2ab52;
+  --accent: #f3cb59;
+  --accent-strong: #e0b13a;
   --accent-text: #8a5c06;
   --accent-foreground: #2e1f06;
-  --accent-soft: rgb(214 154 62 / 14%);
+  --accent-soft: rgb(243 203 89 / 18%);
   --green: #0f7a57;
   --amber: #8a5c06;
   --violet: #5b46b0;

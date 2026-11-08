@@ -32,6 +32,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** The explicit "no account" choice: a blank page in the daily profile. */
   openBlank: [];
+  /** A blank page in a throwaway session: no account, nothing kept. */
+  openBlankClean: [];
   /** Open the site in the daily profile, reusing whatever login it has. */
   openDaily: [siteId: string];
   /** Open the site in a throwaway session. */
@@ -161,10 +163,11 @@ function openIdentity(identity: Identity): void {
     </div>
 
     <!--
-      A blank page belongs to no site, so it sits outside both columns, under its
-      own rule. Inside the account column it read as "the fourth thing you can
-      open in 后台管理", which is the one thing it is not — the empty page is what
-      you get when you want none of the above.
+      Blank pages belong to no site, so they sit outside both columns, under
+      their own rule — one for the daily profile, one for a throwaway session.
+      Inside the account column they would read as "the fourth thing you can
+      open in 后台管理", which is the one thing they are not: these are what you
+      get when you want none of the above.
     -->
     <div class="foot">
       <button type="button" class="account-row anonymous plain" @click="emit('openBlank')">
@@ -172,6 +175,17 @@ function openIdentity(identity: Identity): void {
         <span class="acc-copy">
           <span class="acc-name">{{ t("app.openBlankPage") }}</span>
           <span class="acc-note">{{ t("app.openBlankPageHint") }}</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        class="account-row anonymous dashed"
+        @click="emit('openBlankClean')"
+      >
+        <ShieldOff :size="11" />
+        <span class="acc-copy">
+          <span class="acc-name">{{ t("app.openSiteClean") }}</span>
+          <span class="acc-note">{{ t("app.openBlankCleanHint") }}</span>
         </span>
       </button>
     </div>
@@ -241,9 +255,14 @@ function openIdentity(identity: Identity): void {
   flex: 1 1 auto;
 }
 
-/* The blank-page row lives below both columns: it belongs to no site. */
+/* The blank-page rows live below both columns: they belong to no site. Two
+   side by side — the daily profile and the throwaway session are the same kind
+   of answer at the same level. */
 .foot {
   flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
   border-top: 1px solid var(--line-soft);
   padding: 5px;
 }

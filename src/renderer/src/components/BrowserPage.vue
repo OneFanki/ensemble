@@ -2194,6 +2194,7 @@ function fillMessage(reason?: string): string {
       </div>
       <OpenSiteButton
         @open-blank="store.openTab()"
+        @open-blank-clean="store.openCleanTab()"
         @open-daily="openSiteBookmark"
         @open-clean="openSiteClean"
         @open-identity="openIdentityBookmark"

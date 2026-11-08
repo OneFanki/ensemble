@@ -35,6 +35,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** A blank page in the daily profile was asked for by name. */
   openBlank: [];
+  /** A blank page in a throwaway session was asked for by name. */
+  openBlankClean: [];
   openDaily: [siteId: string];
   openClean: [siteId: string];
   openIdentity: [identityId: string];
@@ -141,6 +143,11 @@ function chooseBlank(): void {
   emit("openBlank");
 }
 
+function chooseBlankClean(): void {
+  open.value = false;
+  emit("openBlankClean");
+}
+
 function chooseDaily(siteId: string): void {
   open.value = false;
   emit("openDaily", siteId);
@@ -178,6 +185,7 @@ function chooseIdentity(identityId: string): void {
         :identities="store.identities"
         :locked-site-id="effectiveLock"
         @open-blank="chooseBlank"
+        @open-blank-clean="chooseBlankClean"
         @open-daily="chooseDaily"
         @open-clean="chooseClean"
         @open-identity="chooseIdentity"

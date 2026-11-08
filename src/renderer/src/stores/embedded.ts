@@ -228,6 +228,16 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     await window.ensemble.openEmbeddedTab({ viewId: null });
   }
 
+  /** The clean counterpart of `openTab`: a blank page in a throwaway session. */
+  async function openCleanTab(): Promise<void> {
+    await window.ensemble.openEmbeddedTab({ clean: true });
+  }
+
+  /** The clean counterpart of `openLooseTab`. */
+  async function openCleanLooseTab(): Promise<void> {
+    await window.ensemble.openEmbeddedTab({ viewId: null, clean: true });
+  }
+
   /**
    * Opens a tab directly at `url`; the address bar's "no tab yet" path.
    *
@@ -583,6 +593,8 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     slots,
     openTab,
     openLooseTab,
+    openCleanTab,
+    openCleanLooseTab,
     openTabWith,
     openLooseTabWith,
     openTabInto,

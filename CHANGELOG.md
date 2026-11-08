@@ -3,68 +3,117 @@
 每个版本的更新内容写在这里，GitHub Release 的正文由 `.github/workflows/release.yml`
 按版本号从这个文件抽取，所以发版时只需要改 `package.json` 和这里。
 
-- 准备发版时，把 `## [未发布]` 改成 `## [<版本号>] - <日期>`，再在顶部加一个新的「未发布」小节。
-- 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循语义化版本。
-- 只写**用户能感知的改动**：新功能、行为变化、修复、升级注意事项。内部重构、CI、依赖更新可以合并成一条。
-- 中英文都要有：仓库和展示页面向中英两种读者，Release 也一样。
-- 缺少对应版本的小节时，发布流程会直接失败——不会发出没有说明的版本。
-
-### 两个层级，别写混
-
-在 `### 中文` / `### English` 下：
-
-1. **摘要**（必须，2–5 条）：每行一条、每条一句，写"用户这次能得到什么"。应用内更新弹窗
-   **只显示这一段**，所以它必须能独立读懂，不引用内部代号、不带链接、不列每个小修复。
-2. **`#### 完整变更`**（可选）：详细的逐条变更，给 Release 页面和需要追溯的人看。
-   更新弹窗会在这一行截断，永远不会显示它。
+- 准备发版时，把 `
 
 ## [未发布]
 
 ### 中文
 
-- 点击账号或视图启动后立即切换到浏览器页，页面在后台继续加载，不再等加载完成才跳转。
-- 多选批量启动同样立即切换：新视图的空格子先出现，四个账号的页面随加载逐格点亮，不再整批静默等待。
-- 书签管理页支持多选批量删除：工具栏进入「多选」，选中多个文件夹和书签一次删除，文件夹连同其中全部内容一起移除。
-- 批量启动时舞台底部显示启动进度（如「正在启动 3/8」），不再静默等待。
-- 书签管理页的行内操作按钮改为跟随行内容显示，宽窗口下不再出现在屏幕最右缘。
-- 修复：拖动 DevTools 停靠分隔条时，被测页面现在实时跟随，不再等松手才对齐。
-- 顶部标签条可以拖动标签调整顺序，鼠标中键点击标签即可关闭（格位里的标签条同样支持中键关闭）。
-- 修复：把某一格正在显示的页拖到同一账号的另一格后，其中一格变成空白。
-- 英文界面下，应用自动生成的默认名称现在跟随界面语言：新标签页、无身份页面的占位名，以及从浏览器导入书签时的「默认配置」「未命名文件夹」，不再固定显示中文。
-- 修复：侧栏收起时的运行数角标被窗口顶边裁掉一半，现在完整显示在按钮右上角内。
-- 书签栏的文件夹面板有了最大高度：条目过多时在窗口内截断并滚动，不再戳出窗口底；二级及更深的面板改为贴着视口定位，父面板滚动时自动收起，不再被裁切或悬错位置。
-- 打开需要登录的网站（nginx 的 401 鉴权、代理认证）现在会弹出账号密码输入框，不再直接显示错误页；同一保护空间只在会话内询问一次，取消后短时间内不再重复打扰。凭据只在本进程内存中保存，退出即清除。
-- 运行坞里不属于任何视图的分组更名为「实例」：它们各自是独立的浏览器实例，而不是同一个窗口里的标签页。
-- 修复：批量启动时部分账号会先闪现在「实例」分组，随后才进入新视图——现在页面从创建起就归属目标视图，逐格点亮的过程不再路过实例分组。
-- 修复：登录弹窗里服务器返回的中文保护区域说明显示为乱码，现在自动还原。
-- 浅色主题的主色重做：按钮和高亮改用亮琥珀配深色文字，链接与彩色文字用专门的金色，不再是浑浊的深褐色。
-- 设置页的常规选项按「外观 / 浏览 / 启动与填充 / 应用 / 工具」分节，长列表有了层次。
-- 修复：页面停着开发者工具面板时，工具栏下拉菜单会被面板盖住看不全——菜单打开期间面板自动让位，关闭后回到原位。
-- 新建页面的选择器底部现在并排提供「空白页」和「干净会话」：可以建一个用一次性会话的空标签页，用完即弃、不留登录状态。
-- 浅色主题的主色再提亮为明快的金黄（深色文字不变），按钮与选中态更清爽。
+- 暂无
 
 ### English
 
-- Launching an account or a view now switches to the browser page right away while the page keeps loading in the background.
-- A multi-select batch launch switches immediately too: the new view's empty cells appear first and each page lights up as it loads, instead of waiting in silence for the whole batch.
-- The bookmark management page supports multi-select delete: enter "Select" from the toolbar, pick several folders and bookmarks, and remove them in one confirm — a picked folder goes away together with everything inside it.
-- A batch launch now shows its progress at the foot of the stage (like "Starting 3/8") instead of waiting in silence.
-- The bookmark management page's row actions now follow the row's content, so on a wide window they no longer appear at the far edge of the screen.
-- Fixed: while dragging the docked DevTools divider, the page now follows in real time instead of snapping into place on release.
-- Tabs in the top strip can be dragged to reorder, and a middle-click closes a tab (a cell's tab strip closes on middle-click too).
-- Fixed: dragging the page a cell was showing onto another cell of the same account left one cell blank.
-- In the English UI, names the app generates automatically now follow the interface language: the default new-tab label, the placeholder for a page without an identity, and the "Default profile" / "Untitled folder" names used when importing bookmarks — instead of always showing Chinese.
-- Fixed: the run-count badge on the collapsed sidebar was clipped in half by the window's top edge; it now sits fully inside the button's top-right corner.
-- Bookmark-bar folder panels now have a maximum height: long lists truncate inside the window and scroll instead of running past its bottom edge. Panels below the root level are pinned to the viewport and collapse when their parent scrolls, so they are no longer clipped or left behind.
-- Websites that require a sign-in (nginx's 401 authentication, proxy auth) now open a username-and-password dialog instead of showing the bare error page. Each protection space is asked about once per session, and dismissing it stays quiet for a while. Credentials are kept in process memory only and are gone when the app exits.
-- The group in the run dock for browser instances outside any view is now called "Instances": each row is an independent browser session, not a tab of one window.
-- Fixed: during a batch launch some accounts briefly flashed under the loose "Instances" group before joining the new view — pages now belong to their view from creation, and the cell-by-cell lighting no longer detours through the loose group.
-- Fixed: the sign-in dialog showed a server's non-ASCII realm as mojibake; it is now recovered automatically.
-- The light theme's accent is redone: buttons and highlights use bright amber with dark text, links and coloured text use a dedicated deep gold — no more muddy brown.
-- The settings page's general options are grouped into sections (Appearance / Browsing / Launch & fill / Application / Tools), giving the long list some hierarchy.
-- Fixed: with a docked DevTools panel open, the toolbar's dropdown menu was buried under it — the panel now steps aside while a menu is up and returns to its place when the menu closes.
-- The page chooser's footer now offers "Blank page" and "Clean session" side by side: a blank tab in a throwaway session is a thing you can ask for, and nothing it picks up survives.
-- The light theme's accent is raised to a bright gold (the dark text on it unchanged), so buttons and selected states read crisp instead of muddy.
+- Nothing yet
+
+## [2.0.0] - 2026-11-08
+
+### 中文
+
+- **内置浏览器核心重写**：被测页面从「叠在界面之上的原生窗口」改为应用界面自身的一部分。菜单、弹窗、提示从此直接盖在页面上，不再有任何「被页面挡住」「先冻结再遮罩」的妥协。
+- **界面全面翻新**：运行栏与页面导航合并为左侧一列，标签条贴边、动效统一；浅色主题换成明快的金黄主色。
+- **书签并入浏览器**：新标签页顶部就是书签栏，悬停逐层展开、右键管理、拖拽排序；管理页支持多选批量删除。
+- **启动更跟手**：点击账号立即切换过去；批量启动空格子先就位、逐格点亮并显示进度。
+- **开发者工具停靠进页面格位**（分隔条可拖、页面实时跟随）；遇到 401 鉴权或代理认证会弹出登录框，凭据只存内存、退出即清。
+
+#### 完整变更
+
+**内置浏览器核心重写（webview 承载）**
+
+- 旧方案里被测页面是系统级的原生窗口，永远叠在应用界面之上：菜单、toast、拖拽分屏的每个浮层都要先「冻结舞台 → 停放页面 → 盖 HTML → 回位」，仍然处处受限。2.0 把页面改成应用文档内的 webview 节点（ADR 0011），界面与页面同处一份 DOM——浮层天然盖住页面，冻结回路整套删除。
+- **AI 与自动化能力原样保留**：控制面仍是 CDP，MCP 工具集不受影响；填充、截图、会话检测、语义定位全部照旧。CDP 空闲约 1.5 秒自动断开，Google 登录一类探测调试协议的风控页面看到的仍是干净 Chromium。
+- **后台标签常驻**：切到账号页时页面继续活着，AI 截图、读页、开页照常工作，后台页截图毫秒级返回。
+- **隔离与安全不降级**：每个身份仍是磁盘上独立的持久化分区——升级后所有登录态原样保留；页面进程无 Node、全沙箱、协议白名单，弹窗统一路由进应用的标签模型。
+- 配套底座升级：Electron 45、凭据存储链路（safeStorage）全面异步化。
+- 升级注意：页面节点随应用启动重建，若个别页面显示异常，重启应用即可；会话与凭据数据不受影响。
+
+**界面与外壳**
+
+- 外壳重做为扁平化平面风格：左侧一列上半是运行栏、下半是页面导航，设置改用侧边标签、整窗覆盖；顶部标签条贴边，选中态改用中性灰阶，浮层统一进出场动画。
+- 收起侧栏后窗口就是普通浏览器；收起态为每个运行中的实例保留一个站点图标，点击切换。运行坞里不属于任何视图的分组更名为「实例」。
+- 浅色主题主色重做：填充用明快金黄配深色文字，链接与彩色文字用专门的金色。
+- 设置页常规选项按「外观 / 浏览 / 启动与填充 / 应用 / 工具」分节。
+- 新建视图的默认布局为「无布局」，每个页面占满整块舞台，需要分格时再选布局。
+- 首次打开改为弹出**使用指南**（一页讲清「建站点 → 录账号 → 启动」），取代逐个指控件的高亮教程。
+
+**浏览器与开发者工具**
+
+- DevTools 停靠进页面格位：分隔条可拖、拖动时页面实时跟随；支持绕过缓存的强制刷新。停靠面板在下拉菜单打开期间自动让位，菜单关闭后回到原位。
+- 打开需要登录的网站（nginx 401、代理认证）弹出账号密码输入框；同一保护空间会话内只问一次，取消后短时间内安静。凭据只存内存，退出即清；服务器返回的中文保护区域说明自动还原。
+- 点击账号或视图立即切换到浏览器页，页面后台继续加载；批量启动显示「正在启动 N/M」进度，页面逐格点亮，且不再闪现「实例」分组。
+- 顶部标签条可拖动排序，中键点击关闭（格位内标签条同样支持）；把某一格正在显示的页拖到同一账号的另一格不再出现空白格。
+- 新建页面选择器底部并排提供「空白页」与「干净会话」：一次性会话的空标签页用完即弃、不留登录状态。
+
+**书签**
+
+- 新标签页顶部书签栏：一层放平的书签与文件夹，悬停逐层展开、跨层级只保留一条路径；右键改名/删除，拖拽排序；放不下的收进右端溢出菜单。原有的书签瓦片网格移除。
+- 书签并入左侧导航；站点页主操作改为「新建身份」。
+- 管理页支持多选批量删除（文件夹连同其中全部内容一起移除）；行内操作按钮跟随行内容显示，宽窗口下不再出现在屏幕最右缘。
+- 从 Edge / Chrome / Firefox 导入的书签直接合并到顶层，不再套一层浏览器根目录。
+- 书签栏的文件夹面板限高滚动；二级及更深的面板贴视口定位，父面板滚动时自动收起，不再被裁切或悬错位置。
+
+**其他修复**
+
+- 侧栏收起态的运行数角标不再被窗口顶边裁掉一半。
+- 英文界面下，应用自动生成的默认名称（新标签页、无身份页面的占位名、书签导入的「默认配置」「未命名文件夹」）跟随界面语言。
+
+### English
+
+- **The embedded browser core is rewritten**: pages move from native windows stacked above the UI into the app's own document. Menus, dialogs and toasts simply draw over pages — no more freezing, parking or burying.
+- **A refreshed shell**: the running dock and page navigation merge into one left column; edge-attached tab strip, unified motion; the light theme moves to a crisp gold accent.
+- **Bookmarks join the browser**: the new-tab page opens with a bookmark bar — hover to expand level by level, right-click to manage, drag to reorder; the management page supports multi-select delete.
+- **Launches feel instant**: clicking an account switches right away; a batch launch seats its cells first, lights each page as it lands and shows progress.
+- **DevTools dock into the page's cell** (draggable divider, the page follows in real time); HTTP 401 and proxy authentication now open a sign-in dialog — credentials live in memory only and die with the app.
+
+#### Complete changes
+
+**The embedded browser core is rewritten (webview carrier)**
+
+- Pages used to be system-level native windows composited above the app UI: every floating layer — menus, toasts, split-view drags — had to freeze the stage, park the pages, draw HTML over the hole and restore. 2.0 hosts pages as webview nodes inside the app's own document (ADR 0011), so HTML simply stacks over them and the entire freeze loop is deleted.
+- **AI and automation are unchanged**: the control plane is still CDP and the MCP tool set is unaffected; fill, screenshots, session checks and semantic targeting all work as before. CDP detaches after ~1.5s idle, so risk-control pages such as Google's sign-in still see a clean Chromium.
+- **Background tabs stay alive**: switching to the accounts page keeps every page running — AI screenshots, reads and opens work as usual, and background-page screenshots come back in milliseconds.
+- **Isolation and safety are not traded away**: each identity keeps its own persistent partition on disk — every login state survives the upgrade; page processes have no Node, run fully sandboxed behind a protocol allow-list, and popups are routed into the app's tab model.
+- Underpinnings moved too: Electron 45 and a fully async credential chain (safeStorage).
+- Upgrade note: page nodes are rebuilt on app start; if a page ever looks wrong, restarting the app fixes it. Session and credential data are unaffected.
+
+**Shell & appearance**
+
+- The shell is redrawn flat: one left column with the running dock above and page navigation below; settings covers the whole window with its own side tabs; the tab strip sits flush with the window edge, selection turned neutral grey, and floating layers share one entry/exit motion.
+- With the sidebar hidden the window is a plain browser; each running instance keeps one site icon in the collapsed strip. The dock's group for instances outside any view is now called "Instances".
+- The light theme's accent is redone: bright gold fills with dark text, and a dedicated deep gold for links and coloured text.
+- The settings page's general options are grouped into sections (Appearance / Browsing / Launch & fill / Application / Tools).
+- New views default to the "no layout" mode: each page fills the whole stage; pick a layout when you want cells.
+- The first launch opens a **guide** (one page: create a site → add an account → launch), replacing the spotlight tour.
+
+**Browser & DevTools**
+
+- DevTools dock into the page's cell: draggable divider with the page following in real time; a cache-bypassing reload is available. A docked panel steps aside while a dropdown menu is open and returns when it closes.
+- Websites requiring a sign-in (nginx 401, proxy auth) open a username-and-password dialog; each protection space is asked about once per session and dismissing it stays quiet for a while. Credentials are kept in memory only and die with the app; a server's non-ASCII realm is recovered automatically.
+- Clicking an account or a view switches to the browser page right away while the page keeps loading; a batch launch shows "Starting N/M", lights each cell as its page lands, and no longer flashes through the loose "Instances" group.
+- Tabs in the top strip can be dragged to reorder and closed with a middle-click (a cell's strip supports it too); dragging the page a cell was showing onto another cell of the same account no longer leaves a blank cell.
+- The page chooser's footer offers "Blank page" and "Clean session" side by side: a blank tab in a throwaway session is a first-class choice, and nothing it picks up survives.
+
+**Bookmarks**
+
+- The new-tab page opens with a bookmark bar: one flat row of bookmarks and folders that expand level by level on hover, keeping a single hover path across levels; right-click to rename or delete, drag to reorder, overflow collected at the right end. The old tile grid is gone.
+- Bookmarks join the left navigation; the sites page's primary action is now "New identity".
+- The management page supports multi-select delete (a folder goes together with everything inside it); row actions follow the row's content instead of sitting at the screen's far edge.
+- Bookmarks imported from Edge / Chrome / Firefox merge into the top level directly, without an extra browser root folder.
+- Folder panels in the bookmark bar cap their height and scroll; panels below the root level pin to the viewport and collapse when their parent scrolls.
+
+**Other fixes**
+
+- The run-count badge on the collapsed sidebar is no longer clipped in half by the window's top edge.
+- In the English UI, names the app generates automatically (the new-tab label, the placeholder for a page without an identity, and bookmark import's "Default profile" / "Untitled folder") follow the interface language.
 
 ## [1.4.0] - 2026-11-03
 

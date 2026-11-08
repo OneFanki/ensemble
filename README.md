@@ -13,7 +13,9 @@
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-42B883?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-![Ensemble 总览：左侧视图编排，右侧四个独立 Profile 的浏览器窗口边到边平铺](docs/diagrams/hero.zh.svg)
+<p align="center">
+  <img src="docs/screenshots/browser.png" alt="工作台：2×2 视图中四个身份并排在线，管理员、成员、访客与审核员各自的控制台界面各不相同" width="900" />
+</p>
 
 内置浏览器里同屏并排，外部浏览器里边到边平铺；每个账号一个完全独立的浏览器 Profile，
 切换时始终知道自己在看谁。
@@ -93,10 +95,6 @@ ENSEMBLE_HEADLESS=1
 
 第一次打开时会自动弹出**使用指南**：一页讲清「建站点 → 录账号 → 启动」这三步，以及这些事
 都能交给 AI 做。关掉就不再打扰，想再看可以从设置里重新打开。
-
-<p align="center">
-  <img src="docs/screenshots/browser.png" alt="工作台：2×2 视图中四个身份并排在线，管理员、成员、访客与审核员各自的控制台界面各不相同" width="900" />
-</p>
 
 **浏览器是默认页。** 上面是地址栏与格位标题，下面是正在跑的页面；左侧一列上半是运行栏，
 把「这次开了哪些账号、各在哪个格位」列成一份可读的清单，下半是页面导航——浏览器、站点、

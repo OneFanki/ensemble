@@ -14,7 +14,9 @@ it should.
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](https://www.electronjs.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.5-42B883?logo=vue.js&logoColor=white)](https://vuejs.org/)
 
-![Ensemble overview: a view on the left, four isolated browser profiles tiled edge to edge on the right](docs/diagrams/hero.svg)
+<p align="center">
+  <img src="docs/screenshots/browser-en.png" alt="Workbench: four identities side by side in a 2×2 view — admin, member, guest and reviewer each see a different console" width="900" />
+</p>
 
 Side by side inside the app, edge to edge in real browsers — every account in its own isolated
 browser profile, so switching never leaves you guessing which account you are looking at.
@@ -90,10 +92,6 @@ real browser — a separate path, triggered explicitly.
 Site 1—N identities, site 1—N views. A view is optional: without one the surface behaves like a plain browser, and views are created explicitly from the running dock. Isolation is unchanged — one profile per identity, sessions never cross sites — but the site is no longer a global filter: the identities page groups every account by site, and a view may span several. One tag namespace is shared by sites, accounts and views, and an account also matches its site's tags.
 
 The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from Settings whenever you like.
-
-<p align="center">
-  <img src="docs/screenshots/browser-en.png" alt="Workbench: four identities side by side in a 2×2 view — admin, member, guest and reviewer each see a different console" width="900" />
-</p>
 
 **The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, sites, identities, views, flows, tags, bookmarks, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch: it only shows or hides the column, and never changes how many cells the stage is split into.
 

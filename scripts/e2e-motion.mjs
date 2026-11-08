@@ -245,9 +245,16 @@ try {
     { frame: dialogFrames?.[0], base: tokens?.base },
   );
 
-  const dialogGeom = await client.evaluate(`(() => {
+  const dialogGeom = await client.evaluate(`(async () => {
     const el = document.querySelector('[role="dialog"], .content');
     if (!el) return null;
+    // Sample after the entry animation has actually finished: reading computed
+    // style one frame before the end caught 0.9996/0.9974 and failed an exact
+    // equality that the settled element passes every time.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (el.getAnimations().length === 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     const cs = getComputedStyle(el);
     const m = cs.transform.match(/matrix\\(([^)]+)\\)/);
     const parts = m ? m[1].split(',').map(Number) : [];

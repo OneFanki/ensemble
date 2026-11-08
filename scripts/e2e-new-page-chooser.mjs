@@ -398,7 +398,9 @@ try {
   );
   check(
     "the toolbar button opens the same chooser with a view on stage",
-    toolbar?.open === true && toolbar?.anonymous?.length === 3,
+    // Two site openings plus the footer's two blank pages (daily profile and
+    // clean session side by side).
+    toolbar?.open === true && toolbar?.anonymous?.length === 4,
     toolbar,
   );
   check(

@@ -1,7 +1,7 @@
 # Ensemble
 
-**Every account of one system, signed in at once.**
-Stop logging out just to check what another role sees.
+**A multi-account browser for development and testing.**
+Every account of one system, signed in at once — stop logging out just to check what another role sees.
 
 A local multi-account browser workbench: keep several identities of the same system present at the
 same time, work in parallel and compare side by side, to confirm that each one sees and can do what

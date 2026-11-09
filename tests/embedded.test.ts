@@ -338,10 +338,21 @@ describe("where a page node sits", () => {
     });
   });
 
-  it("keeps a real box for a page that is off stage", () => {
+  it("keeps a page's own box off stage, not the stage's", () => {
+    /*
+     * This used to assert the stage's size, and that is what made
+     * `set_browser_viewport` a no-op for any page the user was not looking at:
+     * main fitted a parked page to its requested viewport, published that rect,
+     * and the renderer replaced it with the stage size. The page then laid out
+     * at the window's width however small the viewport was, and the tool
+     * reported success.
+     *
+     * The invariant that still matters is "a parked page has a real box", which
+     * the next case and the never-laid-out case cover.
+     */
     const parked = guestNodeRect({ stage, bounds, onStage: false, window: win });
-    expect(parked.width).toBe(stage.width);
-    expect(parked.height).toBe(stage.height);
+    expect(parked.width).toBe(bounds.width);
+    expect(parked.height).toBe(bounds.height);
   });
 
   it("parks off stage to the left of the window, out of sight and out of reach", () => {
@@ -357,8 +368,22 @@ describe("where a page node sits", () => {
     expect(parked.x).toBeLessThan(0);
   });
 
-  it("falls back to the window size when no stage has been reported", () => {
+  it("keeps the page's own box when no stage has been reported", () => {
+    /*
+     * `stage: null` means the browser page is not mounted (the console covers
+     * it). The page still has to keep a real box or its visibility checks all
+     * answer false, and its own fitted box is the accurate one — a page with a
+     * fixed viewport must not silently become window-sized just because the
+     * stage is gone.
+     */
     const parked = guestNodeRect({ stage: null, bounds, onStage: true, window: win });
+    expect(parked.width).toBe(bounds.width);
+    expect(parked.height).toBe(bounds.height);
+    expect(parked.x).toBe(-bounds.width);
+  });
+
+  it("falls back to the window size when nothing has been laid out at all", () => {
+    const parked = guestNodeRect({ stage: null, bounds: undefined, onStage: true, window: win });
     expect(parked.width).toBe(win.width);
     expect(parked.height).toBe(win.height);
     expect(parked.x).toBe(-win.width);
@@ -438,3 +463,4 @@ describe("site icons", () => {
     expect(inlineFavicon("image/png", new Uint8Array(FAVICON_MAX_BYTES))).toBeDefined();
   });
 });
+

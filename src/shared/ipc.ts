@@ -9,7 +9,9 @@ import type { FlowDraft, FlowRunResult } from "./flows";
 import type { ConnectivityProbeResult } from "./proxy";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
+  AddMessageInput,
   AiPageAction,
+  AppMessageView,
   AppSettings,
   AuthBatchResult,
   AuthCheckResult,
@@ -198,10 +200,37 @@ export const IPC = {
   embeddedStateGet: "embedded:state-get",
   /** Asks the renderer to switch to the browser page. */
   embeddedPage: "embedded:page",
+  /**
+   * Main → renderer: the page asked for find (Ctrl+F pressed inside the guest).
+   *
+   * The keystroke lands in the page, not in the app chrome, so the renderer never
+   * sees it. Switching pages alone is not enough — the bar has to open too, or
+   * the shortcut appears to do nothing. Distinct from `embeddedFind` above,
+   * which is the renderer *asking* the page to search.
+   */
+  embeddedFindRequested: "embedded:find-requested",
   /** Main → renderer: a login form was submitted in an embedded page. */
   embeddedLoginCaptured: "embedded:login-captured",
+  /** Renderer → main: every login still waiting to be saved, newest first. */
+  embeddedLoginPending: "embedded:login-pending",
+  /** Main → renderer: the pending list changed (saved, dismissed, expired). */
+  embeddedLoginChanged: "embedded:login-changed",
   /** Renderer → main: forget a pending capture the user declined. */
   embeddedLoginDismiss: "embedded:login-dismiss",
+  /** Renderer → main: the message centre's history, newest first. */
+  messagesList: "messages:list",
+  /** Renderer → main: mark one message read. */
+  messagesRead: "messages:read",
+  /** Renderer → main: mark everything read. */
+  messagesReadAll: "messages:read-all",
+  /** Renderer → main: drop one message (and any secret it pointed at). */
+  messagesRemove: "messages:remove",
+  /** Renderer → main: empty the history. */
+  messagesClear: "messages:clear",
+  /** Renderer → main: record one message produced by the interface itself. */
+  messagesAdd: "messages:add",
+  /** Main → renderer: the history or unread count changed. */
+  messagesChanged: "messages:changed",
   /** Sends the stage rectangle (content area under the chrome) to the manager. */
   embeddedStage: "embedded:stage",
   embeddedOpen: "embedded:open",
@@ -517,6 +546,8 @@ export interface EnsembleApi {
   fillLogin(identityId: string): Promise<AuthCheckResult>;
   /** Fires when a launch triggers a best-effort credential fill. */
   onAutoFilled(listener: (report: AutoFillReport) => void): () => void;
+  /** The focused page asked for find (Ctrl+F pressed inside it). */
+  onFindRequested(listener: () => void): () => void;
   /** Fires once at startup when the last view was restored (or failed). */
   onViewRestored(listener: (outcome: ViewRestoreOutcome) => void): () => void;
 
@@ -610,8 +641,27 @@ export interface EnsembleApi {
   openEmbeddedView(viewId: string): Promise<EmbeddedState>;
   /** Login fields seen in an embedded page; never includes the password. */
   onLoginCaptured(listener: (notice: LoginCaptureNotice) => void): () => void;
+  /**
+   * Every login still waiting to be saved, newest first.
+   *
+   * The prompt is only the newest entry; this is what lets a user come back to
+   * one they let pass, instead of signing out and in again to recreate it.
+   */
+  pendingLogins(): Promise<LoginCaptureNotice[]>;
+  /** Fires whenever the pending list changes. */
+  onPendingLoginsChanged(listener: (list: LoginCaptureNotice[]) => void): () => void;
   /** Forgets a pending capture the user declined to save. */
   dismissLoginCapture(token: string): Promise<void>;
+  /** The message centre's history, newest first, with stale actions marked. */
+  listMessages(): Promise<AppMessageView[]>;
+  /** Records a message produced by the interface (a failed save, an update, …). */
+  addMessage(input: AddMessageInput): Promise<AppMessageView[]>;
+  markMessageRead(id: string): Promise<AppMessageView[]>;
+  markAllMessagesRead(): Promise<AppMessageView[]>;
+  removeMessage(id: string): Promise<AppMessageView[]>;
+  clearMessages(): Promise<AppMessageView[]>;
+  /** Fires whenever the history or the unread count changes. */
+  onMessagesChanged(listener: (list: AppMessageView[]) => void): () => void;
   closeEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   activateEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   navigateEmbeddedTab(tabId: string, url: string): Promise<EmbeddedTab>;

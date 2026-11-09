@@ -74,6 +74,23 @@ describe("update download", () => {
     ).rejects.toThrow(/重定向/);
   });
 
+  it("downloads when the transport cannot report the final URL", async () => {
+    // Electron's `net.fetch` leaves `Response.url` empty for every request, and
+    // it used to make this path refuse every real download as "redirected to an
+    // untrusted address". The address that was already checked has to be enough.
+    const payload = Buffer.from("installer bytes");
+    const dir = await tempDir();
+    const destination = join(dir, "u.exe");
+    const url = "https://github.com/OneFanki/ensemble/releases/download/v1/u.exe";
+    const sha256 = createHash("sha256").update(payload).digest("hex");
+    const result = await downloadUpdateAsset(url, destination, {
+      expectedSha256: sha256,
+      fetchImpl: (() => Promise.resolve(githubResponse(payload, ""))) as typeof fetch,
+    });
+    expect(result.sha256).toBe(sha256);
+    expect(await readFile(destination)).toEqual(payload);
+  });
+
   it("deletes the file and reports it when the checksum does not match", async () => {
     const payload = Buffer.from("not really an installer");
     const dir = await tempDir();

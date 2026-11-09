@@ -162,12 +162,27 @@ function layout(): void {
      * costs nothing: the guest still lays out, still produces frames for
      * `Page.captureScreenshot`, and still answers input dispatched over CDP. A
      * page that is already on stage keeps its own cell and is not ghosted.
+     *
+     * The ghost keeps the page's own size when it has one. Presenting is here to
+     * give the page a box and frames, not to resize it: stretching a page with a
+     * fixed viewport to the whole stage made every read report the window's
+     * width, so `set_browser_viewport` looked like it did nothing on any page
+     * that was not already on stage. Only a page with no box of its own — a
+     * brand-new tab, a park that was zeroed — falls back to the stage size.
      */
     const ghost = presenting && !placement.onStage;
+    const ownBox = placement.rect.width > 0 && placement.rect.height > 0;
     const rect = ghost
       ? stage && stage.width > 0 && stage.height > 0
-        ? { x: stage.x, y: stage.y, width: stage.width, height: stage.height }
-        : { x: 0, y: 0, width: Math.max(1, window.innerWidth), height: Math.max(1, window.innerHeight) }
+        ? ownBox
+          ? { x: stage.x, y: stage.y, width: placement.rect.width, height: placement.rect.height }
+          : { x: stage.x, y: stage.y, width: stage.width, height: stage.height }
+        : {
+            x: 0,
+            y: 0,
+            width: ownBox ? placement.rect.width : Math.max(1, window.innerWidth),
+            height: ownBox ? placement.rect.height : Math.max(1, window.innerHeight),
+          }
       : placement.rect;
     const onStage = placement.onStage;
     const style = mounted.node.style;

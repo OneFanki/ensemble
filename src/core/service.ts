@@ -3427,12 +3427,29 @@ export class WorkspaceService {
    * duplicate" from a synchronous callback, and `vault.has` needs no key. A
    * payload that fails to decrypt still counts as saved here — a broken secret
    * needs the vault UI, not a re-save prompt.
+   *
+   * `tenant` narrows it for multi-tenant systems, where one site hosts many
+   * tenants and `admin` is a different account in each. The same username under
+   * another tenant is a *new* login, not a duplicate: treating it as saved is
+   * how a user signs into a second tenant and gets no prompt at all.
    */
-  hasSavedLogin(siteId: string, username: string): boolean {
+  hasSavedLogin(siteId: string, username: string, tenant?: string): boolean {
     const needle = username.trim().toLowerCase();
     if (!needle) return false;
+    const tenantNeedle = tenant?.trim().toLowerCase();
+    const matchesTenant = (fields: readonly { label: string; value: string }[] | undefined) => {
+      if (!tenantNeedle) return true;
+      // No recorded tenant means the entry cannot be ruled out as the same
+      // account; keeping it avoids offering a duplicate of something saved
+      // before tenants were captured.
+      const field = (fields ?? []).find((item) => /tenant|租户|org|企业/i.test(item.label));
+      return !field || field.value.trim().toLowerCase() === tenantNeedle;
+    };
     const identity = this.data.identities.find(
-      (item) => item.siteId === siteId && item.username.trim().toLowerCase() === needle,
+      (item) =>
+        item.siteId === siteId &&
+        item.username.trim().toLowerCase() === needle &&
+        matchesTenant(item.extraFields),
     );
     if (!identity) return false;
     try {

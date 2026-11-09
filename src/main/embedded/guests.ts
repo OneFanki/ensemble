@@ -2,8 +2,18 @@ import type { WebContents } from "electron";
 import { GuestSessions, type GuestCdpPort, type GuestHandle } from "@core/cdp/guest-sessions";
 import { GuestSlots } from "@core/cdp/guest-slots";
 import { hardenGuestPreferences } from "@core/cdp/guest-policy";
+import { withDeadline } from "@shared/async";
 import { EmbeddedCdp } from "./cdp";
 import type { GuestCdpTarget } from "./guest-cdp";
+
+/**
+ * How long the embedder gets to produce a frame before a capture gives up.
+ *
+ * Same order as the guest-side deadline (4s) but shorter: this is the window
+ * itself, and a window that has not painted in 2s will not paint in 4. Falling
+ * back to the renderer path is the normal outcome, not an error.
+ */
+const HOST_FRAME_TIMEOUT_MS = 2_000;
 
 /**
  * The main-process half of a `<webview>`-hosted page.
@@ -70,7 +80,6 @@ interface GuestRecord {
    * A login-capture binding only has to be added once per target: it survives
    * both navigations and session detaches, and adding it twice throws.
    */
-  captureBinding?: boolean;
 }
 
 interface Waiter {
@@ -190,7 +199,16 @@ export class BrowserGuestManager {
     if (!host || host.isDestroyed()) return false;
     try {
       if (!host.debugger.isAttached()) host.debugger.attach("1.3");
-      await host.debugger.sendCommand("Page.captureScreenshot", { format: "png" });
+      // Bounded, and the bound is not defensive padding: a window that is not
+      // producing frames answers `Page.captureScreenshot` by never replying —
+      // the same trap the guest path documents. Unbounded, that turns one
+      // screenshot into a call that never returns, which a client reports as a
+      // timeout minutes later with no clue where it hung.
+      await withDeadline(
+        host.debugger.sendCommand("Page.captureScreenshot", { format: "png" }),
+        HOST_FRAME_TIMEOUT_MS,
+        "embedder produced no frame",
+      );
       return true;
     } catch {
       // A window that cannot be captured still works for everything except
@@ -477,21 +495,6 @@ export class BrowserGuestManager {
     timer.unref?.();
     this.layoutWaiters.set(tabId, { promise, resolve, timer });
     return promise;
-  }
-
-  /**
-   * Marks the login-capture binding as installed for this guest.
-   *
-   * Returns `true` the first time, so the caller knows whether it still has to
-   * add it. Tracked per target rather than per session because the binding is
-   * target state and outlives every detach.
-   */
-  claimCaptureBinding(guestId: string): boolean {
-    const record = this.guests.get(guestId);
-    if (!record) return false;
-    if (record.captureBinding) return false;
-    record.captureBinding = true;
-    return true;
   }
 
   private resolveWaiter(key: string, handle: GuestHandle): void {

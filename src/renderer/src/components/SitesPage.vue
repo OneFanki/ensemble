@@ -116,7 +116,7 @@ import IconButton from "./ui/IconButton.vue";
 
 <template>
   <section class="page sites">
-    <PageHeader :title="$t('app.sites')" :note="$t('app.sitesSubtitle')">
+    <PageHeader :title="$t('app.sites')">
       <template #actions>
         <GroupCollapseAll
           v-if="groups.length > 1"

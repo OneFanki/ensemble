@@ -3,6 +3,7 @@ import type {
   IdentityDraft,
   LayoutPreset,
   LoginCaptureNotice,
+  Site,
   SiteDraft,
   SlotRect,
   ViewDraft,
@@ -27,6 +28,7 @@ import SettingsPage, { type SettingsSection } from "./components/SettingsPage.vu
 import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import BookmarksPage from "./components/BookmarksPage.vue";
+import MessagesPage from "./components/MessagesPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
 import ToastStack from "./components/ToastStack.vue";
@@ -99,10 +101,23 @@ const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; viewId?: st
 /** The in-app guide: the only first-run introduction and the readable handbook. */
 const guideOpen = ref(false);
 const healthOpen = ref(false);
+/**
+ * Whether the "save this login?" bar is on screen.
+ *
+ * Separate from "is there a pending capture": hiding the bar must not throw the
+ * capture away. It comes back on its own when another login is captured, and the
+ * toolbar's bell opens the same list at any time.
+ */
+const captureVisible = ref(true);
+watch(
+  () => store.pendingLogins.length,
+  (count, previous) => {
+    // A new capture always earns the prompt back, even after one was hidden.
+    if (count > 0 && count >= previous) captureVisible.value = true;
+  },
+);
 /** True while an HTML overlay covers the browser stage. */
 const stageObscured = ref(false);
-/** Seed for the account form's inline site creator, from a captured login. */
-const identitySiteSeed = ref<{ origin: string; path: string } | null>(null);
 /** Set by a background check, or by the manual check in Settings. */
 const updatePrompt = ref<UpdateCheckResult | null>(null);
 /** The HTTP authentication challenge awaiting the user, if any. */
@@ -258,7 +273,7 @@ function switchView(next: View) {
  * The menu names a destination; without one it lands on Settings, because the
  * menu's other rows are already there to be clicked instead.
  */
-function openConsole(target: "sites" | "bookmarks" | "settings" = "settings") {
+function openConsole(target: "sites" | "bookmarks" | "settings" | "messages" = "settings") {
   if (target === "settings") {
     openSettings("general");
     return;
@@ -527,10 +542,28 @@ async function saveSite(draft: SiteDraft) {
 
 async function saveIdentity(draft: IdentityDraft) {
   const result = await store.saveIdentity(draft);
-  if (result) {
-    identityDraft.value = null;
-    // The captured password is consumed on save; the prompt must not linger.
-    if (draft.captureToken) store.clearLoginCapture();
+  if (!result) return;
+  identityDraft.value = null;
+  const fromCapture = Boolean(draft.captureToken);
+  // The captured password is consumed on save; the prompt must not linger.
+  // Named by token: a second capture waiting behind this one must survive.
+  if (fromCapture) store.clearLoginCapture(draft.captureToken);
+  /*
+   * Saving a captured login finishes the path it started: the login was typed
+   * into the daily profile, and the account that now holds it lives in a profile
+   * of its own. Opening that account's own page is the only way to see the
+   * difference, and it doubles as proof the password was stored — the page comes
+   * up already signed in.
+   */
+  const savedId =
+    draft.id ??
+    result.identities.find(
+      (identity) =>
+        identity.siteId === draft.siteId &&
+        identity.username.toLowerCase() === draft.username.trim().toLowerCase(),
+    )?.id;
+  if (fromCapture && savedId) {
+    void store.launchIdentity(savedId, draft.startPath || undefined);
   }
 }
 
@@ -541,12 +574,31 @@ async function saveIdentity(draft: IdentityDraft) {
  * an inline "create this site" suggestion already filled, so the user does not
  * have to leave and come back.
  */
-function saveCapturedLogin(notice: LoginCaptureNotice): void {
-  const site = notice.siteId ? store.sites.find((item) => item.id === notice.siteId) : undefined;
+/**
+ * Opens the account form pre-filled from a login seen in the daily profile.
+ *
+ * The whole point of this path is that nobody had to fill in a site first: a
+ * bookmark, a typed address and a login are enough to end up with a real account.
+ * So when no site matches the origin, one is created here rather than asking the
+ * user to describe a site they just used — its name comes from the host, and its
+ * login path is the page the form was on. Everything else stays at its default
+ * and can be refined later from the site's own dialog.
+ *
+ * The account itself is a full identity: saving it gives the login its own
+ * profile, which is what makes the next launch isolated from the daily profile
+ * the password was first typed into.
+ */
+async function saveCapturedLogin(notice: LoginCaptureNotice): Promise<void> {
+  let site = notice.siteId ? store.sites.find((item) => item.id === notice.siteId) : undefined;
+  if (!site) {
+    site = await createSiteFromCapture(notice);
+    if (!site) return;
+  }
+  const origin = site.id;
   const existing = store.identities.find(
     (identity) =>
       identity.username.toLowerCase() === notice.username.toLowerCase() &&
-      (!site || identity.siteId === site.id),
+      identity.siteId === origin,
   );
   if (existing) {
     // Same account seen again: updating the password is the only sensible action;
@@ -561,7 +613,20 @@ function saveCapturedLogin(notice: LoginCaptureNotice): void {
       engineId: existing.engineId,
       startPath: existing.startPath,
       passwordMode: "custom",
-      extraFields: existing.extraFields ? existing.extraFields.map((field) => ({ ...field })) : [],
+      extraFields: [
+        ...(existing.extraFields ? existing.extraFields.map((field) => ({ ...field })) : []),
+        // A tenant the capture saw but the saved account does not carry yet:
+        // this is a different account on the same site, not the same one.
+        ...(notice.extraFields ?? [])
+          .filter(
+            (field) =>
+              field.value.trim() &&
+              !(existing.extraFields ?? []).some(
+                (have) => have.label.trim().toLowerCase() === field.label.trim().toLowerCase(),
+              ),
+          )
+          .map((field) => ({ ...field })),
+      ],
       tagIds: existing.tagIds ? [...existing.tagIds] : [],
       note: existing.note,
       captureToken: notice.token,
@@ -569,22 +634,52 @@ function saveCapturedLogin(notice: LoginCaptureNotice): void {
     return;
   }
   identityDraft.value = {
-    siteId: site?.id ?? "",
+    siteId: site.id,
     name: notice.username,
     username: notice.username,
     role: "member",
     color: "teal",
     passwordMode: "custom",
     startPath: notice.path || "/",
-    extraFields: [],
+    // Pre-filled so a multi-tenant site keeps its tenant: it is part of which
+    // account this is, and the login that just happened typed it.
+    extraFields: (notice.extraFields ?? []).map((field) => ({ ...field })),
     tagIds: [],
     captureToken: notice.token,
   };
-  // No matching site: the form opens on its inline site creator, prefilled with
-  // the origin, so the password is not dropped just because the site is new.
-  if (!site) {
-    identitySiteSeed.value = { origin: notice.origin, path: notice.path };
+}
+
+/**
+ * Creates the site a captured login belongs to.
+ *
+ * Returning undefined means the site could not be written (the workspace store
+ * has already reported why); the capture stays pending in the main process so a
+ * retry is possible rather than silently dropping the password.
+ */
+async function createSiteFromCapture(
+  notice: LoginCaptureNotice,
+): Promise<Site | undefined> {
+  let host: string;
+  try {
+    host = new URL(notice.origin).hostname;
+  } catch {
+    host = notice.origin;
   }
+  const result = await store.saveSite({
+    name: host,
+    baseUrl: notice.origin,
+    loginPath: notice.path || "/",
+    authCheckPath: "",
+    authCheckSignedOut: "",
+    autoSubmit: undefined,
+    tagIds: [],
+  });
+  if (!result) return undefined;
+  const saved = result.sites.find(
+    (item) => item.name === host && item.baseUrl === notice.origin.replace(/\/$/, ""),
+  );
+  if (saved) store.markSiteUsed(saved.id);
+  return saved;
 }
 
 /**
@@ -725,7 +820,6 @@ async function handleLocale(locale: LocaleSetting) {
       @back="switchView('browser')"
       @theme="handleTheme"
       @locale="handleLocale"
-      @open-guide="openGuide"
       @update-found="(result) => (updatePrompt = result)"
     />
 
@@ -761,6 +855,7 @@ async function handleLocale(locale: LocaleSetting) {
           @open-console="openConsole"
           @switch-mode="setMode"
           @open-workspace="openWorkspace"
+          @open-guide="openGuide"
           @update-found="(result) => (updatePrompt = result)"
         />
         <SitesPage
@@ -786,19 +881,24 @@ async function handleLocale(locale: LocaleSetting) {
         />
         <FlowsPage v-else-if="view === 'flows'" />
         <TagsPage v-else-if="view === 'tags'" />
+        <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
         <BookmarksPage v-else />
       </main>
     </div>
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in
-         the app grid — it is a prompt, not part of the layout. -->
-    <div v-if="store.loginCapture" class="capture-wrap">
+         the app grid — it is a prompt, not part of the layout. Closing it
+         collapses it to a count chip in the same place, not out of existence:
+         the capture is still waiting, and the chip is how you get back to it. -->
+    <div v-if="captureVisible && store.pendingLogins.length" class="capture-wrap">
       <LoginCaptureBar
-        :notice="store.loginCapture"
-        :site-name="store.sites.find((s) => s.id === store.loginCapture?.siteId)?.name"
+        :notices="store.pendingLogins"
+        :site-name-of="(notice) => store.sites.find((s) => s.id === notice.siteId)?.name"
+        :profile-note="tr('app.loginCaptureProfileNote')"
         @save="saveCapturedLogin"
         @dismiss="store.dismissLoginCapture"
+        @hide="captureVisible = false"
       />
     </div>
 
@@ -818,10 +918,9 @@ async function handleLocale(locale: LocaleSetting) {
       v-if="identityDraft"
       :draft="identityDraft"
       :engines="store.engines"
-      :site-seed="identitySiteSeed"
       :password-set="identityDraft.id ? store.identityPasswordSet(store.identities.find(i => i.id === identityDraft!.id)!) : false"
-      @close="identityDraft = null; identitySiteSeed = null"
       @save="saveIdentity"
+      @close="identityDraft = null"
       @create-site="createSiteFromIdentity"
       @delete="store.deleteIdentity(identityDraft!.id!); identityDraft = null"
     />

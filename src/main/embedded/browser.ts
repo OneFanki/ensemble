@@ -18,6 +18,15 @@ import {
   type WaitResult,
 } from "@core/cdp/inspect";
 import {
+  PAGE_ACTIVITY_READ_SCRIPT,
+  PAGE_ACTIVITY_SCRIPT,
+  PAGE_LOG_LIMIT,
+  PAGE_LOG_TEXT_LIMIT,
+  buildNetworkIdleExpression,
+  type PageActivity,
+  type PageLogLevel,
+} from "@core/cdp/page-log";
+import {
   bodyMarksSignedOut,
   buildAuthCheckExpression,
   buildFillExpression,
@@ -177,9 +186,21 @@ interface TabRecord {
   /** Inlined site icon; cleared when the page moves to another origin. */
   favicon?: string;
   loading: boolean;
-  /** `Runtime.addBinding` only needs to run once per target, not per navigation. */
-  captureBinding?: boolean;
   crashed: boolean;
+  /**
+   * Console lines this page produced, newest last.
+   *
+   * Collected from the `console-message` event rather than from page script:
+   * the page-side wrapper can only install after `did-finish-load`, which is
+   * after the first lines — exactly the ones that explain why a page failed to
+   * boot. The event fires for every line from the first document onward, and it
+   * also covers messages a page cannot wrap (network errors, CSP violations).
+   *
+   * Capped at {@link PAGE_LOG_LIMIT}; dropped lines are counted so a reader can
+   * say the history is partial instead of silently showing the tail.
+   */
+  consoleLog?: Array<{ at: string; level: PageLogLevel; text: string; source?: string }>;
+  consoleDropped?: number;
   /**
    * The DevTools panel this app hosts for the page, when one exists.
    *
@@ -329,6 +350,8 @@ export interface EmbeddedBrowserOptions {
     password: string;
     origin: string;
     path: string;
+    /** Tenant and any other fields the form asked for, as typed. */
+    extraFields?: { label: string; value: string }[];
   }) => void;
   /**
    * Proxy settings for the partitions this browser creates.
@@ -376,6 +399,33 @@ function sameDocumentUrl(actual: string, expected: string): boolean {
   } catch {
     return actual === expected;
   }
+}
+
+/**
+ * Has a navigation landed?
+ *
+ * Exported because the rule is easy to get subtly wrong and the cost of getting
+ * it wrong is invisible: a comparison that only accepted the requested address
+ * made every login page (`/` → `/login`, `/login` → `/home`) sit out the whole
+ * ten-second deadline. It did not fail, it just felt like the app was slow.
+ *
+ * Three ways to have arrived:
+ *  1. the address we asked for, trailing slash aside;
+ *  2. any *other* address, once the document is parsed — the redirect case;
+ *  3. when we do not know where we started, only (1) is trustworthy.
+ */
+export function navigationArrived(input: {
+  href: string;
+  state: string;
+  wanted: string;
+  startedFrom?: string;
+}): boolean {
+  const parsed = input.state === "interactive" || input.state === "complete";
+  if (!parsed) return false;
+  if (input.href === input.wanted || sameDocumentUrl(input.href, input.wanted)) return true;
+  // A redirect: the page is no longer on the document it left, which is enough
+  // to say the navigation we asked for has happened.
+  return Boolean(input.startedFrom) && input.href !== input.startedFrom;
 }
 
 /**
@@ -1743,12 +1793,20 @@ export class EmbeddedBrowser {
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
     try {
-      // The binding survives navigations within the same renderer; adding it
-      // twice throws, so it is remembered per tab.
-      if (!tab.captureBinding) {
-        await tab.cdp.send("Runtime.addBinding", { name: LOGIN_CAPTURE_BINDING });
-        tab.captureBinding = true;
-      }
+      /*
+       * Added on every document, not once per tab.
+       *
+       * `Runtime.addBinding` looks target-wide, but the function it exposes is
+       * installed on each execution context, and a submitted native form is
+       * exactly the moment the document is replaced: the page that held the
+       * filled-in fields navigates, and the next document comes up without
+       * `__ensembleLoginCaptured`. A per-tab "already added" flag therefore
+       * dropped the one capture that mattered most — the plain
+       * `<form action=...>` login, which is still the common case outside
+       * single-page apps. Re-adding is a no-op that throws, so that is caught and
+       * ignored; the cost of the redundant call is one CDP command per load.
+       */
+      await tab.cdp.send("Runtime.addBinding", { name: LOGIN_CAPTURE_BINDING }).catch(() => {});
       await tab.cdp.evaluate(LOGIN_CAPTURE_SCRIPT);
       /*
        * The listener lives in the page, but the binding's events are only
@@ -1762,6 +1820,65 @@ export class EmbeddedBrowser {
     } catch {
       // A page that navigated away or a failed load has nothing to instrument.
     }
+  }
+
+  /**
+   * Installs the console/network collector in the current document.
+   *
+   * Same per-document rule as login capture: a navigation replaces `window`, so
+   * the script has to run again on every document. Unlike login capture it does
+   * not need a held session — it collects into a page-side buffer that a later
+   * read picks up, so losing the debugger in between costs nothing.
+   *
+   * Best-effort: a page that is still loading, or one whose document changed
+   * under us, simply has no collector, and a read reports `installed: false`
+   * instead of failing the tool call.
+   */
+  private async installPageActivity(tab: TabRecord): Promise<void> {
+    if (tab.view.webContents.isDestroyed()) return;
+    try {
+      await tab.cdp.evaluate(PAGE_ACTIVITY_SCRIPT);
+    } catch {
+      // Nothing to instrument yet; the next read installs on demand.
+    }
+  }
+
+  /**
+   * Returns what the page logged and requested since the previous read.
+   *
+   * Two sources, merged, because neither alone is enough:
+   *
+   * - **Console** lines come from the `console-message` event in main. That
+   *   fires from the first line of the first document; a page-side wrapper only
+   *   installs after `did-finish-load` and would miss the boot failure that is
+   *   usually the whole answer.
+   * - **Network** activity comes from the page-side collector, because knowing
+   *   a request is *in flight* needs a hook around `fetch`/XHR, and there is no
+   *   event for that without a pinned CDP session.
+   *
+   * Reading clears both, so the next call answers "what happened since".
+   */
+  async readPageActivity(tabId: string): Promise<PageActivity> {
+    const tab = this.requireTab(tabId);
+    await this.installPageActivity(tab);
+    const page = await tab.cdp.evaluate<PageActivity>(PAGE_ACTIVITY_READ_SCRIPT, {
+      awaitPromise: true,
+    });
+    const fromMain = tab.consoleLog ?? [];
+    const droppedFromMain = tab.consoleDropped ?? 0;
+    const hadMainLines = fromMain.length > 0;
+    tab.consoleLog = [];
+    tab.consoleDropped = 0;
+    // Main-side lines are the ones a page-side wrapper could not see (and the
+    // ones it could: both channels are real, and a double-reported line is more
+    // honest than dropping one). Sorted by time so the order reads right.
+    const logs = [...page.logs, ...fromMain].sort((a, b) => a.at.localeCompare(b.at));
+    return {
+      ...page,
+      logs,
+      installed: page.installed || hadMainLines,
+      dropped: page.dropped + droppedFromMain,
+    };
   }
 
   /**
@@ -1834,6 +1951,40 @@ export class EmbeddedBrowser {
       if (!first) return;
       void this.loadFavicon(tab, first).then(() => this.emitState());
     });
+    /*
+     * Console history, straight from the renderer.
+     *
+     * This event fires from the first line of the first document, which is why
+     * it is the primary source rather than a page-side wrapper: a wrapper can
+     * only install after `did-finish-load`, and by then a page that failed to
+     * boot has already printed the reason. It also reports things page script
+     * cannot wrap — network failures, CSP violations, blocked mixed content.
+     */
+    contents.on("console-message", (details) => {
+      // The first argument is the structured record; the positional `level` /
+      // `message` that follow it are the deprecated form kept for old callers.
+      const level: PageLogLevel =
+        details.level === "error"
+          ? "error"
+          : details.level === "warning"
+            ? "warn"
+            : details.level === "info"
+              ? "info"
+              : "debug";
+      const log = (tab.consoleLog ??= []);
+      if (log.length >= PAGE_LOG_LIMIT) {
+        log.shift();
+        tab.consoleDropped = (tab.consoleDropped ?? 0) + 1;
+      }
+      const text = String(details.message ?? "").slice(0, PAGE_LOG_TEXT_LIMIT);
+      if (!text) return;
+      log.push({
+        at: new Date().toISOString(),
+        level,
+        text,
+        ...(details.sourceId ? { source: details.sourceId } : {}),
+      });
+    });
     contents.on("page-title-updated", (_event, title) => {
       tab.title = title;
       update();
@@ -1886,16 +2037,31 @@ export class EmbeddedBrowser {
         return;
       }
       if (!parsed.username.trim() || !parsed.password) return;
+      const extra = Array.isArray((parsed as { extraFields?: unknown }).extraFields)
+        ? ((parsed as { extraFields: unknown[] }).extraFields
+            .filter(
+              (item): item is { label: string; value: string } =>
+                Boolean(item) &&
+                typeof item === "object" &&
+                typeof (item as { label?: unknown }).label === "string" &&
+                typeof (item as { value?: unknown }).value === "string",
+            )
+            .map((item) => ({ label: item.label.slice(0, 40), value: item.value.slice(0, 200) })))
+        : [];
       this.options.onLoginCaptured?.({
         tabId: tab.id,
         username: parsed.username.trim().slice(0, 200),
         password: parsed.password.slice(0, 500),
         origin: parsed.origin,
         path: typeof parsed.path === "string" ? parsed.path : "/",
+        ...(extra.length ? { extraFields: extra } : {}),
       });
     });
     contents.on("did-finish-load", () => {
       void this.installLoginCapture(tab);
+      // Started at load, not only at first read: a caller asking "why did the
+      // page break" wants the errors that happened before it thought to look.
+      void this.installPageActivity(tab);
     });
     /*
      * Clicking anywhere inside a page selects that cell.
@@ -2042,8 +2208,22 @@ export class EmbeddedBrowser {
    * the old page — the flow then waited on elements of the page it was leaving
    * and read from the wrong document. The URL is the signal that the navigation
    * actually happened.
+   *
+   * A redirect to a *different path* is the normal shape of a login page
+   * (`/` → `/login`, `/login` → `/home`), so a URL comparison against the
+   * requested address is not a reliable arrival test on its own: matching only
+   * the requested path made every such navigation wait out the whole deadline.
+   * A ten-second stall did not read as "a redirect happened", it read as the app
+   * being slow. Arrival is therefore either "the URL we asked for" or "any URL
+   * other than the one we started from, fully parsed" — both mean the document
+   * that is now loaded is the new one.
    */
-  private async whenReady(tab: TabRecord, url: string, timeoutMs = 10_000): Promise<void> {
+  private async whenReady(
+    tab: TabRecord,
+    url: string,
+    startedFrom?: string,
+    timeoutMs = 10_000,
+  ): Promise<void> {
     const startedAt = Date.now();
     const wanted = normalizeEmbeddedUrl(url) ?? url;
     while (Date.now() - startedAt < timeoutMs) {
@@ -2051,12 +2231,7 @@ export class EmbeddedBrowser {
         const ready = await tab.cdp.evaluate<{ href: string; state: string }>(
           "({ href: location.href, state: document.readyState })",
         );
-        const landed =
-          ready.href === wanted ||
-          // Redirects (trailing slash, http→https, login bounce) are normal;
-          // compare origins and paths so a redirect still counts as arrival.
-          sameDocumentUrl(ready.href, wanted);
-        if (landed && (ready.state === "interactive" || ready.state === "complete")) return;
+        if (navigationArrived({ ...ready, wanted, startedFrom })) return;
       } catch {
         // Navigation in progress: the execution context is being replaced.
       }
@@ -2068,6 +2243,16 @@ export class EmbeddedBrowser {
     const tab = this.requireTab(tabId);
     const target = normalizeEmbeddedUrl(url);
     if (!target) throw new Error("只支持 http(s) 地址");
+    // Where the page is before we ask it to move. A redirect off this address is
+    // arrival too, and the only way to tell "redirected" from "not yet moved" is
+    // to remember what was on screen.
+    const before = (() => {
+      try {
+        return tab.view.webContents.getURL();
+      } catch {
+        return "";
+      }
+    })();
     // A frozen page must take the navigation; loadURL alone can leave the
     // old document parked in the lifecycle cache.
     this.wakeTab(tabId);
@@ -2079,7 +2264,7 @@ export class EmbeddedBrowser {
     // the *old* page and the following `read` looked in the wrong document.
     // Native views never showed this because their load settled first.
     if (this.options.guests) {
-      await this.whenReady(tab, target);
+      await this.whenReady(tab, target, before);
     }
     this.syncTab(tab);
     // The page is no longer blank, so it has to take over its cell: until now
@@ -2570,6 +2755,21 @@ export class EmbeddedBrowser {
       if (staged.has(tab.id)) continue;
       const contents = tab.view?.webContents;
       if (!contents || contents.isDestroyed()) continue;
+      // A page with a fixed viewport keeps the box that viewport asks for
+      // instead of being zeroed. Clearing it made `set_browser_viewport` a no-op
+      // for any page the user was not looking at: the call returned the size it
+      // had stored while `innerWidth` still read the old value, and the page only
+      // picked the size up if it was later brought on stage. The box is placed
+      // just off the window, so the page is still culled from the compositor and
+      // still unreachable by the pointer.
+      const viewport = this.viewportOf(tab);
+      if (viewport && this.stage) {
+        const { rect, scale } = viewportFitRect(this.stage, viewport);
+        tab.viewportScale = scale;
+        contents.setZoomFactor(scale);
+        tab.view.setBounds({ x: -rect.width, y: rect.y, width: rect.width, height: rect.height });
+        continue;
+      }
       const bounds = tab.view.getBounds();
       if (bounds.width <= 0 || bounds.height <= 0) continue;
       tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -2984,6 +3184,8 @@ export class EmbeddedBrowser {
       target?: TargetInput;
       text?: string;
       timeoutMs: number;
+      /** For `network-idle`: how long the page must stay quiet. Default 500ms. */
+      quietMs?: number;
     },
   ): Promise<WaitResult> {
     const tab = this.requireTab(tabId);
@@ -2992,7 +3194,22 @@ export class EmbeddedBrowser {
     let last: WaitResult | undefined;
     while (Date.now() < deadline) {
       const remaining = Math.max(200, deadline - Date.now());
-      const expression = buildWaitExpression({ ...input, timeoutMs: remaining });
+      /*
+       * Idle is measured inside the page against its own collector, so it needs
+       * the collector to be there. Installing on demand keeps `wait` working on
+       * a page opened before this feature existed, and the install is idempotent
+       * on every later call.
+       */
+      if (input.condition === "network-idle") {
+        await tab.cdp.evaluate(PAGE_ACTIVITY_SCRIPT).catch(() => undefined);
+      }
+      const expression =
+        input.condition === "network-idle"
+          ? buildNetworkIdleExpression({
+              timeoutMs: remaining,
+              ...(input.quietMs === undefined ? {} : { quietMs: input.quietMs }),
+            })
+          : buildWaitExpression({ ...input, timeoutMs: remaining });
       try {
         const result = await Promise.race([
           tab.cdp.evaluate<WaitResult>(expression, { awaitPromise: true }),
@@ -3282,8 +3499,8 @@ export class EmbeddedBrowser {
 
   async screenshot(
     tabId: string,
-    options: { format?: "png" | "jpeg"; quality?: number } = {},
-  ): Promise<{ path: string; bytes: number }> {
+    options: { format?: "png" | "jpeg"; quality?: number; inline?: boolean } = {},
+  ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }> {
     const tab = this.requireTab(tabId);
     // A page the user switched away from, or one in a minimised window, has no
     // compositor frames: the CDP path would stall until its timeout, while the
@@ -3301,7 +3518,17 @@ export class EmbeddedBrowser {
     const extension = options.format === "jpeg" ? "jpg" : "png";
     const file = join(this.options.shotDir, `${tab.id.slice(0, 8)}-${stamp}.${extension}`);
     writeFileSync(file, buffer);
-    return { path: file, bytes: buffer.length };
+    // The image also travels inline when asked. The file is still written: it is
+    // what a person opens afterwards, and one write costs nothing next to the
+    // capture. Only the inline copy is optional, because base64 in a tool result
+    // is paid for in tokens.
+    return {
+      path: file,
+      bytes: buffer.length,
+      ...(options.inline
+        ? { data: buffer.toString("base64"), mimeType: extension === "jpg" ? "image/jpeg" : "image/png" }
+        : {}),
+    };
   }
 
   /**

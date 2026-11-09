@@ -168,7 +168,7 @@ export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(LOCALE_SETTINGS).optional(),
   lastSiteId: z.string().optional(),
-  lastView: z.enum(["browser", "sites", "identities", "views", "flows", "tags"]).optional(),
+  lastView: z.enum(["browser", "messages", "sites", "identities", "views", "flows", "tags"]).optional(),
   shellMode: z.enum(["browse", "bench"]).optional(),
   lastViewId: z.string().optional(),
   restoreLastView: z.boolean().optional(),

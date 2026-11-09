@@ -24,7 +24,12 @@
  * `evaluate_browser_page`, which still exists for one-off work.
  */
 
-export const WAIT_CONDITIONS = ["visible", "hidden", "text", "url", "value"] as const;
+/**
+ * `network-idle` joins the DOM conditions because a step is written as intent:
+ * "wait until the save finished" is a request-activity fact, and the model
+ * should not have to know which module answers it.
+ */
+export const WAIT_CONDITIONS = ["visible", "hidden", "text", "url", "value", "network-idle"] as const;
 export type WaitCondition = (typeof WAIT_CONDITIONS)[number];
 
 export const FLOW_ACTIONS = [

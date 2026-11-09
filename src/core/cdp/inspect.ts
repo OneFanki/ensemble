@@ -42,6 +42,22 @@ export interface DomSnapshotNode {
    */
   field?: string;
   bounds: { x: number; y: number; width: number; height: number };
+  /**
+   * Index of the nearest reported ancestor in `nodes`, or absent for a root.
+   *
+   * The list stays flat because every consumer already treats it as a list, and
+   * a nested tree would double the payload on pages that are mostly text. What
+   * was missing is *enough* structure to answer "which dialog is this button
+   * in": a parent index gets that for one integer, and a caller that does not
+   * care can ignore it.
+   *
+   * It points at the nearest ancestor that survived the same filter (visible,
+   * interactive / heading / text leaf), not necessarily the DOM parent: the
+   * skipped levels carry no information the model can use.
+   */
+  parent?: number;
+  /** Distance from the nearest reported root; 0 for a top-level node. */
+  depth?: number;
 }
 
 export interface DomSnapshot {
@@ -77,7 +93,15 @@ export interface VisibilityProbe {
   name?: string;
 }
 
-export type WaitCondition = "visible" | "hidden" | "text" | "url" | "value";
+/**
+ * What a `wait` can wait for.
+ *
+ * `network-idle` is the odd one out: the first five are page-DOM facts, and this
+ * one is a fact about the page's request activity, read from the collector in
+ * `page-log.ts`. It is here because callers pick a wait by intent — "until this
+ * settled" — not by which internal module answers it.
+ */
+export type WaitCondition = "visible" | "hidden" | "text" | "url" | "value" | "network-idle";
 
 export interface WaitResult {
   ok: boolean;
@@ -410,9 +434,30 @@ export function buildDomSnapshotExpression(
   return `(() => {${HELPERS}
     const seen = new Set();
     const nodes = [];
+    // Reported element to its index in "nodes", for resolving the parent link.
+    const indexOf = new WeakMap();
     let total = 0;
     const all = [];
     eachRoot((root) => { try { root.querySelectorAll("*").forEach((el) => all.push(el)); } catch {} });
+    // Elements are collected host-first (the outer document, then each shadow
+    // root, then each iframe), so an ancestor that was reported is always
+    // already indexed when its descendant arrives.
+    const reportedParent = (el) => {
+      let node = el.parentElement;
+      let cur = el;
+      for (let guard = 0; guard < 64; guard += 1) {
+        if (node) return node;
+        // Leave a shadow root through its host, and an iframe document through
+        // the frame element: parentElement stops at both boundaries.
+        const root = cur && typeof cur.getRootNode === "function" ? cur.getRootNode() : null;
+        if (root && root.host) { cur = root.host; node = cur.parentElement; continue; }
+        const doc = cur && cur.ownerDocument;
+        const frame = doc && doc.defaultView ? doc.defaultView.frameElement : null;
+        if (frame) { cur = frame; node = frame.parentElement; continue; }
+        break;
+      }
+      return null;
+    };
     for (const el of all) {
       if (!isVisible(el)) continue;
       const role = roleOf(el);
@@ -436,12 +481,24 @@ export function buildDomSnapshotExpression(
       total += 1;
       if (nodes.length >= ${maxNodes}) continue;
       const field = interactive ? fieldLabelOf(el).slice(0, ${maxName}) : "";
+      // Nearest reported ancestor, skipping levels that carried no name, role or
+      // text worth reporting. Bounded so an unusual tree cannot walk forever.
+      let parent;
+      let ancestor = reportedParent(el);
+      for (let guard = 0; ancestor && guard < 64; guard += 1) {
+        const index = indexOf.get(ancestor);
+        if (index !== undefined) { parent = index; break; }
+        ancestor = reportedParent(ancestor);
+      }
+      indexOf.set(el, nodes.length);
       nodes.push({
         role,
         name,
         tag: el.tagName.toLowerCase(),
         selector,
         ...(field && field !== name ? { field } : {}),
+        ...(parent === undefined ? {} : { parent }),
+        depth: parent === undefined ? 0 : nodes[parent].depth + 1,
         bounds: rectOf(el),
       });
     }

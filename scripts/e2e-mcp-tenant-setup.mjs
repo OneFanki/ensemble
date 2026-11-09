@@ -307,24 +307,34 @@ try {
     !JSON.stringify(site.value).includes(SUPER.password),
   );
 
-  // The toolbar's AI entry is the everyday way into this endpoint, so it has to
-  // report the live state — and the menu has to name the port, not just say "AI".
+  // The app menu's AI row is the everyday way into this endpoint, so it has to
+  // report the live state. It no longer prints the port: the row is one line in
+  // a menu of destinations, and the address belongs on the settings page it
+  // opens — which is where this checks the port appears.
   const mcpEntry = await client.evaluate(`(async () => {
-    const button = document.querySelector('.toolbar .ai-btn');
-    if (!button) return null;
-    const text = button.textContent.replace(/\\s+/g, ' ').trim();
-    button.click();
+    document.querySelector('[data-app-menu]')?.click();
     await new Promise((r) => setTimeout(r, 300));
-    const head = document.querySelector('.ai-menu-head')?.textContent.replace(/\\s+/g, ' ').trim() ?? '';
-    document.querySelector('.toolbar .ai-btn')?.click();
-    await new Promise((r) => setTimeout(r, 200));
-    return { text, running: button.classList.contains('on'), head };
+    const row = document.querySelector('[data-menu-item="ai"]');
+    if (!row) return null;
+    const hint = row.querySelector('.app-menu-hint')?.textContent?.trim() ?? '';
+    row.click();
+    await new Promise((r) => setTimeout(r, 700));
+    return {
+      hint,
+      onSettings: Boolean(document.querySelector('.mcp-endpoint')),
+      address: document.querySelector('.mcp-endpoint')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+    };
   })()`);
   check(
-    "the AI entry reports the running endpoint and its port",
-    mcpEntry?.running === true && mcpEntry?.head.includes(String(MCP_PORT)),
+    "the AI entry states the endpoint is running and opens a page naming its port",
+    mcpEntry?.hint === "已开启" &&
+      mcpEntry?.onSettings === true &&
+      mcpEntry.address.includes(String(MCP_PORT)),
     mcpEntry,
   );
+  // Back to the browser: the rest of this run drives pages.
+  await client.evaluate(`document.querySelector('.settings-head .back')?.click()`);
+  await new Promise((r) => setTimeout(r, 500));
 
   const admin = await tryCall("create_identity", {
     siteId,

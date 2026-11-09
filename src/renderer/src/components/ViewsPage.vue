@@ -336,7 +336,7 @@ async function confirmCopy(): Promise<void> {
 
 <template>
   <section class="page views">
-    <PageHeader :title="$t('app.views')" :note="$t('app.viewsSubtitle')">
+    <PageHeader :title="$t('app.views')">
       <template #actions>
         <AppButton
           variant="primary"

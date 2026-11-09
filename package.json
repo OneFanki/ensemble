@@ -56,6 +56,7 @@
     "e2e:split-view": "node scripts/e2e-split-view.mjs",
     "e2e:placement": "node scripts/e2e-placement.mjs",
     "e2e:login-capture": "node scripts/e2e-login-capture.mjs",
+    "e2e:messages": "node scripts/e2e-messages.mjs",
     "e2e:mcp-tenant-setup": "node scripts/e2e-mcp-tenant-setup.mjs",
     "e2e:autofill": "node scripts/e2e-autofill.mjs",
     "e2e:ui-regressions": "node scripts/e2e-ui-regressions.mjs",

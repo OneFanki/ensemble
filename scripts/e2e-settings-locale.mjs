@@ -142,8 +142,8 @@ try {
   await client.evaluate(`(() => {
     // "跟随系统" labels both the theme and the language segments; anchor on the
     // 语言 row so the click lands on the locale picker's first segment.
-    const row = [...document.querySelectorAll('.option-row')].find(
-      (item) => item.querySelector('.option-label')?.textContent?.trim() === '语言',
+    const row = [...document.querySelectorAll('.setting-row')].find(
+      (item) => item.querySelector('.setting-name')?.textContent?.trim() === '语言',
     );
     row?.querySelector('button.seg')?.click();
   })()`);

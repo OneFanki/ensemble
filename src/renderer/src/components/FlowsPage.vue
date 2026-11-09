@@ -274,7 +274,7 @@ async function saveDraft() {
 
 <template>
   <section class="page flows">
-    <PageHeader :title="$t('app.flows')" :note="$t('app.flowsSubtitle')">
+    <PageHeader :title="$t('app.flows')">
       <template #actions>
         <GroupCollapseAll
           v-if="groups.length > 1"
@@ -536,7 +536,6 @@ async function saveDraft() {
               {{ $t("app.flowStepAdd") }}
             </button>
           </div>
-          <p class="hint">{{ $t("app.flowStepTargetHint") }}</p>
           <div
             v-for="(step, index) in draft.steps"
             :key="index"
@@ -634,6 +633,7 @@ async function saveDraft() {
                     { value: 'text', label: 'text' },
                     { value: 'url', label: 'url' },
                     { value: 'value', label: 'value' },
+                    { value: 'network-idle', label: 'network-idle' },
                   ]"
                   :aria-label="$t('app.flowStepCondition')"
                   @update:model-value="step.condition = ($event as FlowStep['condition'])"

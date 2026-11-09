@@ -172,7 +172,7 @@ import IconButton from "./ui/IconButton.vue";
 
 <template>
   <section class="page tags">
-    <PageHeader :title="$t('app.tags')" :note="$t('app.tagsSubtitle')" />
+    <PageHeader :title="$t('app.tags')" />
 
     <div class="page-body">
       <!--

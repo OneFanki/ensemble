@@ -8,6 +8,7 @@ import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
+import HintIcon from "./ui/HintIcon.vue";
 
 const props = defineProps<{
   draft: SiteDraft;
@@ -138,7 +139,6 @@ function normalizePath(event: Event) {
   <Modal
     :open="true"
     :title="form.id ? $t('app.editSiteTitle') : $t('app.newSiteTitle')"
-    :description="$t('app.siteDialogDesc')"
     width="620px"
     @close="emit('close')"
   >
@@ -146,13 +146,11 @@ function normalizePath(event: Event) {
       <label class="field">
         <span class="label">{{ $t("app.envNameLabel") }}</span>
         <input v-model="form.name" class="input" :placeholder="namePlaceholder" />
-        <span class="hint">{{ $t("app.siteNameHint") }}</span>
       </label>
 
       <div class="field">
         <span class="label">{{ $t("app.tags") }}</span>
         <TagPicker v-model="form.tagIds" :tags="tags" />
-        <span class="hint">{{ $t("app.siteTagHint") }}</span>
       </div>
 
       <label class="field">
@@ -184,14 +182,16 @@ function normalizePath(event: Event) {
       </div>
 
       <label class="field">
-        <span class="label">{{ $t("app.loginMarkerOptional") }}</span>
+        <span class="label">
+          {{ $t("app.loginMarkerOptional") }}
+          <HintIcon :text="$t('app.loginMarkerHintRestored')" />
+        </span>
         <input
           v-model="form.authCheckSignedOut"
           class="input mono"
           data-field="authCheckSignedOut"
           :placeholder="$t('app.loginMarkerPlaceholder')"
         />
-        <span class="hint">{{ $t("app.loginMarkerHint") }}</span>
       </label>
 
       <!-- Header-token sites: the session lives in localStorage and rides a
@@ -199,14 +199,16 @@ function normalizePath(event: Event) {
            out. The token is read from the page at check time. -->
       <div class="row">
         <label class="field grow">
-          <span class="label">{{ $t("app.loginTokenKeyOptional") }}</span>
+          <span class="label">
+            {{ $t("app.loginTokenKeyOptional") }}
+            <HintIcon :text="$t('app.loginTokenKeyHintRestored')" />
+          </span>
           <input
             v-model="form.authTokenKey"
             class="input mono"
             data-field="authTokenKey"
             :placeholder="$t('app.loginTokenKeyPlaceholder')"
           />
-          <span class="hint">{{ $t("app.loginTokenKeyHint") }}</span>
         </label>
         <label class="field">
           <span class="label">{{ $t("app.loginTokenHeaderOptional") }}</span>
@@ -222,7 +224,6 @@ function normalizePath(event: Event) {
       <section class="group">
         <div class="group-head">
           <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
-          <span class="group-note">{{ $t("app.loginFormGroupNote") }}</span>
         </div>
 
         <!--
@@ -251,7 +252,6 @@ function normalizePath(event: Event) {
               })
             }}
           </span>
-          <span class="hint">{{ $t("app.autoSubmitNote") }}</span>
         </label>
       </section>
 
@@ -271,7 +271,6 @@ function normalizePath(event: Event) {
       <section class="group">
         <div class="group-head">
           <span class="group-title">{{ $t("app.siteDefaultPassword") }}</span>
-          <span class="group-note">{{ $t("app.siteDefaultPasswordNote") }}</span>
         </div>
 
         <label class="field">
@@ -284,12 +283,6 @@ function normalizePath(event: Event) {
               hasSitePassword ? $t('app.siteDefaultPasswordReplace') : $t('app.siteDefaultPasswordEmpty')
             "
           />
-          <span class="hint">
-            <template v-if="hasSitePassword">
-              {{ $t("app.siteDefaultPasswordSet") }}
-            </template>
-            <template v-else>{{ $t("app.siteDefaultPasswordUnset") }}</template>
-          </span>
         </label>
 
         <!-- Removing a password is a separate, deliberate act: an emptied input
@@ -401,11 +394,6 @@ function normalizePath(event: Event) {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
-}
-
-.group-note {
-  font-size: 10.5px;
-  color: var(--faint);
 }
 
 .check {

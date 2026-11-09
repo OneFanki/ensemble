@@ -927,7 +927,6 @@ async function openBlankInView(
         </section>
 
         <p v-if="!totalRunning" class="dock-empty">{{ t("app.noRunningIdentity") }}</p>
-        <p class="dock-hint">{{ t("app.browserDropHint") }}</p>
       </div>
 
       <footer v-if="workspace.instances.length" class="dock-foot">
@@ -1664,14 +1663,6 @@ async function openBlankInView(
   line-height: 1.6;
   color: var(--faint);
   text-align: center;
-}
-
-.dock-hint {
-  margin: 0;
-  padding: 0 4px;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--faint);
 }
 
 .dock-foot {

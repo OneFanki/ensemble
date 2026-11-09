@@ -543,7 +543,7 @@ function onDropOnNothing(): void {
 
 <template>
   <section class="page bookmarks-page" @dragleave.self="onDropOnNothing">
-    <PageHeader :title="t('app.bookmarksPageTitle')" :note="t('app.bookmarksPageHint')">
+    <PageHeader :title="t('app.bookmarksPageTitle')">
       <template #actions>
         <!--
           Picking mode swaps creation for the selection actions: the count, a

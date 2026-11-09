@@ -29,7 +29,9 @@ import {
   AppWindow,
   ArrowLeft,
   ArrowRight,
+  Bell,
   Bookmark as BookmarkIcon,
+  BookOpenText,
   Bug,
   Check,
   Copy,
@@ -57,7 +59,7 @@ import {
   Users,
   X,
 } from "lucide-vue-next";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFloatingLayer } from "../composables/floatingLayer";
 import { useStageGeometry } from "../composables/stageGeometry";
@@ -90,11 +92,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** Open a management page; `null` means "settings", the menu's default. */
-  openConsole: [view?: "sites" | "bookmarks" | "settings"];
+  openConsole: [view?: "sites" | "bookmarks" | "settings" | "messages"];
   /** Single cell ↔ workbench. */
   switchMode: [mode: "browse" | "bench"];
   /** The app menu's "open the workbench" — same action as the layout button. */
   openWorkspace: [];
+  /** The app menu's guide entry; the shell owns the dialog. */
+  openGuide: [];
   /** A manual update check from the menu found something to install. */
   updateFound: [result: UpdateCheckResult];
 }>();
@@ -123,32 +127,21 @@ const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
 const findOpen = ref(false);
 
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
-/** The AI endpoint menu: state, address and the way to settings. */
-const aiMenuOpen = ref(false);
+/** The AI endpoint's live state, shown beside the app menu's AI entry. */
+const aiRunning = computed(() => Boolean(workspace.mcp?.running));
 
-/**
- * Closes the AI menu on a click anywhere outside it.
- *
- * It was the one popup in the toolbar that had no dismissal at all: it opened
- * from its own button and only closed by clicking that button again. Combined
- * with the header being a drag region — where clicks were swallowed before they
- * reached the page — the only reliable way out was to find the same small icon.
- */
-watch(aiMenuOpen, (open) => {
-  if (open) window.addEventListener("pointerdown", onAiMenuOutside, true);
-  else window.removeEventListener("pointerdown", onAiMenuOutside, true);
-});
-
-function onAiMenuOutside(event: PointerEvent): void {
-  const target = event.target;
-  if (target instanceof Element && target.closest(".ai-entry")) return;
-  aiMenuOpen.value = false;
+/** Toggles the docked DevTools for the page in front, from the menu. */
+function toggleDevtoolsFromMenu(): void {
+  const page = activeTab.value;
+  if (!page || isBlankTab(page)) return;
+  appMenuOpen.value = false;
+  if (page.devtoolsOpen) closeDevTools(page.id);
+  else openDevTools(page.id);
 }
 
-useFloatingLayer(aiMenuOpen);
-
+/** The AI entry lives in the app menu now; its status dot moved with it. */
 function openMcpSettings(): void {
-  aiMenuOpen.value = false;
+  appMenuOpen.value = false;
   navigation.navigate("settings", "mcp");
 }
 
@@ -194,6 +187,11 @@ function openWorkspaceFromMenu(): void {
 function openPageFromMenu(view: "sites" | "bookmarks" | "settings"): void {
   appMenuOpen.value = false;
   emit("openConsole", view);
+}
+
+function openGuideFromMenu(): void {
+  appMenuOpen.value = false;
+  emit("openGuide");
 }
 
 async function checkForUpdates(): Promise<void> {
@@ -795,6 +793,7 @@ function onGlobalViewportOutside(event: PointerEvent): void {
 
 onBeforeUnmount(() => {
   window.removeEventListener("pointerdown", onGlobalViewportOutside, true);
+  stopFindRequested();
 });
 
 async function applyGlobalViewport(size: { width: number; height: number } | null): Promise<void> {
@@ -1315,6 +1314,10 @@ function onDocumentPointerDown(event: PointerEvent) {
   downloadsOpen.value = false;
 }
 
+/* Ctrl+F pressed inside a page: the page swallowed the keystroke, so main tells
+   us to open the bar. */
+const stopFindRequested = window.ensemble.onFindRequested(() => openFindBar());
+
 onMounted(async () => {
   store.setStageMounted(true);
   await store.init();
@@ -1459,19 +1462,41 @@ watch(
   syncStageCover,
 );
 
-watch(
-  () => findOpen.value,
-  (open) => {
-    if (!open) return;
+const findInput = ref<HTMLInputElement | null>(null);
+
+/*
+ * Opening the bar focuses and selects its field.
+ *
+ * Chrome's Ctrl+F does three things at once — open, focus, select — and anything
+ * less makes the shortcut feel half-wired: typing after Ctrl+F would otherwise
+ * go to the page, and a second Ctrl+F could not be used to start a fresh query.
+ */
+watch(findOpen, (open) => {
+  if (!open) {
     findResult.value = null;
-  },
-);
+    return;
+  }
+  void nextTick(() => {
+    findInput.value?.focus();
+    findInput.value?.select();
+  });
+});
+
+/** Opens the bar if needed and puts the caret in it; Ctrl+F while it is open. */
+function openFindBar(): void {
+  if (findOpen.value) {
+    findInput.value?.focus();
+    findInput.value?.select();
+    return;
+  }
+  findOpen.value = true;
+}
 
 function onKeydown(event: KeyboardEvent): void {
   const modifier = event.ctrlKey || event.metaKey;
   if (modifier && event.key.toLowerCase() === "f") {
     event.preventDefault();
-    findOpen.value = true;
+    openFindBar();
   }
   // The page handles its own Ctrl +/- through `before-input-event`; this branch
   // covers the case where focus is in the app chrome (address bar, toolbar).
@@ -1488,8 +1513,7 @@ function onKeydown(event: KeyboardEvent): void {
     }
   }
   if (event.key === "Escape" && findOpen.value) {
-    findOpen.value = false;
-    closeFind();
+    closeFindBar();
   }
 }
 
@@ -1608,6 +1632,12 @@ async function runFind(direction: "next" | "prev" | "reset"): Promise<void> {
     forward: direction !== "prev",
     findNext: direction !== "reset",
   });
+}
+
+/** Closes the bar and clears the page's highlight. */
+function closeFindBar(): void {
+  findOpen.value = false;
+  closeFind();
 }
 
 function closeFind(): void {
@@ -1776,8 +1806,8 @@ function fillMessage(reason?: string): string {
         type="button"
         class="layout-btn no-drag"
         :class="{ 'is-bench': bench }"
-        v-tooltip="bench ? t('app.layoutHideSidebar') : t('app.layoutShowSidebar')"
-        :aria-label="bench ? t('app.layoutHideSidebar') : t('app.layoutShowSidebar')"
+        v-tooltip="bench ? t('app.layoutCollapseWorkbench') : t('app.layoutOpenWorkbench')"
+        :aria-label="bench ? t('app.layoutCollapseWorkbench') : t('app.layoutOpenWorkbench')"
         :aria-expanded="bench"
         @click="toggleBench"
       >
@@ -1962,7 +1992,8 @@ function fillMessage(reason?: string): string {
         class="icon"
         :class="{ active: findOpen }"
         v-tooltip="t('app.browserFind')"
-        @click="findOpen = !findOpen"
+        data-find-toggle
+        @click="findOpen ? closeFindBar() : openFindBar()"
       >
         <Search :size="15" />
       </button>
@@ -2139,59 +2170,6 @@ function fillMessage(reason?: string): string {
           <Plus :size="12" />
         </button>
       </div>
-      <button
-        type="button"
-        class="icon"
-        :class="{ active: activeTab?.devtoolsOpen }"
-        :disabled="!activeTab || isBlankTab(activeTab)"
-        v-tooltip="
-          activeTab?.devtoolsOpen ? t('app.browserDevToolsClose') : t('app.browserDevTools')
-        "
-        :aria-label="t('app.browserDevTools')"
-        @click="activeTab && (activeTab.devtoolsOpen ? closeDevTools(activeTab.id) : openDevTools(activeTab.id))"
-      >
-        <Bug :size="15" />
-      </button>
-      <!--
-        The AI entry, and the only place the endpoint's status is reported.
-        A browser has no status bar: putting "connected / port 8765" on a bar
-        across the bottom of every screen was the clearest single sign that this
-        was a console rather than a browser. The dot carries the state, the menu
-        carries the address.
-      -->
-      <div class="ai-entry">
-        <button
-          type="button"
-          class="ai-btn"
-          :class="{ on: workspace.mcp?.running }"
-          :aria-label="t('app.mcpAiAccess')"
-          :aria-expanded="aiMenuOpen"
-          v-tooltip="t('app.statusMcpHint')"
-          @click="aiMenuOpen = !aiMenuOpen"
-        >
-          <span class="ai-mark"><Sparkles :size="14" /></span>
-          <span class="ai-label">{{ t("app.aiEntryShort") }}</span>
-          <span
-            v-if="workspace.mcp?.running"
-            class="ai-dot"
-            :aria-label="t('app.statusConnected')"
-          ></span>
-        </button>
-        <div v-if="aiMenuOpen" class="ai-menu" role="menu">
-          <p class="ai-menu-head">
-            <span class="ai-led" :class="{ on: workspace.mcp?.running }"></span>
-            {{
-              workspace.mcp?.running
-                ? t("app.aiEndpointOn", { port: workspace.mcp.port })
-                : t("app.aiEndpointOff")
-            }}
-          </p>
-          <button type="button" role="menuitem" class="tab-menu-item" @click="openMcpSettings">
-            <Bot :size="13" />
-            {{ t("app.aiEndpointSettings") }}
-          </button>
-        </div>
-      </div>
       <OpenSiteButton
         @open-blank="store.openTab()"
         @open-blank-clean="store.openCleanTab()"
@@ -2207,6 +2185,27 @@ function fillMessage(reason?: string): string {
         was nowhere to put a second door into the sidebar. Frequent controls stay
         in the toolbar; this menu is the once-in-a-while list.
       -->
+      <!--
+        The bell: unread count, and the way into the message centre.
+
+        Only shown when something is unread. A permanently visible bell that is
+        almost always empty trains people to ignore it, and the history has its
+        own rail row for when they go looking.
+      -->
+      <button
+        v-if="workspace.unreadMessages > 0"
+        type="button"
+        class="icon messages-bell"
+        :aria-label="t('app.messagesUnread', { count: workspace.unreadMessages })"
+        v-tooltip="t('app.messagesUnread', { count: workspace.unreadMessages })"
+        data-messages-bell
+        @click="emit('openConsole', 'messages')"
+      >
+        <Bell :size="15" />
+        <span class="bell-count mono">{{
+          workspace.unreadMessages > 9 ? "9+" : workspace.unreadMessages
+        }}</span>
+      </button>
       <div class="app-menu-anchor">
         <button
           type="button"
@@ -2235,14 +2234,13 @@ function fillMessage(reason?: string): string {
             @click="openWorkspaceFromMenu"
           >
             <LayoutGrid :size="14" />
-            <span>{{ t("app.layoutOpenBench") }}</span>
+            <span>{{ t("app.layoutOpenWorkbench") }}</span>
           </button>
           <div class="app-menu-rule" role="separator"></div>
           <!--
             Where launches go, and the throwaway session beside it: both are
             "how this browser behaves", not a page to visit.
           -->
-          <p class="app-menu-title">{{ t("app.launchTargetTitle") }}</p>
           <button
             type="button"
             role="menuitemradio"
@@ -2288,6 +2286,41 @@ function fillMessage(reason?: string): string {
             <BookmarkIcon :size="14" />
             <span>{{ t("app.bookmarks") }}</span>
           </button>
+          <!--
+            Developer tools and AI access: both are "tools for this browser",
+            not something a page visit is about. They used to sit in the toolbar
+            and spent most of their life unused — the DevTools toggle in
+            particular was a permanent bug icon on every screen.
+          -->
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            class="app-menu-item"
+            data-menu-item="devtools"
+            :disabled="!activeTab || isBlankTab(activeTab)"
+            :aria-checked="Boolean(activeTab?.devtoolsOpen)"
+            @click="toggleDevtoolsFromMenu"
+          >
+            <Bug :size="14" />
+            <span>{{ t("app.browserDevTools") }}</span>
+            <Check v-if="activeTab?.devtoolsOpen" :size="13" class="app-menu-check" />
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="ai"
+            @click="openMcpSettings"
+          >
+            <Sparkles :size="14" />
+            <span>{{ t("app.mcpAiAccess") }}</span>
+            <!-- Status reads as a word in the same slot as "off", not as a dot
+                 carrying a native tooltip: the menu row already has a place for
+                 it, and a title here would be the one hint the app cannot draw. -->
+            <span v-if="aiRunning" class="app-menu-hint">{{ t("app.aiEndpointRunning") }}</span>
+            <span v-else class="app-menu-hint">{{ t("app.aiEndpointOff") }}</span>
+          </button>
+          <div class="app-menu-rule" role="separator"></div>
           <button
             type="button"
             role="menuitem"
@@ -2297,6 +2330,16 @@ function fillMessage(reason?: string): string {
           >
             <Settings :size="14" />
             <span>{{ t("app.settings") }}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="guide"
+            @click="openGuideFromMenu"
+          >
+            <BookOpenText :size="14" />
+            <span>{{ t("app.guideOpen") }}</span>
           </button>
           <div class="app-menu-rule" role="separator"></div>
           <button type="button" role="menuitem" class="app-menu-item" @click="checkForUpdates">
@@ -2321,29 +2364,42 @@ function fillMessage(reason?: string): string {
       </div>
     </div>
 
-    <div v-if="findOpen" class="findbar">
-      <input
-        v-model="findText"
-        type="text"
-        :placeholder="t('app.browserFindPlaceholder')"
-        @input="runFind('reset')"
-        @keydown.enter.prevent="runFind('next')"
-      />
-      <span class="count">
-        {{ findResult ? `${findResult.activeMatch} / ${findResult.matches}` : "—" }}
-      </span>
-      <button type="button" class="icon" @click="runFind('prev')">
-        <ArrowLeft :size="13" />
-      </button>
-      <button type="button" class="icon" @click="runFind('next')">
-        <ArrowRight :size="13" />
-      </button>
-      <button type="button" class="icon" @click="findOpen = false; closeFind()">
-        <X :size="13" />
-      </button>
-    </div>
-
     <div ref="stage" class="stage">
+      <!--
+        Find sits over the page, top-right, like every browser since Chrome.
+
+        It used to be its own row under the toolbar, which made the whole stage
+        jump down by its height whenever it opened and pushed the page layout
+        around — the one thing a transient control must not do. As an overlay it
+        costs nothing until it is used, and closing it leaves the page exactly
+        where it was.
+      -->
+      <div v-if="findOpen" class="findbar" data-find-bar>
+        <input
+          ref="findInput"
+          v-model="findText"
+          type="text"
+          :placeholder="t('app.browserFindPlaceholder')"
+          @input="runFind('reset')"
+          @keydown.enter.prevent="runFind('next')"
+          @keydown.shift.enter.prevent="runFind('prev')"
+          @keydown.esc.prevent="closeFindBar"
+        />
+        <span class="count">
+          {{ findResult ? `${findResult.activeMatch} / ${findResult.matches}` : "—" }}
+        </span>
+        <button type="button" class="icon" :aria-label="t('app.browserFindPrev')" @click="runFind('prev')">
+          <ChevronUp :size="13" />
+        </button>
+        <button type="button" class="icon" :aria-label="t('app.browserFindNext')" @click="runFind('next')">
+          <ChevronDown :size="13" />
+        </button>
+        <button type="button" class="icon" :aria-label="t('app.browserFindClose')" @click="closeFindBar">
+          <X :size="13" />
+        </button>
+      </div>
+
+
       <!-- A blank page has no node on the stage; the app draws it. -->
       <div
         v-for="surface in blankSurfaces"
@@ -3135,18 +3191,17 @@ function fillMessage(reason?: string): string {
   background: var(--line-soft);
 }
 
-/* A caption inside the menu, not an item: the launch options below it are one
-   choice with several values, and the caption is what says so. */
-.app-menu-title {
-  margin: 0;
-  padding: 4px 9px 2px;
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-}
-
 .app-menu-check {
   margin-left: auto;
   color: var(--accent-text);
+}
+
+/* Running and off are both words: the slot is one line of text either way, and a
+   bare dot would need a tooltip to say which state it meant. */
+.app-menu-hint {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  color: var(--faint);
 }
 
 /* The native window controls are drawn over the window's top-right corner, and
@@ -3161,120 +3216,6 @@ function fillMessage(reason?: string): string {
   padding-left: 82px;
 }
 
-/* ---------------------------------------------------------------------------
- * AI entry
- *
- * An icon, not an icon-plus-label: the toolbar's right end already carries the
- * zoom stepper, downloads and two page actions, and "AI 接入" was the only
- * multi-character control on the row — it read as a menu heading among buttons,
- * and it pushed the "+" (which really is a menu) to the very edge where the two
- * looked interchangeable. The label still names the button through `aria-label`
- * and `title`; the menu names the endpoint.
- * ------------------------------------------------------------------------ */
-.ai-entry {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.ai-btn {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: var(--control-lg);
-  padding: 0 9px;
-  border-radius: var(--radius);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
-.ai-btn:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-/* The AI entry is a plain toolbar button. It used to tint itself amber whenever
-   the endpoint was running, which made a status light look like a primary
-   action and pulled the eye to the far end of the row; the dot on the corner
-   carries the state, and the glyph is just an icon. */
-.ai-btn.on {
-  background: transparent;
-}
-
-.ai-label {
-  color: var(--text-secondary);
-  letter-spacing: 0.01em;
-}
-
-.ai-btn.on .ai-label {
-  color: var(--text-secondary);
-}
-
-.ai-btn:hover .ai-label {
-  color: var(--text);
-}
-
-.ai-mark {
-  display: grid;
-  place-items: center;
-  color: var(--text-secondary);
-}
-
-.ai-btn:hover .ai-mark {
-  color: var(--text);
-}
-
-/* The dot answers "is it listening" without a word, and it lives on the
-   button's corner rather than over the glyph: on the sparkle it read as part of
-   the icon, and the filled background alone says the same thing less precisely. */
-.ai-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--green);
-}
-
-.ai-menu {
-  position: absolute;
-  z-index: var(--z-dropdown);
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 232px;
-  padding: 5px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-menu);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
-  transform-origin: top right;
-}
-
-.ai-menu-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 2px 6px 6px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-
-.ai-led {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--faint);
-  flex: 0 0 5px;
-}
-
-.ai-led.on {
-  background: var(--green);
-}
 
 .toolbar {
   display: flex;
@@ -3319,12 +3260,6 @@ function fillMessage(reason?: string): string {
   color: var(--accent-text);
 }
 
-/*
- * Zoom is the one toolbar control that is a *value*, not an action, so it needs
- * a little structure — but not a permanently filled block. At rest it is as
- * quiet as the icon buttons beside it; the fill appears on hover, and the accent
- * only when this page differs from the default.
- */
 .zoom-stepper {
   display: inline-flex;
   align-items: stretch;
@@ -3692,17 +3627,42 @@ function fillMessage(reason?: string): string {
 }
 
 .findbar {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: 10px;
+  right: 14px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--line-soft);
-  flex: 0 0 auto;
+  gap: 4px;
+  width: min(340px, calc(100% - 28px));
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
 }
 
 .findbar input {
   flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--text);
+  font-size: var(--fs-base);
+  outline: none;
+}
+
+.findbar input:focus {
+  border-color: var(--accent-text);
+  background: var(--chrome);
+}
+
+.findbar .icon {
+  width: 22px;
+  height: 22px;
 }
 
 .count {

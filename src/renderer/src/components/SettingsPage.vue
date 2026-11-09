@@ -31,6 +31,8 @@ import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
+import SettingGroup from "./ui/SettingGroup.vue";
+import SettingRow from "./ui/SettingRow.vue";
 
 /**
  * The settings section on screen.
@@ -75,7 +77,6 @@ const emit = defineEmits<{
   back: [];
   theme: [theme: "dark" | "light" | "system"];
   locale: [locale: LocaleSetting];
-  openGuide: [];
   updateFound: [result: UpdateCheckResult];
 }>();
 
@@ -458,31 +459,24 @@ async function submitMaster() {
       </nav>
 
       <div class="settings-main">
-        <PageHeader :title="$t('app.settings')" :note="$t('app.settingsSubtitle')" />
+        <PageHeader :title="$t('app.settings')" />
         <div class="scroll">
-          <section v-if="activeTab === 'engines'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.engineList") }}</h2>
-                <p>{{ $t("app.engineHint") }}</p>
-              </div>
-              <div class="block-actions">
-                <AppButton :disabled="scanning" @click="store.addManualEngine()">
-                  <Plus :size="12" />
-                  {{ $t("app.addManual") }}
-                </AppButton>
-                <AppButton :disabled="scanning" @click="store.scanEngines()">
-                  <RefreshCw :size="12" :class="{ spin: scanning }" />
-                  {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
-                </AppButton>
-              </div>
-            </div>
+          <SettingGroup v-if="activeTab === 'engines'" :title="$t('app.engineList')">
+            <template #actions>
+              <AppButton :disabled="scanning" @click="store.addManualEngine()">
+                <Plus :size="12" />
+                {{ $t("app.addManual") }}
+              </AppButton>
+              <AppButton :disabled="scanning" @click="store.scanEngines()">
+                <RefreshCw :size="12" :class="{ spin: scanning }" />
+                {{ scanning ? $t("app.scanning") : $t("app.scanAgain") }}
+              </AppButton>
+            </template>
 
             <!-- The one browser external launches use. It replaced a per-site field:
                  the title bar shows a single browser, so the setting behind it has
                  to be single too, or the same switch routes differently per account. -->
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.defaultBrowser") }}</span>
+            <SettingRow :label="$t('app.defaultBrowser')" :hint="$t('app.defaultBrowserNote')">
               <div class="select-slot wide-select">
                 <SelectField
                   :model-value="store.settings.defaultEngineId ?? '__auto__'"
@@ -494,8 +488,7 @@ async function submitMaster() {
                   "
                 />
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.defaultBrowserNote") }}</p>
+            </SettingRow>
 
             <div class="engine-table">
               <div class="engine-head">
@@ -548,21 +541,11 @@ async function submitMaster() {
                 </div>
               </div>
             </div>
+          </SettingGroup>
 
-            <p class="fineprint">
-              {{ $t("app.engineCapabilityNote") }}
-            </p>
-          </section>
-
-          <section v-if="activeTab === 'general'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.appearanceTitle") }}</h2>
-                <p>{{ $t("app.appearanceNote") }}</p>
-              </div>
-            </div>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.theme") }}</span>
+          <template v-if="activeTab === 'general'">
+            <SettingGroup :title="$t('app.appearanceTitle')">
+              <SettingRow :label="$t('app.theme')">
               <div class="segmented">
                 <button
                   type="button"
@@ -589,9 +572,8 @@ async function submitMaster() {
                   {{ $t("app.themeSystem") }}
                 </button>
               </div>
-            </div>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.language") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.language')">
               <div class="segmented">
                 <button
                   type="button"
@@ -619,10 +601,11 @@ async function submitMaster() {
                   English
                 </button>
               </div>
-            </div>
-            <h3 class="group-title">{{ $t("app.settingsGroupBrowsing") }}</h3>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.defaultLayout") }}</span>
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup :title="$t('app.browsingTitle')">
+              <SettingRow :label="$t('app.defaultLayout')" :hint="$t('app.defaultLayoutNote')">
               <div class="select-slot">
                 <SelectField
                   :model-value="store.settings.layout"
@@ -637,10 +620,8 @@ async function submitMaster() {
                   "
                 />
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.defaultLayoutNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.browserZoomSetting") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.browserZoomSetting')" :hint="$t('app.browserZoomNote')">
               <div class="interval">
                 <input
                   class="input mono interval-input"
@@ -663,10 +644,8 @@ async function submitMaster() {
                 />
                 <span class="unit mono">%</span>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.browserZoomNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.searchEngineSetting") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.searchEngineSetting')" :hint="$t('app.searchEngineNote')">
               <div class="select-slot">
                 <SelectField
                   :model-value="store.settings.searchEngineId"
@@ -680,10 +659,8 @@ async function submitMaster() {
                   "
                 />
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.searchEngineNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.bookmarkShowTitle") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.bookmarkShowTitle')">
               <div class="segmented">
                 <button
                   type="button"
@@ -702,11 +679,11 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.bookmarkShowHint") }}</p>
-            <h3 class="group-title">{{ $t("app.settingsGroupLaunch") }}</h3>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.launchInterval") }}</span>
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup :title="$t('app.launchTitle')">
+              <SettingRow :label="$t('app.launchInterval')" :hint="$t('app.launchIntervalNote')">
               <div class="interval">
                 <input
                   class="input mono interval-input"
@@ -726,10 +703,8 @@ async function submitMaster() {
                 />
                 <span class="unit mono">ms</span>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.launchIntervalNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.autoFillLaunch") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.autoFillLaunch')" :hint="$t('app.autoFillLaunchNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -748,10 +723,7 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">
-              {{ $t("app.autoFillLaunchNote") }}
-            </p>
+              </SettingRow>
             <!--
               Auto-submit is its own switch, next to autofill but not part of it:
               "type my password in" and "press the button for me" are two decisions,
@@ -760,8 +732,7 @@ async function submitMaster() {
               can override this in its own dialog; that override is the exception, so
               the normal answer belongs here.
             -->
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.autoSubmitLabel") }}</span>
+              <SettingRow :label="$t('app.autoSubmitLabel')" :hint="$t('app.autoSubmitNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -780,12 +751,8 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">
-              {{ $t("app.autoSubmitNote") }}
-            </p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.restoreView") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.restoreView')" :hint="$t('app.restoreViewNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -804,11 +771,8 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.restoreViewNote") }}</p>
-            <h3 class="group-title">{{ $t("app.settingsGroupApp") }}</h3>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.autoUpdateSetting") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.autoUpdateSetting')" :hint="$t('app.autoUpdateNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -827,15 +791,16 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.autoUpdateNote") }}</p>
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup :title="$t('app.networkTitle')">
             <!-- Network proxy: one setting for update checks, downloads and the
                  pages in the built-in browser, because all three use Chromium's
                  session. "Follow system" is the default and covers the common case
                  (Clash with the system proxy on); manual exists for setups that
                  never reach the OS settings. -->
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.proxySetting") }}</span>
+            <SettingRow :label="$t('app.proxySetting')" :hint="$t('app.proxyNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -862,9 +827,11 @@ async function submitMaster() {
                   {{ $t("app.proxyManual") }}
                 </button>
               </div>
-            </div>
-            <div v-if="store.settings.proxyMode === 'manual'" class="option-row proxy-fields">
-              <label class="option-label" for="proxy-url">{{ $t("app.proxyUrlLabel") }}</label>
+              </SettingRow>
+              <SettingRow
+                v-if="store.settings.proxyMode === 'manual'"
+                :label="$t('app.proxyUrlLabel')"
+              >
               <input
                 id="proxy-url"
                 class="input mono proxy-input"
@@ -873,12 +840,14 @@ async function submitMaster() {
                 spellcheck="false"
                 @change="saveProxyUrl(($event.target as HTMLInputElement).value)"
               />
-            </div>
-            <p v-if="store.settings.proxyMode === 'manual' && !proxyUrlUsable" class="fineprint warn">
-              {{ $t("app.proxyManualInvalid") }}
-            </p>
-            <div v-if="store.settings.proxyMode !== 'system'" class="option-row proxy-fields">
-              <label class="option-label" for="proxy-bypass">{{ $t("app.proxyBypassLabel") }}</label>
+              </SettingRow>
+              <p v-if="store.settings.proxyMode === 'manual' && !proxyUrlUsable" class="fineprint warn">
+                {{ $t("app.proxyManualInvalid") }}
+              </p>
+              <SettingRow
+                v-if="store.settings.proxyMode !== 'system'"
+                :label="$t('app.proxyBypassLabel')"
+              >
               <input
                 id="proxy-bypass"
                 class="input mono proxy-input"
@@ -887,33 +856,32 @@ async function submitMaster() {
                 spellcheck="false"
                 @change="saveProxyBypass(($event.target as HTMLInputElement).value)"
               />
-            </div>
-            <p class="fineprint">{{ $t("app.proxyNote") }}</p>
-            <div class="option-row proxy-fields">
-              <span class="option-label">{{ $t("app.proxyTestLabel") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.proxyTestLabel')">
               <AppButton size="sm" :disabled="probing" @click="runConnectivityTest">
                 {{ probing ? $t("app.proxyTestRunning") : $t("app.proxyTestButton") }}
               </AppButton>
-            </div>
-            <ul v-if="probeResults" class="probe-results">
-              <li v-for="result in probeResults" :key="result.id" class="probe-row">
-                <span class="probe-dot" :class="result.status"></span>
-                <span class="probe-name">
-                  {{ $t(result.id === "updateApi" ? "app.probeUpdateApi" : "app.probeProxyExit") }}
-                </span>
-                <span class="mono probe-detail">
-                  {{
-                    result.status === "ok"
-                      ? $t("app.probeOk", { ms: result.ms })
-                      : $t("app.probeFail", { message: result.message ?? "" })
-                  }}
-                </span>
-              </li>
-            </ul>
-            <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
-            <h3 class="group-title">{{ $t("app.settingsGroupExtras") }}</h3>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.overlaySetting") }}</span>
+              </SettingRow>
+              <ul v-if="probeResults" class="probe-results">
+                <li v-for="result in probeResults" :key="result.id" class="probe-row">
+                  <span class="probe-dot" :class="result.status"></span>
+                  <span class="probe-name">
+                    {{ $t(result.id === "updateApi" ? "app.probeUpdateApi" : "app.probeProxyExit") }}
+                  </span>
+                  <span class="mono probe-detail">
+                    {{
+                      result.status === "ok"
+                        ? $t("app.probeOk", { ms: result.ms })
+                        : $t("app.probeFail", { message: result.message ?? "" })
+                    }}
+                  </span>
+                </li>
+              </ul>
+              <p v-if="probeReadout" class="fineprint">{{ probeReadout }}</p>
+            </SettingGroup>
+
+            <SettingGroup :title="$t('app.windowTitle')">
+              <SettingRow :label="$t('app.overlaySetting')" :hint="$t('app.overlaySettingNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -932,10 +900,8 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.overlaySettingNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.focusLabelSetting") }}</span>
+              </SettingRow>
+              <SettingRow :label="$t('app.focusLabelSetting')" :hint="$t('app.focusLabelSettingNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -954,10 +920,11 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.focusLabelSettingNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.headlessUaSetting") }}</span>
+              </SettingRow>
+            </SettingGroup>
+
+            <SettingGroup :title="$t('app.detectionTitle')">
+              <SettingRow :label="$t('app.headlessUaSetting')" :hint="$t('app.headlessUaNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -976,24 +943,11 @@ async function submitMaster() {
                   {{ $t("app.headlessUaHeadless") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.headlessUaNote") }}</p>
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.guideTitle") }}</span>
-              <AppButton @click="emit('openGuide')">
-                {{ $t("app.guideShow") }}
-              </AppButton>
-            </div>
-            <p class="fineprint">{{ $t("app.guideShowNote") }}</p>
-          </section>
+              </SettingRow>
+            </SettingGroup>
+          </template>
 
-          <section v-if="activeTab === 'vault'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.vaultTitle") }}</h2>
-                <p>{{ $t("app.vaultNote") }}</p>
-              </div>
-            </div>
+          <SettingGroup v-if="activeTab === 'vault'" :title="$t('app.vaultTitle')">
             <div class="vault-row">
               <ShieldCheck v-if="store.credentials?.secure" :size="16" class="vault-icon ok" />
               <ShieldAlert v-else :size="16" class="vault-icon warn" />
@@ -1066,22 +1020,13 @@ async function submitMaster() {
               </div>
               <p v-if="masterError" class="error" role="alert">{{ masterError }}</p>
             </div>
+            <!-- Stays visible: a master password that cannot be recovered is a
+                 consequence nobody should discover afterwards. -->
+            <p class="fineprint">{{ $t("app.vaultExplainer") }}</p>
+          </SettingGroup>
 
-            <p class="fineprint">
-              {{ $t("app.vaultExplainer") }}
-            </p>
-          </section>
-
-          <section v-if="activeTab === 'data'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.dataTitle") }}</h2>
-                <p>{{ $t("app.dataNote") }}</p>
-              </div>
-            </div>
-
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.closeToTray") }}</span>
+          <SettingGroup v-if="activeTab === 'data'" :title="$t('app.dataTitle')">
+            <SettingRow :label="$t('app.closeToTray')" :hint="$t('app.closeToTrayNote')">
               <div class="segmented">
                 <button
                   type="button"
@@ -1100,8 +1045,7 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.closeToTrayNote") }}</p>
+            </SettingRow>
 
             <div class="transfer">
               <div class="transfer-col">
@@ -1220,29 +1164,22 @@ async function submitMaster() {
               </div>
             </div>
             <p v-if="transferError" class="error" role="alert">{{ transferError }}</p>
-          </section>
+          </SettingGroup>
 
-          <section v-if="activeTab === 'mcp'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.mcpTitle") }}</h2>
-                <p>{{ $t("app.mcpNote") }}</p>
-              </div>
-              <div class="block-actions">
-                <span class="status-chip" :class="{ on: mcp?.running }">
-                  {{
-                    mcp?.running
-                      ? $t("app.mcpRunning")
-                      : mcp?.starting
-                        ? $t("app.mcpStarting")
-                        : $t("app.mcpStopped")
-                  }}
-                </span>
-              </div>
-            </div>
+          <SettingGroup v-if="activeTab === 'mcp'" :title="$t('app.mcpTitle')">
+            <template #actions>
+              <span class="status-chip" :class="{ on: mcp?.running }">
+                {{
+                  mcp?.running
+                    ? $t("app.mcpRunning")
+                    : mcp?.starting
+                      ? $t("app.mcpStarting")
+                      : $t("app.mcpStopped")
+                }}
+              </span>
+            </template>
 
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.mcpEnable") }}</span>
+            <SettingRow :label="$t('app.mcpEnable')">
               <div class="segmented">
                 <button
                   type="button"
@@ -1261,16 +1198,14 @@ async function submitMaster() {
                   {{ $t("app.off") }}
                 </button>
               </div>
-            </div>
+            </SettingRow>
 
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.mcpPort") }}</span>
+            <SettingRow :label="$t('app.mcpPort')">
               <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
               <AppButton @click="updatePort">{{ $t("app.mcpApplyPort") }}</AppButton>
-            </div>
+            </SettingRow>
 
-            <div class="option-row">
-              <span class="option-label">{{ $t("app.mcpPermissions") }}</span>
+            <SettingRow :label="$t('app.mcpPermissions')">
               <div class="perm-row">
                 <label class="check">
                   <input
@@ -1297,7 +1232,9 @@ async function submitMaster() {
                   <span>{{ $t("app.mcpAllowDelete") }}</span>
                 </label>
               </div>
-            </div>
+            </SettingRow>
+            <!-- The one hint on this page that stays on screen: it is the only
+                 place that says what enabling delete permission actually grants. -->
             <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
 
             <!--
@@ -1306,8 +1243,7 @@ async function submitMaster() {
               about what the AI is allowed to do; the toolbar entry exists because
               that is where they notice it needs granting.
             -->
-            <div v-if="mcp" class="origin-block">
-              <span class="origin-label">{{ $t("app.mcpAiOrigins") }}</span>
+            <SettingRow v-if="mcp" :label="$t('app.mcpAiOrigins')" :hint="$t('app.mcpAiOriginsNote')">
               <div class="origin-list">
                 <span v-if="!mcp.aiOrigins.length" class="origin-empty">
                   {{ $t("app.mcpAiOriginsEmpty") }}
@@ -1324,8 +1260,7 @@ async function submitMaster() {
                   </button>
                 </span>
               </div>
-            </div>
-            <p class="fineprint">{{ $t("app.mcpAiOriginsNote") }}</p>
+            </SettingRow>
 
             <div v-if="mcp" class="mcp-endpoint">
               <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
@@ -1360,18 +1295,12 @@ async function submitMaster() {
               <p class="fineprint">{{ $t("app.mcpTokenNote") }}</p>
             </div>
             <p v-if="mcp?.error" class="error" role="alert">{{ mcp.error }}</p>
-          </section>
+          </SettingGroup>
 
-          <section v-if="activeTab === 'about'" class="block">
-            <div class="block-head">
-              <div>
-                <h2>{{ $t("app.about") }}</h2>
-                <p>{{ $t("app.aboutTagline") }}</p>
-              </div>
-              <div class="block-actions">
-                <AppButton variant="danger" @click="quitApp">{{ $t("app.quitApp") }}</AppButton>
-              </div>
-            </div>
+          <SettingGroup v-if="activeTab === 'about'" :title="$t('app.about')">
+            <template #actions>
+              <AppButton variant="danger" @click="quitApp">{{ $t("app.quitApp") }}</AppButton>
+            </template>
             <dl class="about">
               <div><dt>{{ $t("app.version") }}</dt><dd class="mono">{{ store.snapshot?.appVersion }}</dd></div>
               <div><dt>{{ $t("app.platform") }}</dt><dd class="mono">{{ store.snapshot?.platform }}</dd></div>
@@ -1403,7 +1332,7 @@ async function submitMaster() {
                 </AppButton>
               </div>
             </div>
-          </section>
+          </SettingGroup>
         </div>
       </div>
     </div>
@@ -1548,92 +1477,10 @@ async function submitMaster() {
   padding-right: 2px;
 }
 
-.block {
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  padding: 14px 16px;
-  /* One column, not the full window. A label column of 132px followed by a
-     170px control left roughly 1100px of nothing on every row, so the eye had to
-     cross the whole screen to pair a label with its value, and the hairline
-     dividers ran that far too. 820px fits label + control + a comment at a
-     readable measure. */
-  max-width: 820px;
-}
-
 /*
- * Each setting is a row, and rows are separated by a hairline.
- *
- * Without one, the explanatory line under a control and the label of the next
- * control sat at the same visual weight and the same distance, so a column of
- * ten settings read as one paragraph with widgets in it. The rule states where
- * one setting ends; the first row in a block sits directly under the block
- * heading, which already does that job.
+ * Rows and cards come from `SettingGroup` / `SettingRow`; the only row styling
+ * left here is what those components do not cover.
  */
-.option-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line-soft);
-  min-width: 0;
-}
-
-/* The first row in a block follows the block's own heading, which already
-   separates it. */
-.block-head + .option-row,
-.block > .option-row:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-/*
- * Section titles inside one tab. The rows are one flat list otherwise — a
- * dozen unrelated settings in a row reads as a wall. A group title is a quiet
- * label, not another card: it opens a section with whitespace and carries the
- * first row's separator itself, so no double line appears.
- */
-.group-title {
-  margin: 26px 0 0;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.group-title + .option-row {
-  margin-top: 0;
-  border-top: 0;
-  padding-top: 10px;
-}
-
-.block-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.block-head h2 {
-  margin: 0;
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.block-head p {
-  margin: 5px 0 0;
-  font-size: 11.5px;
-  color: var(--faint);
-  line-height: 1.55;
-  max-width: 620px;
-}
-
-.block-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 7px;
-  flex: 0 0 auto;
-}
-
 .spin {
   animation: spin var(--motion-slow) linear infinite;
 }

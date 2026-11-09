@@ -29,6 +29,16 @@ const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-mcp-"));
 
 const page = createServer((req, res) => {
   const url = req.url ?? "/";
+  // A slow endpoint the page can call, so "wait for network idle" has something
+  // that is genuinely busy for a while.
+  if (url.startsWith("/slow")) {
+    const ms = Number(new URL(url, "http://x").searchParams.get("ms") ?? 400);
+    setTimeout(() => {
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      res.end("ok");
+    }, ms);
+    return;
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>应用 ${url}</title>
 <style>body{margin:0;font-family:system-ui}h1{padding:10px;background:#2563eb;color:#fff;margin:0}
@@ -40,6 +50,23 @@ button{padding:8px 14px;margin:16px}</style></head><body>
 <div class="n-form-item"><div class="n-form-item-label">备注</div><input id="note" aria-label="备注" /></div>
 <button id="go" onclick="document.getElementById('done').textContent='已提交'">提交</button>
 <span id="done"></span>
+<div role="dialog" aria-label="确认删除">
+  <p>这个操作不可撤销</p>
+  <button id="ok">确定</button>
+  <button id="cancel">取消</button>
+</div>
+<script>
+  // Just enough to prove the page-side collector sees what a page really does:
+  // a console line, an uncaught error, and a request that keeps the page busy.
+  console.error("smoke: 保存失败");
+  setTimeout(function () { throw new Error("smoke: 临时故障"); }, 0);
+  document.getElementById("ok").addEventListener("click", function () {
+    window.__smokeStarted = Date.now();
+    fetch("/slow?ms=900").then(function (r) { return r.text(); }).then(function () {
+      window.__smokeDone = Date.now();
+    });
+  });
+</script>
 </body></html>`);
 });
 await new Promise((done) => page.listen(PAGE_PORT, "127.0.0.1", done));
@@ -289,6 +316,71 @@ try {
   await tool("navigate_browser_tab", { tabId, url: BASE + "/page-b" }, (v) => v !== undefined);
   await wait(1200);
   await tool("read_browser_page", { tabId }, (v) => (v?.nodes?.length ?? 0) > 0);
+
+  // ---- snapshot shape: the list carries enough structure to say what owns what
+  const nested = await tool(
+    "read_browser_page",
+    { tabId },
+    (v) =>
+      // The dialog's buttons must point at the dialog, not sit as roots: that
+      // parent link is the whole reason the snapshot stopped being a flat list.
+      (v?.nodes ?? []).some(
+        (node) =>
+          node.role === "button" &&
+          node.name === "确定" &&
+          typeof node.parent === "number" &&
+          v.nodes[node.parent]?.name === "确认删除",
+      ),
+  );
+  record(
+    "snapshot nodes carry a parent index for the container they sit in",
+    nested.ok,
+    nested.value?.nodes?.filter((n) => n.role === "button").slice(0, 4),
+  );
+
+  // ---- console history: what the page logged, read on demand
+  const consoleRead = await tool(
+    "read_browser_console",
+    { tabId },
+    (v) =>
+      (v?.logs ?? []).some((line) => String(line.text).includes("smoke: 保存失败")) &&
+      (v?.logs ?? []).some((line) => String(line.text).includes("smoke: 临时故障")),
+  );
+  record("console lines and uncaught errors reach the reader", consoleRead.ok, consoleRead.value?.logs?.slice(0, 4));
+  // Reading clears: a second read must not repeat the same lines.
+  const consoleSecond = await tool("read_browser_console", { tabId }, (v) => (v?.logs ?? []).length === 0);
+  record("a second console read reports only what is new", consoleSecond.ok, consoleSecond.value?.logs);
+
+  // ---- network idle: busy while a request is open, idle once it settles
+  const busy = await tool(
+    "evaluate_browser_page",
+    { tabId, expression: "document.getElementById('ok').click(); 'clicked'" },
+    (v) => v === "clicked",
+  );
+  record("the slow request was started", busy.ok, busy.value);
+  const idle = await tool(
+    "wait_browser",
+    { tabId, condition: "network-idle", quietMs: 300, timeoutMs: 6000 },
+    (v) => v?.ok === true,
+  );
+  // It must have actually waited out the request: answering "idle" instantly
+  // would mean the in-flight request was invisible to the collector.
+  record(
+    "network-idle waits for the request in flight instead of answering at once",
+    idle.ok && (idle.value?.waitedMs ?? 0) >= 500,
+    idle.value,
+  );
+  const settled = await tool(
+    "evaluate_browser_page",
+    {
+      tabId,
+      expression:
+        "(() => ({ done: Boolean(window.__smokeDone), spent: (window.__smokeDone || 0) - (window.__smokeStarted || 0) }))()",
+    },
+    (v) => v?.done === true && v.spent >= 800,
+  );
+  record("idle landed after the request finished, not before", settled.ok, settled.value);
+
   await tool("check_element_visible", { tabId, label: "备注" }, (v) => typeof v === "object");
   await tool("evaluate_browser_page", { tabId, expression: "document.title" }, (v) => typeof v === "string");
   await tool("wait_browser", { tabId, condition: "text", expect: "应用", timeoutMs: 5000 }, (v) => v !== undefined);
@@ -308,17 +400,92 @@ try {
   await tool("fill_browser_login", { tabId }, (v) => v !== undefined);
   await tool("screenshot_browser_tab", { tabId }, (v) => (v?.bytes ?? 0) > 1000);
 
+  /*
+   * The image itself, when asked for. `call` only parses the text block, so this
+   * one is a raw request: what matters is that a second block of type `image`
+   * exists and holds actual data. Without it, a client that cannot open a local
+   * path has no way to see the page at all.
+   */
+  {
+    const response = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: ++seq,
+        method: "tools/call",
+        params: {
+          name: "screenshot_browser_tab",
+          arguments: { tabId, inline: true, format: "jpeg" },
+        },
+      }),
+    });
+    const json = await response.json();
+    const blocks = json.result?.content ?? [];
+    const image = blocks.find((block) => block.type === "image");
+    record(
+      "an inline screenshot returns the image itself",
+      image?.mimeType === "image/jpeg" && typeof image.data === "string" && image.data.length > 500,
+      image ? { mimeType: image.mimeType, chars: image.data.length } : blocks.map((b) => b.type),
+    );
+    const meta = blocks.find((block) => block.type === "text");
+    record(
+      "the inline result still names the file on disk",
+      Boolean(meta) && JSON.parse(meta.text).path !== undefined,
+      meta ? JSON.parse(meta.text) : undefined,
+    );
+  }
+
   // ---- browser: layout and tabs ----
   // Omitting viewId is the documented way to mean "the view on stage", and it is
   // also the only form that works: the definition id is not a runtime view.
   await tool("set_browser_layout", { layoutId: "2x2" }, (v) => v !== undefined);
   await tool("set_browser_layout", { layoutId: "1x1" }, (v) => v !== undefined);
+
+  /*
+   * The viewport tool is checked by what the page reports, not by its return
+   * value. It used to answer `{width, height}` while `innerWidth` never moved,
+   * and a check on the return value passed anyway.
+   */
+  const pageWidth = async () => {
+    const value = await call("evaluate_browser_page", { tabId, expression: "innerWidth" });
+    return typeof value === "number" ? value : Number.NaN;
+  };
   await tool("set_browser_viewport", { tabId, width: 390, height: 844 }, (v) => v !== undefined);
+  await wait(500);
+  record("set_browser_viewport changes innerWidth", (await pageWidth()) === 390, {
+    measured: await pageWidth(),
+  });
   await tool("reset_browser_viewport", { tabId }, (v) => v !== undefined);
+  await wait(500);
+  {
+    const restored = await pageWidth();
+    record("reset_browser_viewport restores the adaptive width", restored > 390, {
+      measured: restored,
+    });
+  }
 
   const second = await call("open_browser_tab", { url: BASE + "/page-c", siteId, identityId });
   const secondId = second?.tabId ?? second?.id;
   record("a second page opens", Boolean(secondId), second);
+
+  /*
+   * A viewport set on a page that is NOT the one on stage.
+   *
+   * This is the shape the bug was reported in, and it stayed invisible to the
+   * checks above because those ran while the page was alone on stage. The second
+   * page now holds the stage; `tabId` is parked. Reading `innerWidth` goes
+   * through the presentation path, which is exactly the one that used to stretch
+   * the parked page to the whole window and lose the requested size.
+   */
+  await wait(600);
+  await tool("set_browser_viewport", { tabId, width: 390, height: 844 }, (v) => v !== undefined);
+  await wait(600);
+  {
+    const measured = await pageWidth();
+    record("a viewport applies to a page that is off stage", measured === 390, { measured });
+  }
+  await tool("reset_browser_viewport", { tabId }, (v) => v !== undefined);
 
   await tool("set_tab_page", { pageId: secondId }, (v) => v !== undefined);
   await tool("pin_browser_tab", { slotIndex: 0, tabId }, (v) => v !== undefined);

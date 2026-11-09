@@ -2,6 +2,7 @@ import type { EmbeddedState } from "@shared/embedded";
 import { type EnsembleApi, type HttpAuthChallenge, IPC } from "@shared/ipc";
 import type {
   AiPageAction,
+  AppMessageView,
   AutoFillReport,
   DownloadEntry,
   FocusLabelPayload,
@@ -133,6 +134,11 @@ const api: EnsembleApi = {
   checkAllAuth: (siteId) => ipcRenderer.invoke(IPC.authCheckAll, siteId),
   reloginExpired: (siteId) => ipcRenderer.invoke(IPC.authReloginExpired, siteId),
   fillLogin: (identityId) => ipcRenderer.invoke(IPC.authFill, identityId),
+  onFindRequested: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.embeddedFindRequested, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedFindRequested, handler);
+  },
   onAutoFilled: (listener: (report: AutoFillReport) => void) => {
     const handler = (_event: unknown, report: AutoFillReport) => listener(report);
     ipcRenderer.on(IPC.authAutoFilled, handler);
@@ -179,7 +185,24 @@ const api: EnsembleApi = {
     ipcRenderer.on(IPC.embeddedLoginCaptured, handler);
     return () => ipcRenderer.removeListener(IPC.embeddedLoginCaptured, handler);
   },
+  pendingLogins: () => ipcRenderer.invoke(IPC.embeddedLoginPending),
+  onPendingLoginsChanged: (listener: (list: LoginCaptureNotice[]) => void) => {
+    const handler = (_event: unknown, list: LoginCaptureNotice[]) => listener(list);
+    ipcRenderer.on(IPC.embeddedLoginChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedLoginChanged, handler);
+  },
   dismissLoginCapture: (token) => ipcRenderer.invoke(IPC.embeddedLoginDismiss, token),
+  listMessages: () => ipcRenderer.invoke(IPC.messagesList),
+  addMessage: (input) => ipcRenderer.invoke(IPC.messagesAdd, input),
+  markMessageRead: (id) => ipcRenderer.invoke(IPC.messagesRead, id),
+  markAllMessagesRead: () => ipcRenderer.invoke(IPC.messagesReadAll),
+  removeMessage: (id) => ipcRenderer.invoke(IPC.messagesRemove, id),
+  clearMessages: () => ipcRenderer.invoke(IPC.messagesClear),
+  onMessagesChanged: (listener: (list: AppMessageView[]) => void) => {
+    const handler = (_event: unknown, list: AppMessageView[]) => listener(list);
+    ipcRenderer.on(IPC.messagesChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.messagesChanged, handler);
+  },
   closeEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedClose, tabId),
   activateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedActivate, tabId),
   navigateEmbeddedTab: (tabId, url) => ipcRenderer.invoke(IPC.embeddedNavigate, tabId, url),

@@ -9,6 +9,8 @@ import {
 } from "@shared/search";
 import { DEFAULT_NEW_TAB_BACKDROP, newTabBackdrop } from "@shared/newtab";
 import type {
+  AddMessageInput,
+  AppMessageView,
   AppSettings,
   AuthBatchResult,
   AuthCheckResult,
@@ -61,12 +63,25 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   const busy = ref<string | null>(null);
   const toasts = ref<ToastMessage[]>([]);
   /**
-   * The most recent login seen in an embedded page.
+   * Logins seen in embedded pages that have not been saved yet, newest first.
    *
-   * One at a time on purpose: this is a "sort it out now" prompt, and a stack of
-   * them would sit over the page the user is still working in.
+   * A list, not a single notice. The prompt only ever shows the newest one — a
+   * stack of bars over the page would be worse than useless while someone is
+   * still working — but dropping the older ones lost the password: the only way
+   * back was to sign out and in again, and the login the user wanted to keep was
+   * often the one that scrolled away. The list is the record, and the bar's
+   * header is simply its first entry.
    */
-  const loginCapture = ref<LoginCaptureNotice | null>(null);
+  const pendingLogins = ref<LoginCaptureNotice[]>([]);
+  /**
+   * The message centre's history, newest first.
+   *
+   * On disk rather than in memory: the point is coming back to something that
+   * already scrolled past, including after a restart. `unreadMessages` feeds both
+   * entry points' badges so neither has to count for itself.
+   */
+  const messages = ref<AppMessageView[]>([]);
+  const unreadMessages = computed(() => messages.value.filter((item) => !item.read).length);
   /** Most recently used site; only a default for new drafts, not a global scope. */
   const recentSiteId = ref<string | null>(null);
   /**
@@ -100,8 +115,22 @@ export const useWorkspaceStore = defineStore("workspace", () => {
       window.ensemble.onWorkspaceChanged((next) => apply(next));
       window.ensemble.onAutoFilled((report) => announceAutoFill(report));
       window.ensemble.onLoginCaptured((notice) => {
-        loginCapture.value = notice;
+        // Both events fire for one capture: the list is authoritative, and the
+        // single-notice event only exists so an older main process still works.
+        if (!pendingLogins.value.some((item) => item.token === notice.token)) {
+          pendingLogins.value = [notice, ...pendingLogins.value];
+        }
       });
+      window.ensemble.onPendingLoginsChanged((list) => {
+        pendingLogins.value = list;
+      });
+      // Captures made before this window existed (a reload, a reopened window)
+      // are still in main; the event only carries changes from here on.
+      pendingLogins.value = await window.ensemble.pendingLogins();
+      window.ensemble.onMessagesChanged((list) => {
+        messages.value = list;
+      });
+      messages.value = await window.ensemble.listMessages();
       window.ensemble.onMcpChanged((status) => {
         mcp.value = status;
       });
@@ -117,14 +146,54 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
+  /**
+   * Message mutations are round trips, not local edits.
+   *
+   * Main owns the staleness decision — a row whose target disappeared must come
+   * back marked — so every call returns the list as it now stands. Editing
+   * locally first would let the two disagree.
+   */
+  async function refreshMessages(): Promise<void> {
+    messages.value = await window.ensemble.listMessages();
+  }
+
+  async function markMessageRead(id: string): Promise<void> {
+    messages.value = await window.ensemble.markMessageRead(id);
+  }
+
+  async function markAllMessagesRead(): Promise<void> {
+    messages.value = await window.ensemble.markAllMessagesRead();
+  }
+
+  async function removeMessage(id: string): Promise<void> {
+    messages.value = await window.ensemble.removeMessage(id);
+  }
+
+  async function clearMessages(): Promise<void> {
+    messages.value = await window.ensemble.clearMessages();
+  }
+
+  async function addMessage(input: AddMessageInput): Promise<void> {
+    messages.value = await window.ensemble.addMessage(input);
+  }
+
   /** Forgets a capture without saving it; the secret is dropped in the main process. */
   async function dismissLoginCapture(notice: LoginCaptureNotice): Promise<void> {
-    if (loginCapture.value?.token === notice.token) loginCapture.value = null;
+    pendingLogins.value = pendingLogins.value.filter((item) => item.token !== notice.token);
     await window.ensemble.dismissLoginCapture(notice.token);
   }
 
-  function clearLoginCapture(): void {
-    loginCapture.value = null;
+  /**
+   * Drops a capture the user has just saved.
+   *
+   * The main process removes it from its own list and broadcasts, so this is
+   * only the local half: waiting for the round trip would leave the bar offering
+   * an account that already exists for a frame.
+   */
+  function clearLoginCapture(token?: string): void {
+    pendingLogins.value = token
+      ? pendingLogins.value.filter((item) => item.token !== token)
+      : [];
   }
 
   function announceAutoFill(report: AutoFillReport) {
@@ -946,7 +1015,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     loading,
     busy,
     toasts,
-    loginCapture,
+    pendingLogins,
+    messages,
+    unreadMessages,
+    refreshMessages,
+    markMessageRead,
+    markAllMessagesRead,
+    removeMessage,
+    clearMessages,
+    addMessage,
     dismissLoginCapture,
     clearLoginCapture,
     mcp,

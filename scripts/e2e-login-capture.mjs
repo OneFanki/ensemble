@@ -21,7 +21,58 @@ const electronBinary =
     ? resolve("node_modules/electron/dist/electron.exe")
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 
+/*
+ * Three shapes of login page, because the capture script has to survive all of
+ * them and each one broke it in a different way:
+ *
+ *  - /login       a plain form with a submit button (the common case)
+ *  - /spa         no <form> at all, button type="button", three fields because
+ *                 the site is multi-tenant
+ *  - /clearing    a single-page form that empties the password box on submit
+ */
+const spaPage = `<!doctype html><html><head><meta charset="utf-8"><title>SPA 登录</title></head>
+<body>
+<div class="login">
+  <div class="field"><div class="label">租户名</div><input id="tenant" type="text" placeholder="请输入租户名" /></div>
+  <div class="field"><div class="label">用户名</div><input id="user" type="text" placeholder="请输入用户名" /></div>
+  <div class="field"><div class="label">密码</div><input id="pass" type="password" placeholder="请输入密码" /></div>
+  <button id="submit" type="button">登录</button>
+</div>
+</body></html>`;
+
+const clearingPage = `<!doctype html><html><head><meta charset="utf-8"><title>清空表单</title></head>
+<body>
+<form id="f">
+  <label>账号 <input id="user" name="user" type="text" /></label>
+  <label>密码 <input id="pass" name="pass" type="password" /></label>
+  <button id="submit" type="submit">登录</button>
+</form>
+<script>
+  document.querySelector('#f').addEventListener('submit', (event) => {
+    event.preventDefault();
+    // What a lot of real single-page forms do after sending the request.
+    document.querySelector('#pass').value = '';
+    document.querySelector('#user').value = '';
+  });
+</script>
+</body></html>`;
+
 const page = createServer((req, res) => {
+  if (req.url.startsWith("/spa")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(spaPage);
+    return;
+  }
+  if (req.url.startsWith("/clearing")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(clearingPage);
+    return;
+  }
+  if (req.url.startsWith("/console")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><html><body>console</body></html>");
+    return;
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>登录页</title></head>
 <body>
@@ -33,7 +84,8 @@ const page = createServer((req, res) => {
 </body></html>`);
 });
 await new Promise((done) => page.listen(PAGE_PORT, "127.0.0.1", done));
-const PAGE_URL = `http://127.0.0.1:${PAGE_PORT}/login`;
+const BASE_URL = `http://127.0.0.1:${PAGE_PORT}`;
+const PAGE_URL = `${BASE_URL}/login`;
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
@@ -123,6 +175,46 @@ function check(name, ok, detail) {
   console.log(ok ? "PASS" : "FAIL", name, detail === undefined ? "" : JSON.stringify(detail));
 }
 
+/**
+ * The embedded page's CDP target.
+ *
+ * Matched by origin, not by the login path: submitting the form navigates to
+ * whatever the form's action is, so a path-specific lookup would silently stop
+ * finding the page after the first sign-in — and every later assertion would
+ * pass because nothing happened at all.
+ */
+async function pageTarget() {
+  const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
+  return list.find((item) => item.url.startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+}
+
+/** Types a login into the embedded page and submits it. False if the page is gone. */
+async function submitLogin(username, password) {
+  const target = await pageTarget();
+  if (!target) return false;
+  const pageClient = await connect(target.webSocketDebuggerUrl);
+  await pageClient.evaluate(`(() => {
+    const user = document.querySelector('#user');
+    const pass = document.querySelector('#pass');
+    if (!user || !pass) return false;
+    user.value = ${JSON.stringify(username)};
+    pass.value = ${JSON.stringify(password)};
+    user.dispatchEvent(new Event('input', { bubbles: true }));
+    pass.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await wait(300);
+  await pageClient.evaluate(`(() => {
+    document.querySelector('#f')?.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    return true;
+  })()`);
+  await wait(900);
+  pageClient.close();
+  return true;
+}
+
 try {
   let target;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -190,29 +282,11 @@ try {
   check("renderer can address the tab", typed === true, typed);
 
   // The embedded page is a separate target; drive it directly over CDP.
-  const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-  const loginTarget = list.find((item) => item.url.startsWith(PAGE_URL));
+  const loginTarget = await pageTarget();
   check("login page is a CDP target", Boolean(loginTarget), loginTarget?.url);
 
-  if (loginTarget) {
-    const pageClient = await connect(loginTarget.webSocketDebuggerUrl);
-    await pageClient.evaluate(`(() => {
-      const user = document.querySelector('#user');
-      const pass = document.querySelector('#pass');
-      user.value = 'admin@example.test';
-      pass.value = 'secret-from-form';
-      user.dispatchEvent(new Event('input', { bubbles: true }));
-      pass.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    })()`);
-    await wait(300);
-    await pageClient.evaluate(`(() => {
-      document.querySelector('#f').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      return true;
-    })()`);
-    await wait(900);
-    pageClient.close();
-  }
+  const typedIn = await submitLogin("admin@example.test", "secret-from-form");
+  check("the form can be submitted in the page", typedIn === true);
 
   const captured = await client.evaluate(`(async () => {
     const list = window.__captures ?? [];
@@ -236,6 +310,65 @@ try {
     "the capture is matched to the site by origin",
     captured?.notice?.siteId === siteId,
     captured?.notice,
+  );
+
+  /*
+   * The prompt is transient; the capture is not. Hiding the bar has to leave a
+   * way back to the same list, otherwise the only recovery is to sign out and in
+   * again — the thing this path exists to avoid.
+   *
+   * Runs before the account is saved: saving takes the capture out of the list on
+   * purpose, so there would be nothing left to reopen.
+   */
+  /*
+   * Closing the bar keeps the capture, and the way back is the message centre.
+   *
+   * The old shape was a count chip in the bar's place; the history is the same
+   * promise done properly — it survives a restart, and it holds the other kinds
+   * of news too. What matters here is that hiding the bar neither drops the
+   * secret nor leaves the user with no way to reach it.
+   */
+  const hidden = await client.evaluate(`(async () => {
+    document.querySelector('[data-capture-hide]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const pending = await window.ensemble.pendingLogins();
+    const messages = await window.ensemble.listMessages();
+    return {
+      barGone: !document.querySelector('[data-capture-hide]'),
+      pending: pending.length,
+      pendingUser: pending[0]?.username ?? '',
+      pendingHasPassword: pending[0]
+        ? Object.prototype.hasOwnProperty.call(pending[0], 'password')
+        : null,
+      row: messages.find((item) => item.kind === 'login-capture') ?? null,
+    };
+  })()`);
+  check(
+    "closing the prompt keeps the capture and records it in history",
+    hidden?.barGone === true &&
+      hidden?.pending === 1 &&
+      hidden?.pendingUser === "admin@example.test" &&
+      hidden?.pendingHasPassword === false &&
+      hidden?.row?.action?.type === "login-capture" &&
+      hidden?.row?.read === false,
+    hidden,
+  );
+
+  const fromHistory = await client.evaluate(`(async () => {
+    const messages = await window.ensemble.listMessages();
+    const row = messages.find((item) => item.kind === 'login-capture');
+    return {
+      hasAction: Boolean(row?.action),
+      titleKey: row?.titleKey ?? '',
+      username: row?.titleParams?.user ?? '',
+    };
+  })()`);
+  check(
+    "the history row points back at that login",
+    fromHistory?.hasAction === true &&
+      fromHistory?.username === "admin@example.test" &&
+      !String(fromHistory?.titleKey).includes("messages."),
+    fromHistory,
   );
 
   const saved = await client.evaluate(`(async () => {
@@ -264,6 +397,21 @@ try {
     saved,
   );
   check("the captured password is written to the vault", saved?.passwordSet === true, saved);
+
+  const consumed = await client.evaluate(`(async () => {
+    await new Promise((r) => setTimeout(r, 300));
+    const pending = await window.ensemble.pendingLogins();
+    return {
+      pending: pending.length,
+      barGone: !document.querySelector('[data-capture-hide]'),
+      chipGone: !document.querySelector('[data-capture-bell]'),
+    };
+  })()`);
+  check(
+    "saving takes the capture out of the list",
+    consumed?.pending === 0 && consumed?.barGone === true && consumed?.chipGone === true,
+    consumed,
+  );
 
   const reused = await client.evaluate(`(async () => {
     const notice = (window.__captures ?? [])[0];
@@ -303,28 +451,212 @@ try {
   })()`);
   check("a saved account exists before the second login", known === 2, { identities: known });
 
-  const list2 = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-  const loginTarget2 = list2.find((item) => item.url.startsWith(PAGE_URL));
-  if (loginTarget2) {
-    const pageClient = await connect(loginTarget2.webSocketDebuggerUrl);
-    await pageClient.evaluate(`(() => {
-      const user = document.querySelector('#user');
-      const pass = document.querySelector('#pass');
-      user.value = 'known@example.test';
-      pass.value = 'known-secret';
-      user.dispatchEvent(new Event('input', { bubbles: true }));
-      pass.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('#f').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      return true;
-    })()`);
-    await wait(900);
-    pageClient.close();
-  }
+  const knownSubmitted = await submitLogin("known@example.test", "known-secret");
+  check("the second sign-in reached the page", knownSubmitted === true);
 
   const afterKnown = await client.evaluate(`(window.__captures ?? []).length`);
   check("logging in as an already-saved account produces no prompt", afterKnown === 1, {
     captures: afterKnown,
   });
+
+  /*
+   * Two logins, one prompt.
+
+   * The bar shows the newest; the panel is the record. Signing in as a second
+   * account used to replace the first prompt outright, and the first password
+   * went with it.
+   */
+  await submitLogin("second@example.test", "secret-two");
+  await submitLogin("third@example.test", "secret-three");
+
+  const stacked = await client.evaluate(`(async () => {
+    await new Promise((r) => setTimeout(r, 300));
+    const pending = await window.ensemble.pendingLogins();
+    const head = document.querySelector('.capture .detail')?.textContent?.trim() ?? '';
+    document.querySelector('[data-capture-list]')?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    return {
+      pending: pending.map((item) => item.username),
+      head,
+      rows: [...document.querySelectorAll('.more .row-user')].map((el) => el.textContent.trim()),
+      barGone: !document.querySelector('[data-capture-hide]'),
+    };
+  })()`);
+  check(
+    "signing in twice keeps both logins, newest in the bar",
+    stacked?.head.includes("third@example.test") &&
+      stacked?.pending?.[0] === "third@example.test" &&
+      stacked?.pending?.[1] === "second@example.test" &&
+      stacked?.barGone === true &&
+      stacked?.rows?.join(",") === "third@example.test,second@example.test",
+    stacked,
+  );
+
+  /*
+   * An older entry is still saveable — the whole reason the list exists. Saving
+   * from the row must use *that* capture's token, not the head's.
+   */
+  const olderSaved = await client.evaluate(`(async () => {
+    // Second row: the first one is the newest, which the bar already offers.
+    const rows = [...document.querySelectorAll('.more .row-save')];
+    const row = rows[1];
+    if (!row) return { error: 'no second row' };
+    row.click();
+    await new Promise((r) => setTimeout(r, 400));
+    // The form has no test hooks; the username field is the only mono input in
+    // it whose value comes straight from the capture.
+    const values = [...document.querySelectorAll('input[type="text"], input:not([type])')]
+      .map((el) => el.value)
+      .filter(Boolean);
+    return {
+      fieldValues: values,
+      prefilled: values.includes('second@example.test'),
+    };
+  })()`);
+  check(
+    "saving an older entry opens the form for that account",
+    olderSaved?.prefilled === true,
+    olderSaved,
+  );
+
+  /*
+   * The three page shapes, each of which the script got wrong at some point.
+   * One suite, because they are the same contract seen from different markup:
+   * a submitted credential form always produces exactly one capture.
+   */
+  await client.evaluate(`(async () => {
+    for (const item of await window.ensemble.pendingLogins()) {
+      await window.ensemble.dismissLoginCapture(item.token);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    return true;
+  })()`);
+
+  const shapes = [
+    {
+      name: "a plain form with a submit button",
+      path: "/login",
+      fields: { "#user": "form@example.test", "#pass": "pw-form" },
+      expect: { username: "form@example.test" },
+    },
+    {
+      name: "a form-less component library with a tenant field",
+      path: "/spa",
+      fields: { "#tenant": "acme", "#user": "spa@example.test", "#pass": "pw-spa" },
+      expect: { username: "spa@example.test", tenant: "acme" },
+    },
+    {
+      name: "a form that clears itself on submit",
+      path: "/clearing",
+      fields: { "#user": "clear@example.test", "#pass": "pw-clear" },
+      expect: { username: "clear@example.test" },
+    },
+  ];
+
+  for (const shape of shapes) {
+    const tab = await client.evaluate(
+      `window.ensemble.openEmbeddedTab({ viewId: null, url: ${JSON.stringify(`${BASE_URL}${shape.path}`)} })`,
+    );
+    await wait(1_500);
+    const target = await pageTarget();
+    if (!target) {
+      check(`captures a login from ${shape.name}`, false, { reason: "page target missing" });
+      continue;
+    }
+    const pageClient = await connect(target.webSocketDebuggerUrl);
+    await pageClient.evaluate(`(() => {
+      const values = ${JSON.stringify(shape.fields)};
+      for (const [selector, value] of Object.entries(values)) {
+        const el = document.querySelector(selector);
+        if (!el) continue;
+        const proto = Object.getPrototypeOf(el);
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(el, value);
+        else el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    })()`);
+    await wait(250);
+    // A real click, not a synthetic submit event: this is what a person does,
+    // and the two take different code paths through the page.
+    await pageClient.evaluate(`(() => {
+      document.querySelector('#submit').click();
+      return true;
+    })()`);
+    await wait(900);
+    pageClient.close();
+
+    const pending = await client.evaluate(`window.ensemble.pendingLogins()`);
+    const head = pending?.[0];
+    const tenant = head?.extraFields?.find((field) => /租户|tenant/i.test(field.label))?.value;
+    check(
+      `captures a login from ${shape.name}`,
+      head?.username === shape.expect.username &&
+        (!shape.expect.tenant || tenant === shape.expect.tenant),
+      { pending: pending ?? [], tabId: tab?.id ?? "" },
+    );
+    if (head) {
+      await client.evaluate(`window.ensemble.dismissLoginCapture(${JSON.stringify(head.token)})`);
+      await wait(200);
+    }
+  }
+
+  /*
+   * Same username, different tenant: two accounts, so the second sign-in must
+   * still be offered. Treating them as one is how a second tenant got no prompt.
+   */
+  const tenantSite = await client.evaluate(`(async () => {
+    const snapshot = await window.ensemble.getWorkspace();
+    return snapshot.sites.find((site) => site.baseUrl.includes(${JSON.stringify(String(PAGE_PORT))})) ?? null;
+  })()`);
+  if (tenantSite) {
+    await client.evaluate(`(async () => {
+      await window.ensemble.saveIdentity({
+        siteId: ${JSON.stringify(tenantSite.id)},
+        name: '租户 A 管理员',
+        username: 'shared@example.test',
+        role: 'admin',
+        color: 'teal',
+        passwordMode: 'custom',
+        password: 'pw-a',
+        extraFields: [{ label: '租户名', value: 'tenant-a' }],
+      });
+      return true;
+    })()`);
+    const spaUrl = `${BASE_URL}/spa`;
+    await client.evaluate(
+      `window.ensemble.openEmbeddedTab({ viewId: null, url: ${JSON.stringify(spaUrl)} })`,
+    );
+    await wait(1_500);
+    const target = await pageTarget();
+    if (target) {
+      const pageClient = await connect(target.webSocketDebuggerUrl);
+      await pageClient.evaluate(`(() => {
+        const values = { '#tenant': 'tenant-b', '#user': 'shared@example.test', '#pass': 'pw-b' };
+        for (const [selector, value] of Object.entries(values)) {
+          const el = document.querySelector(selector);
+          const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+          descriptor.set.call(el, value);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return true;
+      })()`);
+      await wait(250);
+      await pageClient.evaluate(`document.querySelector('#submit').click()`);
+      await wait(900);
+      pageClient.close();
+    }
+    const pending = await client.evaluate(`window.ensemble.pendingLogins()`);
+    const tenantB = pending?.find((item) => item.username === "shared@example.test");
+    check(
+      "the same username under another tenant is still offered",
+      Boolean(tenantB) &&
+        tenantB.extraFields?.some((field) => field.value === "tenant-b"),
+      { pending: pending ?? [] },
+    );
+  }
 
   client.close();
 } catch (error) {

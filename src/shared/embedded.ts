@@ -349,6 +349,22 @@ export function guestNodeRect(input: {
     };
   }
   /*
+   * A page with a fixed viewport keeps *its own* size off stage.
+   *
+   * This is what makes `set_browser_viewport` mean something for a page nobody
+   * is looking at. The box main computes for a parked page is the fit rect of
+   * the requested viewport; before this branch existed the renderer ignored it
+   * and substituted the stage's size, so the page laid out at the window's
+   * width however small the requested viewport was — the tool reported success
+   * and `innerWidth` never changed. Position stays off-window: size is what the
+   * page reads, visibility is what the user sees.
+   */
+  if (hasBox && bounds) {
+    const width = bounds.width;
+    const height = bounds.height;
+    return { x: -width, y: stage?.y ?? 0, width, height };
+  }
+  /*
    * A page that is on stage but has no box yet is parked, not stretched.
    *
    * It used to fall through to the window-sized fallback below, which put a

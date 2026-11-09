@@ -8,6 +8,7 @@ import LayoutPreview from "./LayoutPreview.vue";
 import Modal from "./Modal.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
+import HintIcon from "./ui/HintIcon.vue";
 
 const props = defineProps<{
   draft: ViewDraft;
@@ -196,7 +197,6 @@ function submit() {
   <Modal
     :open="true"
     :title="form.id ? $t('app.editViewTitle') : $t('app.newViewTitle')"
-    :description="$t('app.viewDialogDesc')"
     width="620px"
     @close="emit('close')"
   >
@@ -207,8 +207,10 @@ function submit() {
       </label>
 
       <div class="field">
-        <span class="label">{{ $t("app.viewMembersLabel") }}</span>
-        <p class="hint">{{ $t("app.viewMemberDragHint") }}</p>
+        <span class="label">
+          {{ $t("app.viewMembersLabel") }}
+          <HintIcon :text="$t('app.viewMemberDragHintRestored')" />
+        </span>
         <!-- Grouped by site: a view may span deployments, and the group header is
              the only place that provenance is visible before saving. -->
         <div v-for="group in groupedIdentities" :key="group.siteId" class="member-group">
@@ -253,7 +255,6 @@ function submit() {
       <div class="field">
         <span class="label">{{ $t("app.tags") }}</span>
         <TagPicker v-model="form.tagIds" :tags="tags ?? []" />
-        <p class="hint">{{ $t("app.viewTagHint") }}</p>
       </div>
 
       <div class="field">

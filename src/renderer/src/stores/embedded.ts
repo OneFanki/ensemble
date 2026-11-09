@@ -45,13 +45,16 @@ export const useEmbeddedStore = defineStore("embedded", () => {
    */
   const stageMenuOpen = ref(false);
 
+  /**
+   * Marks "a menu is covering the stage".
+   *
+   * Only the stage cover is tracked here; the docked DevTools panel steps aside
+   * from `useFloatingLayer`, which every menu already goes through. Parking it
+   * from here as well made the two disagree: whichever wrote last won, and a
+   * menu closing under another one reported "nothing is open".
+   */
   function setStageMenu(open: boolean): void {
     stageMenuOpen.value = open;
-    // A docked DevTools panel is a native view: HTML stacks under it, so a menu
-    // opening across it would be buried mid-list. The panel steps aside for as
-    // long as any stage-covering menu is up, and returns when the last one
-    // closes (main is idempotent per call).
-    void window.ensemble.setDevtoolsParked(open);
   }
 
   /** Resolves once the stage has been captured and the pages parked. */
@@ -81,7 +84,6 @@ export const useEmbeddedStore = defineStore("embedded", () => {
    */
   function coverStage(): Promise<void> {
     stageMenuOpen.value = true;
-    void window.ensemble.setDevtoolsParked(true);
     if (!stageMounted.value || !tabs.value.length) return Promise.resolve();
     return new Promise((done) => {
       coverDone = done;

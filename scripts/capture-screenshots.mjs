@@ -504,6 +504,13 @@ const SHOTS = [
     script: `(() => { const seg = [...document.querySelectorAll('.seg')].find((el) => el.textContent.includes('引用')); seg?.click(); return Boolean(seg); })()`,
   },
   {
+    // The message centre: three kinds of "while you were not looking" in one
+    // list, each row showing what it can still do.
+    name: "messages",
+    locale: "zh",
+    view: "messages",
+  },
+  {
     // Tags are a page of their own in the rail now, not a Settings tab.
     name: "tags",
     locale: "zh",
@@ -718,6 +725,57 @@ async function seed(userData, locale, theme = "dark") {
         closeToTray: true,
         guideVersion: 1,
         autoCheckUpdates: false,
+      },
+      null,
+      2,
+    ),
+  );
+
+  /*
+   * A short message history so the page is not an empty state.
+   *
+   * Deliberately mixed: one row per kind, with the login-capture row unread so
+   * the rail badge and the toolbar bell both show something. Timestamps are
+   * relative to the run, otherwise the dates in the shot drift into the past.
+   */
+  const minute = 60_000;
+  const at = (minutesAgo) => new Date(Date.now() - minutesAgo * minute).toISOString();
+  await writeFile(
+    join(userData, "messages.json"),
+    JSON.stringify(
+      {
+        messages: [
+          {
+            id: uuid(31),
+            at: at(2),
+            kind: "login-capture",
+            tone: "info",
+            titleKey: "app.messagesLoginCaptured",
+            titleParams: { user: demo.people[1][1], site: demo.site },
+            action: { type: "login-capture", token: "screenshot-token" },
+            read: false,
+          },
+          {
+            id: uuid(32),
+            at: at(47),
+            kind: "account",
+            tone: "warning",
+            titleKey: "app.messagesLoginFailed",
+            titleParams: { name: demo.people[2][0], site: demo.site },
+            action: { type: "identity", identityId: uuid(4), siteId },
+            read: false,
+          },
+          {
+            id: uuid(33),
+            at: at(93),
+            kind: "ai",
+            tone: "info",
+            titleKey: "app.messagesAiAction",
+            titleParams: { tool: "click_browser_element", site: demo.site },
+            action: { type: "tab", tabId: "screenshot-tab" },
+            read: true,
+          },
+        ],
       },
       null,
       2,

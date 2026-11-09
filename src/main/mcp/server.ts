@@ -38,6 +38,16 @@ import type {
 } from "@shared/types";
 
 const DEFAULT_PORT = 47_821;
+/**
+ * Default port for a development build.
+ *
+ * The installed app keeps 47821, so a client already configured for the app the
+ * user actually uses keeps working. A dev build takes the next port instead of
+ * competing for the same socket: before this, starting `pnpm dev` while the
+ * installed copy was running left one of the two endpoints unbound after the
+ * retry ladder and then reported the port as busy.
+ */
+export const DEV_DEFAULT_PORT = 47_822;
 const MAX_BODY_BYTES = 1_000_000;
 const AUDIT_FILE = "mcp-audit.log";
 /**
@@ -88,6 +98,18 @@ const SERVER_INSTRUCTIONS = [
 
 type ToolKind = "read" | "write" | "run" | "danger";
 
+/**
+ * One block of a tool result.
+ *
+ * MCP has two content shapes that matter here: `text`, which is what every tool
+ * has always returned, and `image`, which is the only way an image ever reaches
+ * a model that cannot open a local file. A tool that returns a screenshot gives
+ * `content` back directly instead of a value to serialise.
+ */
+type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 interface ToolDefinition {
   name: string;
   description: string;
@@ -111,6 +133,15 @@ interface ToolDefinition {
    */
   hidden?: boolean;
   run: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+  /**
+   * Turns a tool's own return value into the result's content blocks.
+   *
+   * Defaults to one `text` block holding the JSON. Screenshots use it because
+   * an inline image is not JSON: base64 in a text block would be a wall of
+   * characters the model cannot see, and the whole point of asking for an image
+   * is that it be seen.
+   */
+  content?: (output: unknown) => ToolContent[];
 }
 
 /**
@@ -202,19 +233,27 @@ export interface EmbeddedSurface {
   evaluate(tabId: string, expression: string): Promise<unknown>;
   screenshot(
     tabId: string,
-    options?: { format?: "png" | "jpeg"; quality?: number },
-  ): Promise<{ path: string; bytes: number }>;
+    options?: { format?: "png" | "jpeg"; quality?: number; inline?: boolean },
+  ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }>;
   visibility(tabId: string, target: ElementTarget | string): Promise<unknown>;
   /** Polls a page condition; see `buildWaitExpression` for the conditions. */
   wait(
     tabId: string,
     input: {
-      condition: "visible" | "hidden" | "text" | "url" | "value";
+      condition: "visible" | "hidden" | "text" | "url" | "value" | "network-idle";
       target?: ElementTarget | string;
       text?: string;
       timeoutMs: number;
+      quietMs?: number;
     },
   ): Promise<WaitResult>;
+  /**
+   * Console lines and request activity since the previous read.
+   *
+   * Optional: a surface without the collector reports nothing rather than
+   * failing, which is the same shape the other capability gaps use.
+   */
+  readPageActivity?(tabId: string): Promise<unknown>;
   /** `viewId` omitted means the view currently on stage. */
   setLayout(layoutId: string, viewId?: string): unknown;
   /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
@@ -249,6 +288,7 @@ export interface EmbeddedSurface {
 
 const string = (description: string) => ({ type: "string", description });
 const integer = (description: string) => ({ type: "integer", description });
+const boolean = (description: string) => ({ type: "boolean", description });
 
 /**
  * The `tabId` property, used by every browser tool.
@@ -417,10 +457,10 @@ function targetFrom(args: Record<string, unknown>, options: { withText: boolean 
   };
 }
 
-export function defaultMcpSettings(): McpSettings {
+export function defaultMcpSettings(port: number = DEFAULT_PORT): McpSettings {
   return {
     enabled: false,
-    port: DEFAULT_PORT,
+    port,
     token: newMcpToken(),
     allowWrite: true,
     allowRun: true,
@@ -450,16 +490,20 @@ function clampPort(value: unknown): number {
 /**
  * Loads and repairs the MCP settings file. A missing token is regenerated, and an
  * invalid port falls back to the default instead of leaving the server unstartable.
+ *
+ * `defaultPort` is a parameter because a development build must not claim the
+ * installed app's port (see {@link DEV_DEFAULT_PORT}). Only the *default* moves:
+ * a port the user has chosen is honoured as written, in either build.
  */
-export function loadMcpSettings(path: string): McpSettings {
-  const store = new JsonStore<McpSettings>(path, defaultMcpSettings);
+export function loadMcpSettings(path: string, defaultPort: number = DEFAULT_PORT): McpSettings {
+  const store = new JsonStore<McpSettings>(path, () => defaultMcpSettings(defaultPort));
   let raw: Partial<McpSettings>;
   try {
     raw = store.read();
   } catch {
     raw = {};
   }
-  const defaults = defaultMcpSettings();
+  const defaults = defaultMcpSettings(defaultPort);
   // 0 is honoured as "let the OS pick a port"; it is what tests write so they
   // never fight over a fixed number.
   const port =
@@ -562,6 +606,8 @@ export class McpServer {
       auditPath: string;
       service: WorkspaceService;
       appVersion: string;
+      /** Default endpoint port when nothing is stored; see {@link DEV_DEFAULT_PORT}. */
+      defaultPort?: number;
       /**
        * The in-app browser surface. Optional so the server can be constructed in
        * tests without an Electron window; when absent the browser tools report
@@ -620,7 +666,7 @@ export class McpServer {
       }) => void;
     },
   ) {
-    this.settings = loadMcpSettings(options.settingsPath);
+    this.settings = loadMcpSettings(options.settingsPath, options.defaultPort);
   }
 
   settingsSnapshot(): McpSettings {
@@ -973,7 +1019,9 @@ export class McpServer {
               jsonrpc: "2.0",
               id,
               result: {
-                content: [{ type: "text", text: JSON.stringify(output ?? null, null, 2) }],
+                content: tool.content
+                  ? tool.content(output)
+                  : [{ type: "text", text: JSON.stringify(output ?? null, null, 2) }],
               },
             });
           } catch (error) {
@@ -2499,6 +2547,18 @@ export class McpServer {
         },
       },
       {
+        name: "read_browser_console",
+        description:
+          "读取页面自己记下的报错、console 输出和网络请求，读完即清空——回答的是「上次读取之后发生了什么」。排查「点了保存却没反应」时先用它：能看到前端异常和失败的 fetch / XHR。看不到跨域 iframe 的请求，也看不到浏览器自身的警告。",
+        kind: "read",
+        inputSchema: object({ tabId: tabIdProp() }),
+        run: (args) => {
+          const read = surface().readPageActivity;
+          if (!read) throw new Error("当前浏览器表面不支持读取控制台");
+          return read.call(surface(), tabId(args));
+        },
+      },
+      {
         name: "check_element_visible",
         description:
           "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同身份的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。",
@@ -2605,14 +2665,14 @@ export class McpServer {
       {
         name: "wait_browser",
         description:
-          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。",
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。",
         kind: "read",
         inputSchema: object(
           {
             tabId: tabIdProp(),
             condition: {
               type: "string",
-              enum: ["visible", "hidden", "text", "url", "value"],
+              enum: ["visible", "hidden", "text", "url", "value", "network-idle"],
               description: "要等的条件",
             },
             selector: string("CSS 选择器；可用 label / elementText / role 代替"),
@@ -2622,24 +2682,41 @@ export class McpServer {
             exact: { type: "boolean", description: "要求文字完全相等" },
             expect: string("text / url / value 条件要比对的文字"),
             timeoutMs: integer("最多等多久，默认 5000 毫秒"),
+            quietMs: integer("network-idle 专用：需要连续安静多久，默认 500 毫秒"),
           },
           ["condition"],
         ),
         run: (args) => {
           const condition = String(args["condition"] ?? "");
-          if (!["visible", "hidden", "text", "url", "value"].includes(condition)) {
-            throw new Error("condition 必须是 visible / hidden / text / url / value 之一");
+          if (
+            !["visible", "hidden", "text", "url", "value", "network-idle"].includes(condition)
+          ) {
+            throw new Error(
+              "condition 必须是 visible / hidden / text / url / value / network-idle 之一",
+            );
           }
           const needsTarget =
             condition === "visible" || condition === "hidden" || condition === "value";
           const target = needsTarget ? targetFrom(args, { withText: false }) : undefined;
           const expect = typeof args["expect"] === "string" ? args["expect"] : "";
-          if (!needsTarget && !expect) throw new Error(`${condition} 条件需要 expect`);
+          // Only the DOM conditions need a value to compare against; idle is a
+          // state, and requiring a needle there would be a trap.
+          if (condition !== "network-idle" && !needsTarget && !expect) {
+            throw new Error(`${condition} 条件需要 expect`);
+          }
           const timeout = Number(args["timeoutMs"]);
+          const quiet = Number(args["quietMs"]);
           return surface().wait(tabId(args), {
-            condition: condition as "visible" | "hidden" | "text" | "url" | "value",
+            condition: condition as
+              | "visible"
+              | "hidden"
+              | "text"
+              | "url"
+              | "value"
+              | "network-idle",
             ...(target ? { target } : {}),
             ...(expect ? { text: expect } : {}),
+            ...(Number.isFinite(quiet) && quiet >= 0 ? { quietMs: Math.trunc(quiet) } : {}),
             timeoutMs:
               Number.isFinite(timeout) && timeout > 0
                 ? Math.min(Math.trunc(timeout), 60_000)
@@ -2659,16 +2736,48 @@ export class McpServer {
       {
         name: "screenshot_browser_tab",
         description:
-          "给标签页截图，返回保存到磁盘的路径。窗口最小化时也能拿到画面；完全隐藏的窗口不行。",
+          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。窗口最小化时也能拿到画面；完全隐藏的窗口不行。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           format: { type: "string", enum: ["png", "jpeg"], description: "默认 png" },
+          inline: boolean("是否把图像随结果返回，默认否；远程客户端需要它才能看到画面"),
         }),
         run: (args) =>
           surface().screenshot(tabId(args), {
             format: args["format"] === "jpeg" ? "jpeg" : "png",
+            // Only when asked: the argument's absence is what keeps the default
+            // result small, and an explicit `false` would still read as a request
+            // in a log.
+            ...(args["inline"] === true ? { inline: true } : {}),
           }),
+        content: (output) => {
+          const shot = output as { path?: unknown; bytes?: unknown; data?: unknown; mimeType?: unknown };
+          // The metadata stays text as well as the image: a person reading the
+          // transcript still wants the file path, and a client that renders only
+          // text should not see an empty result.
+          const summary = JSON.stringify(
+            {
+              path: shot?.path,
+              bytes: shot?.bytes,
+              ...(typeof shot?.data === "string" ? { inline: true } : {}),
+            },
+            null,
+            2,
+          );
+          if (typeof shot?.data !== "string" || !shot.data) {
+            return [{ type: "text", text: summary }];
+          }
+          return [
+            { type: "text", text: summary },
+            {
+              type: "image",
+              data: shot.data,
+              mimeType:
+                typeof shot.mimeType === "string" ? shot.mimeType : "image/png",
+            },
+          ];
+        },
       },
       {
         name: "evaluate_browser_page",

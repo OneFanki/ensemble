@@ -58,6 +58,11 @@ describe("app icon", () => {
   });
 
   it("sets a Windows AppUserModelID so the taskbar groups under Ensemble", () => {
-    expect(source).toContain('app.setAppUserModelId("io.github.onefanki.ensemble")');
+    // Two ids, one per build: sharing one made Windows treat the development
+    // window and the installed app as a single taskbar entry, so they could not
+    // be pinned, switched or closed independently.
+    expect(source).toContain('"io.github.onefanki.ensemble"');
+    expect(source).toContain('"io.github.onefanki.ensemble.dev"');
+    expect(source).toContain("isolatedDev");
   });
 });

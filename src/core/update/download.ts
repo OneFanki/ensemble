@@ -51,7 +51,11 @@ export async function downloadUpdateAsset(
     ...(options.signal ? { signal: options.signal } : {}),
   });
   // A redirect can land anywhere; the final URL is what actually gets downloaded.
-  if (!isTrustedUpdateUrl(response.url)) {
+  // An empty `url` is not a rejection: Electron's `net.fetch` never fills that
+  // field, so the main process hands the downloader a `net.request` wrapper that
+  // reports each hop instead. When the transport cannot say where it landed, the
+  // URL that was already checked above is the only address there is to trust.
+  if (response.url && !isTrustedUpdateUrl(response.url)) {
     throw new Error("更新下载被重定向到不受信任的地址，已停止。");
   }
   if (!response.ok || !response.body) {

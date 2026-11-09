@@ -1,5 +1,15 @@
 import type { WebContents } from "electron";
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
+import { withDeadline } from "@shared/async";
+
+/**
+ * Ceiling for one CDP command.
+ *
+ * Generous against any real command (the slowest ordinary one is a page load,
+ * which arrives as several events) and short enough that a client sees an error
+ * instead of waiting out its own multi-minute timeout.
+ */
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
  * The command surface every displayed page is driven through.
@@ -117,10 +127,30 @@ export class EmbeddedCdp implements CdpExecutor {
   async send<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
   ): Promise<T> {
     await this.onActivity?.();
     await this.prepare();
-    return (await this.contents.debugger.sendCommand(method, params)) as T;
+    /*
+     * Every command is bounded.
+     *
+     * Chromium answers some commands by never replying when the target is not
+     * painting — `Page.captureScreenshot` is the documented one, but the same
+     * surface state can swallow `Runtime.evaluate` on a culled guest. Unbounded,
+     * one such command hangs the tool call that issued it with no way to tell
+     * that from a slow page: a client hits its own 90-second timeout and reports
+     * "no response", which is exactly what was observed. A per-command ceiling
+     * turns that into an error naming the command.
+     *
+     * Long-running work (`wait_browser`, a flow step) runs as repeated short
+     * commands rather than one long one, so this ceiling does not cap it.
+     */
+    const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    return (await withDeadline(
+      this.contents.debugger.sendCommand(method, params) as Promise<T>,
+      timeoutMs,
+      `CDP ${method} 没有响应`,
+    )) as T;
   }
 
   /**
@@ -134,7 +164,14 @@ export class EmbeddedCdp implements CdpExecutor {
    */
   async lifecycle(state: "frozen" | "active"): Promise<void> {
     await this.prepare();
-    await this.contents.debugger.sendCommand("Page.setWebLifecycleState", { state });
+    // Bounded like every other command: this one runs in the background sweep,
+    // where a command that never returns would silently stop the sweep from
+    // ever finishing a pass.
+    await withDeadline(
+      this.contents.debugger.sendCommand("Page.setWebLifecycleState", { state }),
+      DEFAULT_COMMAND_TIMEOUT_MS,
+      "CDP Page.setWebLifecycleState 没有响应",
+    );
   }
 
   async evaluate<T>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {

@@ -150,7 +150,25 @@ function fakeSurface(): EmbeddedSurface {
     },
     screenshot: async (tabId, options) => {
       calls.push({ method: "screenshot", args: [tabId, options] });
-      return { path: join(dir, "shot.png"), bytes: 2048 };
+      return {
+        path: join(dir, "shot.png"),
+        bytes: 2048,
+        ...(options?.inline
+          ? { data: "iVBORw0KGgo=", mimeType: "image/png" }
+          : {}),
+      };
+    },
+    readPageActivity: async (tabId: string) => {
+      calls.push({ method: "readPageActivity", args: [tabId] });
+      return {
+        url: "http://example.test/",
+        title: "页面",
+        logs: [{ at: "2026-01-01T00:00:00.000Z", level: "error", text: "boom" }],
+        inflight: [],
+        recent: [],
+        installed: true,
+        dropped: 0,
+      };
     },
     visibility: async (tabId, target) => {
       calls.push({ method: "visibility", args: [tabId, target] });
@@ -275,6 +293,7 @@ describe("browser tools are advertised", () => {
       "open_browser_tab",
       "navigate_browser_tab",
       "read_browser_page",
+      "read_browser_console",
       "check_element_visible",
       "click_browser_element",
       "type_browser_text",
@@ -555,6 +574,54 @@ describe("browser tool calls", () => {
     expect(payload.bytes).toBe(2048);
     const shot = calls.find((call) => call.method === "screenshot");
     expect(shot?.args[1]).toEqual({ format: "jpeg" });
+  });
+
+  /**
+   * A remote client cannot open a file path. The image has to travel inside the
+   * result for those clients, and only when asked, because base64 is paid for in
+   * tokens on every client including the local one.
+   */
+  it("returns the image itself when inline is asked for", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("screenshot_browser_tab", { inline: true }));
+    const blocks = json.result.content as Array<{ type: string; text?: string; data?: string }>;
+    expect(blocks[0]?.type).toBe("text");
+    const image = blocks.find((block) => block.type === "image");
+    expect(image?.data).toBe("iVBORw0KGgo=");
+    // The path stays in the text block: a person reading the transcript still
+    // wants the file, and a text-only client must not get an empty result.
+    expect(JSON.parse(blocks[0]!.text!)).toMatchObject({ bytes: 2048, inline: true });
+  });
+
+  it("keeps the default screenshot result free of image data", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("screenshot_browser_tab", {}));
+    expect(json.result.content).toHaveLength(1);
+    expect(json.result.content[0].type).toBe("text");
+    expect(json.result.content[0].text).not.toContain("iVBORw0KGgo=");
+  });
+
+  it("reads what the page logged and clears it for the next read", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("read_browser_console", {}));
+    expect(json.result.isError).toBeUndefined();
+    const activity = toolPayload(json) as { logs: Array<{ text: string }>; installed: boolean };
+    expect(activity.installed).toBe(true);
+    expect(activity.logs[0]?.text).toBe("boom");
+  });
+
+  it("waits for network idle without needing a value to compare", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("wait_browser", { condition: "network-idle", quietMs: 800 }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const waited = calls.find((call) => call.method === "wait");
+    expect(waited?.args[1]).toMatchObject({ condition: "network-idle", quietMs: 800 });
   });
 
   it("moves a tab relative to another tab", async () => {

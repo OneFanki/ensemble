@@ -21,11 +21,31 @@
  * The counter is module-level because layers nest in practice — a view menu over
  * a page, a confirm over that — and each one flipping the flag on its own would
  * have the first close re-enable dragging underneath the second.
+ *
+ * ## Docked DevTools step aside here too
+ *
+ * A docked DevTools panel is a native view: it paints over everything the
+ * renderer draws, so a dropdown opening across it is buried mid-list. The first
+ * fix for that was a manual call per menu, and it was incomplete in the way that
+ * shape always is — six of the seven menus in the toolbar never made the call,
+ * and the one that did passed a boolean, so closing either of two nested menus
+ * reported "nothing is open". Both follow from the same root cause: the
+ * knowledge of *which* surfaces overlap a native panel lived in each menu.
+ *
+ * Parking now hangs off this counter, which every floating layer already passes
+ * through. One place, correct nesting, and a new menu cannot forget.
  */
 import { watch, type Ref } from "vue";
 
 /** How many layers are open. Positive means drag regions are suspended. */
 let openLayers = 0;
+
+function publish(open: boolean): void {
+  if (open) document.documentElement.dataset["floating"] = "1";
+  else delete document.documentElement.dataset["floating"];
+  // Fire and forget: a menu must not wait on a round trip to appear.
+  void window.ensemble?.setDevtoolsParked?.(open);
+}
 
 /**
  * Publishes "a layer is open" while `open` is true.
@@ -40,8 +60,7 @@ export function useFloatingLayer(open: Ref<boolean>): void {
     open,
     (isOpen) => {
       openLayers = Math.max(0, openLayers + (isOpen ? 1 : -1));
-      if (openLayers > 0) document.documentElement.dataset["floating"] = "1";
-      else delete document.documentElement.dataset["floating"];
+      publish(openLayers > 0);
     },
     { immediate: true },
   );

@@ -46,6 +46,49 @@ describe("saved-login detection", async () => {
     expect(service.hasSavedLogin(site.id, "other@example.test")).toBe(false);
   });
 
+  /**
+   * A multi-tenant site signs in with tenant + user + password, so one username
+   * is several distinct accounts. Treating them as one is how a user signs into
+   * a second tenant and gets no save prompt at all.
+   */
+  it("keeps accounts of different tenants apart on a multi-tenant site", async () => {
+    const site = await makeSite("多租户", "http://localhost:3000");
+    await service.saveIdentity(
+      {
+        siteId: site.id,
+        name: "租户 A 管理员",
+        username: "admin",
+        role: "管理员",
+        color: "amber",
+        passwordMode: "custom",
+        extraFields: [{ label: "租户名", value: "tenant-a" }],
+      },
+      "secret-a",
+    );
+    expect(service.hasSavedLogin(site.id, "admin", "tenant-a")).toBe(true);
+    // Same username, different tenant: a new account, so it must be offered.
+    expect(service.hasSavedLogin(site.id, "admin", "tenant-b")).toBe(false);
+    // With no tenant given the entry cannot be ruled out, so it still counts.
+    expect(service.hasSavedLogin(site.id, "admin")).toBe(true);
+  });
+
+  it("does not keep apart accounts whose extra fields are unrelated to tenants", async () => {
+    const site = await makeSite("多租户", "http://localhost:3000");
+    await service.saveIdentity(
+      {
+        siteId: site.id,
+        name: "带工号",
+        username: "admin",
+        role: "管理员",
+        color: "amber",
+        passwordMode: "custom",
+        extraFields: [{ label: "工号", value: "E001" }],
+      },
+      "secret",
+    );
+    expect(service.hasSavedLogin(site.id, "admin", "tenant-b")).toBe(true);
+  });
+
   it("does not treat an identity saved without a password as saved", async () => {
     const site = await makeSite("本地", "http://localhost:3000");
     await service.saveIdentity({

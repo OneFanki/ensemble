@@ -90,9 +90,25 @@ describe("hover labels", () => {
   });
 
   it("labels every navigation row in the column", () => {
-    // Rows collapse to icons, so the label is all that is left at 46px.
+    // Rows collapse to icons, so the label is all that is left at 46px. The
+    // first row shows the pages themselves, so it is named after them —
+    // "workbench" is the column, not this destination.
     expect(sidebar).toContain('v-tooltip="t(\'app.browser\')"');
     expect(sidebar).toContain("v-tooltip=\"entry.label\"");
+  });
+
+  it("names the sidebar toggle after the workbench it opens", () => {
+    // The grid glyph only shows or hides the column, never changes the layout;
+    // its copy names what appears, which is the workbench.
+    expect(browser).toContain("t('app.layoutOpenWorkbench')");
+    expect(browser).toContain("t('app.layoutCollapseWorkbench')");
+  });
+
+  it("labels the guide entry in the app menu", () => {
+    // The guide moved out of settings: it belongs with the other "look
+    // something up" entries, not beside a switch that changes the workspace.
+    expect(browser).toContain('data-menu-item="guide"');
+    expect(browser).toContain('t("app.guideOpen")');
   });
 
   it("routes the shared icon button's hint through the directive", () => {
@@ -107,7 +123,14 @@ describe("hover labels", () => {
     // Every `title` left in the toolbar would be a control whose hint the app
     // cannot draw. The two survivors below are page URLs, which is a different
     // job: the OS tooltip truncates a long URL and lets the user read it.
-    const toolbar = browser.slice(browser.indexOf('<div class="toolbar">'), browser.indexOf('<div v-if="findOpen"'));
+    // The slice ends at the stage, not at a control inside the toolbar: a marker
+    // that moves out of the toolbar would make `indexOf` return -1, and slicing
+    // to -1 silently covers the rest of the file instead of failing.
+    const toolbar = browser.slice(
+      browser.indexOf('<div class="toolbar">'),
+      browser.indexOf('<div ref="stage"'),
+    );
+    expect(toolbar.length).toBeGreaterThan(0);
     expect(toolbar).not.toMatch(/:title="t\(/);
   });
 });

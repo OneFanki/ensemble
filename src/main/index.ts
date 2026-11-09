@@ -13,6 +13,7 @@ import {
   type ScreenRect,
   warmUpWindowFocus,
 } from "@core/launch/window-focus";
+import { MessageStore } from "@core/messages";
 import { WorkspaceService } from "@core/service";
 import { downloadUpdateAsset } from "@core/update/download";
 import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
@@ -56,6 +57,8 @@ import { detectBookmarkSources, type BookmarkImportSource as DetectSource } from
 import { parseExportFile } from "@shared/transfer";
 import type {
   AppSettings,
+  AddMessageInput,
+  AppMessageView,
   BookmarkDraft,
   BookmarkFolderDraft,
   BookmarkImportSourceInfo,
@@ -108,9 +111,18 @@ import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
 import { fixRealmEncoding, HttpAuthCoordinator } from "./http-auth";
 import { LoginCaptureStore } from "./embedded/login-capture";
-import { McpServer } from "./mcp/server";
+import { DEV_DEFAULT_PORT, McpServer } from "./mcp/server";
+import { createTrustedUpdateFetch } from "./update-fetch";
+import { DEV_APP_NAME, devUserDataDir } from "./user-data";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
+
+/**
+ * The download transport for update assets. One instance for the whole process:
+ * it holds no state, and creating a fresh one per download would only re-parse
+ * the same header list.
+ */
+const trustedUpdateFetch = createTrustedUpdateFetch();
 
 /**
  * Runs the app without putting anything on screen.
@@ -130,7 +142,35 @@ const headless = process.env["ENSEMBLE_HEADLESS"] === "1";
 // user's real one. Must happen before app ready: Electron derives session and
 // partition storage from userData, so a late override would split the two.
 const userDataOverride = process.env["ENSEMBLE_USER_DATA"]?.trim();
+
+/**
+ * Development runs in a workspace of their own, never the installed app's.
+ *
+ * See `user-data.ts` for what used to go wrong when the two shared one. The
+ * decision is made here, before the single-instance lock below, because that
+ * lock lives inside userData: two directories are two instances.
+ */
+const devDataDir = devUserDataDir({
+  packaged: app.isPackaged,
+  appDataDir: app.getPath("appData"),
+  argv: process.argv,
+  envOverride: userDataOverride,
+});
+/** True when this run is a development build with its own workspace. */
+const isolatedDev = devDataDir !== undefined;
+
 if (userDataOverride) app.setPath("userData", userDataOverride);
+else if (devDataDir) app.setPath("userData", devDataDir);
+
+/**
+ * How this build names itself in the title bar, the tray and the About panel.
+ *
+ * Set before anything reads `app.name`, and only for a development build: the
+ * packaged app's name is what Electron derives its default userData path from, so
+ * renaming it there would move an existing installation's data out from under it.
+ */
+const appDisplayName = isolatedDev ? DEV_APP_NAME : "Ensemble";
+if (isolatedDev) app.setName(DEV_APP_NAME);
 
 // Chromium's UI language follows the app's. This is the tag that reaches
 // `navigator.language` inside every embedded page, so a site that localizes by
@@ -241,6 +281,53 @@ const aiActionsByTab = new Map<string, number>();
 let settingsCache: AppSettings | null = null;
 /** Logins seen in embedded pages, waiting for the user to accept or dismiss. */
 const loginCaptures = new LoginCaptureStore();
+/**
+ * The message centre's history.
+ *
+ * Created lazily rather than at module scope: `userData` is only final after the
+ * dev/installed split has run, so a store built too early would open the file in
+ * Electron's default directory instead of beside `workspace.json`.
+ */
+let messages: MessageStore | null = null;
+
+function messageStore(): MessageStore {
+  if (!messages) messages = new MessageStore(join(userDataDir(), "messages.json"));
+  return messages;
+}
+
+/**
+ * The history as the interface sees it.
+ *
+ * Staleness is decided here, on every read, because it is a fact about the world
+ * rather than about the message: a capture token only lives in this process, a
+ * tab only while it is open, an identity only until it is deleted. History from
+ * last week still says what happened and simply stops offering the action.
+ */
+function messageViews(): AppMessageView[] {
+  const openTabs = new Set(embedded?.state().tabs.map((tab) => tab.id) ?? []);
+  const pendingTokens = new Set(loginCaptures.list().map((item) => item.token));
+  const identities = new Set((service?.snapshot().identities ?? []).map((item) => item.id));
+  return messageStore()
+    .list()
+    .map((message) => {
+      if (!message.action) return message;
+      const stale =
+        message.action.type === "login-capture"
+          ? !pendingTokens.has(message.action.token)
+          : message.action.type === "tab"
+            ? !openTabs.has(message.action.tabId)
+            : !identities.has(message.action.identityId);
+      return stale ? { ...message, stale: true } : message;
+    });
+}
+
+function broadcastMessages(): AppMessageView[] {
+  const list = messageViews();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC.messagesChanged, list);
+  }
+  return list;
+}
 
 /**
  * The in-app browser surface. Created on first use so a user who never opens it
@@ -522,9 +609,14 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
       }
     },
     onFocusTab: () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IPC.embeddedPage);
-      }
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send(IPC.embeddedPage);
+      /*
+       * Both: show the browser page *and* open find. Ctrl+F pressed inside a
+       * guest arrives here as this callback, and the renderer's own keydown
+       * handler never fires for it — the page consumed the keystroke.
+       */
+      mainWindow.webContents.send(IPC.embeddedFindRequested);
     },
     /*
      * A login form was submitted inside a page. The secret stays here: the
@@ -534,16 +626,43 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     onLoginCaptured: (capture) => {
       if (!loginCaptures) return;
       const site = service?.findSiteByOrigin(capture.origin);
+      /*
+       * A multi-tenant system asks for tenant + user + password, so the tenant is
+       * part of which account this is: `admin` on tenant A and `admin` on tenant
+       * B are different logins. Passing it through is what stops the second
+       * tenant being silently treated as "already saved".
+       */
+      const tenant = capture.extraFields?.find((field) => /tenant|租户|org|企业/i.test(field.label))?.value;
       // Signing in as an account the vault already stores (a saved identity, or
       // a page an AI opened with `fill_browser_login`) must not offer to save a
       // duplicate. Only a genuinely new credential is worth a prompt.
-      if (site && service?.hasSavedLogin(site.id, capture.username)) return;
+      if (site && service?.hasSavedLogin(site.id, capture.username, tenant)) return;
       const notice = loginCaptures.add(capture);
       if (!notice) return;
-      const withSite = site ? loginCaptures.attachSite(notice.token, site.id) : notice;
+      const withSite = site ? (loginCaptures.attachSite(notice.token, site.id) ?? notice) : notice;
+      /*
+       * The prompt is the moment; the history is the record.
+       *
+       * The bar disappears on its own and only lives while there is something
+       * pending, so without a message the login is only findable again by
+       * signing out and back in. Recorded here rather than when the user acts so
+       * that ignoring the prompt still leaves a trace of what happened.
+       */
+      messageStore().add({
+        kind: "login-capture",
+        tone: "info",
+        titleKey: "app.messagesLoginCaptured",
+        titleParams: { user: withSite.username, site: site?.name ?? withSite.origin },
+        action: { type: "login-capture", token: withSite.token },
+      });
+      // Two shapes of the same news: the single notice for the prompt, the whole
+      // list for the panel behind it. Both are sent so a listener on either one
+      // is correct, and the list is what self-corrects after an expiry.
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(IPC.embeddedLoginCaptured, withSite);
       }
+      sendPendingLogins();
+      broadcastMessages();
     },
   });
   if (mainWindow && !mainWindow.isDestroyed()) embedded.attach(mainWindow);
@@ -680,6 +799,42 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
         ...extra,
       });
     }
+    /*
+     * Only the outcomes the user has to act on go into history.
+     *
+     * A successful fill is already visible in the page and does not need to be
+     * looked up later; a failure is exactly what someone scrolls back for. The
+     * action reopens that identity's login page, which is the fix for every one
+     * of these reasons — missing password, wrong origin, form not found, and the
+     * generic "still signed out after signing in".
+     */
+    if (!extra.skipped && !(extra.filled && extra.submitted && extra.loggedIn === false)) {
+      return;
+    }
+    messageStore().add(
+      {
+        kind: "account",
+        tone: extra.skipped === "login-failed" ? "warning" : "error",
+        titleKey:
+          extra.skipped === "login-failed"
+            ? "app.messagesLoginFailed"
+            : extra.skipped === "no-password"
+              ? "app.messagesLoginNoPassword"
+              : extra.skipped === "cross-origin"
+                ? "app.messagesLoginCrossOrigin"
+                : "app.messagesLoginFormNotFound",
+        titleParams: { name: identity.name, site: site?.name ?? "" },
+        action: {
+          type: "identity",
+          identityId,
+          ...(identity.siteId ? { siteId: identity.siteId } : {}),
+        },
+      },
+      // One row per identity per five minutes: a batch launch of twelve
+      // accounts with the same broken site must not bury everything else.
+      5 * 60_000,
+    );
+    broadcastMessages();
   };
 
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -904,6 +1059,19 @@ async function restoreLastSurface(): Promise<RestoreOutcome> {
       reason: (error as Error).message,
     };
   }
+}
+
+/**
+ * Pushes the pending-login list to the renderer.
+ *
+ * One channel for the whole list rather than an event per change: the bar shows
+ * the newest entry and a panel shows the rest, and both read from the same list.
+ * Sending the list also makes expiry self-correcting — a capture that timed out
+ * simply stops appearing.
+ */
+function sendPendingLogins(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(IPC.embeddedLoginChanged, loginCaptures.list());
 }
 
 function broadcastWorkspace(): void {
@@ -1132,7 +1300,7 @@ function ensureOverlay(): BrowserWindow {
     // The whole point is staying reachable while browser windows overlap it.
     alwaysOnTop: true,
     skipTaskbar: true,
-    title: "Ensemble",
+    title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
@@ -1401,7 +1569,7 @@ function ensureFocusLabel(): BrowserWindow {
     focusable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    title: "Ensemble",
+    title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
@@ -1602,7 +1770,7 @@ function parkWindowOffscreen(win: BrowserWindow): void {
 function createTray(): void {
   if (tray) return;
   tray = new Tray(loadTrayImage());
-  tray.setToolTip("Ensemble");
+  tray.setToolTip(appDisplayName);
   const rebuild = () => {
     if (!tray) return;
     const mcp = mcpServer?.status();
@@ -1610,7 +1778,7 @@ function createTray(): void {
     trayInstanceCount = running;
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: "打开 Ensemble", click: () => showMainWindow() },
+        { label: `打开 ${appDisplayName}`, click: () => showMainWindow() },
         { type: "separator" },
         ...(running > 0
           ? [
@@ -1735,7 +1903,7 @@ async function createWindow(): Promise<void> {
     // makes `Page.captureScreenshot` hang instead of returning pixels.
     show: !headless,
     backgroundColor: isDarkTheme(currentTheme) ? "#0b0d10" : "#f3efe6",
-    title: "Ensemble",
+    title: appDisplayName,
     titleBarStyle: "hidden",
     // Packaged builds take the executable icon (build/icon.ico); in development
     // the window and taskbar need it passed explicitly.
@@ -2002,11 +2170,11 @@ async function downloadPendingUpdate(result: UpdateCheckResult): Promise<UpdateC
     let lastEmit = 0;
     await downloadUpdateAsset(asset.url, destination, {
       expectedSha256: asset.sha256,
-      // Same reason as the update check: this fetch has to ride the configured
-      // proxy, and only `net.fetch` uses the session that carries it. The cast
-      // narrows `net.fetch`'s `string | Request` input to the global `fetch`
-      // signature, which the downloader accepts; every call passes a string.
-      fetchImpl: net.fetch as typeof fetch,
+      // Same network stack as the update check, so the configured proxy still
+      // applies, but driven through `net.request`: `net.fetch` leaves
+      // `Response.url` empty on every redirect mode, and the downloader reads
+      // that field to check where the bytes actually came from.
+      fetchImpl: trustedUpdateFetch,
       onProgress: (received, total) => {
         // The renderer only needs a few updates per second; emitting per chunk
         // would flood IPC on a fast connection.
@@ -2109,6 +2277,24 @@ function startUpdateWatcher(): void {
     if (result.status !== "available" || !result.asset) return;
     if (settingsCache?.dismissedUpdateVersion === result.latest) return;
     pendingUpdate = result;
+    /*
+     * Recorded, not just announced.
+     *
+     * The dialog is easy to dismiss by accident, and then the only way to learn
+     * again is to wait six hours or open settings. A row in history keeps it
+     * findable; the same waiting version replaces its own row rather than
+     * stacking one per check.
+     */
+    messageStore().add(
+      {
+        kind: "app",
+        tone: "info",
+        titleKey: "app.messagesUpdateAvailable",
+        titleParams: { version: result.latest ?? "" },
+      },
+      12 * 60 * 60_000,
+    );
+    broadcastMessages();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.appUpdateAvailable, result);
     }
@@ -2298,12 +2484,30 @@ function registerIpc(workspace: WorkspaceService): void {
       captured = loginCaptures.take(captureToken);
       if (!captured) throw new Error("这次登录信息已保存过，请重新登录后再试");
     }
+    /*
+     * The tenant is part of the account for a multi-tenant site, and the form only
+     * pre-fills it — a user may well have cleared it. Filling in what the capture
+     * actually saw keeps the saved account matching the login that produced it,
+     * which is what `hasSavedLogin` compares against on the next sign-in.
+     */
+    const merged = (() => {
+      if (!captured?.extraFields?.length) return rest;
+      const already = rest.extraFields ?? [];
+      const seen = new Set(already.map((field) => field.label.trim().toLowerCase()));
+      const missing = captured.extraFields.filter(
+        (field) => field.value.trim() && !seen.has(field.label.trim().toLowerCase()),
+      );
+      return missing.length ? { ...rest, extraFields: [...already, ...missing] } : rest;
+    })();
     // Awaited: writing the vault is asynchronous, and the snapshot returned
     // below is what the form reads to report whether a password is stored.
     // Returning before the write landed made a saved capture look like an
     // account without a password.
-    await workspace.saveIdentity(rest, password ?? captured?.password);
+    await workspace.saveIdentity(merged, password ?? captured?.password);
     broadcastWorkspace();
+    // The saved entry leaves the pending list; the bar and the panel read the
+    // same list, so both stop offering it.
+    if (captured) sendPendingLogins();
     return workspace.snapshot();
   });
   handle(IPC.identityDelete, (id: string) => {
@@ -3188,6 +3392,61 @@ function registerIpc(workspace: WorkspaceService): void {
    */
   handle(IPC.embeddedLoginDismiss, (token: string) => {
     loginCaptures.discard(String(token));
+    sendPendingLogins();
+  });
+  /** Everything still waiting to be saved; the renderer's list view calls this. */
+  handle(IPC.embeddedLoginPending, () => loginCaptures.list());
+
+  /*
+   * The message centre.
+   *
+   * `listMessages` is the one place staleness is decided: a capture token only
+   * lives in this process, a tab only exists while it is open, so "can this row
+   * still do anything" is a question about right now, not about the message.
+   * Answering it on read keeps the stored list honest — history from last week
+   * still shows what happened, and simply stops offering the action.
+   */
+
+  handle(IPC.messagesList, () => messageViews());
+  handle(IPC.messagesAdd, (input: AddMessageInput) => {
+    messageStore().add({
+      kind: input.kind,
+      tone: input.tone,
+      titleKey: String(input.titleKey),
+      ...(input.titleParams ? { titleParams: input.titleParams } : {}),
+      ...(input.detail ? { detail: String(input.detail).slice(0, 500) } : {}),
+      ...(input.action ? { action: input.action } : {}),
+    });
+    return broadcastMessages();
+  });
+  handle(IPC.messagesRead, (id: string) => {
+    messageStore().markRead(String(id));
+    return broadcastMessages();
+  });
+  handle(IPC.messagesReadAll, () => {
+    messageStore().markAllRead();
+    return broadcastMessages();
+  });
+  handle(IPC.messagesRemove, (id: string) => {
+    // Dropping the row also drops the secret it pointed at: leaving an
+    // unreachable password in memory until the process exits is the exact shape
+    // of leak a "delete" is supposed to avoid.
+    const removed = messageStore().remove(String(id));
+    if (removed?.action?.type === "login-capture") {
+      loginCaptures.discard(removed.action.token);
+      sendPendingLogins();
+    }
+    return broadcastMessages();
+  });
+  handle(IPC.messagesClear, () => {
+    for (const message of messageStore().list()) {
+      if (message.action?.type === "login-capture") {
+        loginCaptures.discard(message.action.token);
+      }
+    }
+    messageStore().clear();
+    sendPendingLogins();
+    return broadcastMessages();
   });
 
   handle(IPC.embeddedClose, (tabId: string) => ensureEmbeddedBrowser().closeTab(String(tabId)));
@@ -3518,13 +3777,22 @@ if (!gotLock) {
     // Windows groups taskbar entries by AppUserModelID and takes the icon from
     // the packaged executable. In development the process is electron.exe, so
     // without this the taskbar shows Electron's logo for our window.
-    if (process.platform === "win32") app.setAppUserModelId("io.github.onefanki.ensemble");
+    //
+    // A development build carries its own id. Sharing the packaged app's id made
+    // Windows treat both windows as one application: they stacked into a single
+    // taskbar button, so the dev window and the installed one could not be
+    // pinned, switched or closed independently.
+    if (process.platform === "win32") {
+      app.setAppUserModelId(
+        isolatedDev ? "io.github.onefanki.ensemble.dev" : "io.github.onefanki.ensemble",
+      );
+    }
     // The About panel is reachable from the app menu; without this it shows the
     // bare product name with no version, which is the first thing a bug report
     // needs.
     if (process.platform === "darwin") {
       app.setAboutPanelOptions({
-        applicationName: "Ensemble",
+        applicationName: appDisplayName,
         applicationVersion: app.getVersion(),
         version: `Electron ${process.versions.electron ?? ""}`,
         copyright: "MIT License",
@@ -3582,6 +3850,9 @@ if (!gotLock) {
       auditPath: join(userDataDir(), "mcp-audit.log"),
       service,
       appVersion: app.getVersion(),
+      // A development build gets the next port, so it can run beside the
+      // installed app instead of fighting it for one socket.
+      ...(isolatedDev ? { defaultPort: DEV_DEFAULT_PORT } : {}),
       // The log is the record; this is the live signal the dock shows.
       onPageAction: (event) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -3594,6 +3865,25 @@ if (!gotLock) {
           originAuthorized: event.originAuthorized,
           count: aiActionsByTab.get(event.tabId) ?? 0,
         });
+        /*
+         * History keeps the tool calls, not every page event: one row per call
+         * is what answers "what did the AI do to this page", and the dock's live
+         * counter covers "how much is it doing right now". Failures are kept at
+         * warning tone so they stand out when scrolling back.
+         */
+        messageStore().add(
+          {
+            kind: "ai",
+            tone: event.ok ? "info" : "warning",
+            titleKey: event.ok ? "app.messagesAiAction" : "app.messagesAiActionFailed",
+            titleParams: { tool: event.tool, site: event.origin },
+            action: { type: "tab", tabId: event.tabId },
+          },
+          // Repeated clicks on one element are one intent; five minutes of the
+          // same tool on the same page collapses into the newest row.
+          60_000,
+        );
+        broadcastMessages();
       },
       embedded: {
         state: () => ensureEmbeddedBrowser().state(),
@@ -3654,6 +3944,7 @@ if (!gotLock) {
         evaluate: (tabId, expression) => ensureEmbeddedBrowser().evaluate(tabId, expression),
         screenshot: (tabId, options) => ensureEmbeddedBrowser().screenshot(tabId, options),
         visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
+        readPageActivity: (tabId) => ensureEmbeddedBrowser().readPageActivity(tabId),
         wait: (tabId, input) => ensureEmbeddedBrowser().wait(tabId, input),
         setLayout: (layoutId, viewId) =>
           ensureEmbeddedBrowser().setViewLayout(

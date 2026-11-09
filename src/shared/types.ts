@@ -422,7 +422,7 @@ export interface AppSettings {
   /** UI language; `"system"` follows the OS. See {@link LocaleSetting}. */
   locale: LocaleSetting;
   lastSiteId?: string;
-  lastView: "browser" | "sites" | "identities" | "views" | "flows" | "tags";
+  lastView: "browser" | "messages" | "sites" | "identities" | "views" | "flows" | "tags";
   /**
    * Which shell the window opens in.
    *
@@ -766,6 +766,11 @@ export interface LoginCaptureNotice {
   tabId: string;
   /** Site matched by origin, when one exists; new sites are created instead. */
   siteId?: string;
+  /**
+   * Tenant, organization or whatever else the form asked for beside the
+   * username. Part of the account's identity on a multi-tenant site.
+   */
+  extraFields?: { label: string; value: string }[];
 }
 
 export interface LayoutPresetDraft {
@@ -906,3 +911,55 @@ export interface DownloadEntry {
 
 /** What the toolbar may ask a download to do. */
 export type DownloadAction = "cancel" | "open" | "reveal" | "remove" | "clear";
+
+/**
+ * Which part of the app a message came from.
+ *
+ * Separate from `tone`: tone is how loud the row is, kind is which producer it
+ * belongs to and therefore what the row can offer to do about it.
+ */
+export type MessageKind = "login-capture" | "account" | "ai" | "app";
+
+/**
+ * Something a message row can do.
+ *
+ * Stored as data, not a callback: history outlives the process, and the thing it
+ * points at may not. A capture token dies with the process, a tab closes, an
+ * identity is deleted — so a row has to be able to say "this no longer works"
+ * rather than pretend.
+ */
+export type MessageAction =
+  | { type: "login-capture"; token: string }
+  | { type: "identity"; identityId: string; siteId?: string }
+  | { type: "tab"; tabId: string };
+
+export interface AppMessage {
+  id: string;
+  /** ISO timestamp; the list is ordered by it, newest first. */
+  at: string;
+  kind: MessageKind;
+  tone: "info" | "success" | "warning" | "error";
+  /**
+   * The headline as an i18n key, so switching language rewrites history too.
+   * Anything untranslatable (a server error, a page title) travels in `detail`.
+   */
+  titleKey: string;
+  titleParams?: Record<string, string>;
+  detail?: string;
+  action?: MessageAction;
+  read: boolean;
+}
+
+/** A row as the renderer sees it: `stale` is decided live and never stored. */
+export interface AppMessageView extends AppMessage {
+  stale?: boolean;
+}
+
+export interface AddMessageInput {
+  kind: MessageKind;
+  tone: AppMessage["tone"];
+  titleKey: string;
+  titleParams?: Record<string, string>;
+  detail?: string;
+  action?: MessageAction;
+}

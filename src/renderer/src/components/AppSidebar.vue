@@ -28,6 +28,7 @@
 import {
   Bookmark,
   Globe,
+  Inbox,
   LayoutGrid,
   Settings,
   Tag,
@@ -42,7 +43,15 @@ import { useWorkspaceStore } from "../stores/workspace";
 import RunDock from "./RunDock.vue";
 
 /** Everything the pane can show beside the column. `browser` is a page, the rest are management. */
-export type AppView = "browser" | "sites" | "identities" | "views" | "flows" | "tags" | "bookmarks";
+export type AppView =
+  | "browser"
+  | "messages"
+  | "sites"
+  | "identities"
+  | "views"
+  | "flows"
+  | "tags"
+  | "bookmarks";
 
 defineProps<{ view: AppView }>();
 const emit = defineEmits<{ navigate: [view: AppView]; settings: [] }>();
@@ -72,6 +81,14 @@ const reservesControls = computed(() => platform.value !== "darwin");
  */
 const browserEntries = computed<Array<{ view: AppView; label: string; icon: Component; count: number }>>(
   () => [
+    {
+      view: "messages",
+      label: t("app.messages"),
+      icon: Inbox,
+      // Unread, not total: a badge that counts history you already read is a
+      // counter of nothing.
+      count: workspace.unreadMessages,
+    },
     {
       view: "bookmarks",
       label: t("app.bookmarks"),

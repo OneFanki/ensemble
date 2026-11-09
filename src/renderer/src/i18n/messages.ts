@@ -10,14 +10,13 @@ export const messages = {
   zh: {
     app: {
       name: "Ensemble",
-      tagline: "多个身份，同一个舞台",
       identities: "身份",
       views: "视图",
       sites: "站点",
       engines: "引擎",
       settings: "设置",
       consoleNav: "应用导航",
-      consoleBack: "返回浏览器",
+      consoleBack: "返回工作台",
       consoleGroupWorkspace: "工作区",
       cleanSession: "干净会话",
       dailyProfile: "默认档案",
@@ -68,8 +67,6 @@ export const messages = {
       site: "站点",
       tags: "标签",
       flows: "流程",
-      flowsSubtitle:
-        "把一次性的操作固化成步骤：AI 试通一次就存下来，下次一句话跑完。流程按站点归属，参数在运行时填。",
       flowsEmpty: "还没有流程。让 AI 做一遍，再把步骤存下来。",
       flowsEmptyNoSite: "流程要挂在站点上。先建一个站点，再回来记步骤。",
       flowGoToSites: "去建站点",
@@ -137,9 +134,6 @@ export const messages = {
       flowNoSite: "先在站点页建一个站点，流程要挂在站点上。",
       flowParamRequiredShort: "必填",
       flowAddParamFirst: "先加参数，再在步骤里用 {'{{'}变量名{'}}'} 引用",
-      flowStepTargetHint: "定位元素：优先用字段标签或按钮文字，选择器只作兜底",
-      tagsSubtitle:
-        "一套标签，站点、账号、视图都能用。账号会继承所属站点的标签，视图会继承成员及其站点的标签，所以筛选一次就够。",
       tagsEmptyHint: "给站点、账号或视图打标签，之后就能按标签筛选。",
       tagEdit: "编辑",
       tagUsageSites: "{count} 站点",
@@ -151,7 +145,6 @@ export const messages = {
       tagCreate: "创建",
       untaggedSites: "未分组",
       noTags: "还没有标签。",
-      siteTagHint: "标签只用于查找与分组，不影响站点和账号本身。",
       errTagName: "请填写标签名称",
       deleteTagConfirm: "删除标签「{name}」？站点、账号和视图都会保留，只是不再带这个标签。",
       note: "备注",
@@ -190,13 +183,11 @@ export const messages = {
       authCheckPath: "登录检测地址",
       authCheckPlaceholder: "留空则不检测登录态",
       loginMarkerOptional: "未登录标记（可选）",
+      loginMarkerHintRestored: "接口信封式应答时，填未登录响应 body 里的字样，命中即按未登录处理。",
+      loginTokenKeyHintRestored: "站点用私订请求头而非 cookie 鉴权时，填会话令牌在 localStorage 里的键名。",
       loginMarkerPlaceholder: "例如：请先登录",
-      loginMarkerHint:
-        "检测地址返回 200 也可能未登录时（接口信封式应答），填未登录响应 body 里的字样，命中即按未登录处理。",
       loginTokenKeyOptional: "令牌存储键（可选）",
       loginTokenKeyPlaceholder: "例如：token",
-      loginTokenKeyHint:
-        "站点用私订请求头而非 cookie 鉴权时，填会话令牌在页面 localStorage 里的键名；检测会读取它一并发送，否则登录态永远显示已过期。",
       loginTokenHeaderOptional: "令牌请求头",
       autoSubmit: "填充后自动提交",
       layout: "窗口布局",
@@ -243,7 +234,6 @@ export const messages = {
       languageSystemHint: "跟随操作系统的语言；系统是中文时用中文，其余用英文。",
       languageZh: "中文",
       engineList: "可用浏览器",
-      engineHint: "Ensemble 不打包浏览器，使用系统已安装的版本；版本由浏览器自身更新。",
       engineBlocked: "不可用",
       engineReady: "可用",
       externalOnly: "仅外部模式",
@@ -311,7 +301,8 @@ export const messages = {
       mcpAiAccess: "AI 接入",
       aiEntryShort: "AI",
       aiEndpointOn: "AI 接入已开启 · 端口 {port}",
-      aiEndpointOff: "AI 接入未开启",
+      aiEndpointOff: "未开启",
+      aiEndpointRunning: "已开启",
       aiEndpointSettings: "打开 AI 接入设置",
       statusMcpHint: "AI 接入：查看地址并复制配置",
       statusMcpOff: "AI 接入 · 未开启",
@@ -381,18 +372,12 @@ export const messages = {
       // Site dialog
       editSiteTitle: "编辑站点",
       newSiteTitle: "新建站点",
-      siteDialogDesc: "站点是被测目标的作用域：站点地址、登录入口与默认凭据。",
       envNameLabel: "名称",
       siteNameExample: "例如：项目名-测试站点",
-      siteNameHint: "随意命名。想区分多个项目时，可以用「项目-站点」的写法。",
       loginFormGroup: "登录表单",
-      loginFormGroupNote: "提交方式与账号密码之外的输入框",
       siteDefaultPassword: "默认密码",
-      siteDefaultPasswordNote: "同站点的账号默认共用它",
       siteDefaultPasswordReplace: "留空则不改动已保存的密码",
       siteDefaultPasswordEmpty: "填入这个站点的公共密码（可选）",
-      siteDefaultPasswordSet: "已保存。想换一个就直接在上面输入新密码；留空不会改动它。",
-      siteDefaultPasswordUnset: "还没设置。设一次之后，这个站点下所有用「默认密码」的账号都会一起生效。",
       siteDefaultPasswordClear: "删除已保存的默认密码",
       siteDefaultPasswordClearNote: "删除后，依赖它的账号将无法自动登录，直到你重新设置。",
       envUrlLabel: "站点地址",
@@ -405,11 +390,11 @@ export const messages = {
       engineBlockedSuffix: "（不可用）",
       engineExternalSuffix: "（仅外部模式）",
       autoSubmitLabel: "填完后自动登录",
+      autoSubmitNote: "自动提交会去点登录按钮本身（不是只提交表单），双因素验证码仍需手动完成。",
       autoSubmitFollowGlobal: "跟随全局设置",
       autoSubmitEffective: "当前生效：{state}",
       autoSubmitAlways: "总是自动提交",
       autoSubmitNever: "从不自动提交",
-      autoSubmitNote: "自动提交会去点登录按钮本身（不是只提交表单），双因素验证码仍需手动完成。",
       errSiteName: "请填写站点名称",
       errSiteUrl: "站点地址必须是 http(s) 开头",
       errLoginPath: "登录入口必须以 / 开头",
@@ -418,20 +403,21 @@ export const messages = {
       // Identity dialog
       editIdentityTitle: "编辑身份",
       newIdentityTitle: "新建身份",
-      identityDialogDesc: "一个身份对应一个独立的浏览器 profile，账号与登录态互不影响。",
       identityOrphanSite: "未关联站点",
       newIdentityHere: "在这个站点下新建身份",
       loginCaptureTitle: "保存这个登录？",
       loginCaptureSave: "保存账号",
       loginCaptureDismiss: "不保存",
-      loginCaptureNeedSite: "这个地址还没有站点：在表单里创建后即可保存",
+      loginCaptureList: "待保存的登录",
+      loginCaptureHide: "收起",
+      loginCaptureCollapse: "收起列表",
+      loginCaptureProfileNote: "保存会新建一个独立身份，用它启动时用的是它自己的登录状态；默认档案不受影响。",
       displayName: "显示名称",
       displayNameExample: "例如：管理员 · 主账号",
       identitySite: "所属站点",
       identitySitePick: "选择站点",
       identitySiteNew: "新建站点…",
       identitySiteCreate: "创建并选用",
-      identityTagHint: "标签用于查找。站点的标签也会算在这个账号上。",
       tagsNone: "还没有标签，去站点页创建",
       errIdentitySite: "请先选择或新建一个站点",
       errSiteInline: "站点名称和地址都要填",
@@ -468,8 +454,6 @@ export const messages = {
       colorSlate: "灰",
 
       // Site view
-      sitesSubtitle:
-        "站点是一套登录配方，也是它下面那组账号的归属：一个地址、登录路径与默认密码。",
       emptySites: "还没有站点。新建账号时也可以直接选「新建站点」，不必先来这里。",
       switchSite: "切换站点",
       manageSites: "管理站点",
@@ -487,20 +471,15 @@ export const messages = {
       // View dialog and view view
       editViewTitle: "编辑视图",
       newViewTitle: "新建视图",
-      viewDialogDesc:
-        "视图把常一起测试的身份编成一组。内置浏览器按布局同屏摆放，成员可以来自不同站点。",
       viewNameLabel: "视图名称",
       viewNameExample: "例如：权限矩阵 · 主流程",
       viewMembersLabel: "成员（至少一个）",
+      viewMemberDragHintRestored: "拖动成员可调整启动顺序；拖到下方布局的格子里，或先点成员再点格子，即可指定位置。",
       viewNoIdentities: "还没有身份，请先创建身份。",
       viewCrossSiteNote:
         "这个视图跨了多个站点：每个站点会各自启动一组外部窗口，再按槽位摆到对应位置。",
-      viewTagHint: "视图的标签用于查找；成员账号和它所属站点的标签也会算在筛选里。",
       viewOrderNote: "内置浏览器按这个顺序摆放格位；外部窗口按这个顺序启动。",
-      viewMemberDragHint:
-        "拖动成员可调整启动顺序；把成员拖到下方布局的格子里，或先点成员再点格子，即可指定它出现在哪个位置。",
       viewLayoutNote: "当前布局共 {count} 个槽位；多出的窗口会叠加在已有槽位上。",
-      viewsSubtitle: "一组身份共享一块屏幕 · 可跨站点复制到其他部署",
       viewColumnName: "视图",
       viewColumnMembers: "成员",
       viewColumnLayout: "布局",
@@ -570,7 +549,11 @@ export const messages = {
         "窗口开着就在窗口里检测；没开窗口的身份会用一个不显示窗口的后台浏览器，读取它自己 Profile 的 Cookie 完成检测，检测完立即关闭，不会出现在悬浮条里，也不需要你手动启动。重新登录会为每个过期身份打开登录页并填入已保存的账号密码。如果站点只使用会话 Cookie（关闭浏览器即失效），关窗后检测会显示已过期，这和你重新打开窗口看到的状态一致。",
 
       // Settings
-      settingsSubtitle: "按类别查看与管理",
+      browsingTitle: "浏览",
+      launchTitle: "启动与填充",
+      networkTitle: "网络",
+      windowTitle: "窗口",
+      detectionTitle: "检测",
       settingsTabGeneral: "常规",
       settingsTabTags: "标签",
       settingsTabEngines: "外部浏览器",
@@ -590,10 +573,7 @@ export const messages = {
       scanningInstalled: "正在扫描系统中已安装的浏览器…",
       noBrowsersHint:
         "没有发现浏览器。请安装 Chrome、Edge、Brave 或 Firefox，或手动指定可执行文件。",
-      engineCapabilityNote:
-        "只有 CDP 引擎支持自动填充、登录态检测与窗口平铺。Firefox 使用外部模式：可多开、可复制密码，但不接管页面。Safari 不支持多账号隔离。",
       appearanceTitle: "外观",
-      appearanceNote: "深色适合长时间盯着控制台；浅色适合核对凭据和阅读。",
       autoFillLaunch: "启动自动填充",
       defaultLayout: "默认布局",
       defaultLayoutNote: "新建视图和批量启动都用这个布局；无布局时每个页面占满整块舞台。单个视图仍可在视图页里单独指定。",
@@ -625,7 +605,8 @@ export const messages = {
       headlessUaNote:
         "后台检测用无窗口浏览器读取该身份的 Cookie。默认把它上报的 User-Agent 换成正常桌面浏览器的值，避免被测系统把检测请求当成爬虫；这不是指纹伪装，浏览器开发者工具也能改 UA。改成无头 UA 则如实上报 HeadlessChrome，更贴近真实的无头访问。",
       vaultTitle: "凭据存储",
-      vaultNote: "密码只在主进程内解密，用于在登录页填充；不会发送到界面进程。",
+      vaultExplainer:
+        "系统密钥环能挡住离线读取；主密码不可找回，忘记后只能删除 vault.json 重新录入。",
       vaultUnlockPlaceholder: "输入主密码解锁凭据库",
       unlock: "解锁",
       changeMaster: "修改主密码",
@@ -640,12 +621,9 @@ export const messages = {
       saveNewMaster: "保存新主密码",
       masterMismatch: "两次输入的主密码不一致",
       wrongMaster: "当前主密码不正确",
-      vaultExplainer:
-        "系统密钥环能挡住离线读取，但挡不住以你的账户身份运行的程序。主密码把密钥改成只有你知道的密码才能解开——即使测试库来自生产，也更接近密码管理器的保护级别。主密码不可找回，忘记后只能删除 vault.json 重新录入。",
 
       // Data and AI access
       dataTitle: "数据",
-      dataNote: "配置全部保存在本机。这里负责跨机器迁移，以及让本机 AI 客户端接管录入工作。",
       closeToTray: "关闭进托盘",
       closeToTrayNote:
         "开启后点关闭只是隐藏窗口，浏览器和 AI 接入继续运行；要彻底退出请在托盘菜单或这里选择退出。",
@@ -664,8 +642,6 @@ export const messages = {
       importResult: "已新增 {added} 项、更新 {updated} 项，跳过 {skipped} 项",
       layoutPresets: "布局预设",
       mcpTitle: "AI 接入",
-      mcpNote:
-        "在本机开一个 MCP 端点，让 AI 客户端直接录入站点、身份与视图，也能驱动内置浏览器操作页面——页面就在主窗口里，你随时能看见并接手。",
       mcpEnable: "端点",
       mcpRunning: "运行中",
       mcpStopped: "未运行",
@@ -686,13 +662,13 @@ export const messages = {
       mcpAllowWrite: "允许创建与修改",
       mcpAllowRun: "允许启动与停止窗口",
       mcpAllowDelete: "允许删除",
+      mcpPermissionNote: "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉站点、身份或视图。",
       mcpAiOrigins: "默认档案里允许 AI 操作的来源",
       mcpAiOriginsEmpty: "还没有授权任何来源",
       mcpAiOriginsNote:
         "默认档案是你随手浏览用的登录态，AI 默认只能读页面、截图和切换标签，不能点击或输入。" +
         "要用 AI 操作某个站点，在浏览器工具栏的「AI 权限」里允许它的来源；账号页与干净会话里的页面不受此限制。",
       mcpAiOriginRevoke: "撤销这个来源的 AI 操作权限",
-      mcpPermissionNote: "删除默认关闭；打开后 AI 只需传 confirm 就可能删掉站点、身份或视图。",
       mcpEndpoint: "客户端连接信息",
       mcpConnTitle: "客户端连接信息",
       mcpFieldUrl: "地址",
@@ -712,7 +688,6 @@ export const messages = {
       exportWithSecrets: "含加密密码",
       exportNoSecrets: "不含密码",
       toastImportDone: "导入完成：新增 {added} 项、更新 {updated} 项",
-      aboutTagline: "一套系统里的多个账号，一屏同时在线。",
       updateIdle: "尚未检查更新。",
       updateChecking: "检查中…",
       updateCheck: "检查更新",
@@ -861,6 +836,9 @@ export const messages = {
       browserFill: "填充",
       browserFillHint: "用该身份保存的账号密码填充当前页",
       browserFind: "页面内查找",
+      browserFindPrev: "上一个",
+      browserFindNext: "下一个",
+      browserFindClose: "关闭查找",
       browserFindPlaceholder: "在页面中查找",
       browserDevTools: "开发者工具",
       browserDevToolsClose: "关闭开发者工具",
@@ -872,9 +850,10 @@ export const messages = {
       browserNewTabHere: "在这个实例里新建标签页",
       browserTabs: "标签页",
       browserLoading: "正在加载",
-      layoutOpenBench: "打开工作台",
-      layoutShowSidebar: "显示侧栏",
-      layoutHideSidebar: "隐藏侧栏",
+      // Copy names the shell, not the mechanism: the sidebar *is* the
+      // workbench, and the toolbar once called this button by another name.
+      layoutOpenWorkbench: "打开工作台",
+      layoutCollapseWorkbench: "收起工作台",
       appMenu: "应用菜单",
       checkUpdate: "检查更新",
       browserUnsplit: "不再分屏，这一格跟随窗口当前页",
@@ -898,13 +877,37 @@ export const messages = {
       newTabBadInput: "这个输入既不像地址，也无法组成搜索链接",
       newTabBackground: "背景",
       bookmarks: "书签",
+      // 消息中心
+      messages: "消息",
+      messagesUnread: "未读消息（{count}）",
+      messagesAll: "全部",
+      messagesEmpty: "还没有消息。登录、账号问题与 AI 操作都会记在这里。",
+      messagesReadAll: "全部标为已读",
+      messagesClear: "清空",
+      messagesClearBody: "清空后历史不可恢复，其中未保存的登录也会一并丢弃。",
+      messageKindLoginCapture: "登录捕获",
+      messageKindAccount: "账号",
+      messageKindAi: "AI 操作",
+      messageKindApp: "应用",
+      messageGotoTab: "查看页面",
+      messageRelogin: "重新登录",
+      messageRemove: "删除这条",
+      messageStale: "已失效",
+      messageStaleCapture: "这次捕获的密码只留在内存里，应用重启后无法再保存",
+      messageStaleTarget: "它指向的页面或账号已经不存在",
+      messagesLoginCaptured: "捕获到登录：{user}（{site}）",
+      messagesLoginFailed: "登录未成功：{name}",
+      messagesLoginNoPassword: "缺少密码：{name}",
+      messagesLoginCrossOrigin: "登录页地址不匹配：{name}",
+      messagesLoginFormNotFound: "未找到登录表单：{name}",
+      messagesAiAction: "AI 执行 {tool}（{site}）",
+      messagesAiActionFailed: "AI 执行 {tool} 失败（{site}）",
+      messagesUpdateAvailable: "发现新版本 {version}",
       bookmarkAllFolders: "全部",
       bookmarkFolderLabel: "文件夹",
       bookmarkFolderNone: "未分类",
       bookmarkFolderHint: "留空则放在顶层",
       bookmarksPageTitle: "书签",
-      bookmarksPageHint:
-        "书签只在新标签页显示。左侧目录树按层级整理文件夹和书签，新标签页上方会列出顶层文件夹。",
       bookmarksPageNew: "新建书签",
       bookmarksPageNewFolder: "新建文件夹",
       bookmarksEmpty: "还没有书签。在新标签页里点地址栏右侧的星标即可收藏当前页。",
@@ -975,7 +978,6 @@ export const messages = {
       newTabEngineTemplateHint:
         "模板里用 %s 表示搜索词，例如 https://example.com/search?q=%s；只接受 http(s)。",
       newTabEngineInvalid: "名称不能为空，模板必须是 http(s) 链接且包含 %s",
-      launchTargetTitle: "启动方式",
       launchTargetHint: "视图和账号从这里显示的地方启动",
       launchTargetEmbedded: "内置浏览器",
       launchTargetEmbeddedHint: "所有账号在同一个窗口里",
@@ -998,7 +1000,6 @@ export const messages = {
       browserNewView: "创建视图",
       browserNewViewHint: "新建一个空视图；再把实例拖进去分格",
       browserRenameHint: "双击或右键改名",
-      browserDropHint: "拖动排序；拖进视图即加入；新视图点上方按钮创建；拖格位分界线可改比例",
       browserExpandDock: "展开侧栏",
       browserCollapseDock: "收起侧栏",
       browserResizeDock: "拖动调整侧栏宽度",
@@ -1017,14 +1018,13 @@ export const messages = {
   en: {
     app: {
       name: "Ensemble",
-      tagline: "Many identities. One stage.",
       identities: "Identities",
       views: "Views",
       sites: "Sites",
       engines: "Engines",
       settings: "Settings",
       consoleNav: "App navigation",
-      consoleBack: "Back to the browser",
+      consoleBack: "Back to the workbench",
       consoleGroupWorkspace: "Workspace",
       cleanSession: "Clean session",
       dailyProfile: "Default profile",
@@ -1076,8 +1076,6 @@ export const messages = {
       site: "Site",
       tags: "Tags",
       flows: "Flows",
-      flowsSubtitle:
-        "Turn a one-off job into steps: an AI figures it out once, saves it here, and next time it is a single call. Flows belong to a site; parameters are filled in when you run one.",
       flowsEmpty: "No flows yet. Have an AI do the job once, then save the steps.",
       flowsEmptyNoSite:
         "A flow belongs to a site. Create a site first, then come back and record the steps.",
@@ -1144,10 +1142,6 @@ export const messages = {
       flowNoSite: "Create a site first — a flow has to belong to one.",
       flowParamRequiredShort: "required",
       flowAddParamFirst: "Add a parameter first, then reference it as {'{{'}name{'}}'} in steps",
-      flowStepTargetHint:
-        "Target elements by field label or button text; a selector is the fallback",
-      tagsSubtitle:
-        "One tag namespace for sites, accounts and views. An account also matches its site's tags and a view also matches its members' tags, so one filter reaches everything.",
       tagsEmptyHint: "Tag a site, account or view, then filter by it.",
       tagEdit: "Edit",
       tagUsageSites: "{count} sites",
@@ -1159,7 +1153,6 @@ export const messages = {
       tagCreate: "Create",
       untaggedSites: "Ungrouped",
       noTags: "No tags yet.",
-      siteTagHint: "Tags only decide how the list is grouped; sites and identities are untouched.",
       errTagName: "Enter a tag name",
       deleteTagConfirm:
         "Delete the tag “{name}”? Sites, accounts and views stay; they just stop carrying it.",
@@ -1203,13 +1196,11 @@ export const messages = {
       authCheckPath: "Auth check path",
       authCheckPlaceholder: "Leave empty to skip the session check",
       loginMarkerOptional: "Signed-out marker (optional)",
+      loginMarkerHintRestored: "接口信封式应答时，填未登录响应 body 里的字样，命中即按未登录处理。",
+      loginTokenKeyHintRestored: "站点用私订请求头而非 cookie 鉴权时，填会话令牌在 localStorage 里的键名。",
       loginMarkerPlaceholder: 'e.g. "signed_out"',
-      loginMarkerHint:
-        "If the check endpoint answers 200 even when signed out (envelope-style API), enter a body substring from the signed-out reply; a hit reads as signed out.",
       loginTokenKeyOptional: "Token storage key (optional)",
       loginTokenKeyPlaceholder: 'e.g. "token"',
-      loginTokenKeyHint:
-        "For sites that authenticate a private request header instead of a cookie, enter the localStorage key holding the session token; the check reads and sends it. Without it a header-token site always reads as expired.",
       loginTokenHeaderOptional: "Token header",
       autoSubmit: "Submit after fill",
       layout: "Window layout",
@@ -1257,8 +1248,6 @@ export const messages = {
         "Follow the operating system: Chinese when the OS is Chinese, English otherwise.",
       languageZh: "中文",
       engineList: "Available browsers",
-      engineHint:
-        "Ensemble does not bundle browsers. It uses installed ones and lets them update themselves.",
       engineBlocked: "Unavailable",
       engineReady: "Ready",
       externalOnly: "External only",
@@ -1335,7 +1324,8 @@ export const messages = {
       mcpAiAccess: "AI access",
       aiEntryShort: "AI",
       aiEndpointOn: "AI access is on · port {port}",
-      aiEndpointOff: "AI access is off",
+      aiEndpointOff: "Off",
+      aiEndpointRunning: "On",
       aiEndpointSettings: "Open AI access settings",
       statusMcpHint: "AI access: endpoint address and config to copy",
       statusMcpOff: "AI access · off",
@@ -1409,21 +1399,12 @@ export const messages = {
       // Site dialog
       editSiteTitle: "Edit site",
       newSiteTitle: "New site",
-      siteDialogDesc:
-        "An site is the scope under test: base URL, login entry and default credentials.",
       envNameLabel: "Name",
       siteNameExample: "e.g. Project name — test",
-      siteNameHint:
-        "Name it however you like. “Project — site” works well when you test several projects.",
       loginFormGroup: "Login form",
-      loginFormGroupNote: "Submission behavior and inputs beyond username and password",
       siteDefaultPassword: "Default password",
-      siteDefaultPasswordNote: "Accounts on this site share it by default",
       siteDefaultPasswordReplace: "Leave empty to keep the saved password",
       siteDefaultPasswordEmpty: "A shared password for this site (optional)",
-      siteDefaultPasswordSet: "Saved. Type a new one above to replace it; leaving it empty changes nothing.",
-      siteDefaultPasswordUnset:
-        "Not set yet. Set it once and every account on this site that uses the default picks it up.",
       siteDefaultPasswordClear: "Delete the saved default password",
       siteDefaultPasswordClearNote:
         "Accounts that rely on it will not be able to sign in automatically until you set it again.",
@@ -1437,12 +1418,11 @@ export const messages = {
       engineBlockedSuffix: " (unavailable)",
       engineExternalSuffix: " (external only)",
       autoSubmitLabel: "Sign in automatically after filling",
+      autoSubmitNote: "自动提交会去点登录按钮本身（不是只提交表单），双因素验证码仍需手动完成。",
       autoSubmitFollowGlobal: "Follow the global setting",
       autoSubmitEffective: "In effect: {state}",
       autoSubmitAlways: "Always submit",
       autoSubmitNever: "Never submit",
-      autoSubmitNote:
-        "Submitting clicks the login button itself rather than only submitting the form; 2FA codes still need manual input.",
       errSiteName: "Enter a site name",
       errSiteUrl: "The base URL must start with http(s)",
       errLoginPath: "The login path must start with /",
@@ -1451,21 +1431,22 @@ export const messages = {
       // Identity dialog
       editIdentityTitle: "Edit identity",
       newIdentityTitle: "New identity",
-      identityDialogDesc:
-        "Each identity has its own browser profile, so accounts and sessions never mix.",
       identityOrphanSite: "No site",
       newIdentityHere: "New identity on this site",
       loginCaptureTitle: "Save this login?",
       loginCaptureSave: "Save account",
       loginCaptureDismiss: "Not now",
-      loginCaptureNeedSite: "No site matches this address yet; create one in the form to save it",
+      loginCaptureList: "Logins to save",
+      loginCaptureHide: "Hide",
+      loginCaptureCollapse: "Collapse list",
+      loginCaptureProfileNote:
+        "Saving creates a separate identity that keeps its own session. The default profile is not changed.",
       displayName: "Display name",
       displayNameExample: "e.g. Admin · primary account",
       identitySite: "Site",
       identitySitePick: "Pick a site",
       identitySiteNew: "New site…",
       identitySiteCreate: "Create and use",
-      identityTagHint: "Tags are for finding things. The site's tags count for this account too.",
       tagsNone: "No tags yet — create them on the sites page",
       errIdentitySite: "Pick or create a site first",
       errSiteInline: "Both a site name and an address are required",
@@ -1504,8 +1485,6 @@ export const messages = {
       colorSlate: "Slate",
 
       // Site view
-      sitesSubtitle:
-        "A site is a login recipe, and the home of the accounts under it: one address, a login path and a default password.",
       emptySites:
         "No sites yet. The new-identity form can create one inline; you do not have to start here.",
       switchSite: "Switch site",
@@ -1524,23 +1503,17 @@ export const messages = {
       // View dialog and view view
       editViewTitle: "Edit view",
       newViewTitle: "New view",
-      viewDialogDesc:
-        "A view groups identities you test together and tiles their windows on launch.",
       viewNameLabel: "View name",
       viewNameExample: "e.g. Permission matrix · main flow",
       viewMembersLabel: "Members (at least one)",
+      viewMemberDragHintRestored: "拖动成员可调整启动顺序；拖到下方布局的格子里，或先点成员再点格子，即可指定位置。",
       viewNoIdentities: "No identities yet. Create one first.",
-      viewTagHint:
-        "View tags are for finding views; member accounts and their sites count too when filtering.",
       viewCrossSiteNote:
         "This view spans several sites: it opens in the built-in browser; external windows need one site per view.",
       viewOrderNote:
         "The built-in browser fills slots in this order; external windows launch in it.",
-      viewMemberDragHint:
-        "Drag a member to change the launch order; drop it on a slot below — or click a member, then a slot — to choose where its window appears.",
       viewLayoutNote:
         "This layout has {count} slots; any extra windows stack on top of the last slot.",
-      viewsSubtitle: "One group of identities sharing one screen · copyable to another deployment",
       viewColumnName: "View",
       viewColumnMembers: "Members",
       viewColumnLayout: "Layout",
@@ -1615,7 +1588,11 @@ export const messages = {
         "An open window is checked in place. An identity without a window is checked in a hidden background browser reading that profile's own cookies, then closed again — it never appears in the switcher and you never have to launch it. Signing in expired identities opens the login page and fills the saved credentials. If a site only uses session cookies (gone when the browser exits), a closed window reads as expired after the close, which matches what reopening the window would show.",
 
       // Settings
-      settingsSubtitle: "Browse and manage settings by category",
+      browsingTitle: "Browsing",
+      launchTitle: "Launch and fill",
+      networkTitle: "Network",
+      windowTitle: "Windows",
+      detectionTitle: "Detection",
       settingsTabGeneral: "General",
       settingsTabTags: "Tags",
       settingsTabEngines: "External browsers",
@@ -1635,11 +1612,7 @@ export const messages = {
       scanningInstalled: "Scanning installed browsers…",
       noBrowsersHint:
         "No browsers found. Install Chrome, Edge, Brave or Firefox, or pick an executable manually.",
-      engineCapabilityNote:
-        "Only CDP engines support autofill, session checks and window tiling. Firefox runs in external mode: multiple windows and password copy, but no page control. Safari does not support multi-account isolation.",
       appearanceTitle: "Appearance",
-      appearanceNote:
-        "Dark is easier on the eyes for long sessions; light helps when checking credentials.",
       autoFillLaunch: "Autofill on launch",
       defaultLayout: "Default layout",
       defaultLayoutNote:
@@ -1672,8 +1645,8 @@ export const messages = {
       headlessUaNote:
         "Background checks read the identity's cookies using a windowless browser. By default it reports the normal desktop User-Agent, so the site under test does not treat the check as a crawler. That is not fingerprint spoofing — devtools can change the UA too. Switch to the headless UA to report HeadlessChrome honestly.",
       vaultTitle: "Credential storage",
-      vaultNote:
-        "Passwords are decrypted only in the main process for login-page fills; they never reach the renderer.",
+      vaultExplainer:
+        "The OS keychain keeps it out of reach offline; a master password cannot be recovered — forgetting it means deleting vault.json and entering everything again.",
       vaultUnlockPlaceholder: "Enter your master password to unlock",
       unlock: "Unlock",
       changeMaster: "Change master password",
@@ -1688,13 +1661,9 @@ export const messages = {
       saveNewMaster: "Save new master password",
       masterMismatch: "The two master passwords do not match",
       wrongMaster: "The current master password is incorrect",
-      vaultExplainer:
-        "The system keychain blocks offline reads but not a program running as your user. A master password makes the key derivable only from something you know — closer to a password manager, even when the test database came from production. It cannot be recovered: if you forget it, delete vault.json and re-enter the credentials.",
 
       // Data and AI access
       dataTitle: "Data",
-      dataNote:
-        "Everything is stored on this machine. This section moves it to another one and lets a local AI client do the data entry.",
       closeToTray: "Close to tray",
       closeToTrayNote:
         "With this on, closing the window only hides it; browsers and the AI endpoint keep running. Quit fully from the tray menu or the button below.",
@@ -1715,8 +1684,6 @@ export const messages = {
       importResult: "{added} added, {updated} updated, {skipped} skipped",
       layoutPresets: "Layout presets",
       mcpTitle: "AI access",
-      mcpNote:
-        "Runs a local MCP endpoint so an AI client can record sites, identities and views directly, and drive the built-in browser — the pages live in the main window, so you can watch and take over.",
       mcpEnable: "Endpoint",
       mcpRunning: "Running",
       mcpStopped: "Stopped",
@@ -1737,14 +1704,14 @@ export const messages = {
       mcpAllowWrite: "Create and edit",
       mcpAllowRun: "Launch and stop windows",
       mcpAllowDelete: "Delete",
+      mcpPermissionNote:
+        "Delete is off by default; once enabled the AI only has to pass confirm to remove a site, account or view.",
       mcpAiOrigins: "Origins the AI may operate in the default profile",
       mcpAiOriginsEmpty: "No origin authorized yet",
       mcpAiOriginsNote:
         "The default profile is your own signed-in browsing, so an AI can read, screenshot and switch tabs there but cannot click or type. " +
         "To let it operate a site, allow that origin from the browser toolbar; pages in the identities page and clean sessions are never restricted.",
       mcpAiOriginRevoke: "Revoke the AI's permission for this origin",
-      mcpPermissionNote:
-        "Delete is off by default; once enabled, a single confirm flag lets the AI remove sites, identities or views.",
       mcpEndpoint: "Client connection",
       mcpConnTitle: "Client connection",
       mcpFieldUrl: "URL",
@@ -1765,7 +1732,6 @@ export const messages = {
       exportWithSecrets: "with encrypted passwords",
       exportNoSecrets: "without passwords",
       toastImportDone: "Import finished: {added} added, {updated} updated",
-      aboutTagline: "Every account of one system, signed in at once.",
       updateIdle: "No update check yet.",
       updateChecking: "Checking…",
       updateCheck: "Check for updates",
@@ -1921,6 +1887,9 @@ export const messages = {
       browserFill: "Fill",
       browserFillHint: "Fill this page with the identity's saved credentials",
       browserFind: "Find in page",
+      browserFindPrev: "Previous",
+      browserFindNext: "Next",
+      browserFindClose: "Close find",
       browserFindPlaceholder: "Find in page",
       browserDevTools: "Developer tools",
       browserDevToolsClose: "Close developer tools",
@@ -1932,9 +1901,8 @@ export const messages = {
       browserNewTabHere: "New tab in this instance",
       browserTabs: "Tabs",
       browserLoading: "Loading",
-      layoutOpenBench: "Open the workbench",
-      layoutShowSidebar: "Show the sidebar",
-      layoutHideSidebar: "Hide the sidebar",
+      layoutOpenWorkbench: "Open the workbench",
+      layoutCollapseWorkbench: "Collapse the workbench",
       appMenu: "App menu",
       checkUpdate: "Check for updates",
       browserUnsplit: "Stop splitting; this cell follows the window again",
@@ -1959,13 +1927,37 @@ export const messages = {
       newTabBadInput: "That is neither an address nor something a search link can carry",
       newTabBackground: "Background",
       bookmarks: "Bookmarks",
+      // Message centre
+      messages: "Messages",
+      messagesUnread: "Unread messages ({count})",
+      messagesAll: "All",
+      messagesEmpty: "Nothing here yet. Sign-ins, account problems and AI actions are recorded here.",
+      messagesReadAll: "Mark all read",
+      messagesClear: "Clear",
+      messagesClearBody: "Clearing cannot be undone, and unsaved logins recorded here are discarded with it.",
+      messageKindLoginCapture: "Sign-in",
+      messageKindAccount: "Account",
+      messageKindAi: "AI",
+      messageKindApp: "App",
+      messageGotoTab: "Show page",
+      messageRelogin: "Sign in again",
+      messageRemove: "Delete this entry",
+      messageStale: "No longer valid",
+      messageStaleCapture: "That password was only held in memory and cannot be saved after a restart",
+      messageStaleTarget: "The page or account it pointed at is gone",
+      messagesLoginCaptured: "Sign-in captured: {user} ({site})",
+      messagesLoginFailed: "Sign-in did not complete: {name}",
+      messagesLoginNoPassword: "No password saved: {name}",
+      messagesLoginCrossOrigin: "Login page is on another origin: {name}",
+      messagesLoginFormNotFound: "No login form found: {name}",
+      messagesAiAction: "AI ran {tool} ({site})",
+      messagesAiActionFailed: "AI failed to run {tool} ({site})",
+      messagesUpdateAvailable: "Version {version} is available",
       bookmarkAllFolders: "All",
       bookmarkFolderLabel: "Folder",
       bookmarkFolderNone: "Unfiled",
       bookmarkFolderHint: "Leave empty to keep it at the top level",
       bookmarksPageTitle: "Bookmarks",
-      bookmarksPageHint:
-        "Bookmarks appear on the new-tab page only. The tree on the left organises folders and bookmarks by level, and the top-level folders are listed above the grid.",
       bookmarksPageNew: "New bookmark",
       bookmarksPageNewFolder: "New folder",
       bookmarksEmpty:
@@ -2039,7 +2031,6 @@ export const messages = {
       newTabEngineTemplateHint:
         "Use %s where the query goes, for example https://example.com/search?q=%s. Only http(s) is accepted.",
       newTabEngineInvalid: "Name is required and the template must be an http(s) URL containing %s",
-      launchTargetTitle: "Launch with",
       launchTargetHint: "Views and identities launch into the surface chosen here",
       launchTargetEmbedded: "Built-in browser",
       launchTargetEmbeddedHint: "Every account in one window",
@@ -2062,8 +2053,6 @@ export const messages = {
       browserNewView: "Create view",
       browserNewViewHint: "Create an empty view, then drag instances into it",
       browserRenameHint: "Double-click or right-click to rename",
-      browserDropHint:
-        "Drag to reorder; drop into a view to join it; create views with the button above; drag a slot seam to re-proportion",
       browserExpandDock: "Expand the sidebar",
       browserCollapseDock: "Collapse the sidebar",
       browserResizeDock: "Drag to resize the sidebar",

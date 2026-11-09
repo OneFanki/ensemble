@@ -2703,45 +2703,61 @@ try {
     flowsFold,
   );
 
-  // --- AI entry in the toolbar ----------------------------------------------
+  // --- AI entry in the app menu --------------------------------------------
   // The endpoint used to be reported by a status bar across the bottom of every
   // screen, which is the single clearest sign that a window is a console rather
-  // than a browser. It now rides the toolbar's AI button: the label says what the
-  // button opens, the dot says whether it is listening.
-  // The AI entry lives in the browser's toolbar, so this block starts there.
-  // Earlier checks leave the app on a console page; without this the toolbar is
-  // simply not mounted and every assertion below would read null.
+  // than a browser. It then lived in the toolbar, which had grown into a row of
+  // one-off buttons; it is now a row in the app menu, where an infrequent
+  // destination belongs. The row keeps its label and says whether it is
+  // listening in the same right-aligned slot that otherwise says "off".
+  // Earlier checks leave the app on a console page; without this the browser's
+  // toolbar is simply not mounted and every assertion below would read null.
   await backToBrowser(client);
-  await waitFor(client, `Boolean(document.querySelector('.ai-btn'))`, 5000);
-
-  const mcpEntry = await client.evaluate(`(() => {
-    const button = document.querySelector('.ai-btn');
-    if (!button) return null;
-    const rect = button.getBoundingClientRect();
+  await waitFor(client, `Boolean(document.querySelector('[data-app-menu]'))`, 5000);
+  const aiRow = await client.evaluate(`(async () => {
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const row = document.querySelector('[data-menu-item="ai"]');
+    if (!row) return { menuOpen: Boolean(document.querySelector('.app-menu')), row: null };
+    const rect = row.getBoundingClientRect();
     return {
-      text: button.textContent.replace(/\\s+/g, ' ').trim(),
-      hasIcon: Boolean(button.querySelector('svg')),
-      hasDot: Boolean(button.querySelector('.ai-dot')),
+      menuOpen: true,
+      text: row.textContent.replace(/\\s+/g, ' ').trim(),
+      hasIcon: Boolean(row.querySelector('svg')),
+      hint: row.querySelector('.app-menu-hint')?.textContent?.trim() ?? '',
+      inMenu: Boolean(row.closest('.app-menu')),
+      width: Math.round(rect.width),
       height: Math.round(rect.height),
-      inToolbar: button.closest('.toolbar') !== null,
     };
   })()`);
   check(
-    "the toolbar carries an AI entry with an icon",
-    Boolean(mcpEntry?.inToolbar && mcpEntry?.hasIcon),
-    mcpEntry,
+    "the app menu carries the AI entry with an icon",
+    Boolean(aiRow?.menuOpen && aiRow?.hasIcon && aiRow?.inMenu === true),
+    aiRow,
   );
   check(
-    "the AI entry is labelled whether or not the endpoint is running",
-    typeof mcpEntry?.text === 'string' && mcpEntry.text.includes('AI'),
-    { text: mcpEntry?.text },
+    "the AI entry is labelled and states whether it is running",
+    typeof aiRow?.text === 'string' &&
+      aiRow.text.includes('AI') &&
+      typeof aiRow.hint === 'string' &&
+      aiRow.hint.length > 0 &&
+      aiRow.text !== aiRow.hint,
+    { text: aiRow?.text, hint: aiRow?.hint },
   );
-  // Level with the other toolbar controls; the whole row shares --control-lg.
+  // A menu row is a full-width row in the menu panel, not an icon button
+  // standing in the toolbar.
   check(
-    "the AI entry matches the toolbar control height",
-    Boolean(mcpEntry) && mcpEntry.height === sizing?.controlLg,
-    { height: mcpEntry?.height, expected: sizing?.controlLg },
+    "the AI entry is a menu row rather than a toolbar control",
+    Boolean(aiRow?.inMenu) && aiRow.width > aiRow.height * 3,
+    { width: aiRow?.width, height: aiRow?.height },
   );
+  // Leave the menu closed: the probe opened it, and the next step clicks the
+  // trigger again — which would close it and make the click miss.
+  await client.evaluate(`(async () => {
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    return true;
+  })()`);
 
   // The status bar is gone: its 30px across every screen was the clearest sign
   // that this was a console. Assert the removal, so it cannot creep back.
@@ -2751,11 +2767,11 @@ try {
   }))()`);
   check("the window has no status bar", noStatusBar?.statusbar === false && noStatusBar?.footer === false, noStatusBar);
 
-  // The AI menu is the entry point now: state, address and the way to settings.
+  // The menu row is the entry point now: it opens the AI access settings page.
   await client.evaluate(`(async () => {
-    document.querySelector('.ai-btn')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    document.querySelector('.ai-menu [role="menuitem"]')?.click();
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    document.querySelector('[data-menu-item="ai"]')?.click();
     await new Promise((r) => setTimeout(r, 600));
     return true;
   })()`);
@@ -2839,13 +2855,13 @@ try {
   );
   await wait(400);
   await client.evaluate(`(async () => {
-    // Back to the browser first: the AI entry is part of the browser's toolbar,
-    // and settings has no toolbar at all.
+    // Back to the browser first: the AI entry is a row in the browser's app
+    // menu, and settings has neither a toolbar nor that menu.
     document.querySelector('.settings-head .back')?.click();
     await new Promise((r) => setTimeout(r, 500));
-    document.querySelector('.ai-btn')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    document.querySelector('.ai-menu [role="menuitem"]')?.click();
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    document.querySelector('[data-menu-item="ai"]')?.click();
     await new Promise((r) => setTimeout(r, 600));
     return true;
   })()`);

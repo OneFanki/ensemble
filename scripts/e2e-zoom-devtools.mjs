@@ -438,20 +438,26 @@ try {
   })();
   check("the DevTools front-end is running", frontEnd?.loaded === true, frontEnd);
 
-  const toolbarState = await client.evaluate(`(() => {
-    // Located by accessible name, not by the hover hint: the hint is drawn by the
-    // app's own tooltip now, so there is no \`title\` attribute left to read. The
-    // aria-label is also what a screen reader announces, which makes it the more
-    // meaningful thing for a test to depend on.
-    const button = [...document.querySelectorAll('.toolbar .icon')].find((el) =>
-      (el.getAttribute('aria-label') ?? '').includes('开发者工具'),
-    );
-    return { present: Boolean(button), active: button?.classList.contains('active') ?? null };
+  const menuState = await client.evaluate(`(async () => {
+    // DevTools moved off the toolbar into the app menu, where it is a checkbox:
+    // the tick says the panel below is this tab's own. Located by its row id,
+    // not by copy, so a wording change does not break the check.
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const row = document.querySelector('[data-menu-item="devtools"]');
+    const state = {
+      present: Boolean(row),
+      checked: row?.getAttribute('aria-checked') ?? null,
+      tick: Boolean(row?.querySelector('.app-menu-check')),
+    };
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 150));
+    return state;
   })()`);
   check(
-    "the toolbar marks DevTools as open",
-    toolbarState?.present === true && toolbarState?.active === true,
-    toolbarState,
+    "the app menu marks DevTools as open",
+    menuState?.present === true && menuState?.checked === 'true' && menuState?.tick === true,
+    menuState,
   );
 
   // A resize round-trip. The live drag polls the real cursor, which a headless

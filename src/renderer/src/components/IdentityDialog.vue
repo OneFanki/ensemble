@@ -17,8 +17,6 @@ const props = defineProps<{
   draft: IdentityDraft;
   engines: Engine[];
   passwordSet: boolean;
-  /** Origin/path of a captured login, offered as a prefilled new site. */
-  siteSeed?: { origin: string; path: string } | null;
 }>();
 
 const emit = defineEmits<{
@@ -42,28 +40,6 @@ const editingSitePassword = ref(false);
 const newSiteName = ref("");
 const newSiteUrl = ref("");
 const creatingSite = ref(false);
-
-/**
- * A captured login on an unknown site opens this form with the creator already
- * showing and the origin filled in — the alternative is losing the password
- * because the site does not exist yet.
- */
-watch(
-  () => props.siteSeed,
-  (seed) => {
-    if (!seed) return;
-    creatingSite.value = true;
-    newSiteUrl.value = seed.origin;
-    if (!newSiteName.value) {
-      try {
-        newSiteName.value = new URL(seed.origin).hostname;
-      } catch {
-        newSiteName.value = seed.origin;
-      }
-    }
-  },
-  { immediate: true },
-);
 
 watch(
   () => props.draft,
@@ -303,7 +279,6 @@ async function rebuildProfile() {
   <Modal
     :open="true"
     :title="form.id ? $t('app.editIdentityTitle') : $t('app.newIdentityTitle')"
-    :description="$t('app.identityDialogDesc')"
     width="600px"
     @close="emit('close')"
   >
@@ -394,13 +369,11 @@ async function rebuildProfile() {
       <div class="field">
         <span class="label">{{ $t("app.tags") }}</span>
         <TagPicker v-model="form.tagIds" :tags="store.snapshot?.tags ?? []" />
-        <span class="hint">{{ $t("app.identityTagHint") }}</span>
       </div>
 
       <section class="group">
         <div class="group-head">
           <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
-          <span class="group-note">{{ $t("app.loginFormGroupNote") }}</span>
         </div>
 
         <div class="field">
@@ -841,11 +814,6 @@ async function rebuildProfile() {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
-}
-
-.group-note {
-  font-size: 10.5px;
-  color: var(--faint);
 }
 
 .error {

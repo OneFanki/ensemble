@@ -91,9 +91,9 @@ real browser — a separate path, triggered explicitly.
 
 Site 1—N identities, site 1—N views. A view is optional: without one the surface behaves like a plain browser, and views are created explicitly from the running dock. Isolation is unchanged — one profile per identity, sessions never cross sites — but the site is no longer a global filter: the identities page groups every account by site, and a view may span several. One tag namespace is shared by sites, accounts and views, and an account also matches its site's tags.
 
-The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from Settings whenever you like.
+The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from the app menu in the toolbar whenever you like.
 
-**The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, sites, identities, views, flows, tags, bookmarks, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch: it only shows or hides the column, and never changes how many cells the stage is split into.
+**The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, bookmarks, sites, identities, views, flows, tags, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch — opening it puts you in the workbench, collapsing it leaves a plain browser — and it only shows or hides the column, never changing how many cells the stage is split into.
 
 With no view open, startup lands on one blank page whose surface is a search box: type an address or words and press enter. A bookmark bar runs along the top of that blank page — one row of bookmarks and folders, folders open on hover and nest to any depth, and rows that do not fit move into an overflow menu at the right; it exists only on the blank surface. The stage still carries a page strip along the top, just like a cell of a view. Collapsed, the column keeps one site icon per running instance and hands the width back to the page:
 
@@ -152,7 +152,7 @@ The identities page is where most of the day is spent: one card per identity wit
 - **Clean sessions**: in external mode, throwaway windows with their own profile directory, deleted on close. In the built-in surface each clean open gets its own in-memory session — gone when the process exits, and two clean opens never see each other. The entry lives in the title bar's browser menu and follows that switch
 - **Daily profile**: in the built-in surface, identity-less pages share one persistent profile, so signing in once lasts. It is a separate world from a clean session, and a bookmark opens using the login it already holds
 - **Process reclamation**: on quit, only browsers launched against Ensemble's own profile root are stopped
-- **One entry per job**: the left column navigates browser / sites / identities / views / flows / tags / bookmarks, with Settings alone at the bottom; the toolbar's right-hand menu holds the infrequent entries — show the sidebar, launch target (built-in / external), clean session, bookmarks, settings, check for updates, about, quit. Password fill, the AI entry, zoom, downloads and the bookmark star stay in the toolbar
+- **One entry per job**: the left column navigates browser / sites / identities / views / flows / tags / bookmarks, with Settings alone at the bottom; the toolbar's right-hand menu holds the infrequent entries — show the sidebar, launch target (built-in / external), clean session, bookmarks, DevTools, AI access, settings, check for updates, about, quit. The toolbar itself keeps only the everyday controls: back and forward, the address bar, bookmark star, password fill, find, downloads, viewport and zoom
 - **Let an AI do the data entry**: a built-in MCP endpoint receives sites, identities and views from your AI client; it also drives the built-in browser, so given a test URL and a super-admin login it can create the tenant accounts, save them and put them on stage
 - **Flows are reusable assets**: an AI (or you) can save a page operation that worked as a flow — a list of parameterised steps that reruns in one call instead of being worked out again. A flow is steps, not a script, so it stays readable, editable and adjustable in the UI
 - **Portable config**: export the whole workspace to JSON, including encrypted passwords
@@ -218,7 +218,7 @@ The light theme matches the dark one, down to the native title-bar buttons:
 
 Have your AI create the accounts in a container, then record them in Ensemble without typing a single form:
 
-1. Turn on "AI access" in settings to get the loopback URL and a Bearer token — the AI entry at the right of the status bar jumps straight there, and its dot shows whether the endpoint is running;
+1. Turn on "AI access" in settings to get the loopback URL and a Bearer token — the "AI access" row in the toolbar's app menu jumps straight there, and the same row states whether the endpoint is running;
 2. Paste the config snippet into any MCP-capable client (Claude Code, ZCode, …);
 3. The AI calls `create_site`, `create_identities`, `create_view`, then `open_browser_view` (built-in browser) or `launch_view` (external windows).
 
@@ -254,9 +254,19 @@ What the AI does, and with which tool:
 Interactive tools address elements the way a person does — `label: "Username"`, `text: "Create
 tenant"` — instead of the long `:nth-of-type` paths a snapshot can express, which break the moment
 one conditional field appears on a component-library form. Asynchronous renders are waited on with
-`wait_browser` (`visible` / `hidden` / `text` / `url` / `value`) rather than sleep-then-read: one
-round trip, and no window in which the page changes itself (a menu closing on blur, an option
-appearing one frame late).
+`wait_browser` (`visible` / `hidden` / `text` / `url` / `value` / `network-idle`) rather than
+sleep-then-read: one round trip, and no window in which the page changes itself (a menu closing on
+blur, an option appearing one frame late). When you do not know which element will appear first,
+`network-idle` usually costs less: it waits for the requests to finish, so nothing about the page's
+shape has to be guessed in advance.
+
+**The AI gets more than a screenshot.** `read_browser_page` returns an accessibility snapshot —
+roles, readable names, stable selectors, the label beside each form field, and `parent` / `depth`
+for every node (which dialog a button belongs to). When clicking save does nothing,
+`read_browser_console` brings back the errors, console output and requests — failed `fetch` / `XHR`
+included — and clears them, so it answers "what happened since I last looked". Screenshots return a
+file path by default; `inline: true` sends the image itself as well, which is what a client that
+cannot open a local path needs.
 
 The pages live in the main window throughout, so you can watch, take over or interrupt at any point.
 Signing in as an account that is already saved never asks "save this login?" again — only a

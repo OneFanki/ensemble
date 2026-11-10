@@ -118,6 +118,29 @@ export class MessageStore {
     this.write(file);
   }
 
+  /**
+   * Marks the row that points at a login capture as read.
+   *
+   * Saving the account *is* handling the news, so the unread dot must go with
+   * it. Leaving it lit is what made the toolbar claim there was something to
+   * read right after the user had just dealt with the only item in the list.
+   * Matched by token rather than by id because that is what the save path
+   * carries — the row's id is never handed to the identity form.
+   */
+  markReadByCaptureToken(token: string): boolean {
+    const file = this.read();
+    let changed = false;
+    for (const item of file.messages) {
+      if (item.read) continue;
+      if (item.action?.type !== "login-capture") continue;
+      if (item.action.token !== token) continue;
+      item.read = true;
+      changed = true;
+    }
+    if (changed) this.write(file);
+    return changed;
+  }
+
   /** Drops one row, and the secret it points at with it. */
   remove(id: string): AppMessage | undefined {
     const file = this.read();

@@ -82,10 +82,47 @@ const active = computed(() => GUIDE_SECTIONS.find((item) => item.id === section.
         </nav>
 
         <div class="guide-main">
-          <!-- First screen: the diagram, then the AI turn. -->
+          <!-- First screen: what the window is, then the shortest path, then
+               the AI turn. The layout diagram comes first on purpose — the old
+               first screen opened with "add a site", which is the third concept
+               a newcomer needs, not the first. -->
           <template v-if="section === null">
             <h1 class="guide-h1">{{ t("app.guideH1") }}</h1>
             <p class="guide-lead">{{ t("app.guideLead") }}</p>
+
+            <!-- The layout, not a screenshot: the real UI is right behind this
+                 dialog, so a picture of it would be redundant and would age the
+                 moment a control moves. Structure is what needs explaining. -->
+            <svg
+              class="diagram workbench"
+              viewBox="0 0 420 104"
+              role="img"
+              :aria-label="t('app.guideWorkbenchAlt')"
+            >
+              <rect x="2" y="2" width="118" height="98" rx="6" class="d-panel" />
+              <text x="14" y="18" class="d-kicker">{{ t("app.guideWorkbenchTitle") }}</text>
+              <text x="14" y="38" class="d-label">{{ t("app.guideWorkbenchDock") }}</text>
+              <rect x="10" y="44" width="102" height="14" rx="3" class="d-cell" />
+              <text x="18" y="54" class="d-label">账号 A</text>
+              <rect x="10" y="62" width="102" height="14" rx="3" class="d-cell" />
+              <text x="18" y="72" class="d-label">账号 B</text>
+              <rect x="10" y="80" width="102" height="14" rx="3" class="d-cell" />
+              <text x="18" y="90" class="d-label">账号 C</text>
+
+              <rect x="134" y="2" width="282" height="98" rx="6" class="d-panel" />
+              <text x="146" y="18" class="d-kicker">{{ t("app.guideWorkbenchStage") }}</text>
+              <rect x="146" y="26" width="126" height="32" rx="4" class="d-cell" />
+              <text x="158" y="45" class="d-label">账号 A</text>
+              <rect x="284" y="26" width="126" height="32" rx="4" class="d-cell" />
+              <text x="296" y="45" class="d-label">账号 B</text>
+              <rect x="146" y="64" width="126" height="32" rx="4" class="d-cell" />
+              <text x="158" y="83" class="d-label">账号 C</text>
+              <rect x="284" y="64" width="126" height="32" rx="4" class="d-cell muted" />
+              <text x="296" y="83" class="d-label muted">+</text>
+            </svg>
+
+            <p class="guide-kicker">{{ t("app.guidePathKicker") }}</p>
+            <p class="guide-lead tight">{{ t("app.guidePathLead") }}</p>
 
             <!-- Arrows live BETWEEN the boxes, not inside them: the flow reads
                  left to right as boxes connected by steps, and the boxes stay
@@ -196,7 +233,11 @@ const active = computed(() => GUIDE_SECTIONS.find((item) => item.id === section.
   position: relative;
   z-index: 71;
   width: min(880px, calc(100vw - 64px));
-  height: min(620px, calc(100vh - 80px));
+  /* Tall enough for the first screen in full: the layout diagram, the three
+     steps and the AI block together need more room than the old two-block
+     screen did. Still bounded by the viewport so it never runs off a small
+     display — the body scrolls in that case. */
+  height: min(700px, calc(100vh - 64px));
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -309,6 +350,44 @@ const active = computed(() => GUIDE_SECTIONS.find((item) => item.id === section.
   font-size: 12.5px;
   line-height: 1.7;
   color: var(--muted);
+}
+
+/* Directly above a diagram or a list the lead only needs a breath of space. */
+.guide-lead.tight {
+  margin: 4px 0 14px;
+}
+
+/* Section kicker for the second block on the first screen. Without it the
+   layout diagram and the three steps read as one long list. */
+.guide-kicker {
+  margin: 22px 0 0;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ---- the layout diagram ---- */
+
+.diagram.workbench {
+  /* Height follows the viewBox, so the first screen fits without scrolling at
+     the dialog's default height. It shrank from 132 to 104 units for exactly
+     that reason: the AI block below it was being cut off. */
+  max-width: 420px;
+  margin: 0 0 2px;
+}
+
+.d-panel {
+  fill: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.d-kicker {
+  fill: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  font-family: var(--font-sans);
 }
 
 /* ---- the three-box path ---- */

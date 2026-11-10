@@ -21,7 +21,15 @@ import type { AppSettings } from "@shared/types";
  * behind the section list, because a wall of features on first open reads as
  * "this is complicated" rather than "this is capable".
  */
-export const GUIDE_VERSION = 1;
+/**
+ * Bumped when the guide's content changes enough that someone who already read
+ * the old one should see this one.
+ *
+ * 2: the first screen now opens with what the window *is* — the workbench on the
+ * left, the stage on the right — and only then explains the three steps. The old
+ * screen started at "add a site", which is the third thing a newcomer needs.
+ */
+export const GUIDE_VERSION = 2;
 
 /** One section of the guide; `core` sections are shown on the first screen. */
 export interface GuideSection {

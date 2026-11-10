@@ -1,3 +1,4 @@
+import type { PerfSample } from "@shared/embedded";
 import {
   DEVICE_DPR_MAX,
   DEVICE_DPR_MIN,
@@ -10,6 +11,7 @@ import {
   perfAxisMax,
   perfSparkPath,
   perfSparkPoints,
+  perfSummarize,
 } from "@shared/embedded";
 import {
   PERF_HISTORY_LIMIT,
@@ -326,5 +328,53 @@ describe("performance sampler", () => {
       "layouts",
       "styleRecalcs",
     ]);
+  });
+});
+
+/*
+ * The summary an agent gets instead of the curve.
+ *
+ * These exist because the tool's whole value is that a model does not have to do
+ * the arithmetic: if `avg` were computed over the wrong set, or `maxAt` pointed
+ * at a sample that is not the max, every conclusion drawn from it would be
+ * plausible and wrong.
+ */
+describe("performance summary", () => {
+  const sample = (t: number, cpu: number): PerfSample => ({
+    t,
+    at: "",
+    cpu,
+    nodes: 0,
+    listeners: 0,
+    documents: 0,
+    frames: 0,
+    heap: 0,
+    layouts: 0,
+    styleRecalcs: 0,
+  });
+
+  it("reports the mean, the peak and when the peak happened", () => {
+    const history = [sample(0, 2), sample(200, 40), sample(400, 6)];
+    const summary = perfSummarize(history, "cpu");
+    expect(summary?.avg).toBe(16);
+    expect(summary?.max).toBe(40);
+    // The middle sample: this is the number that gets matched against a console
+    // line's timestamp, so an off-by-one here produces a confidently wrong story.
+    expect(summary?.maxAt).toBe(200);
+    expect(summary?.last).toBe(6);
+  });
+
+  it("says nothing at all for an empty window", () => {
+    // The caller substitutes zeros; returning a zero-filled summary from here
+    // would claim "the page was idle" for a window that was never measured.
+    expect(perfSummarize([], "cpu")).toBeUndefined();
+  });
+
+  it("keeps sub-unit precision instead of rounding to whole numbers", () => {
+    // A page idling at 0.4% and one at 0.6% are both "0" if this rounds early,
+    // and the panel's headline number would disagree with the tool's.
+    const summary = perfSummarize([sample(0, 0.4), sample(200, 0.6)], "cpu");
+    expect(summary?.avg).toBe(0.5);
+    expect(summary?.max).toBe(0.6);
   });
 });

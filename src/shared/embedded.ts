@@ -830,6 +830,54 @@ export function perfPeak(history: PerfSample[], metric: PerfMetric): number {
 }
 
 /**
+ * One metric's behaviour over a sample window, as facts rather than a curve.
+ *
+ * An agent cannot read a sparkline. Handing it 100 raw points makes it compute
+ * an average in prose and get it wrong; handing it `{avg, max, maxAt}` lets it
+ * answer "was the page slow while I clicked" in one step. `maxAt` is milliseconds
+ * from the start of sampling, so it can be matched against the timestamps of the
+ * log lines it read from `read_browser_console` — the pairing is the whole point.
+ */
+export interface PerfMetricSummary {
+  /** Mean over the samples present. */
+  avg: number;
+  /** Highest reading in the window. */
+  max: number;
+  /** Offset of that reading, matching `PerfSample.t`. */
+  maxAt: number;
+  /** Newest reading, which is what the panel's value column shows. */
+  last: number;
+}
+
+/** Summarises one metric across the samples it is given. */
+export function perfSummarize(
+  history: PerfSample[],
+  metric: PerfMetric,
+): PerfMetricSummary | undefined {
+  if (history.length === 0) return undefined;
+  let sum = 0;
+  let max = Number.NEGATIVE_INFINITY;
+  let maxAt = 0;
+  for (const sample of history) {
+    const value = sample[metric];
+    sum += value;
+    if (value > max) {
+      max = value;
+      maxAt = sample.t;
+    }
+  }
+  const last = history[history.length - 1]!;
+  return {
+    // Rounded here, not by the caller: three decimals of a percentage is noise,
+    // and the same rounding on both sides keeps the panel and the tool agreeing.
+    avg: Math.round((sum / history.length) * 1000) / 1000,
+    max: Math.round(max * 1000) / 1000,
+    maxAt,
+    last: Math.round(last[metric] * 1000) / 1000,
+  };
+}
+
+/**
  * The points of one metric's line inside `width × height`.
  *
  * x is wall time, not sample index: the renderer can drop a tick (a busy page

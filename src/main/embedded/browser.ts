@@ -32,6 +32,12 @@ import {
   buildFillExpression,
   type AuthTokenSource,
 } from "@core/cdp/login";
+import {
+  type PerfSample,
+  type RawMetrics,
+  deriveSample,
+  pushSample,
+} from "@core/cdp/performance";
 import type { MissingCredentialReason } from "@core/credentials/vault";
 import { t } from "@core/i18n/translate";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
@@ -58,10 +64,12 @@ import {
   stageDrawsSlotHeaders,
   neighborZoomStep,
   normalizeEmbeddedUrl,
+  PERF_SAMPLE_INTERVAL_MS as PERF_SAMPLE_INTERVAL_MS_SHARED,
   planTabClick,
   resolveSlotPages,
   resolveSlotTabs,
   settleSplitPages,
+  type EmbeddedDevice,
   type EmbeddedViewport,
   type StageRect,
   viewIsOnScreen,
@@ -102,6 +110,16 @@ import { applyProxyToSession } from "../proxy";
  */
 const AI_ACTIVE_WINDOW_MS = 60_000;
 const FREEZE_SWEEP_INTERVAL_MS = 10_000;
+/**
+ * Five samples per second.
+ *
+ * Chrome's own monitor samples once a second, which is enough for a trend and
+ * not enough for a stutter: a 200ms freeze lands entirely between two samples.
+ * `Performance.getMetrics` is a counter read, not a tracing session, so 5 Hz
+ * costs little; the panel publishes at 1 Hz so the renderer's reactive pass
+ * does not become the thing being measured.
+ */
+const PERF_SAMPLE_INTERVAL_MS = PERF_SAMPLE_INTERVAL_MS_SHARED;
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -150,6 +168,41 @@ interface TabRecord {
    * effective size is {@link viewportOf}, never this field directly.
    */
   viewportOverride?: EmbeddedViewport | null;
+  /**
+   * Device this page is impersonating, when it is.
+   *
+   * Kept separate from `viewportOverride` because it is a different kind of
+   * claim: the viewport is where the page lays out, the device is what the page
+   * believes it is running on. Applying one means talking to CDP and pinning the
+   * session; applying the other is pure geometry.
+   */
+  device?: EmbeddedDevice;
+  /**
+   * Which tab of the docked panel is showing.
+   *
+   * Absent means the native front-end. The other two are ours, drawn by the
+   * renderer — mutually exclusive with the front-end, because a native view
+   * paints over anything the renderer draws and two owners of one rectangle
+   * would fight.
+   */
+  devtoolsTab?: "front-end" | "device" | "performance";
+  /**
+   * Performance samples, present only while the performance tab is open.
+   *
+   * Not persisted and not kept after the tab closes: a metric history that
+   * outlives the panel would describe a page the user is no longer profiling,
+   * and the polling it takes to fill it pins the CDP session.
+   */
+  perf?: {
+    history: PerfSample[];
+    previous: RawMetrics | undefined;
+    startedAt: number;
+    /** Wall clock of the first sample, so `t` is an offset from it. */
+    firstAt: number;
+    timer?: ReturnType<typeof setTimeout>;
+  };
+  /** Guards a stale sampling closure from writing after a restart. */
+  perfGeneration?: number;
   /** Zoom factor the current viewport fit resolved to; drives `applyZoom`. */
   viewportScale?: number;
   /**
@@ -619,12 +672,14 @@ export class EmbeddedBrowser {
   /**
    * The size a page actually renders at.
    *
-   * One resolution order for the whole surface: an explicit page choice wins,
-   * otherwise the workspace default applies, otherwise the page fills its cell.
+   * One resolution order for the whole surface: a device wins over everything —
+   * it *is* a size, and the page has been told to lay out at exactly that size —
+   * then an explicit page choice, then the workspace default, then the cell.
    * Every reader (`describe`, `placePageSurface`, `applyZoom`, `zoomBy`) goes
-   * through this so the chrome and the native geometry can never disagree.
+   * through this so the chrome and the geometry can never disagree.
    */
   private viewportOf(tab: TabRecord): EmbeddedViewport | undefined {
+    if (tab.device) return { width: tab.device.width, height: tab.device.height };
     if (tab.viewportOverride !== undefined) return tab.viewportOverride ?? undefined;
     return this.defaultViewport;
   }
@@ -706,8 +761,10 @@ export class EmbeddedBrowser {
       ...(tab.viewportOverride === undefined
         ? {}
         : { viewportOverride: tab.viewportOverride ?? null }),
+      ...(tab.device ? { device: { ...tab.device } } : {}),
       devtoolsOpen: this.devtoolsOpen(tab),
       ...(tab.devtools ? { devtoolsWidth: tab.devtools.width } : {}),
+      ...(tab.devtoolsTab ? { devtoolsTab: tab.devtoolsTab } : {}),
       // No bounds while the carrier is still being created: the renderer uses
       // the absence to mean "not laid out yet" and keeps the node hidden until
       // a real rect arrives, instead of placing it at 0×0.
@@ -1630,6 +1687,19 @@ export class EmbeddedBrowser {
     if (clean) this.cleanInstances.add(instanceId);
     this.configureSession(partition);
     /*
+     * Resolve the target before the tab exists.
+     *
+     * Two reasons. An unusable address should fail before anything is published,
+     * so no tab flashes in and out. More importantly, the tab's `url` is what
+     * decides whether the stage draws the app's own new-tab surface — and that
+     * surface was being shown for the whole load: the record said `about:blank`
+     * until `loadURL` resolved, so opening an account showed a new tab, sat
+     * there while the site's first byte arrived, and only then switched to the
+     * page. A browser shows the page it is loading, not the page it is leaving.
+     */
+    const target = normalizeEmbeddedUrl(input.url ?? "about:blank");
+    if (!target) throw new Error("只支持 http(s) 地址");
+    /*
      * The tab is in the list before its carrier exists.
      *
      * A guest's `webContents` only appears once the renderer mounts the node,
@@ -1658,22 +1728,37 @@ export class EmbeddedBrowser {
       // the renderer creates one.
       view: null as unknown as PageSurface,
       cdp: null as unknown as CdpExecutor,
-      url: "about:blank",
+      // The address it is *going to*, from the first broadcast. A browser's tab
+      // says where it is heading while it loads; saying `about:blank` until the
+      // load finishes made the stage draw the new-tab surface instead.
+      url: target,
       title: "",
-      loading: false,
+      // Set immediately: the tab strip shows a spinner from this, and without
+      // it the strip claimed the page was already done while it was loading.
+      loading: true,
       crashed: false,
     };
     this.tabs.push(tab);
+    /*
+     * Claim the stage in the same broadcast that announces the tab.
+     *
+     * `openCarrier` below waits for the renderer to mount the guest node — a
+     * round trip of a few hundred milliseconds, longer on a busy machine. While
+     * `activeTabId` still pointed at the previous (blank) page, the stage kept
+     * drawing the new-tab surface for that whole window; the user reads it as
+     * "clicked an account, got a new tab, waited". Selecting the tab here means
+     * the very first state the renderer sees is already the loading page.
+     */
+    this.activeTabId = id;
+    this.setActivePage(tab);
     this.emitState();
-    const carrier = await this.openCarrier({ tabId: id, partition, url: input.url ?? "about:blank" });
+    const carrier = await this.openCarrier({ tabId: id, partition, url: target });
     tab.view = carrier.view;
     tab.cdp = carrier.cdp;
     this.wireTab(tab);
     // A new page starts at the global default; only a deliberate keystroke
     // creates an override, so the setting keeps applying to everything else.
     this.applyZoom(tab, parent ? (parent.zoomOverride ?? this.defaultZoom) : this.defaultZoom);
-    this.activeTabId = id;
-    this.setActivePage(tab);
 
     if (parent) {
       // A popup joins its opener's container and slot; it never becomes a new
@@ -1699,12 +1784,19 @@ export class EmbeddedBrowser {
       delete this.activeViewId;
     }
     this.applyLayout();
+    /*
+     * Publish the switch before waiting out the load.
+     *
+     * `loadURL` resolves on `did-finish-load`, seconds away on a slow site, and
+     * the only broadcast so far was the one right after `push` — at which point
+     * `activeTabId` still named the previous (blank) page. The renderer
+     * therefore kept drawing the new-tab surface for the whole load and the
+     * real page appeared only at the end. The tab already carries its
+     * destination and `loading: true`; saying so here is what turns "stuck on a
+     * new tab" into "loading, address already filled".
+     */
+    this.emitState();
 
-    const target = normalizeEmbeddedUrl(input.url ?? "about:blank");
-    if (!target) {
-      this.closeTab(tab.id);
-      throw new Error("只支持 http(s) 地址");
-    }
     await tab.view.webContents.loadURL(target).catch(() => {
       // A failed load still leaves a usable tab; the error page is visible.
     });
@@ -2062,6 +2154,17 @@ export class EmbeddedBrowser {
       // Started at load, not only at first read: a caller asking "why did the
       // page break" wants the errors that happened before it thought to look.
       void this.installPageActivity(tab);
+      /*
+       * Re-apply a device after every navigation.
+       *
+       * A cross-document navigation replaces the renderer's view of the world,
+       * and the metrics override does not follow it. Without this, clicking any
+       * link on a page being tested as a phone dropped the page back to a
+       * desktop viewport mid-flow — the exact moment the emulation matters.
+       * `applyDevice` is a no-op when the device has not changed, so this costs
+       * nothing on pages that are not being emulated.
+       */
+      if (tab.device) void this.applyDevice(tab, tab.device, { reapply: true });
     });
     /*
      * Clicking anywhere inside a page selects that cell.
@@ -2189,6 +2292,18 @@ export class EmbeddedBrowser {
         event.preventDefault();
         this.zoomBy(tab.id, "reset");
       }
+    });
+    /*
+     * Ctrl + wheel, which is how most people zoom.
+     *
+     * Electron does not bind it, and without this handler the gesture reaches
+     * the page and is either ignored or — worse — scrolls the page diagonally,
+     * because Chromium treats ctrl+wheel as a pinch on some platforms. Routing
+     * it through `zoomBy` also means the overlay and the clamp behave exactly
+     * like the keyboard.
+     */
+    contents.on("zoom-changed", (_event, direction) => {
+      this.zoomBy(tab.id, direction === "in" ? "in" : "out");
     });
   }
 
@@ -3742,7 +3857,12 @@ export class EmbeddedBrowser {
     // the natural way back from the keyboard.
     const viewport = this.viewportOf(tab);
     if (viewport && direction !== "reset") {
-      return Math.round((tab.viewportScale ?? 1) * 100);
+      // Still answer the gesture. With no toolbar readout, a keystroke that
+      // changes nothing and says nothing reads as a dead shortcut; the same
+      // overlay as a real zoom at least names the state the page is in.
+      const percent = Math.round((tab.viewportScale ?? 1) * 100);
+      this.announceZoom(tab, percent);
+      return percent;
     }
     // Reset clears the page's own choice, not the viewport feature as a whole:
     // with a workspace default in effect, "reset" means "back to what everything
@@ -3758,8 +3878,27 @@ export class EmbeddedBrowser {
     // Reset means "back to the default", which is not an override.
     if (direction === "reset" || next === this.defaultZoom) delete tab.zoomOverride;
     else tab.zoomOverride = next;
+    this.announceZoom(tab, next);
     this.emitState();
     return next;
+  }
+
+  /**
+   * Tells the chrome what a zoom gesture landed on.
+   *
+   * The toolbar used to show this number permanently, so a keyboard user could
+   * look up and see the result. With the stepper gone the gesture needs its own
+   * feedback — a short overlay, exactly like the one every browser draws — and
+   * only the main process knows a gesture happened, because Ctrl +/- and
+   * Ctrl+wheel are consumed inside the page.
+   */
+  private announceZoom(tab: TabRecord, percent: number): void {
+    const host = this.host;
+    if (!host || host.isDestroyed()) return;
+    host.webContents.send("embedded:zoom-notice", {
+      tabId: tab.id,
+      zoom: Math.round(percent),
+    });
   }
 
   /**
@@ -3781,6 +3920,18 @@ export class EmbeddedBrowser {
     size: EmbeddedViewport | null | undefined,
   ): EmbeddedViewport | null | undefined {
     const tab = this.requireTab(tabId);
+    /*
+     * Choosing a size replaces the device rather than layering under it.
+     *
+     * A device already carries a size; keeping both would leave two sources
+     * disagreeing about how wide the page is, and the menu would show a tick on
+     * a device the page is not actually wearing. Moving from "iPhone" to a plain
+     * 390×844 viewport means "keep the size, stop pretending to be a phone",
+     * which is the direction people debug in.
+     */
+    if (tab.device) {
+      void this.applyDevice(tab, undefined);
+    }
     if (size === undefined) delete tab.viewportOverride;
     else tab.viewportOverride = size;
     if (!this.viewportOf(tab)) {
@@ -3790,6 +3941,208 @@ export class EmbeddedBrowser {
     this.applyLayout();
     this.emitState();
     return size;
+  }
+
+  /**
+   * Applies, replaces or clears a page's device emulation.
+   *
+   * Three things have to move together and they live in different places:
+   *
+   * - **Geometry** (`setDeviceMetricsOverride`) changes the layout viewport, the
+   *   DPR the page reads and whether it believes it is mobile, which is what
+   *   media queries and `innerWidth` see.
+   * - **Touch** is a separate switch. Without it a page that feature-detects
+   *   `maxTouchPoints` serves its desktop UI at a phone width, which looks like
+   *   the emulation half-failed.
+   * - **UA** is a third switch again. Sites that branch on it (a `/m` redirect,
+   *   "open our app" banners) only react to this one.
+   *
+   * All of it is applied through CDP, and CDP overrides do **not** survive the
+   * session being released: the guest manager detaches after 1.5 seconds idle
+   * (deliberately — a long-lived debugger session is detectable), and a reopened
+   * session comes back at the real viewport, desktop DPR, no touch. Measured, not
+   * assumed. So a page wearing a device pins its session for as long as it wears
+   * it; that is the one page the user has explicitly asked to treat as a
+   * test target, which is the right place to spend the detectability.
+   */
+  async setDevice(tabId: string, device: EmbeddedDevice | null): Promise<EmbeddedDevice | null> {
+    const tab = this.requireTab(tabId);
+    /*
+     * Clearing keeps the size as a plain viewport.
+     *
+     * The alternative — snapping back to the cell — throws away the layout the
+     * user was looking at, and "stop pretending to be a phone" is not the same
+     * request as "stop being 390 wide". A device is a superset; dropping back
+     * down keeps the part that still applies.
+     */
+    const keepSize = device ? undefined : tab.device;
+    await this.applyDevice(tab, device ?? undefined);
+    if (keepSize) tab.viewportOverride = { width: keepSize.width, height: keepSize.height };
+    this.applyLayout();
+    this.emitState();
+    return device;
+  }
+
+  /** Pushes one device (or none) into the page over CDP. */
+  private async applyDevice(
+    tab: TabRecord,
+    device: EmbeddedDevice | undefined,
+    options: { reapply?: boolean } = {},
+  ): Promise<void> {
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    const before = tab.device;
+    if (device) tab.device = device;
+    else delete tab.device;
+    // `reapply` is for a fresh document: the record did not change, but the page
+    // forgot everything, so the overrides have to be sent again.
+    const changed =
+      options.reapply === true ||
+      !before !== !device ||
+      (device && before && JSON.stringify(before) !== JSON.stringify(device));
+    if (!changed) return;
+    try {
+      if (device) {
+        await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
+          width: device.width,
+          height: device.height,
+          deviceScaleFactor: device.dpr,
+          mobile: device.touch,
+        });
+        await tab.cdp.send("Emulation.setTouchEmulationEnabled", {
+          enabled: device.touch,
+          maxTouchPoints: device.touch ? 5 : 1,
+        });
+        if (device.userAgent) {
+          await tab.cdp.send("Emulation.setUserAgentOverride", {
+            userAgent: device.userAgent,
+          });
+        } else {
+          await tab.cdp.send("Emulation.setUserAgentOverride", { userAgent: "" }).catch(() => {});
+        }
+      } else {
+        await tab.cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => undefined);
+        await tab.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(
+          () => undefined,
+        );
+        await tab.cdp.send("Emulation.setUserAgentOverride", { userAgent: "" }).catch(
+          () => undefined,
+        );
+      }
+    } catch {
+      // A page that navigated mid-call has nothing to emulate. The device stays
+      // on the record so the next load re-applies it.
+    }
+    // Pinned while wearing a device: idle release would silently drop all three
+    // overrides, and the page would quietly become a desktop browser again.
+    this.options.guests?.holdSession?.(tab.id, Boolean(device));
+  }
+
+  /**
+   * Switches which tab of the docked panel owns its rectangle.
+   *
+   * Three tabs, one rectangle. The native front-end cannot share: it is a
+   * `WebContentsView`, so it paints over anything the renderer draws and hiding
+   * it is the only way our own panels can be seen. So the front-end is parked
+   * (zero-sized, not closed — its console history has to survive a trip to
+   * another tab and back) while one of ours is showing.
+   */
+  showDevtoolsTab(tabId: string, tab: "front-end" | "device" | "performance"): void {
+    const record = this.requireTab(tabId);
+    if (!record.devtools) throw new Error("开发者工具面板没有打开");
+    record.devtoolsTab = tab === "front-end" ? undefined : tab;
+    if (tab === "front-end") this.placeDevTools(record);
+    else record.devtools.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    /*
+     * Sampled only while its tab is showing.
+     *
+     * The sampler pins the CDP session, and a pinned session is detectable by
+     * the page. Keeping it running after the user looks away would pay that
+     * cost for numbers nobody is reading — so leaving the tab stops it.
+     */
+    if (tab === "performance") void this.startPerfSampling(record);
+    else this.stopPerfSampling(record);
+    this.emitState();
+  }
+
+  /** Samples this page's performance metrics, replacing any earlier history. */
+  private async startPerfSampling(tab: TabRecord): Promise<void> {
+    this.stopPerfSampling(tab);
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) return;
+    tab.perf = { history: [], previous: undefined, startedAt: Date.now(), firstAt: Date.now() };
+    try {
+      await tab.cdp.send("Performance.enable");
+    } catch {
+      // A page that cannot be sampled reports an empty series rather than an
+      // error: the panel is still useful for reading the device tab.
+      return;
+    }
+    const generation = (tab.perfGeneration ?? 0) + 1;
+    tab.perfGeneration = generation;
+    /** Last time the renderer was told about new samples; see the note below. */
+    let lastPublish = 0;
+    const tick = async (): Promise<void> => {
+      // A newer start (or a stop) invalidates this closure: without the check a
+      // second start would leave the first timer writing into its own record.
+      if (tab.perfGeneration !== generation || !tab.perf) return;
+      const now = Date.now();
+      // The rate for *this* sample is the gap since the previous reading. Using
+      // the total elapsed time averaged every spike into the whole run, which is
+      // why the first version drew near-flat lines on a page that was visibly
+      // busy.
+      const interval = now - tab.perf.firstAt;
+      tab.perf.firstAt = now;
+      try {
+        const response = await tab.cdp.send<{ metrics?: Array<{ name: string; value: number }> }>(
+          "Performance.getMetrics",
+        );
+        const raw: RawMetrics = {};
+        for (const item of response?.metrics ?? []) {
+          (raw as Record<string, number>)[item.name] = item.value;
+        }
+        const sample = deriveSample(tab.perf.previous, raw, interval, tab.perf.startedAt);
+        tab.perf.history = pushSample(tab.perf.history, sample);
+        tab.perf.previous = raw;
+        /*
+         * Publish at most once a second.
+         *
+         * Sampling runs at 5 Hz so a 200ms freeze is visible, but every publish
+         * runs the renderer's whole reactive pass; doing that 5×/s would make
+         * the panel itself the thing your are measuring. The panel polls, so it
+         * still refreshes five times a second — it just reads the array instead
+         * of being pushed a full workspace state each time.
+         */
+        if (now - lastPublish >= 1_000) {
+          lastPublish = now;
+          this.emitState();
+        }
+      } catch {
+        // The page navigated or went away mid-sample; the next tick either
+        // recovers or the tab is gone.
+      }
+      if (tab.perfGeneration !== generation || !tab.perf) return;
+      tab.perf.timer = setTimeout(() => void tick(), PERF_SAMPLE_INTERVAL_MS);
+      tab.perf.timer.unref?.();
+    };
+    tab.perf.timer = setTimeout(() => void tick(), PERF_SAMPLE_INTERVAL_MS);
+    tab.perf.timer.unref?.();
+    // Same reason as the device overrides: the counters reset with a new
+    // document, so the series has to restart rather than draw a cliff.
+    this.options.guests?.holdSession?.(tab.id, true);
+  }
+
+  private stopPerfSampling(tab: TabRecord): void {
+    if (tab.perf?.timer) clearTimeout(tab.perf.timer);
+    delete tab.perf;
+    tab.perfGeneration = (tab.perfGeneration ?? 0) + 1;
+    // Unpin only if nothing else still needs the session. A device keeps it too.
+    if (!tab.device) this.options.guests?.holdSession?.(tab.id, false);
+  }
+
+  /** The samples taken so far, for the panel to draw. */
+  perfHistory(tabId: string): PerfSample[] {
+    return this.findTab(tabId)?.perf?.history ?? [];
   }
 
   private applyZoom(tab: TabRecord, percent: number): void {
@@ -3962,8 +4315,43 @@ export class EmbeddedBrowser {
       this.parkDevTools(tab);
       return;
     }
+    /*
+     * Split the *cell*, then fit the viewport into the area that is left.
+     *
+     * Splitting the page's already-fitted box looked equivalent and is not: a
+     * 393×852 device in a wide cell is fitted to a tall, narrow box, and taking
+     * 42% of *that* left the panel about 150px wide — one click on "iPhone 15"
+     * collapsed the very panel being used to pick it. The panel's width belongs
+     * to the cell, not to the page's aspect ratio.
+     *
+     * The page side still gets a freshly fitted rect (below), which is what the
+     * earlier fix was really about: the split area is not the page's bounds,
+     * the fit inside the split area is.
+     */
     const left = this.splitWidth(rect, devtools.width);
-    tab.view.setBounds({ ...rect, width: left });
+    const area = { ...rect, width: left };
+    const placed = this.viewportOf(tab)
+      ? viewportFitRect(area, this.viewportOf(tab)!)
+      : { rect: area, scale: 1 };
+    if (this.viewportOf(tab)) {
+      tab.viewportScale = placed.scale;
+      tab.view.webContents.setZoomFactor(placed.scale);
+    }
+    tab.view.setBounds(placed.rect);
+    /*
+     * Only the native front-end owns this rectangle, and only while it is the
+     * tab showing.
+     *
+     * `placeDevTools` runs on every layout pass — a resize of the page, a split
+     * drag, a re-stage. Writing the panel's bounds unconditionally brought the
+     * native view back over our own Device/Performance panel mid-drag, where
+     * being a native view it naturally painted on top of the HTML. The user saw
+     * "dragging the split teleports me back to DevTools".
+     */
+    if (tab.devtoolsTab) {
+      devtools.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      return;
+    }
     /*
      * The panel gives up a band at its top for the app's own title strip.
      *

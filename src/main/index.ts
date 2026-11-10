@@ -22,6 +22,9 @@ import { DEFAULT_SETTINGS } from "@shared/defaults";
 import type { EmbeddedDropTarget, StageRect } from "@shared/embedded";
 import {
   normalizeViewportSize,
+  normalizeDevice,
+  DEVICE_DPR_MAX,
+  DEVICE_DPR_MIN,
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
   VIEWPORT_MIN,
@@ -2518,7 +2521,16 @@ function registerIpc(workspace: WorkspaceService): void {
     broadcastWorkspace();
     // The saved entry leaves the pending list; the bar and the panel read the
     // same list, so both stop offering it.
-    if (captured) sendPendingLogins();
+    if (captured) {
+      sendPendingLogins();
+      /*
+       * The message-centre row for this capture is read now, because saving it
+       * *is* reading it. Without this the unread dot stayed lit right after the
+       * user had dealt with the only thing in the list — the interface claiming
+       * there was news when there was none.
+       */
+      if (messageStore().markReadByCaptureToken(captured.token)) broadcastMessages();
+    }
     return workspace.snapshot();
   });
   handle(IPC.identityDelete, (id: string) => {
@@ -3640,6 +3652,32 @@ function registerIpc(workspace: WorkspaceService): void {
         );
       }
       return ensureEmbeddedBrowser().setViewport(String(tabId), viewport);
+    },
+  );
+  /*
+   * Device emulation. Separate from the viewport channel because it is a
+   * different claim: not "lay out this wide" but "believe you are this phone".
+   * `null` clears it and keeps the size as a plain viewport.
+   */
+  handle(IPC.embeddedDevice, async (tabId: string, device: unknown) => {
+    if (device === null || device === undefined) {
+      return ensureEmbeddedBrowser().setDevice(String(tabId), null);
+    }
+    const parsed = normalizeDevice(device as never);
+    if (!parsed) {
+      throw new Error(
+        `设备尺寸必须在 ${VIEWPORT_MIN}–${VIEWPORT_MAX_WIDTH} × ${VIEWPORT_MIN}–${VIEWPORT_MAX_HEIGHT} 之间，像素比 ${DEVICE_DPR_MIN}–${DEVICE_DPR_MAX}`,
+      );
+    }
+    return ensureEmbeddedBrowser().setDevice(String(tabId), parsed);
+  });
+  handle(IPC.embeddedPerf, (tabId: string) => ensureEmbeddedBrowser().perfHistory(String(tabId)));
+  handle(
+    IPC.embeddedDevtoolsTab,
+    (tabId: string, tab: string) => {
+      const wanted =
+        tab === "device" || tab === "performance" ? tab : ("front-end" as const);
+      ensureEmbeddedBrowser().showDevtoolsTab(String(tabId), wanted);
     },
   );
   handle(

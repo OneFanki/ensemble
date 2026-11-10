@@ -1,8 +1,10 @@
 import type { BundleCounts, BundleImportResult, BundlePreview } from "./accounts-transfer";
 import type {
+  EmbeddedDevice,
   EmbeddedDropTarget,
   EmbeddedState,
   EmbeddedTab,
+  PerfSample,
   StageRect,
 } from "./embedded";
 import type { FlowDraft, FlowRunResult } from "./flows";
@@ -211,6 +213,15 @@ export const IPC = {
   embeddedFindRequested: "embedded:find-requested",
   /** Main → renderer: a login form was submitted in an embedded page. */
   embeddedLoginCaptured: "embedded:login-captured",
+  /**
+   * Main → renderer: this page's zoom just changed from a gesture.
+   *
+   * Ctrl +/-, Ctrl+wheel and Ctrl+0 land in the page, so the chrome never sees
+   * them and cannot show what happened. Like every browser, the gesture gets a
+   * brief overlay with the new percentage and then goes away — the toolbar no
+   * longer carries a permanent zoom readout to update.
+   */
+  embeddedZoomNotice: "embedded:zoom-notice",
   /** Renderer → main: every login still waiting to be saved, newest first. */
   embeddedLoginPending: "embedded:login-pending",
   /** Main → renderer: the pending list changed (saved, dismissed, expired). */
@@ -285,6 +296,12 @@ export const IPC = {
   embeddedDevToolsResizeEnd: "embedded:devtools-resize-end",
   embeddedZoom: "embedded:zoom",
   embeddedViewport: "embedded:viewport",
+  /** Applies or clears a simulated device (size + DPR + touch + UA). */
+  embeddedDevice: "embedded:device",
+  /** Reads the samples taken while the performance tab is open. */
+  embeddedPerf: "embedded:perf",
+  /** Switches the docked panel between the front-end and our own tabs. */
+  embeddedDevtoolsTab: "embedded:devtools-tab",
   embeddedFind: "embedded:find",
   embeddedStopFind: "embedded:stop-find",
   /** Freezes the browser stage into an image so HTML overlays can float over it. */
@@ -573,6 +590,13 @@ export interface EnsembleApi {
   onEmbeddedState(listener: (state: EmbeddedState) => void): () => void;
   /** Fires when the main process wants the browser page brought forward. */
   onEmbeddedPage(listener: () => void): () => void;
+  /**
+   * Fires after a zoom gesture in a page, with the new percentage.
+   *
+   * The renderer draws a short-lived overlay from this; the gesture itself
+   * never reaches the chrome.
+   */
+  onEmbeddedZoomNotice(listener: (notice: { tabId: string; zoom: number }) => void): () => void;
   /** Reports where the native views may paint, in content-area pixels. */
   setEmbeddedStage(stage: StageRect | null): void;
   /** Opens a blank tab; optionally bound to an identity for its partition. */
@@ -754,6 +778,20 @@ export interface EnsembleApi {
     tabId: string,
     mode: { width: number; height: number } | "adaptive" | "inherit" | null,
   ): Promise<{ width: number; height: number } | null | undefined>;
+  /**
+   * Applies a simulated device, or clears it with `null`.
+   *
+   * Clearing keeps the device's size as a plain viewport: "stop pretending to be
+   * a phone" is not the same request as "go back to filling the cell".
+   */
+  setEmbeddedDevice(tabId: string, device: EmbeddedDevice | null): Promise<EmbeddedDevice | null>;
+  /** Samples taken so far while the performance tab was open. */
+  readEmbeddedPerf(tabId: string): Promise<PerfSample[]>;
+  /** Which tab of the docked panel owns it. */
+  showEmbeddedDevtoolsTab(
+    tabId: string,
+    tab: "front-end" | "device" | "performance",
+  ): Promise<void>;
   findInEmbeddedTab(
     tabId: string,
     text: string,

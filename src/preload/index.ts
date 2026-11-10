@@ -166,6 +166,11 @@ const api: EnsembleApi = {
     ipcRenderer.on(IPC.embeddedPage, handler);
     return () => ipcRenderer.removeListener(IPC.embeddedPage, handler);
   },
+  onEmbeddedZoomNotice: (listener: (notice: { tabId: string; zoom: number }) => void) => {
+    const handler = (_event: unknown, notice: { tabId: string; zoom: number }) => listener(notice);
+    ipcRenderer.on(IPC.embeddedZoomNotice, handler);
+    return () => ipcRenderer.removeListener(IPC.embeddedZoomNotice, handler);
+  },
   setEmbeddedStage: (stage) => {
     ipcRenderer.send(IPC.embeddedStage, stage);
   },
@@ -239,6 +244,10 @@ const api: EnsembleApi = {
   endEmbeddedDevToolsResize: () => ipcRenderer.invoke(IPC.embeddedDevToolsResizeEnd),
   zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
   setEmbeddedViewport: (tabId, size) => ipcRenderer.invoke(IPC.embeddedViewport, tabId, size),
+  setEmbeddedDevice: (tabId, device) => ipcRenderer.invoke(IPC.embeddedDevice, tabId, device),
+  readEmbeddedPerf: (tabId) => ipcRenderer.invoke(IPC.embeddedPerf, tabId),
+  showEmbeddedDevtoolsTab: (tabId, tab) =>
+    ipcRenderer.invoke(IPC.embeddedDevtoolsTab, tabId, tab),
   findInEmbeddedTab: (tabId, text, options) =>
     ipcRenderer.invoke(IPC.embeddedFind, tabId, text, options),
   stopEmbeddedFind: (tabId) => ipcRenderer.invoke(IPC.embeddedStopFind, tabId),

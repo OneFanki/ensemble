@@ -254,6 +254,25 @@ export interface EmbeddedSurface {
    * failing, which is the same shape the other capability gaps use.
    */
   readPageActivity?(tabId: string): Promise<unknown>;
+  /**
+   * Measures the page's rendering/GC work for a moment and reports a summary.
+   *
+   * Optional for the same reason as `readPageActivity`: a surface that cannot
+   * sample reports the capability as absent instead of pretending to measure.
+   */
+  measurePerformance?(
+    tabId: string,
+    options: { durationMs: number; idleMs: number },
+  ): Promise<unknown>;
+  /**
+   * The raw samples behind `measurePerformance`, newest last.
+   *
+   * Separate from the summary because the two answer different questions: a
+   * model deciding "is this slow" wants numbers it cannot mis-add, while one
+   * correlating a spike with a console line wants the points. Optional for the
+   * same reason as the rest of the browser surface.
+   */
+  readPerfHistory?(tabId: string): Promise<unknown>;
   /** `viewId` omitted means the view currently on stage. */
   setLayout(layoutId: string, viewId?: string): unknown;
   /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
@@ -2555,6 +2574,37 @@ export class McpServer {
         run: (args) => {
           const read = surface().readPageActivity;
           if (!read) throw new Error("当前浏览器表面不支持读取控制台");
+          return read.call(surface(), tabId(args));
+        },
+      },
+      {
+        name: "measure_browser_performance",
+        description:
+          "测量页面当前的实际开销，回答「这个页面卡不卡」。指标与 Chrome 性能监视器同源，每项给出均值、峰值、峰值出现的毫秒时刻（从本次窗口起点算）和最新值。默认观察 1 秒；连续调用接着上次继续，中间空档也在采样，所以「测一次 → 操作 → 再测一次」能看见那次操作的开销。CPU 均值高＝持续重负载，峰值高但均值低＝某一下卡顿；布局/秒与样式重算/秒的峰值说明那一下在反复排版。逐点数据用 read_browser_performance。",
+        kind: "read",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          durationMs: integer("观察时长，默认 1000，范围 200–10000"),
+        }),
+        run: (args) => {
+          const measure = surface().measurePerformance;
+          if (!measure) throw new Error("当前浏览器表面不支持性能测量");
+          const requested = Number(args["durationMs"]);
+          const durationMs = Number.isFinite(requested)
+            ? Math.min(10_000, Math.max(200, Math.trunc(requested)))
+            : 1_000;
+          return measure.call(surface(), tabId(args), { durationMs, idleMs: 15_000 });
+        },
+      },
+      {
+        name: "read_browser_performance",
+        description:
+          "读取这一页最近 20 秒的逐点性能数据（最多 100 个采样，每 200ms 一个），用于自己算任意统计量或看趋势。数据只在有人读过之后才继续累积，闲置 15 秒即停止，所以两次读之间若隔得更久，前面那段就没有。只要汇总（均值、峰值、峰值时刻）用 measure_browser_performance。",
+        kind: "read",
+        inputSchema: object({ tabId: tabIdProp() }),
+        run: (args) => {
+          const read = surface().readPerfHistory;
+          if (!read) throw new Error("当前浏览器表面不支持读取性能数据");
           return read.call(surface(), tabId(args));
         },
       },

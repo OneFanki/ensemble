@@ -3994,6 +3994,9 @@ if (!gotLock) {
         screenshot: (tabId, options) => ensureEmbeddedBrowser().screenshot(tabId, options),
         visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
         readPageActivity: (tabId) => ensureEmbeddedBrowser().readPageActivity(tabId),
+        measurePerformance: (tabId, options) =>
+          ensureEmbeddedBrowser().measurePerformance(tabId, options),
+        readPerfHistory: (tabId) => ensureEmbeddedBrowser().readPerfHistory(tabId),
         wait: (tabId, input) => ensureEmbeddedBrowser().wait(tabId, input),
         setLayout: (layoutId, viewId) =>
           ensureEmbeddedBrowser().setViewLayout(

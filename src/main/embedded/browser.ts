@@ -65,12 +65,16 @@ import {
   neighborZoomStep,
   normalizeEmbeddedUrl,
   PERF_SAMPLE_INTERVAL_MS as PERF_SAMPLE_INTERVAL_MS_SHARED,
+  PERF_METRICS,
+  perfSummarize,
   planTabClick,
   resolveSlotPages,
   resolveSlotTabs,
   settleSplitPages,
   type EmbeddedDevice,
   type EmbeddedViewport,
+  type PerfMetric,
+  type PerfMetricSummary,
   type StageRect,
   viewIsOnScreen,
   viewportFitRect,
@@ -187,11 +191,12 @@ interface TabRecord {
    */
   devtoolsTab?: "front-end" | "device" | "performance";
   /**
-   * Performance samples, present only while the performance tab is open.
+   * Performance samples.
    *
-   * Not persisted and not kept after the tab closes: a metric history that
-   * outlives the panel would describe a page the user is no longer profiling,
-   * and the polling it takes to fill it pins the CDP session.
+   * Present while the performance tab is open, and for a while after an MCP read
+   * (see `measurePerformance`): the panel's history is drawn, the agent's is
+   * summarised. Not persisted — a history that outlived both readers would
+   * describe a page nobody is profiling, and filling it pins the CDP session.
    */
   perf?: {
     history: PerfSample[];
@@ -200,6 +205,19 @@ interface TabRecord {
     /** Wall clock of the first sample, so `t` is an offset from it. */
     firstAt: number;
     timer?: ReturnType<typeof setTimeout>;
+    /**
+     * Who is sampling.
+     *
+     * The panel stops its sampler when its tab is hidden — leaving is the
+     * signal that nobody is reading. An agent's sampler has no tab to watch, so
+     * it stops after a quiet period instead, and the distinction is what keeps
+     * the panel from being silently killed by an agent read or vice versa.
+     */
+    owner: "panel" | "ai";
+    /** Last `t` an agent read, so the next read continues from there. */
+    aiCursor?: number;
+    /** Stops an agent-owned sampler once reads go quiet. */
+    aiIdleTimer?: ReturnType<typeof setTimeout>;
   };
   /** Guards a stale sampling closure from writing after a restart. */
   perfGeneration?: number;
@@ -4066,11 +4084,17 @@ export class EmbeddedBrowser {
   }
 
   /** Samples this page's performance metrics, replacing any earlier history. */
-  private async startPerfSampling(tab: TabRecord): Promise<void> {
+  private async startPerfSampling(tab: TabRecord, owner: "panel" | "ai" = "panel"): Promise<void> {
     this.stopPerfSampling(tab);
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
-    tab.perf = { history: [], previous: undefined, startedAt: Date.now(), firstAt: Date.now() };
+    tab.perf = {
+      history: [],
+      previous: undefined,
+      startedAt: Date.now(),
+      firstAt: Date.now(),
+      owner,
+    };
     try {
       await tab.cdp.send("Performance.enable");
     } catch {
@@ -4134,6 +4158,7 @@ export class EmbeddedBrowser {
 
   private stopPerfSampling(tab: TabRecord): void {
     if (tab.perf?.timer) clearTimeout(tab.perf.timer);
+    if (tab.perf?.aiIdleTimer) clearTimeout(tab.perf.aiIdleTimer);
     delete tab.perf;
     tab.perfGeneration = (tab.perfGeneration ?? 0) + 1;
     // Unpin only if nothing else still needs the session. A device keeps it too.
@@ -4143,6 +4168,141 @@ export class EmbeddedBrowser {
   /** The samples taken so far, for the panel to draw. */
   perfHistory(tabId: string): PerfSample[] {
     return this.findTab(tabId)?.perf?.history ?? [];
+  }
+
+  /**
+   * Raw samples for an agent, trimmed to something a model can actually read.
+   *
+   * Starts the sampler if nobody is measuring, so a model that only wants the
+   * series does not have to call `measurePerformance` first and throw its
+   * numbers away. The tail is what it gets: a full window is 100 points, and a
+   * request that asked for "the last 20 seconds" of a slow page should not
+   * return more than that window.
+   */
+  async readPerfHistory(tabId: string, idleMs = 15_000): Promise<PerfSample[]> {
+    const tab = this.requireTab(tabId);
+    if (!tab.perf) await this.startPerfSampling(tab, "ai");
+    const perf = this.findTab(tabId)?.perf;
+    if (!perf) throw new Error("这一页无法读取性能指标");
+    if (perf.owner === "ai") {
+      if (perf.aiIdleTimer) clearTimeout(perf.aiIdleTimer);
+      perf.aiIdleTimer = setTimeout(() => {
+        const record = this.findTab(tabId);
+        if (record?.perf?.owner === "ai") this.stopPerfSampling(record);
+      }, Math.max(0, idleMs));
+      perf.aiIdleTimer.unref?.();
+    }
+    return perf.history;
+  }
+
+  /**
+   * Samples for a while and reports what the page did, as numbers an agent can
+   * act on.
+   *
+   * Why this exists at all: an agent asked "is this page slow" can already read
+   * the console and take screenshots, and neither answers it. It could call
+   * `evaluate_browser_page` with a `performance.now()` loop of its own, but that
+   * measures its own script rather than the page's rendering and GC work — the
+   * numbers would be worse than no numbers. CDP's `Performance.getMetrics` is
+   * the same source Chrome's own monitor reads, so the tool hands back facts
+   * with a known provenance instead of a home-grown approximation.
+   *
+   * The shape is a summary, not a series. A model cannot read a sparkline, and
+   * a hundred raw points make it average in prose and get it wrong; `max` and
+   * `maxAt` answer "did it stutter, and when" directly. `maxAt` is milliseconds
+   * from the window's start, which pairs with the `at` timestamps of the console
+   * lines it already reads — that pairing is the point.
+   *
+   * Consecutive reads continue rather than restart, and sampling keeps running
+   * between them for a short idle period. That is what makes "measure, click,
+   * measure again" see the click: the second call reports what happened while
+   * the first call was still fresh, not an empty window after it.
+   */
+  async measurePerformance(
+    tabId: string,
+    options: { durationMs: number; idleMs: number },
+  ): Promise<{
+    tabId: string;
+    url: string;
+    title: string;
+    /** Wall clock of the window this summary covers. */
+    from: string;
+    to: string;
+    durationMs: number;
+    samples: number;
+    metrics: Record<PerfMetric, PerfMetricSummary>;
+  }> {
+    const tab = this.requireTab(tabId);
+    const contents = tab.view?.webContents;
+    if (!contents || contents.isDestroyed()) throw new Error("页面已关闭");
+    /*
+     * Take over only when nothing is sampling.
+     *
+     * The panel owns its sampler while its tab is showing, and restarting it
+     * here would wipe the history a person is watching — an agent read must not
+     * blank someone's chart. Sharing the running sampler is also what makes the
+     * numbers agree: one reader, one series.
+     */
+    if (!tab.perf) await this.startPerfSampling(tab, "ai");
+    const perf = tab.perf;
+    if (!perf) {
+      // `Performance.enable` failed: the page refuses to be measured.
+      throw new Error("这一页无法读取性能指标");
+    }
+    if (perf.owner === "ai" && perf.aiIdleTimer) {
+      clearTimeout(perf.aiIdleTimer);
+      delete perf.aiIdleTimer;
+    }
+    const startedAt = Date.now();
+    await new Promise((done) => setTimeout(done, Math.max(0, options.durationMs)));
+    // Re-read: the page may have closed, or the panel may have taken over while
+    // this call was waiting out its window.
+    const live = this.findTab(tabId)?.perf;
+    if (!live) throw new Error("采样在测量期间被停止");
+    /*
+     * Only what an agent has not seen yet.
+     *
+     * The first read reports its whole window; a later one continues from the
+     * previous cursor. Without the cursor the second call would repeat numbers
+     * the model already acted on, and a series that repeats itself is a series a
+     * model reasons about twice.
+     */
+    const from = live.aiCursor ?? 0;
+    const fresh = live.history.filter((sample) => sample.t > from);
+    const metrics = {} as Record<PerfMetric, PerfMetricSummary>;
+    for (const metric of PERF_METRICS) {
+      const summary = perfSummarize(fresh, metric);
+      // A metric with no samples still needs a row: an absent key reads as "the
+      // tool forgot", while zeros read as "nothing happened".
+      metrics[metric] = summary ?? { avg: 0, max: 0, maxAt: 0, last: 0 };
+    }
+    const newest = fresh[fresh.length - 1] ?? live.history[live.history.length - 1];
+    if (newest) live.aiCursor = newest.t;
+    /*
+     * Keep sampling for a quiet period, then let go.
+     *
+     * An agent's next call usually follows an action, and the action's cost
+     * happens *between* calls. Sampling only inside the call would miss exactly
+     * what the agent wanted to measure. The pin is bounded either way: this
+     * timer releases it, and the panel taking over releases it immediately.
+     */
+    if (live.owner === "ai") {
+      live.aiIdleTimer = setTimeout(() => {
+        const record = this.findTab(tabId);
+        if (record?.perf?.owner === "ai") this.stopPerfSampling(record);
+      }, Math.max(0, options.idleMs));
+      live.aiIdleTimer.unref?.();
+    }
+    return {
+      tabId: tab.id,
+      url: tab.url,
+      title: tab.title,
+      from: new Date(live.startedAt + from).toISOString(),
+      to: new Date(live.startedAt + (newest?.t ?? from)).toISOString(),
+      durationMs: Date.now() - startedAt,
+      samples: fresh.length,
+      metrics,
+    };
   }
 
   private applyZoom(tab: TabRecord, percent: number): void {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EmbeddedTab, EmbeddedView, StageRect } from "@shared/embedded";
+import type { EmbeddedDevice, EmbeddedTab, EmbeddedView, StageRect } from "@shared/embedded";
 import type { UpdateCheckResult } from "@shared/update";
 import {
   EMBEDDED_DEVTOOLS_GRIP,
@@ -26,6 +26,7 @@ import type {
   SlotRect,
 } from "@shared/types";
 import {
+  Activity,
   AppWindow,
   ArrowLeft,
   ArrowRight,
@@ -53,11 +54,13 @@ import {
   Settings,
   ShieldCheck,
   ShieldOff,
+  Smartphone,
   Sparkles,
   Star,
   Trash2,
   Users,
   X,
+  ZoomIn,
 } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -67,9 +70,11 @@ import { useEmbeddedStore } from "../stores/embedded";
 import { useNavigationStore } from "../stores/navigation";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
+import DevicePanel from "./DevicePanel.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
+import PerformancePanel from "./PerformancePanel.vue";
 import TabIcon from "./TabIcon.vue";
 
 const store = useEmbeddedStore();
@@ -154,10 +159,14 @@ function openMcpSettings(): void {
  * reason this is not a plain browser, but its only entry was a grid glyph beside
  * the first tab that a newcomer has no reason to try.
  *
- * The frequent things stay outside the menu: password fill, the AI entry, zoom,
- * downloads and the bookmark star all remain visible in the toolbar. What lives
- * here is what people look for once and would otherwise hunt for — settings,
- * bookmarks, updates, quitting, and that second workbench door.
+ * The frequent things stay outside the menu: password fill, the AI entry,
+ * downloads and the bookmark star all remain visible in the toolbar. Zoom moved
+ * in: it is the one control most people drive from the keyboard or the wheel,
+ * and a permanent readout for a number that is 100% on almost every page cost a
+ * tenth of the row. It appears in two places instead — the viewport menu and
+ * here — and a gesture raises a transient overlay with the new percentage.
+ * What lives here is what people look for once and would otherwise hunt for —
+ * settings, bookmarks, updates, quitting, and that second workbench door.
  */
 const appMenuOpen = ref(false);
 useFloatingLayer(appMenuOpen);
@@ -391,6 +400,8 @@ function toggleBench(): void {
 
 const activeTab = computed(() => store.activeTab);
 const activeView = computed(() => store.activeView);
+/** Transient zoom percentage; see `showZoomNotice` in the store. */
+const zoomNotice = computed(() => store.zoomNotice);
 
 /**
  * The strip swaps its pages as a set when the selection moves to another
@@ -1203,28 +1214,73 @@ function endResize(): void {
 const devtoolsPanels = computed(() => {
   const view = activeView.value;
   const cells = slotChrome.value;
-  const stages: Array<{ id: string; tabId: string; rect: StageRect; width: number }> = [];
+  const stages: Array<{
+    id: string;
+    tabId: string;
+    rect: StageRect;
+    width: number;
+    tab: "front-end" | "device" | "performance";
+    page: EmbeddedTab;
+  }> = [];
   if (view) {
     for (const cell of cells) {
       const page = slotPage(cell.tabId, cell.index);
       if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) continue;
       const rect = embeddedSlotRectsForSlot(cell.index);
-      if (rect) stages.push({ id: page.id, tabId: page.id, rect, width: page.devtoolsWidth });
+      if (rect) {
+        stages.push({
+          id: page.id,
+          tabId: page.id,
+          rect,
+          width: page.devtoolsWidth,
+          tab: page.devtoolsTab ?? "front-end",
+          page,
+        });
+      }
     }
   } else {
     const page = activeTab.value;
     if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) return [];
     const box = stageBox.value;
     const rect = { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) };
-    stages.push({ id: page.id, tabId: page.id, rect, width: page.devtoolsWidth });
+    stages.push({
+      id: page.id,
+      tabId: page.id,
+      rect,
+      width: page.devtoolsWidth,
+      tab: page.devtoolsTab ?? "front-end",
+      page,
+    });
   }
   return stages.map((entry) => {
+    /*
+     * Split the cell, then let the page fit into what is left.
+     *
+     * Splitting the page's fitted box instead made the panel's width depend on
+     * the page's aspect ratio: a 393×852 device fits as a tall narrow box, and
+     * 42% of that is about 150px — the panel collapsed the moment a phone was
+     * chosen. The panel's share belongs to the cell; the page is fitted inside
+     * the remainder by the main process.
+     */
     const split = Math.round(entry.rect.width * (1 - entry.width));
     const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
     const panelX = entry.rect.x + left + EMBEDDED_DEVTOOLS_GRIP;
+    const panelWidth = Math.max(1, entry.rect.width - left - EMBEDDED_DEVTOOLS_GRIP);
     return {
       key: entry.id,
       tabId: entry.tabId,
+      tab: entry.tab,
+      device: entry.page.device,
+      viewport: entry.page.viewport,
+      /*
+       * A narrow panel keeps only the tab icons.
+       *
+       * Three Chinese labels need about 240px; below that the third tab slid
+       * under the close button and became unclickable. The width is already
+       * known here, so this is decided per panel rather than by a container
+       * query the absolutely positioned strip cannot host.
+       */
+      compact: panelWidth < 240,
       grip: {
         left: entry.rect.x + left,
         top: entry.rect.y,
@@ -1234,8 +1290,22 @@ const devtoolsPanels = computed(() => {
       head: {
         left: panelX,
         top: entry.rect.y,
-        width: Math.max(1, entry.rect.width - left - EMBEDDED_DEVTOOLS_GRIP),
+        width: panelWidth,
         height: EMBEDDED_DEVTOOLS_HEAD,
+      },
+      /*
+       * Our own panels fill everything below the strip.
+       *
+       * They are HTML, so unlike the native front-end they could be drawn
+       * anywhere; keeping them inside the same rectangle as the front-end means
+       * switching tabs never moves the split or changes what the page thinks its
+       * size is.
+       */
+      body: {
+        left: panelX,
+        top: entry.rect.y + EMBEDDED_DEVTOOLS_HEAD,
+        width: panelWidth,
+        height: Math.max(1, entry.rect.height - EMBEDDED_DEVTOOLS_HEAD),
       },
     };
   });
@@ -1244,6 +1314,50 @@ const devtoolsPanels = computed(() => {
 const devtoolsGrips = computed(() =>
   devtoolsPanels.value.map((panel) => ({ key: panel.key, tabId: panel.tabId, ...panel.grip })),
 );
+
+/**
+ * The panel's tabs, in display order.
+ *
+ * The native front-end first because that is what the panel has always been
+ * known for; the two we own come after, so a person who only ever opens DevTools
+ * sees no change at all.
+ */
+const DEVTOOLS_TABS = [
+  { id: "front-end" as const, icon: Bug, labelKey: "app.devtoolsTabFrontEnd" },
+  { id: "device" as const, icon: Smartphone, labelKey: "app.devtoolsTabDevice" },
+  { id: "performance" as const, icon: Activity, labelKey: "app.devtoolsTabPerformance" },
+];
+
+function showDevtoolsTab(tabId: string, tab: "front-end" | "device" | "performance"): void {
+  void window.ensemble.showEmbeddedDevtoolsTab(tabId, tab);
+}
+
+/**
+ * Applies a device, or clears it.
+ *
+ * The main process owns the CDP work; this only says what the user chose. A
+ * failed application is reported rather than swallowed — a device that silently
+ * did nothing is indistinguishable from a page that ignores emulation.
+ */
+async function setDevice(tabId: string, device: EmbeddedDevice | null): Promise<void> {
+  try {
+    await window.ensemble.setEmbeddedDevice(tabId, device);
+  } catch (error) {
+    workspace.notify(String((error as Error)?.message ?? error), "error");
+  }
+}
+
+/** The viewport menu and the device panel share one channel; see setEmbeddedViewport. */
+async function setViewport(
+  tabId: string,
+  mode: { width: number; height: number } | "adaptive" | "inherit",
+): Promise<void> {
+  try {
+    await window.ensemble.setEmbeddedViewport(tabId, mode);
+  } catch (error) {
+    workspace.notify(String((error as Error)?.message ?? error), "error");
+  }
+}
 
 function startDevToolsResize(tabId: string, event: PointerEvent): void {
   event.preventDefault();
@@ -1618,11 +1732,19 @@ function closeDevTools(tabId: string): void {
   void window.ensemble.closeEmbeddedDevTools(tabId);
 }
 
-/** Ctrl +/-/0 from the app chrome; the page itself handles its own keystrokes. */
+/**
+ * Ctrl +/-/0 from the app chrome; the page itself handles its own keystrokes.
+ *
+ * The overlay is raised here as well as from the main-process path: a click in
+ * the menu is a different way into the same change, and a stepper that silently
+ * updates its own number is fine until the menu closes and the number is gone
+ * with it.
+ */
 async function zoom(direction: "in" | "out" | "reset"): Promise<void> {
   const tab = activeTab.value;
   if (!tab) return;
-  await window.ensemble.zoomEmbeddedTab(tab.id, direction);
+  const next = await window.ensemble.zoomEmbeddedTab(tab.id, direction);
+  if (typeof next === "number") store.showZoomNotice({ tabId: tab.id, zoom: next });
 }
 
 async function runFind(direction: "next" | "prev" | "reset"): Promise<void> {
@@ -2106,6 +2228,51 @@ function fillMessage(reason?: string): string {
           </span>
         </button>
         <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
+          <!--
+            Zoom, inside the size menu.
+
+            Both change what the page looks like without changing its window:
+            "make it a phone" and "make everything 25% bigger" are two answers
+            to the same wish, and keeping them apart meant a permanent 110px
+            stepper in the toolbar for a number that is 100% on almost every
+            page. The stepper keeps the − value + shape so anyone who used the
+            toolbar one recognises it.
+          -->
+          <div v-if="activeTab" class="zoom-field">
+            <span class="zoom-label">{{ t("app.zoomTitle") }}</span>
+            <div
+              class="zoom-stepper"
+              :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
+            >
+              <button
+                type="button"
+                class="zoom-step"
+                :aria-label="t('app.browserZoomOut')"
+                v-tooltip="t('app.browserZoomOut')"
+                @click="zoom('out')"
+              >
+                <Minus :size="11" />
+              </button>
+              <button
+                type="button"
+                class="zoom-value mono"
+                v-tooltip="t('app.browserZoomReset')"
+                data-zoom-value
+                @click="zoom('reset')"
+              >
+                {{ activeTab.zoom }}%
+              </button>
+              <button
+                type="button"
+                class="zoom-step"
+                :aria-label="t('app.browserZoomIn')"
+                v-tooltip="t('app.browserZoomIn')"
+                @click="zoom('in')"
+              >
+                <Plus :size="11" />
+              </button>
+            </div>
+          </div>
           <p class="global-viewport-note">{{ t("app.viewportDefaultHint") }}</p>
           <button
             type="button"
@@ -2133,43 +2300,16 @@ function fillMessage(reason?: string): string {
         </div>
       </div>
       <!--
-        Zoom lives in the toolbar so it can be found without knowing the
-        shortcut. It stays visible (a hidden control is a control nobody
-        discovers) but is drawn quietly at the global default and takes the
-        accent colour once this page differs. The number is the reset.
+        Zoom is not a toolbar control any more.
+
+        It was, and it earned its place by being discoverable — but it is also
+        the one control most people drive from the keyboard or the wheel, and a
+        permanent 110px stepper is a lot of toolbar for a number that is 100% on
+        almost every page. It now lives in two places that both carry the same
+        − value + shape: the viewport menu (where sizes already are) and the app
+        menu. Keyboard and wheel gestures still work and raise a transient
+        overlay with the new percentage, like every browser.
       -->
-      <div
-        v-if="activeTab"
-        class="zoom-stepper"
-        :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
-      >
-        <button
-          type="button"
-          class="zoom-step"
-          :aria-label="t('app.browserZoomOut')"
-          v-tooltip="t('app.browserZoomOut')"
-          @click="zoom('out')"
-        >
-          <Minus :size="12" />
-        </button>
-        <button
-          type="button"
-          class="zoom-value mono"
-          v-tooltip="t('app.browserZoomReset')"
-          @click="zoom('reset')"
-        >
-          {{ activeTab.zoom }}%
-        </button>
-        <button
-          type="button"
-          class="zoom-step"
-          :aria-label="t('app.browserZoomIn')"
-          v-tooltip="t('app.browserZoomIn')"
-          @click="zoom('in')"
-        >
-          <Plus :size="12" />
-        </button>
-      </div>
       <OpenSiteButton
         @open-blank="store.openTab()"
         @open-blank-clean="store.openCleanTab()"
@@ -2186,25 +2326,34 @@ function fillMessage(reason?: string): string {
         in the toolbar; this menu is the once-in-a-while list.
       -->
       <!--
-        The bell: unread count, and the way into the message centre.
+        The bell is a permanent door to the message centre.
 
-        Only shown when something is unread. A permanently visible bell that is
-        almost always empty trains people to ignore it, and the history has its
-        own rail row for when they go looking.
+        It used to appear only when something was unread, which made it hard to
+        find ("where do I read my messages?") and made the toolbar gain and lose
+        a control on its own. A dot says "there is news" without changing the
+        button's box — a count inside it did, which pushed the bell and the menu
+        button out of line with every other icon by a pixel, and "9+" is not a
+        number anyone reads before clicking anyway.
       -->
       <button
-        v-if="workspace.unreadMessages > 0"
         type="button"
         class="icon messages-bell"
-        :aria-label="t('app.messagesUnread', { count: workspace.unreadMessages })"
-        v-tooltip="t('app.messagesUnread', { count: workspace.unreadMessages })"
+        :class="{ unread: workspace.unreadMessages > 0 }"
+        :aria-label="
+          workspace.unreadMessages > 0
+            ? t('app.messagesUnread', { count: workspace.unreadMessages })
+            : t('app.messages')
+        "
+        v-tooltip="
+          workspace.unreadMessages > 0
+            ? t('app.messagesUnread', { count: workspace.unreadMessages })
+            : t('app.messages')
+        "
         data-messages-bell
         @click="emit('openConsole', 'messages')"
       >
         <Bell :size="15" />
-        <span class="bell-count mono">{{
-          workspace.unreadMessages > 9 ? "9+" : workspace.unreadMessages
-        }}</span>
+        <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
       </button>
       <div class="app-menu-anchor">
         <button
@@ -2320,6 +2469,52 @@ function fillMessage(reason?: string): string {
             <span v-if="aiRunning" class="app-menu-hint">{{ t("app.aiEndpointRunning") }}</span>
             <span v-else class="app-menu-hint">{{ t("app.aiEndpointOff") }}</span>
           </button>
+          <!--
+            Zoom, also reachable from the menu.
+
+            Two doors on purpose: the viewport menu is where you go to change
+            how the page looks, and this menu is where you go when you remember
+            "there was a zoom control somewhere". Both are the same stepper, so
+            the value and the reset gesture are identical wherever you land.
+          -->
+          <div v-if="activeTab" class="app-menu-zoom" data-menu-item="zoom">
+            <span class="app-menu-zoom-label">
+              <ZoomIn :size="14" />
+              <span>{{ t("app.zoomTitle") }}</span>
+            </span>
+            <div
+              class="zoom-stepper"
+              :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
+            >
+              <button
+                type="button"
+                class="zoom-step"
+                :aria-label="t('app.browserZoomOut')"
+                v-tooltip="t('app.browserZoomOut')"
+                @click="zoom('out')"
+              >
+                <Minus :size="11" />
+              </button>
+              <button
+                type="button"
+                class="zoom-value mono"
+                v-tooltip="t('app.browserZoomReset')"
+                data-zoom-value
+                @click="zoom('reset')"
+              >
+                {{ activeTab.zoom }}%
+              </button>
+              <button
+                type="button"
+                class="zoom-step"
+                :aria-label="t('app.browserZoomIn')"
+                v-tooltip="t('app.browserZoomIn')"
+                @click="zoom('in')"
+              >
+                <Plus :size="11" />
+              </button>
+            </div>
+          </div>
           <div class="app-menu-rule" role="separator"></div>
           <button
             type="button"
@@ -2365,6 +2560,17 @@ function fillMessage(reason?: string): string {
     </div>
 
     <div ref="stage" class="stage">
+      <!--
+        The zoom readout, for a gesture the chrome never sees.
+
+        Ctrl +/-, Ctrl+wheel and Ctrl+0 are handled inside the page, so there is
+        nothing here to update — this overlay is the feedback, and it expires on
+        its own. Cheap and centred like every browser's: a short-lived label is
+        all the confirmation the gesture needs, and it must not take a row.
+      -->
+      <div v-if="zoomNotice" class="zoom-toast mono" data-zoom-toast>
+        {{ zoomNotice.zoom }}%
+      </div>
       <!--
         Find sits over the page, top-right, like every browser since Chrome.
 
@@ -2635,10 +2841,33 @@ function fillMessage(reason?: string): string {
           height: `${panel.head.height}px`,
         }"
       >
-        <span class="devtools-head-label">
-          <Bug :size="11" />
-          {{ t("app.browserDevTools") }}
-        </span>
+        <!--
+          Three tabs, one rectangle.
+
+          The native front-end is a WebContentsView, so when one of our own
+          panels is showing it has to be parked off screen entirely — two owners
+          of one rect would fight, and the native one always wins. Switching is
+          therefore "which surface owns this rectangle", not "which layer is on
+          top".
+        -->
+        <div class="devtools-tabs" role="tablist">
+          <button
+            v-for="entry in DEVTOOLS_TABS"
+            :key="entry.id"
+            type="button"
+            role="tab"
+            class="devtools-tab"
+            :class="{ active: panel.tab === entry.id, compact: panel.compact }"
+            :aria-selected="panel.tab === entry.id"
+            :aria-label="panel.compact ? t(entry.labelKey) : undefined"
+            v-tooltip="panel.compact ? t(entry.labelKey) : undefined"
+            :data-devtools-tab="entry.id"
+            @click="showDevtoolsTab(panel.tabId, entry.id)"
+          >
+            <component :is="entry.icon" :size="11" />
+            <span v-if="!panel.compact">{{ t(entry.labelKey) }}</span>
+          </button>
+        </div>
         <button
           type="button"
           class="devtools-head-close"
@@ -2650,6 +2879,30 @@ function fillMessage(reason?: string): string {
           <X :size="12" />
         </button>
       </div>
+
+      <!-- Our own panel bodies. Only one is mounted per page, and only when
+           that page's tab is the one showing. -->
+      <template v-for="panel in devtoolsPanels" :key="`devtools-body-${panel.key}`">
+        <div
+          v-if="panel.tab !== 'front-end'"
+          class="devtools-body"
+          :style="{
+            left: `${panel.body.left}px`,
+            top: `${panel.body.top}px`,
+            width: `${panel.body.width}px`,
+            height: `${panel.body.height}px`,
+          }"
+        >
+          <DevicePanel
+            v-if="panel.tab === 'device'"
+            :device="panel.device"
+            :viewport="panel.viewport ?? null"
+            @device="setDevice(panel.tabId, $event)"
+            @viewport="setViewport(panel.tabId, $event)"
+          />
+          <PerformancePanel v-else-if="panel.tab === 'performance'" :tab-id="panel.tabId" />
+        </div>
+      </template>
 
       <!--
         Batch launch marker: while a batch is still filling this view, the stage
@@ -3177,6 +3430,27 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
+/* The zoom row: a label on the left where every other row puts one, and the
+   stepper pushed to the right edge. It is not a menu item because it does not
+   close the menu — you step twice as often as you step once. */
+.app-menu-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.app-menu-zoom-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
 .app-menu-item.danger {
   color: var(--red);
 }
@@ -3247,6 +3521,35 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
+/*
+ * The unread dot.
+
+ * Absolutely positioned inside a fixed-size button, so it never widens it: a
+ * count in the flow did, and that is what made this button and its neighbour
+ * sit a pixel lower than the rest of the row. `aria-label` on the button still
+ * carries the number, so nothing is lost for a screen reader.
+ */
+.messages-bell {
+  position: relative;
+}
+
+.messages-bell.unread {
+  color: var(--text);
+}
+
+.bell-dot {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  /* A ring in the toolbar's colour keeps the dot legible on hover, where the
+     button's own background lights up behind it. */
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
 .icon:disabled {
   opacity: 0.3;
   cursor: default;
@@ -3260,12 +3563,31 @@ function fillMessage(reason?: string): string {
   color: var(--accent-text);
 }
 
+/* Zoom beside the viewport control, in the toolbar's own row.
+
+   It used to sit here as a permanent stepper. It is drawn smaller now — 24px
+   tall against the 32px field it sits beside — because it is a secondary
+   control in this row: the size presets are what the neighbour is for, zoom is
+   the "and also" that most people reach for the keyboard to do. */
+.zoom-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.zoom-label {
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  white-space: nowrap;
+}
+
 .zoom-stepper {
   display: inline-flex;
   align-items: stretch;
-  height: var(--control-lg);
-  border: none;
-  border-radius: var(--radius);
+  height: 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
   background: transparent;
   overflow: hidden;
   flex: 0 0 auto;
@@ -3277,9 +3599,10 @@ function fillMessage(reason?: string): string {
 }
 
 /* Quiet at the default; the accent only appears when this page is actually
-   zoomed, so the toolbar does not shout "110%" at every normal page. */
+   zoomed, so the row does not shout "110%" at every normal page. */
 .zoom-stepper.changed {
   background: var(--accent-soft);
+  border-color: transparent;
 }
 
 .zoom-stepper.changed .zoom-value {
@@ -3289,7 +3612,7 @@ function fillMessage(reason?: string): string {
 .zoom-step {
   display: grid;
   place-items: center;
-  width: 24px;
+  width: 20px;
   color: var(--text-secondary);
 }
 
@@ -3300,8 +3623,8 @@ function fillMessage(reason?: string): string {
 
 /* The number is the reset: the only reason to click a zoom value is to undo it. */
 .zoom-value {
-  min-width: 44px;
-  padding: 0 6px;
+  min-width: 40px;
+  padding: 0 4px;
   font-size: var(--fs-2xs);
   letter-spacing: 0.02em;
   color: var(--text-secondary);
@@ -3624,6 +3947,42 @@ function fillMessage(reason?: string): string {
 .go:hover {
   background: var(--surface-3);
   color: var(--text);
+}
+
+/* The zoom readout: centred over the page, gone in 1.2s.
+
+   Positioned absolutely inside the stage so it costs no layout at all — the
+   same rule the find bar follows — and pointer-events are off so a click
+   through it still reaches the page. Sits above guest nodes because it is HTML
+   in the renderer layer, which is the topmost layer now that pages are guest
+   views inside it. */
+.zoom-toast {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  box-shadow: var(--shadow-menu);
+  pointer-events: none;
+  animation: zoom-toast-in 160ms var(--ease-out);
+}
+
+@keyframes zoom-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .findbar {
@@ -3955,22 +4314,49 @@ function fillMessage(reason?: string): string {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 4px 0 8px;
+  padding: 0 4px 0 4px;
   box-sizing: border-box;
   background: var(--surface);
   border-bottom: 1px solid var(--line-soft);
+  /* The strip is only 26px, so the tabs have to fit it exactly: no padding
+     tricks, no taller hit areas — anything bigger is clipped by the panel. */
+  overflow: hidden;
 }
 
-.devtools-head-label {
+/* Tabs, not a label: this strip is now the panel's own title bar and its mode
+   switch. Each tab is the whole click target. */
+.devtools-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  height: 100%;
+}
+
+.devtools-tab {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: var(--faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.devtools-tab:hover {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+/* The active tab is marked by the same bottom rule the panel body sits under,
+   so the strip reads as attached to the surface below it. */
+.devtools-tab.active {
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent-text);
 }
 
 .devtools-head-close {
@@ -3987,6 +4373,15 @@ function fillMessage(reason?: string): string {
 .devtools-head-close:hover {
   background: var(--surface-3);
   color: var(--text);
+}
+
+/* Our own panel bodies, inside the same rectangle the native front-end
+   occupies. HTML, so it needs an explicit layer above the guest nodes. */
+.devtools-body {
+  position: absolute;
+  z-index: 3;
+  overflow: hidden;
+  background: var(--surface);
 }
 
 .slot-index {

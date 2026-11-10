@@ -114,6 +114,10 @@ watch(
   (count, previous) => {
     // A new capture always earns the prompt back, even after one was hidden.
     if (count > 0 && count >= previous) captureVisible.value = true;
+    // An explicit hide must not survive the list emptying and refilling: the
+    // prompt is about the newest capture, and dismissing a whole batch is not a
+    // standing preference to be told about the next one.
+    else if (count === 0) captureVisible.value = true;
   },
 );
 /** True while an HTML overlay covers the browser stage. */
@@ -158,6 +162,43 @@ const overlayOpen = computed(
         updatePrompt.value ||
         guideOpen.value,
     ),
+);
+
+/**
+ * Whether the prompt has to give up the screen to something else.
+ *
+ * Dialogs do, for two reasons that happen to share one fix:
+ *
+ * 1. A modal locks `body { pointer-events: none }` (reka-ui does this), and the
+ *    prompt is a fixed child of the body, outside the dialog's portal. It stayed
+ *    visible over the mask but swallowed every press — it looked stuck, and the
+ *    only way out was closing the dialog underneath it.
+ * 2. It is not needed inside the account form anyway: that form *is* the answer
+ *    to the prompt.
+ *
+ * The guide is deliberately NOT in this list. It opens by itself on a first run
+ * and stays until dismissed; letting it suppress the prompt meant a new user's
+ * very first login was captured, prompted, and then invisible underneath the
+ * introduction. The prompt is small and sits at the bottom edge, so sharing the
+ * screen with the guide costs nothing.
+ */
+const captureCovered = computed(
+  () =>
+    stageObscured.value ||
+    Boolean(
+      confirm.current ||
+        siteDraft.value ||
+        identityDraft.value ||
+        viewDraft.value ||
+        layoutEditor.value ||
+        healthOpen.value ||
+        updatePrompt.value,
+    ),
+);
+
+/** The prompt, when it is both wanted and not covered by a dialog. */
+const capturePromptVisible = computed(
+  () => captureVisible.value && store.pendingLogins.length > 0 && !captureCovered.value,
 );
 
 onMounted(async () => {
@@ -544,27 +585,18 @@ async function saveIdentity(draft: IdentityDraft) {
   const result = await store.saveIdentity(draft);
   if (!result) return;
   identityDraft.value = null;
-  const fromCapture = Boolean(draft.captureToken);
-  // The captured password is consumed on save; the prompt must not linger.
-  // Named by token: a second capture waiting behind this one must survive.
-  if (fromCapture) store.clearLoginCapture(draft.captureToken);
   /*
-   * Saving a captured login finishes the path it started: the login was typed
-   * into the daily profile, and the account that now holds it lives in a profile
-   * of its own. Opening that account's own page is the only way to see the
-   * difference, and it doubles as proof the password was stored — the page comes
-   * up already signed in.
+   * The captured password is consumed on save, so the prompt goes with it.
+   * Named by token: a second capture waiting behind this one must survive.
+   *
+   * Nothing else happens here on purpose. This used to launch the account as
+   * well — "prove the password was stored, the page comes up signed in" — but
+   * being right about the password is not a reason to open a browser. Someone
+   * who clicked "save account" asked for the account to be stored; a window
+   * appearing on its own reads as the app doing something they did not ask for.
+   * The toast already confirms the save, and launching stays one click away.
    */
-  const savedId =
-    draft.id ??
-    result.identities.find(
-      (identity) =>
-        identity.siteId === draft.siteId &&
-        identity.username.toLowerCase() === draft.username.trim().toLowerCase(),
-    )?.id;
-  if (fromCapture && savedId) {
-    void store.launchIdentity(savedId, draft.startPath || undefined);
-  }
+  if (draft.captureToken) store.clearLoginCapture(draft.captureToken);
 }
 
 /**
@@ -892,8 +924,33 @@ async function handleLocale(locale: LocaleSetting) {
          covers the page the user is still working in, and never takes a row in
          the app grid — it is a prompt, not part of the layout. Closing it
          collapses it to a count chip in the same place, not out of existence:
-         the capture is still waiting, and the chip is how you get back to it. -->
-    <div v-if="captureVisible && store.pendingLogins.length" class="capture-wrap">
+         the capture is still waiting, and the chip is how you get back to it.
+
+         It yields to a dialog, though: a modal locks `body` pointer events and
+         the bar lives outside the dialog's portal, so it used to stay visible
+         over the mask and swallow every click. `data-capture-probe` states which
+         of the three inputs blocked it, so a failing e2e says which one. -->
+    <div
+      class="sr-only"
+      data-capture-probe
+      :data-list="store.pendingLogins.length"
+      :data-shown="captureVisible ? '1' : '0'"
+      :data-covered="captureCovered ? '1' : '0'"
+      :data-what="[
+        stageObscured ? 'stage' : '',
+        confirm.current ? 'confirm' : '',
+        siteDraft ? 'site' : '',
+        identityDraft ? 'identity' : '',
+        viewDraft ? 'view' : '',
+        layoutEditor ? 'layout' : '',
+        healthOpen ? 'health' : '',
+        updatePrompt ? 'update' : '',
+        guideOpen ? 'guide' : '',
+      ]
+        .filter(Boolean)
+        .join('+')"
+    ></div>
+    <div v-if="capturePromptVisible" class="capture-wrap">
       <LoginCaptureBar
         :notices="store.pendingLogins"
         :site-name-of="(notice) => store.sites.find((s) => s.id === notice.siteId)?.name"

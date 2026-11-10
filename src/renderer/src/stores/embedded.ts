@@ -127,7 +127,31 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     unsubscribe = window.ensemble.onEmbeddedState((next) => {
       state.value = next;
     });
+    window.ensemble.onEmbeddedZoomNotice((notice) => {
+      showZoomNotice(notice);
+    });
     ready.value = true;
+  }
+
+  /**
+   * The transient "110%" overlay, and its lifetime.
+   *
+   * The toolbar used to carry this number permanently; with the stepper gone a
+   * keyboard or wheel zoom would otherwise be silent, and a silent zoom reads
+   * as "the gesture did nothing" — people press it repeatedly until the page is
+   * unreadable. The overlay is the same idea as Chrome's: name the number, then
+   * get out of the way. Replaced, not queued, on repeated presses.
+   */
+  const zoomNotice = ref<{ tabId: string; zoom: number } | null>(null);
+  let zoomNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function showZoomNotice(notice: { tabId: string; zoom: number }): void {
+    zoomNotice.value = notice;
+    if (zoomNoticeTimer) clearTimeout(zoomNoticeTimer);
+    zoomNoticeTimer = setTimeout(() => {
+      zoomNotice.value = null;
+      zoomNoticeTimer = undefined;
+    }, 1_200);
   }
 
   const tabs = computed<EmbeddedTab[]>(() => state.value.tabs);
@@ -173,14 +197,33 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     return index >= 0 ? index + 1 : undefined;
   }
 
+  /**
+   * Whether this page is one the stage is drawing right now.
+   *
+   * One page per cell, not one instance. The flat stage shows the *active page*
+   * of the focused instance; comparing `instanceId` alone reported every page of
+   * that instance as on stage, so two nodes shared `opacity: 1` in the same rect.
+   * The placeholder `about:blank` that every instance starts with was one of
+   * them and sat on top of the real page — an empty new tab until a reload
+   * shuffled the layers. Same rule the main process uses (`slotPages`), so the
+   * two sides cannot disagree about which node owns the pixels.
+   */
   function isOnStage(tab: EmbeddedTab): boolean {
-    if (!tab.viewId) {
-      // In flat mode the stage shows the active page of the focused instance.
-      const focused = tabs.value.find((item) => item.id === state.value.activeTabId);
-      return Boolean(focused && tab.instanceId === focused.instanceId);
-    }
+    if (!tab.viewId) return tab.id === state.value.activeTabId;
     const view = views.value.find((item) => item.id === tab.viewId);
-    return Boolean(view?.slotTabs.includes(tab.instanceId) || view?.slotTabs.includes(tab.id));
+    if (!view || view.id !== state.value.activeViewId) return false;
+    const index = view.slotTabs.findIndex(
+      (id) => id === tab.instanceId || id === tab.id,
+    );
+    if (index < 0) return false;
+    // A cell shows its pinned page when it has one, otherwise the instance's
+    // active page — the same rule as `pageForSlot` in the main process. Using
+    // the window-wide `activeTabId` for the unpinned case put only ONE cell on
+    // stage: a 2×2 launch of four accounts left three cells parked off window,
+    // so the stage looked like it had received a single page.
+    const pinned = view.slotPages?.[index];
+    if (pinned) return pinned === tab.id;
+    return tab.active;
   }
 
   function isFocused(tab: EmbeddedTab): boolean {
@@ -563,6 +606,8 @@ export const useEmbeddedStore = defineStore("embedded", () => {
   return {
     state,
     ready,
+    zoomNotice,
+    showZoomNotice,
     draggingTabId,
     pointerShield,
     holdPointer,

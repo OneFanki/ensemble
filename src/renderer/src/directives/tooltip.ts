@@ -96,6 +96,13 @@ function place(element: HTMLElement, placement: Placement = "bottom"): void {
 }
 
 function show(element: HTMLElement, options: TooltipOptions): void {
+  // Text can be empty now: a control whose visible label is hidden in a narrow
+  // layout has a tooltip, and the same control in a wide layout does not. An
+  // empty label would paint an empty box, so it is treated as "no tooltip".
+  if (!options.text) {
+    if (active === element) hide();
+    return;
+  }
   const node = ensureHost();
   node.textContent = options.text;
   active = element;
@@ -118,8 +125,10 @@ function hide(): void {
 
 export const vTooltip: Directive<HTMLElement, string | TooltipOptions> = {
   mounted(element, binding) {
+    // Listeners are attached even when the text is empty: the text can be
+    // filled in later (a label that only appears when its button is icon-only),
+    // and a directive that skipped binding would never pick that up.
     const options = normalize(binding.value);
-    if (!options.text) return;
 
     const entry: Bound = {
       options,

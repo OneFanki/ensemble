@@ -91,8 +91,26 @@ export interface EmbeddedTab {
    * an explicit choice may disagree with the default.
    */
   viewportOverride?: EmbeddedViewport | null;
+  /**
+   * Device this page is impersonating, when it is.
+   *
+   * A device supersedes the viewport: it carries its own size, and on top of it
+   * touch, a DPR and a UA. When it is set the page lays out at the device's
+   * size too, so the two never disagree about how wide the page is.
+   *
+   * Absent means "not emulating"; the viewport fields below still apply then.
+   */
+  device?: EmbeddedDevice;
   /** True while this page's DevTools are open (docked by default). */
   devtoolsOpen: boolean;
+  /**
+   * Which of the panel's three tabs is showing.
+   *
+   * The native front-end, our device picker, or our performance monitor. Only
+   * one can own the panel's rectangle at a time, because the front-end is a
+   * native view that paints over anything the renderer draws.
+   */
+  devtoolsTab?: "front-end" | "device" | "performance";
   /**
    * Fraction of the page's cell the docked panel takes, when it is docked.
    *
@@ -591,6 +609,10 @@ export const VIEWPORT_MAX_HEIGHT = 2160;
 /**
  * Common devices and desktop sizes, ordered small → large. These are the menu's
  * one-tap answers; anything else goes through the custom input.
+ *
+ * These are **viewports**, not devices: they change how big the page thinks it
+ * is and nothing else. The page still sees a desktop browser — no touch, desktop
+ * UA, `pointer: fine`. `DEVICE_PRESETS` below is the other half.
  */
 export const VIEWPORT_PRESETS: Array<EmbeddedViewport & { name: string }> = [
   { name: "320 × 640", width: 320, height: 640 },
@@ -601,6 +623,377 @@ export const VIEWPORT_PRESETS: Array<EmbeddedViewport & { name: string }> = [
   { name: "1366 × 768", width: 1366, height: 768 },
   { name: "1920 × 1080", width: 1920, height: 1080 },
 ];
+
+/**
+ * A simulated device: the viewport plus everything that makes a page believe it
+ * is on a phone.
+ *
+ * Two separate things, deliberately kept apart:
+ *
+ * - A **viewport** is geometry. It is useful on its own (check a 768px layout
+ *   without resizing the window) and leaves the page a desktop browser.
+ * - A **device** is an identity. `innerWidth` alone never makes a site serve its
+ *   mobile UI; it also reads `navigator.maxTouchPoints`, `matchMedia("(pointer:
+ *   coarse)")`, and the UA — and redirects to `/m` or shows an "open our app"
+ *   banner on the last one.
+ *
+ * A device therefore *contains* a viewport. The menu offers both, and switching
+ * from a device back to a viewport keeps the size and drops the rest, which is
+ * the direction a person actually moves while debugging.
+ */
+export interface EmbeddedDevice extends EmbeddedViewport {
+  /** Device pixel ratio the page should report (`innerWidth` stays CSS px). */
+  dpr: number;
+  /** UA string; absent leaves the browser's own. */
+  userAgent?: string;
+  /** Whether to emulate touch. A tablet or phone sets this; a console does not. */
+  touch: boolean;
+  /** One-tap menu label; absent for anything the user typed. */
+  name?: string;
+}
+
+/**
+ * Devices worth one click.
+ *
+ * Sizes are the CSS-pixel viewports Chrome's own device list uses, so a layout
+ * checked here matches what the same page shows in Chrome's responsive mode.
+ * The list is short on purpose: every entry is a claim about a device somebody
+ * actually opens this app to test, and a long list makes the menu unusable.
+ */
+export const DEVICE_PRESETS: EmbeddedDevice[] = [
+  {
+    name: "iPhone 15",
+    width: 393,
+    height: 852,
+    dpr: 3,
+    touch: true,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+  {
+    name: "iPhone SE",
+    width: 375,
+    height: 667,
+    dpr: 2,
+    touch: true,
+    userAgent:
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+  },
+  {
+    name: "Pixel 8",
+    width: 412,
+    height: 915,
+    dpr: 2.625,
+    touch: true,
+    userAgent:
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+  },
+  {
+    name: "Galaxy S24",
+    width: 360,
+    height: 780,
+    dpr: 3,
+    touch: true,
+    userAgent:
+      "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+  },
+  {
+    name: "iPad mini",
+    width: 744,
+    height: 1133,
+    dpr: 2,
+    touch: true,
+    userAgent:
+      "Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+  },
+];
+
+/** Device pixel ratios a browser will actually report; outside this is a typo. */
+export const DEVICE_DPR_MIN = 1;
+export const DEVICE_DPR_MAX = 5;
+
+/**
+ * Performance metrics the monitor shows, in display order.
+ *
+ * The order is Chrome's own performance monitor, and it is not arbitrary:
+ * headline cost first (CPU), then what it costs in memory (heap), then the
+ * page's structure (nodes, listeners, documents, frames), then churn (layouts
+ * and style recalculations per second). Reading top to bottom answers "is it
+ * busy", "is it growing", "is it bloated", "is it thrashing".
+ *
+ * In `shared/` because the panel renders them: `core/` is Electron-free but not
+ * renderer-safe, and the list has to mean the same thing on both sides or the
+ * table and the sampler disagree about what exists.
+ */
+export const PERF_METRICS = [
+  "cpu",
+  "heap",
+  "nodes",
+  "listeners",
+  "documents",
+  "frames",
+  "layouts",
+  "styleRecalcs",
+] as const;
+
+export type PerfMetric = (typeof PERF_METRICS)[number];
+
+/**
+ * One performance sample, in display units.
+ *
+ * Lives in `shared/` rather than beside the sampler because it crosses the IPC
+ * boundary: the panel draws these directly and must not import from `core/`
+ * (which is Electron-free but not renderer-safe).
+ */
+export interface PerfSample {
+  /** Milliseconds since the page started being sampled. */
+  t: number;
+  /** Wall clock, so a sample can be matched against a log line. */
+  at: string;
+  /** CPU busy percent over the interval; the headline number. */
+  cpu: number;
+  nodes: number;
+  listeners: number;
+  documents: number;
+  frames: number;
+  /** JS heap in bytes. */
+  heap: number;
+  /** Layouts per second over the interval. */
+  layouts: number;
+  /** Style recalculations per second over the interval. */
+  styleRecalcs: number;
+}
+
+/**
+ * How often the performance panel samples.
+ *
+ * Edge and Chrome sample once a second, which is enough to see a trend and not
+ * enough to see a stutter: a 200ms freeze lands entirely between two samples.
+ * `Performance.getMetrics` is a cheap counter read, so the cost of 5 Hz is the
+ * point read itself, not a tracing session.
+ */
+export const PERF_SAMPLE_INTERVAL_MS = 200;
+
+/**
+ * The span the chart shows, in milliseconds.
+ *
+ * Chosen for resolution, not for history: the docked panel is roughly 200–350px
+ * wide, so a minute across it is ~4px per second and a 200ms stutter becomes
+ * sub-pixel — the chart looks smooth while the page is not. Twenty seconds puts
+ * ~11px between seconds, which is the range where a burst has a visible shape.
+ *
+ * It is a *window*, not a cap: the axis is always this wide, its right edge is
+ * "now", and older samples leave at the left. Deriving the axis from whatever
+ * data exists (the earlier behaviour) rescaled the whole curve on every tick,
+ * which read as the chart zooming on its own.
+ */
+export const PERF_WINDOW_MS = 20_000;
+
+/**
+ * Samples kept, newest last.
+ *
+ * A window's worth at the interval above, and also the hard cap: trimming is by
+ * time first (see `pushSample`), because a busy page delays the sampler and a
+ * count-only cap would then keep more than a window of history.
+ */
+export const PERF_HISTORY_LIMIT = Math.round(PERF_WINDOW_MS / PERF_SAMPLE_INTERVAL_MS);
+
+/**
+ * Rounds a series peak up to a readable axis top.
+ *
+ * Two things it has to prevent: an all-zero series dividing by zero, and a
+ * chart whose top edge is exactly the highest sample (a steady line then reads
+ * as "pinned to the ceiling" instead of "flat"). The 10% headroom is what makes
+ * a constant series visibly flat rather than visibly clipped.
+ */
+export function perfAxisMax(peak: number, ceiling = Number.POSITIVE_INFINITY): number {
+  const value = Math.max(1, peak) * 1.1;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const stepped = [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10].map((factor) => factor * magnitude);
+  const top = stepped.find((candidate) => value <= candidate) ?? 10 * magnitude;
+  return Math.min(ceiling, Math.max(1, top));
+}
+
+/**
+ * The largest value a metric reached across the samples, floored at 1.
+ *
+ * Floored so a series of zeros has something to scale against; every caller
+ * feeds the result to `perfAxisMax`, which adds the readable rounding.
+ */
+export function perfPeak(history: PerfSample[], metric: PerfMetric): number {
+  let peak = 0;
+  for (const sample of history) {
+    const value = sample[metric];
+    if (value > peak) peak = value;
+  }
+  return Math.max(1, peak);
+}
+
+/**
+ * The points of one metric's line inside `width × height`.
+ *
+ * x is wall time, not sample index: the renderer can drop a tick (a busy page
+ * delays the timer), and spacing samples evenly would silently compress the
+ * gaps and misreport when a spike happened.
+ *
+ * The horizontal scale is **fixed at one window, ending now**, and never fitted
+ * to the data. Fitting meant the axis was re-derived from "oldest sample to
+ * newest" on every tick, so a freshly opened panel drew one second of data
+ * across the whole chart and then squeezed it as more arrived — the curve
+ * appeared to zoom out on its own, and a 200ms stutter looked like a long slow
+ * wave. With a fixed scale the newest sample is always at the right edge; a
+ * young series occupies only its own slice at that edge, and once a full window
+ * is on screen the oldest samples fall off the left while new ones arrive on the
+ * right. The window therefore slides from the first frame, not only after it
+ * fills.
+ *
+ * `axisMax` is passed in rather than derived so every lane can share one when
+ * that is the honest comparison — CPU in percent, for instance — while the
+ * default per-metric scaling keeps eight series with different units readable
+ * side by side.
+ *
+ * Returned as numbers rather than a path string because the panel draws two
+ * shapes from the same points — the line and the area under it — and the area
+ * has to close on the baseline at both ends.
+ */
+export function perfSparkPoints(
+  history: PerfSample[],
+  metric: PerfMetric,
+  width: number,
+  height: number,
+  axisMax: number,
+  windowMs = PERF_WINDOW_MS,
+): Array<{ x: number; y: number }> {
+  if (history.length < 2) return [];
+  const span = Math.max(1, windowMs);
+  // The right edge is "now"; the left edge is one window earlier. Not anchored
+  // to the first sample: that would move the axis every tick, which is the
+  // rescaling this fixed window exists to stop.
+  const origin = history[history.length - 1]!.t - span;
+  const top = Math.max(1, axisMax);
+  return history.map((sample) => ({
+    // Clamped: a sample older than the window would otherwise draw to the left
+    // of the plot, into the tick gutter.
+    x: Math.min(width, Math.max(0, ((sample.t - origin) / span) * width)),
+    // One pixel of inset top and bottom: a sample sitting exactly at the
+    // maximum would otherwise draw its stroke half outside the viewBox.
+    y: height - 1 - Math.min(1, Math.max(0, sample[metric] / top)) * (height - 2),
+  }));
+}
+
+/** Those points as an SVG polyline path. */
+export function perfPolyline(points: Array<{ x: number; y: number }>): string {
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+    .join(" ");
+}
+
+/**
+ * The same line closed down to the baseline, for the filled area.
+ *
+ * A fill is what makes a low, spiky series readable: a 1px line at the bottom
+ * of a 30px lane is nearly invisible, while the shaded region below it shows
+ * the shape and the proportion at once. The fill is drawn with low opacity by
+ * the caller, so two rows can never obscure each other.
+ */
+export function perfArea(points: Array<{ x: number; y: number }>, height: number): string {
+  if (points.length === 0) return "";
+  const last = points[points.length - 1]!;
+  const first = points[0]!;
+  const baseline = height - 1;
+  return `${perfPolyline(points)} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`;
+}
+
+/** A metric's line as a path string; a thin wrapper over the two helpers above. */
+export function perfSparkPath(
+  history: PerfSample[],
+  metric: PerfMetric,
+  width: number,
+  height: number,
+  axisMax: number,
+  windowMs = PERF_WINDOW_MS,
+): string {
+  return perfPolyline(perfSparkPoints(history, metric, width, height, axisMax, windowMs));
+}
+
+/**
+ * A compact label for an axis tick.
+ *
+ * The gutter beside each chart is about 36px wide, so this has to say "16.9 MB"
+ * in six glyphs: `17M`. Units are already in the row's name ("JS 堆大小",
+ * "布局/秒"), which is the only place that can afford the words.
+ *
+ * Ticks are rounded *down* to a readable number rather than reporting the
+ * precise cap: an axis that says `2.38M` beside a series that never exceeds
+ * `1.8M` invites the reader to check the arithmetic instead of reading the
+ * chart. `1.8M` and `2M` are both fine; `2.38M` is a number nobody chose.
+ */
+export function perfAxisLabel(metric: PerfMetric, value: number): string {
+  // Zero keeps the metric's own unit: a CPU scale reading "100% / 50% / 0" has
+  // one label that belongs to a different axis.
+  if (!Number.isFinite(value) || value <= 0) return metric === "cpu" ? "0%" : "0";
+  /** Two significant digits, which is as much as 36px can show. */
+  const compact = (number: number): string => {
+    if (number >= 10) return String(Math.round(number));
+    if (number >= 1) return String(Math.round(number * 10) / 10);
+    return String(Math.round(number * 100) / 100);
+  };
+  switch (metric) {
+    case "cpu": {
+      // Percentages are read to a tenth: the difference between 12.4% and 12%
+      // is the difference between "idle" and "working a little".
+      const rounded = Math.round(value * 10) / 10;
+      return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+    }
+    case "heap": {
+      const units = ["B", "K", "M", "G"];
+      const power = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+      const scaled = value / 1024 ** power;
+      // One decimal below 10 (1.8M), none above (17M): more digits than the
+      // gutter can show, and none of them change a decision.
+      const shown = scaled >= 10 ? Math.round(scaled) : Math.round(scaled * 10) / 10;
+      return `${shown}${units[power]}`;
+    }
+    case "layouts":
+    case "styleRecalcs":
+      return compact(value);
+    default:
+      return value >= 10_000 ? `${compact(value / 1000)}k` : String(Math.round(value));
+  }
+}
+
+
+
+/**
+ * Rejects a hand-typed device the same way `normalizeViewportSize` rejects a
+ * size: a wrong value is reported, never silently corrected.
+ *
+ * The UA is capped rather than validated — there is no such thing as an invalid
+ * UA string, only one too long to be worth storing, and a device with junk in
+ * that field is harmless (a site simply treats it as unknown).
+ */
+export function normalizeDevice(input: {
+  width: unknown;
+  height: unknown;
+  dpr: unknown;
+  touch: unknown;
+  userAgent?: unknown;
+}): EmbeddedDevice | undefined {
+  const size = normalizeViewportSize(input.width, input.height);
+  if (!size) return undefined;
+  const dpr = typeof input.dpr === "number" ? input.dpr : Number(input.dpr);
+  if (!Number.isFinite(dpr) || dpr < DEVICE_DPR_MIN || dpr > DEVICE_DPR_MAX) return undefined;
+  const userAgent =
+    typeof input.userAgent === "string" && input.userAgent.trim()
+      ? input.userAgent.trim().slice(0, 400)
+      : undefined;
+  return {
+    ...size,
+    dpr: Math.round(dpr * 1000) / 1000,
+    touch: input.touch === true,
+    ...(userAgent ? { userAgent } : {}),
+  };
+}
 
 /**
  * Rejects anything that is not a whole number inside the supported range.

@@ -337,6 +337,20 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
 | 控制台 | `read_browser_console` | 主进程 `console-message` 事件 | 只覆盖该页所在的渲染进程 |
 | 网络 | 同上 + `wait_browser` 的 `network-idle` | 注入脚本包 `fetch` / XHR | 只覆盖页面 JS 发起的请求 |
 | 画面 | `screenshot_browser_tab` | CDP 或 `capturePage` | 完全隐藏的窗口拿不到 |
+| 性能 | `measure_browser_performance` / `read_browser_performance` | CDP `Performance.getMetrics` | 只有主线程指标；没有 tracing 的调用树 |
+
+**性能是事实，不是让 AI 自己算。** AI 判断「页面卡不卡」原本只有截图和 `evaluate` 两条路：
+截图看不出耗时，自己在页面里跑 `performance.now()` 循环测的是它那段脚本，不是页面的渲染
+与 GC 开销——比没有数字更糟。所以这两个工具直接把 CDP 的同一份计数器给出去，出处与
+Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不了走势图，一百个原始点会让它
+在正文里做算术并且做错；`{avg, max, maxAt, last}` 能直接回答「有没有卡、卡在哪一刻」，
+`maxAt` 还是相对毫秒，能与 `read_browser_console` 里日志行的时间戳对上。要逐点数据的
+调用方（自己算任意统计量）走 `read_browser_performance`。
+
+采样的所有权是分开的：面板在它的页显示时拥有采样器，切走即停；AI 的采样没有页签可看，
+改由**闲置超时**回收（连续读取会续期），并且在面板已经采样时**接管而不重启**——一次 AI
+读取把用户正在看的图清空，是那种「功能正确但用户会骂」的错误。两次连续读取之间也在采样，
+这才是「测一次 → 点一下 → 再测一次」能看见那次点击开销的原因。
 
 **快照是扁平列表，但带 `parent` 与 `depth`。** 保持扁平是因为每个使用者本来就把它当
 列表处理，树形会把主要是文字的页面翻倍；而「这个按钮在哪个对话框里」只需要一个下标。

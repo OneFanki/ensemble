@@ -282,6 +282,15 @@ included — and clears them, so it answers "what happened since I last looked".
 file path by default; `inline: true` sends the image itself as well, which is what a client that
 cannot open a local path needs.
 
+Whether a page feels slow is a question it can answer directly: `measure_browser_performance`
+returns, for an observation window, each metric's mean, peak, when that peak happened, and the
+latest reading — CPU usage, JS heap, DOM nodes, event listeners, documents, document frames,
+layouts/s and style recalcs/s, from the same source as Chrome's own performance monitor.
+Consecutive calls continue where the previous one left off and sampling keeps running in between,
+so "measure, click, measure again" shows what that click cost; pairing the peak's timestamp with
+the log times from `read_browser_console` says which step was responsible. Callers that want the
+points themselves use `read_browser_performance`.
+
 The pages live in the main window throughout, so you can watch, take over or interrupt at any point.
 Signing in as an account that is already saved never asks "save this login?" again — only a
 credential the vault does not have yet produces that prompt.

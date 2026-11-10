@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-locale-"));
 const port = await freePort();
@@ -39,7 +40,7 @@ writeFileSync(
 // Seeded to "zh" so a successful click visibly flips the stored value.
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", guideVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "sites", guideVersion: GUIDE_SEEN }),
 );
 
 const electronBinary =

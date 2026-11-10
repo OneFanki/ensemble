@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -158,7 +159,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: GUIDE_SEEN }),
 );
 
 const electronBinary =
@@ -768,9 +769,13 @@ try {
     sizing?.heights?.length === 1 && sizing.heights[0] === sizing.controlLg,
     sizing,
   );
+  // The zoom stepper used to live in this row and took a tenth of it. It now
+  // sits in the app menu and the viewport menu; what this checks is that the
+  // toolbar is actually free of it (a second copy would push the row over at
+  // 960px) and that a gesture still reports its result.
   check(
-    "the toolbar carries a zoom stepper",
-    sizing?.stepper === sizing?.controlLg,
+    "the toolbar no longer carries a zoom stepper",
+    sizing?.stepper === null,
     { stepper: sizing?.stepper },
   );
 
@@ -1782,11 +1787,21 @@ try {
     // Restore the view: the rest of this suite works inside its cells.
     if (viewId) await window.ensemble.activateEmbeddedView(viewId);
     await new Promise((r) => setTimeout(r, 700));
+    const probe = [];
+    for (let n = hit; n && probe.length < 6; n = n.parentElement) {
+      probe.push(n.tagName.toLowerCase() + '.' + (n.className || '').toString().split(' ').filter(Boolean).join('.'));
+    }
     return {
       activeBlank: Boolean(active) && (!active.url || active.url === "about:blank"),
       surfacePresent: Boolean(surface),
       surfaceOwnsItsCentre: Boolean(hit && surface?.contains(hit)),
       restored: (await window.ensemble.getEmbeddedState()).activeViewId === viewId,
+      _probe: {
+        box: box ? [box.x, box.y, box.width, box.height].map(Math.round) : null,
+        hitChain: probe,
+        stage: (() => { const s = document.querySelector('.stage')?.getBoundingClientRect(); return s ? [s.x, s.y, s.width, s.height].map(Math.round) : null; })(),
+        window: [window.innerWidth, window.innerHeight],
+      },
     };
   })()`);
   check(

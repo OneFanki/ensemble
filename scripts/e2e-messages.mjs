@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PAGE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-messages-"));
@@ -88,7 +89,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1, layout: "free", layoutExplicit: true }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: GUIDE_SEEN, layout: "free", layoutExplicit: true }),
 );
 
 const app = spawn(
@@ -202,21 +203,26 @@ try {
     captureRow ?? afterLogin,
   );
 
-  // 2) The two entry points agree on the unread count.
+  // 2) The two entry points agree that something is unread. The rail keeps the
+  // count (it is a list); the toolbar bell only carries a red dot, because a
+  // number there widened the button and pushed it out of line with the icons
+  // beside it — so the bell is asserted on the dot, not on a number.
   await client.evaluate(`document.querySelector('.layout-btn')?.click()`);
   await wait(900);
   const entryPoints = await client.evaluate(`(() => ({
     navLabel: document.querySelector('[data-nav="messages"] .nav-label')?.textContent?.trim() ?? '',
     navCount: document.querySelector('[data-nav="messages"] .nav-count')?.textContent?.trim() ?? '',
     bell: Boolean(document.querySelector('[data-messages-bell]')),
+    bellDot: Boolean(document.querySelector('[data-messages-bell] .bell-dot')),
     bellCount: document.querySelector('.bell-count')?.textContent?.trim() ?? '',
   }))()`);
   check(
-    "the rail row and the toolbar bell both show the unread count",
+    "the rail row carries the unread count and the bell a red dot",
     entryPoints?.navLabel === "消息" &&
       entryPoints?.navCount === "1" &&
       entryPoints?.bell === true &&
-      entryPoints?.bellCount === "1",
+      entryPoints?.bellDot === true &&
+      entryPoints?.bellCount === "",
     entryPoints,
   );
 

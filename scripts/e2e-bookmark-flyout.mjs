@@ -26,6 +26,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-bookmark-flyout-"));
 
@@ -78,7 +79,7 @@ writeFileSync(
     lastView: "browser",
     // The sidebar — and with it the run dock — only exists in bench mode.
     shellMode: "bench",
-    guideVersion: 1,
+    guideVersion: GUIDE_SEEN,
   }),
 );
 

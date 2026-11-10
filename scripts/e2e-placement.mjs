@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-placement-"));
 const port = await freePort();
@@ -90,7 +91,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: GUIDE_SEEN }),
 );
 
 const app = spawn(

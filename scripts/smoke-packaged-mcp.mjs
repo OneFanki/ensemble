@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PORT = Number(process.env.SMOKE_PORT ?? 49821);
 const TOKEN = "packaged-smoke-token-1234567890";
@@ -36,7 +37,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: GUIDE_SEEN }),
 );
 
 const exe = resolve(process.env.ENSEMBLE_UNPACKED ?? "release/win-unpacked/Ensemble.exe");

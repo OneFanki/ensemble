@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PROBE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-connectivity-"));
@@ -58,7 +59,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "sites",
-    guideVersion: 1,
+    guideVersion: GUIDE_SEEN,
     proxyMode: "manual",
     proxyUrl: "http://127.0.0.1:1",
   }),

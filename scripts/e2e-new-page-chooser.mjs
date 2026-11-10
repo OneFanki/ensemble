@@ -20,6 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -106,7 +107,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "browser",
-    guideVersion: 1,
+    guideVersion: GUIDE_SEEN,
     autoFillOnLaunch: false,
   }),
 );

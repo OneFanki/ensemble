@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -44,7 +45,7 @@ writeFileSync(
     theme: "dark",
     locale: "zh",
     lastView: "browser",
-    guideVersion: 1,
+    guideVersion: GUIDE_SEEN,
     // On from the first launch: the check is that a cold start replays the view
     // into the built-in surface, not that the toggle itself saves.
     restoreLastView: true,

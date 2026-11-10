@@ -328,7 +328,38 @@ tr:last-child td{border-bottom:none}
 <div class="cards">${cards}</div>
 ${notice}
 <div class="table"><table><thead><tr>${page.columns.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>
-</div></main></body></html>`.replaceAll("{{ACCENT}}", ROLE_PAGES[role].accent);
+</div></main>
+<script>
+/*
+ * A little load, only when asked for.
+ *
+ * The performance screenshot needs a chart with a shape; a static page draws a
+ * flat line, which is honest and useless as a picture of the feature. The
+ * load=1 query makes the page do real layout and style work in bursts — measured
+ * by the panel, not synthesised into it.
+ */
+if (new URLSearchParams(location.search).get("load") === "1") {
+  const host = document.querySelector(".content");
+  setInterval(() => {
+    const burst = document.createElement("div");
+    burst.style.cssText = "display:flex;gap:2px;flex-wrap:wrap;margin-top:6px";
+    for (let i = 0; i < 220; i += 1) {
+      const cell = document.createElement("span");
+      cell.textContent = "▪";
+      cell.style.cssText = "font-size:9px;color:#3f4b5a;padding:1px";
+      burst.appendChild(cell);
+    }
+    host.appendChild(burst);
+    requestAnimationFrame(() => {
+      // Read layout on every node, then restyle: that is what costs frames.
+      for (const cell of burst.children) cell.getBoundingClientRect();
+      for (const cell of burst.children) cell.style.color = "#5c6b7d";
+      burst.remove();
+    });
+  }, 700);
+}
+</script>
+</body></html>`.replaceAll("{{ACCENT}}", ROLE_PAGES[role].accent);
 }
 
 
@@ -492,6 +523,103 @@ const SHOTS = [
     locale: "zh",
     view: "browser",
     clicks: ["[data-app-menu]", '[data-menu-item="guide"]'],
+  },
+  {
+    // The device tab: a phone-sized page in the same dock the front-end uses.
+    // Worth a shot because it is the feature a person is looking for when they
+    // open this panel at all. One full stage cell, not a quadrant: the panel
+    // needs the room to be readable, and that is how it is actually used.
+    name: "devtools-device",
+    locale: "zh",
+    view: "browser",
+    singleCell: true,
+    script: `(async () => {
+      const api = window.ensemble;
+      const state = await api.getEmbeddedState();
+      const tabId = state.activeTabId ?? state.tabs[0]?.id;
+      if (!tabId) return false;
+      await api.openEmbeddedDevTools(tabId);
+      await new Promise((r) => setTimeout(r, 1400));
+      await api.showEmbeddedDevtoolsTab(tabId, "device");
+      await new Promise((r) => setTimeout(r, 700));
+      await api.setEmbeddedDevice(tabId, {
+        name: "iPhone 15", width: 393, height: 852, dpr: 3, touch: true,
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      });
+      await new Promise((r) => setTimeout(r, 1200));
+      return true;
+    })()`,
+  },
+  {
+    // The performance tab, given time to collect: one sample would show an
+    // empty chart, and an empty chart is not what the feature looks like.
+    //
+    // `?load=1` makes the demo page do real layout and style work in bursts, so
+    // the curves have a shape. The numbers come from the page's actual work —
+    // nothing is fabricated — and the busy page also proves the sampler is fast
+    // enough to show a burst instead of averaging it away.
+    name: "devtools-performance",
+    locale: "zh",
+    view: "browser",
+    singleCell: true,
+    singleCellQuery: "load=1",
+    script: `(async () => {
+      const api = window.ensemble;
+      const state = await api.getEmbeddedState();
+      const tabId = state.activeTabId ?? state.tabs[0]?.id;
+      if (!tabId) return false;
+      await api.openEmbeddedDevTools(tabId);
+      await new Promise((r) => setTimeout(r, 1400));
+      await api.showEmbeddedDevtoolsTab(tabId, "performance");
+      // The x axis is a fixed window now, so a young series paints only its
+      // right-hand sliver. Waiting out the window is what makes the screenshot
+      // show a full chart rather than a nearly empty one.
+      await new Promise((r) => setTimeout(r, 21000));
+      return true;
+    })()`,
+  },
+  {
+    name: "devtools-device-en",
+    locale: "en",
+    view: "browser",
+    singleCell: true,
+    script: `(async () => {
+      const api = window.ensemble;
+      const state = await api.getEmbeddedState();
+      const tabId = state.activeTabId ?? state.tabs[0]?.id;
+      if (!tabId) return false;
+      await api.openEmbeddedDevTools(tabId);
+      await new Promise((r) => setTimeout(r, 1400));
+      await api.showEmbeddedDevtoolsTab(tabId, "device");
+      await new Promise((r) => setTimeout(r, 700));
+      await api.setEmbeddedDevice(tabId, {
+        name: "iPhone 15", width: 393, height: 852, dpr: 3, touch: true,
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      });
+      await new Promise((r) => setTimeout(r, 1200));
+      return true;
+    })()`,
+  },
+  {
+    name: "devtools-performance-en",
+    locale: "en",
+    view: "browser",
+    singleCell: true,
+    singleCellQuery: "load=1",
+    script: `(async () => {
+      const api = window.ensemble;
+      const state = await api.getEmbeddedState();
+      const tabId = state.activeTabId ?? state.tabs[0]?.id;
+      if (!tabId) return false;
+      await api.openEmbeddedDevTools(tabId);
+      await new Promise((r) => setTimeout(r, 1400));
+      await api.showEmbeddedDevtoolsTab(tabId, "performance");
+      // The x axis is a fixed window now, so a young series paints only its
+      // right-hand sliver. Waiting out the window is what makes the screenshot
+      // show a full chart rather than a nearly empty one.
+      await new Promise((r) => setTimeout(r, 21000));
+      return true;
+    })()`,
   },
   {
     name: "site-dialog",
@@ -919,6 +1047,37 @@ async function capture(shot) {
          })()`,
       );
       await wait(2500);
+      // A single page filling the whole stage. The docked panel needs the room:
+      // in a 2×2 cell it is a quarter of a quarter and every label clips.
+      if (shot.singleCell) {
+        // The demo site renders its copy in the shot's language; without the
+        // query the English screenshots showed a Chinese page behind the
+        // English panel. `singleCellQuery` carries extra parameters for shots
+        // that also need the page busy (the performance one). Both are resolved
+        // here, in Node — the page context cannot see `shot`.
+        const singleCellParams = [
+          ...(shot.locale === "en" ? ["l=en"] : []),
+          ...(shot.singleCellQuery ? [shot.singleCellQuery] : []),
+        ];
+        const singleCellUrl =
+          `http://127.0.0.1:${PAGE_PORT}/admin` +
+          (singleCellParams.length ? `?${singleCellParams.join("&")}` : "");
+        await client.evaluate(`(async () => {
+          const api = window.ensemble;
+          for (const view of (await api.getEmbeddedState()).views) {
+            await api.closeEmbeddedView(view.id, "all");
+          }
+          const created = await api.createEmbeddedView({ layoutId: "1x1", name: "单页" });
+          const snap = await api.getWorkspace();
+          const identityId = snap.identities[0]?.id;
+          await api.openEmbeddedTabInSlot(created.activeViewId, 0, {
+            ...(identityId ? { identityId } : {}),
+            url: ${JSON.stringify(singleCellUrl)},
+          });
+          return true;
+        })()`);
+        await wait(2400);
+      }
       // A flat strip shot wants two pages in one instance and no view at all:
       // that is the state the strip now covers, and a view would hide it.
       if (shot.flatStrip) {

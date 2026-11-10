@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-reorder-"));
 const port = await freePort();
@@ -90,7 +91,7 @@ writeFileSync(
       layout: "2x1",
       autoFillOnLaunch: false,
       closeToTray: false,
-      guideVersion: 1,
+      guideVersion: GUIDE_SEEN,
       autoCheckUpdates: false,
     },
     null,

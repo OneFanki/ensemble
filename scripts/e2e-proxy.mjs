@@ -19,6 +19,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PROXY_PORT = await freePort();
 const UPDATE_PORT = await freePort();
@@ -83,7 +84,7 @@ async function main() {
       theme: "dark",
       locale: "zh",
       lastView: "browser",
-      guideVersion: 1,
+      guideVersion: GUIDE_SEEN,
       // Manual, pointing at the stub: this is the setting under test.
       proxyMode: "manual",
       proxyUrl: `http://127.0.0.1:${PROXY_PORT}`,

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
 const PAGE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-capture-"));
@@ -118,7 +119,7 @@ writeFileSync(
 );
 writeFileSync(
   join(userData, "settings.json"),
-  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: 1 }),
+  JSON.stringify({ theme: "dark", locale: "zh", lastView: "browser", guideVersion: GUIDE_SEEN }),
 );
 
 const app = spawn(
@@ -381,6 +382,10 @@ try {
   const saved = await client.evaluate(`(async () => {
     const notice = (window.__captures ?? [])[0];
     if (!notice) return { error: 'no notice' };
+    // Counted around the save itself: saving must not open anything, and a
+    // hardcoded baseline would only be asserting how many tabs this script
+    // happened to open before it.
+    const tabsBefore = (await window.ensemble.getEmbeddedState()).tabs.length;
     const snapshot = await window.ensemble.saveIdentity({
       siteId: notice.siteId,
       name: '管理员 · 捕获',
@@ -396,6 +401,7 @@ try {
       identities: snapshot.identities.length,
       username: saved?.username,
       passwordSet: snapshot.credentials.identity[saved?.id ?? ''] ?? false,
+      tabsBefore,
     };
   })()`);
   check(
@@ -408,10 +414,15 @@ try {
   const consumed = await client.evaluate(`(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const pending = await window.ensemble.pendingLogins();
+    const state = await window.ensemble.getEmbeddedState();
     return {
       pending: pending.length,
       barGone: !document.querySelector('[data-capture-hide]'),
       chipGone: !document.querySelector('[data-capture-bell]'),
+      // Saving a captured login must not open a browser: the account was asked
+      // for, the window was not. Counted here because "a window appeared" is the
+      // exact symptom that was reported.
+      tabs: state.tabs.length,
     };
   })()`);
   check(
@@ -419,6 +430,75 @@ try {
     consumed?.pending === 0 && consumed?.barGone === true && consumed?.chipGone === true,
     consumed,
   );
+  check(
+    "saving a captured login does not open a browser",
+    consumed?.tabs === saved?.tabsBefore,
+    { before: saved?.tabsBefore, after: consumed?.tabs },
+  );
+
+  /*
+   * The prompt steps aside while a dialog is open.
+   *
+   * It is a fixed child of `<body>`, and a modal sets `body { pointer-events:
+   * none }`; the bar therefore stayed visible over the form but swallowed every
+   * click, so it looked stuck. It is the form's own subject, so it also has no
+   * business being drawn behind the mask.
+   *
+   * The save above consumed the last capture, so this signs in once more to have
+   * a prompt to open — otherwise the test would be asserting against nothing.
+   * Any capture left over is dropped first: this block must not change what the
+   * later multi-capture steps see.
+   */
+  await client.evaluate(`(async () => {
+    for (const item of await window.ensemble.pendingLogins()) {
+      await window.ensemble.dismissLoginCapture(item.token);
+    }
+    return true;
+  })()`);
+  await submitLogin("dialog@example.test", "secret-dialog");
+  await wait(600);
+
+  const withDialog = await client.evaluate(`(async () => {
+    const before = (await window.ensemble.pendingLogins()).length;
+    // Open the account form the same way the prompt does.
+    const prompt = document.querySelector('[data-capture-save]');
+    prompt?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const dialogOpen = Boolean(document.querySelector('.content .body'));
+    const insideDialog = {
+      // The bar lives outside the dialog portal, at the end of <body>.
+      barPresent: Boolean(document.querySelector('[data-capture-hide]')),
+      bodyLocked: getComputedStyle(document.body).pointerEvents === 'none',
+    };
+    // Dismiss the dialog and confirm the prompt is back, unchanged.
+    document.querySelector('.content .close')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    return {
+      hadPrompt: Boolean(prompt),
+      dialogOpen,
+      ...insideDialog,
+      backAfterClose: Boolean(document.querySelector('[data-capture-hide]')),
+      pending: { before, after: (await window.ensemble.pendingLogins()).length },
+    };
+  })()`);
+  check(
+    "the prompt steps aside while the account form is open and returns after",
+    withDialog?.hadPrompt === true &&
+      withDialog?.dialogOpen === true &&
+      withDialog?.barPresent === false &&
+      withDialog?.backAfterClose === true &&
+      withDialog?.pending?.before === withDialog?.pending?.after,
+    withDialog,
+  );
+
+  // Leave the list empty again: the steps below count captures themselves.
+  await client.evaluate(`(async () => {
+    for (const item of await window.ensemble.pendingLogins()) {
+      await window.ensemble.dismissLoginCapture(item.token);
+    }
+    return true;
+  })()`);
+  await wait(300);
 
   const reused = await client.evaluate(`(async () => {
     const notice = (window.__captures ?? [])[0];
@@ -443,6 +523,7 @@ try {
 
   // Signing in as an account the vault already stores must not offer to save a
   // duplicate: that is the normal "open the tab and log in" path, not a capture.
+  const knownCapturesBefore = await client.evaluate(`(window.__captures ?? []).length`);
   const known = await client.evaluate(`(async () => {
     await window.ensemble.saveIdentity({
       siteId: ${JSON.stringify(siteId)},
@@ -460,11 +541,17 @@ try {
 
   const knownSubmitted = await submitLogin("known@example.test", "known-secret");
   check("the second sign-in reached the page", knownSubmitted === true);
-
+  /*
+   * Counting the delta, not the total: earlier steps in this script sign in on
+   * purpose (the capture flow, then the dialog check), so a fixed number would
+   * only assert "how many logins this script happened to make".
+   */
   const afterKnown = await client.evaluate(`(window.__captures ?? []).length`);
-  check("logging in as an already-saved account produces no prompt", afterKnown === 1, {
-    captures: afterKnown,
-  });
+  check(
+    "logging in as an already-saved account produces no prompt",
+    afterKnown === knownCapturesBefore,
+    { before: knownCapturesBefore, after: afterKnown },
+  );
 
   /*
    * Two logins, one prompt.
@@ -487,6 +574,32 @@ try {
       head,
       rows: [...document.querySelectorAll('.more .row-user')].map((el) => el.textContent.trim()),
       barGone: !document.querySelector('[data-capture-hide]'),
+      // Diagnostics: the bar is a computed now, so "gone" can mean a dialog is
+      // open or the user hid it. Named separately so a failure says which.
+      wrapPresent: Boolean(document.querySelector('.capture-wrap')),
+      dialogs: document.querySelectorAll('.overlay').length,
+      bodyPointer: getComputedStyle(document.body).pointerEvents,
+      // Pinia state, to tell "the list is empty in the renderer" apart from
+      // "the bar is hidden by its own flags".
+      storePending: (() => {
+        const app = document.querySelector('#app')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const list = pinia?.state?.value?.workspace?.pendingLogins;
+        return Array.isArray(list) ? list.length : null;
+      })(),
+      // The two flags the template combines, read from the component instance
+      // that owns them.
+      flags: (() => {
+        const probe = document.querySelector('[data-capture-probe]');
+        return probe
+          ? {
+              list: probe.dataset.list,
+              shown: probe.dataset.shown,
+              covered: probe.dataset.covered,
+              what: probe.dataset.what,
+            }
+          : null;
+      })(),
     };
   })()`);
   check(
@@ -525,6 +638,12 @@ try {
     olderSaved?.prefilled === true,
     olderSaved,
   );
+  // Close it: an open form covers the prompt, and the steps below need the bar.
+  await client.evaluate(`(async () => {
+    document.querySelector('.content .close')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    return true;
+  })()`);
 
   /*
    * The three page shapes, each of which the script got wrong at some point.
@@ -727,8 +846,22 @@ try {
       );
 
       const opened = await client.evaluate(`(async () => {
+        const probe = document.querySelector('[data-capture-probe]');
         const button = document.querySelector('[data-capture-save]');
-        if (!button) return { error: 'no save button' };
+        if (!button) {
+          return {
+            error: 'no save button',
+            flags: probe
+              ? {
+                  list: probe.dataset.list,
+                  shown: probe.dataset.shown,
+                  covered: probe.dataset.covered,
+                  what: probe.dataset.what,
+                }
+              : null,
+            pending: (await window.ensemble.pendingLogins()).length,
+          };
+        }
         button.click();
         await new Promise((r) => setTimeout(r, 1_200));
         const snapshot = await window.ensemble.getWorkspace();

@@ -183,9 +183,16 @@ function check(name, ok, detail) {
  * finding the page after the first sign-in — and every later assertion would
  * pass because nothing happened at all.
  */
-async function pageTarget() {
+/**
+ * The embedded page's CDP target.
+ *
+ * Matched by origin rather than by path: submitting a form navigates, so the
+ * page a test wants is often no longer at the URL it opened. `port` narrows it
+ * when the suite runs more than one local server.
+ */
+async function pageTarget(port = PAGE_PORT) {
   const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-  return list.find((item) => item.url.startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+  return list.find((item) => item.url.startsWith(`http://127.0.0.1:${port}`));
 }
 
 /** Types a login into the embedded page and submits it. False if the page is gone. */
@@ -656,6 +663,91 @@ try {
         tenantB.extraFields?.some((field) => field.value === "tenant-b"),
       { pending: pending ?? [] },
     );
+  }
+
+  /*
+   * The prompt's own button, on a site the workspace has never seen.
+   *
+   * Every case above calls `saveIdentity` directly and every one of them is on a
+   * site that already exists. Both differences matter: the prompt is the only
+   * place the shell has to create the site first, and that path passed blank
+   * optional fields to the site schema, so every "save this login" failed while
+   * these tests stayed green.
+   */
+  {
+    const strangerPort = await freePort();
+    const stranger = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(`<!doctype html><html><head><meta charset="utf-8"><title>陌生站点</title></head>
+<body>
+<form id="f" action="/done" method="get">
+  <label>账号 <input id="user" name="user" type="text" /></label>
+  <label>密码 <input id="pass" name="pass" type="password" /></label>
+  <button id="submit" type="submit">登录</button>
+</form>
+</body></html>`);
+    });
+    await new Promise((done) => stranger.listen(strangerPort, "127.0.0.1", done));
+    try {
+      const url = `http://127.0.0.1:${strangerPort}/login`;
+      await client.evaluate(
+        `window.ensemble.openEmbeddedTab({ viewId: null, url: ${JSON.stringify(url)} })`,
+      );
+      await wait(1_500);
+      const target = await pageTarget(strangerPort);
+      if (!target) throw new Error("the stranger page never became a CDP target");
+      const pageClient = await connect(target.webSocketDebuggerUrl);
+      await pageClient.evaluate(`(() => {
+        const set = (selector, value) => {
+          const el = document.querySelector(selector);
+          const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+          descriptor.set.call(el, value);
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        set('#user', 'stranger@example.test');
+        set('#pass', 'pw-stranger');
+        return true;
+      })()`);
+      await wait(250);
+      await pageClient.evaluate(`document.querySelector('#submit').click()`);
+      await wait(1_000);
+      pageClient.close();
+
+      const before = await client.evaluate(`(async () => {
+        const snapshot = await window.ensemble.getWorkspace();
+        return {
+          sites: snapshot.sites.length,
+          hasSite: snapshot.sites.some((site) => site.baseUrl.includes(${strangerPort})),
+        };
+      })()`);
+      check(
+        "a login on an unknown origin has no site yet",
+        before?.hasSite === false,
+        before,
+      );
+
+      const opened = await client.evaluate(`(async () => {
+        const button = document.querySelector('[data-capture-save]');
+        if (!button) return { error: 'no save button' };
+        button.click();
+        await new Promise((r) => setTimeout(r, 1_200));
+        const snapshot = await window.ensemble.getWorkspace();
+        const dialog = document.querySelector('.modal, [role="dialog"]');
+        return {
+          dialogOpen: Boolean(dialog),
+          sites: snapshot.sites.length,
+          siteCreated: snapshot.sites.some((site) => site.baseUrl.includes(${strangerPort})),
+          errorText: dialog?.querySelector('.error, .form-error')?.textContent?.trim() ?? '',
+        };
+      })()`);
+      check(
+        "saving a login on an unknown origin creates the site and opens the account form",
+        opened?.dialogOpen === true && opened?.siteCreated === true,
+        opened,
+      );
+    } finally {
+      stranger.close();
+    }
   }
 
   client.close();

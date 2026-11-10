@@ -575,8 +575,52 @@ try {
       parkedFlag?.after === false,
     parkedFlag,
   );
-  await pressF12("a");
-  await new Promise((r) => setTimeout(r, 900));
+
+  /*
+   * Parking must not resize the page.
+   *
+   * The panel used to be hidden by shrinking its view to zero while the page
+   * grew back over the whole cell — so opening any menu made the page visibly
+   * jump wider and the panel blink out, which read as "DevTools disappeared".
+   * The page now keeps its docked width while the panel is parked, so the split
+   * is still where the user left it.
+   */
+  const heldWidth = await client.evaluate(`(async () => {
+    // The node of *this* page, not whichever <webview> comes first: several
+    // tabs are open, and an off-stage one sits at a negative x with its full
+    // width, which would make this pass without measuring the docked page.
+    const width = () => {
+      const node = document.querySelector('webview[data-tab-id="${opened.a}"]');
+      return node ? Math.round(node.getBoundingClientRect().width) : null;
+    };
+    // Make sure the page is the one on stage, or its cell is undefined and no
+    // split exists to preserve.
+    await window.ensemble.activateEmbeddedTab('${opened.a}');
+    await new Promise((r) => setTimeout(r, 600));
+    const openBefore = (await window.ensemble.getEmbeddedState()).tabs.find((t) => t.id === '${opened.a}')?.devtoolsOpen ?? null;
+    if (!openBefore) {
+      await window.ensemble.openEmbeddedDevTools('${opened.a}');
+      await new Promise((r) => setTimeout(r, 1400));
+    }
+    const openAfter = (await window.ensemble.getEmbeddedState()).tabs.find((t) => t.id === '${opened.a}')?.devtoolsOpen ?? null;
+    const pageWidth = width();
+    await window.ensemble.setDevtoolsParked(true);
+    await new Promise((r) => setTimeout(r, 400));
+    const parkedWidth = width();
+    await window.ensemble.setDevtoolsParked(false);
+    await new Promise((r) => setTimeout(r, 400));
+    return { openBefore, openAfter, pageWidth, parkedWidth, restoredWidth: width() };
+  })()`);
+  check(
+    "parking the panel leaves the page at its docked width",
+    // The docked page is narrower than its cell; without the panel it would be
+    // at the full stage width, so this only holds if the split is real.
+    heldWidth?.openAfter === true &&
+      heldWidth.pageWidth > 0 &&
+      heldWidth.parkedWidth === heldWidth.pageWidth &&
+      heldWidth.restoredWidth === heldWidth.pageWidth,
+    heldWidth,
+  );
 
   // --- F5 inside the panel reloads the page, not the front-end -------------
   //
@@ -638,6 +682,42 @@ try {
       isolated?.find((tab) => tab.id === opened.a)?.zoom === 80,
     isolated,
   );
+
+  /*
+   * Closing the tab closes its panel.
+   *
+   * The explicit close paths all resolved a tab and then tore its panel down;
+   * closing the tab itself skipped that step, so a full DevTools front-end kept
+   * running with nothing in the strip naming it and no way left to close it.
+   *
+   * Runs last: it opens a page of its own and closes it again, and inserting
+   * another tab mid-suite changes which page a flat stage shows — the reload
+   * and zoom checks above depend on that.
+   */
+  {
+    const victim = await client.evaluate(
+      `(async () => (await window.ensemble.openEmbeddedTab({ url: ${JSON.stringify(PAGE_URL)} + '?tab=victim', viewId: null })).id)()`,
+    );
+    await new Promise((r) => setTimeout(r, 1500));
+    await client.evaluate(`window.ensemble.openEmbeddedDevTools(${JSON.stringify(victim)})`);
+    await new Promise((r) => setTimeout(r, 1500));
+    const before = (await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json())
+      .filter((item) => item.url.startsWith("devtools://")).length;
+    const closed = await client.evaluate(`(async () => {
+      await window.ensemble.closeEmbeddedTab(${JSON.stringify(victim)});
+      await new Promise((r) => setTimeout(r, 900));
+      const state = await window.ensemble.getEmbeddedState();
+      return { stillListed: state.tabs.some((tab) => tab.id === ${JSON.stringify(victim)}) };
+    })()`);
+    await new Promise((r) => setTimeout(r, 800));
+    const after = (await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json())
+      .filter((item) => item.url.startsWith("devtools://")).length;
+    check(
+      "closing a tab tears down its DevTools front-end",
+      closed?.stillListed === false && after < before,
+      { devtoolsTargetsBefore: before, devtoolsTargetsAfter: after, ...closed },
+    );
+  }
 
   client.close();
 } catch (error) {

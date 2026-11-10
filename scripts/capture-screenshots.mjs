@@ -485,6 +485,15 @@ const SHOTS = [
     clicks: ["[data-app-menu]"],
   },
   {
+    // The guide's first screen. It is what a new user actually sees, so it
+    // belongs in the README next to the workbench shot rather than being
+    // described in prose.
+    name: "guide",
+    locale: "zh",
+    view: "browser",
+    clicks: ["[data-app-menu]", '[data-menu-item="guide"]'],
+  },
+  {
     name: "site-dialog",
     locale: "zh",
     view: "sites",
@@ -723,7 +732,9 @@ async function seed(userData, locale, theme = "dark") {
         lastView: "browser",
         autoFillOnLaunch: true,
         closeToTray: true,
-        guideVersion: 1,
+        // Ahead of GUIDE_VERSION on purpose: any lower number makes the guide
+        // open by itself and every screenshot becomes a picture of the dialog.
+        guideVersion: 99,
         autoCheckUpdates: false,
       },
       null,

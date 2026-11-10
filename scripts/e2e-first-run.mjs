@@ -149,12 +149,17 @@ try {
     () =>
       client.evaluate(`(() => {
         const dialog = document.querySelector('.guide-backdrop');
+        const layout = dialog?.querySelector('.diagram.workbench');
+        const path = dialog?.querySelector('ol.path');
         return {
           open: Boolean(dialog),
           title: dialog?.querySelector('.guide-title')?.textContent?.trim() ?? '',
-          // The first screen is the diagram plus the AI turn — not a list of
-          // features the user has not needed yet.
-          hasPath: Boolean(dialog?.querySelector('ol.path')),
+          // The first screen explains the window before it asks for anything.
+          hasLayout: Boolean(layout),
+          hasPath: Boolean(path),
+          layoutFirst:
+            Boolean(layout && path) &&
+            (layout.compareDocumentPosition(path) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
           sections: dialog?.querySelectorAll('.guide-nav .nav-entry').length ?? 0,
         };
       })()`),
@@ -162,6 +167,14 @@ try {
   check(
     "a fresh install opens the guide by itself",
     firstRun?.open === true && firstRun?.title.length > 0 && firstRun?.sections >= 3,
+    firstRun,
+  );
+  // The screen has to answer "what am I looking at" before "what do I do".
+  // Opening with the three steps asked a newcomer to create a site while having
+  // no idea what the left column or the stage were.
+  check(
+    "the guide explains the window layout before the three steps",
+    firstRun?.hasLayout === true && firstRun?.hasPath === true && firstRun?.layoutFirst === true,
     firstRun,
   );
 

@@ -1787,21 +1787,24 @@ try {
     // Restore the view: the rest of this suite works inside its cells.
     if (viewId) await window.ensemble.activateEmbeddedView(viewId);
     await new Promise((r) => setTimeout(r, 700));
-    const probe = [];
-    for (let n = hit; n && probe.length < 6; n = n.parentElement) {
-      probe.push(n.tagName.toLowerCase() + '.' + (n.className || '').toString().split(' ').filter(Boolean).join('.'));
+    // What was actually on top of the surface's centre, as a selector chain.
+    // "Something is covering the search box" is the whole genre of failure this
+    // assertion catches, and the element that owns the pixel is the answer — a
+    // bare `false` would send the next reader hunting through the DOM by hand.
+    const covering = [];
+    for (let n = hit; n && covering.length < 6; n = n.parentElement) {
+      covering.push(
+        n.tagName.toLowerCase() +
+          "." +
+          (n.className || "").toString().split(" ").filter(Boolean).join("."),
+      );
     }
     return {
       activeBlank: Boolean(active) && (!active.url || active.url === "about:blank"),
       surfacePresent: Boolean(surface),
       surfaceOwnsItsCentre: Boolean(hit && surface?.contains(hit)),
       restored: (await window.ensemble.getEmbeddedState()).activeViewId === viewId,
-      _probe: {
-        box: box ? [box.x, box.y, box.width, box.height].map(Math.round) : null,
-        hitChain: probe,
-        stage: (() => { const s = document.querySelector('.stage')?.getBoundingClientRect(); return s ? [s.x, s.y, s.width, s.height].map(Math.round) : null; })(),
-        window: [window.innerWidth, window.innerHeight],
-      },
+      covering,
     };
   })()`);
   check(

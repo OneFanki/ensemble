@@ -111,7 +111,7 @@ function dismiss(notice: LoginCaptureNotice): void {
           {{ siteNameOf(head) ?? head.origin }} · {{ head.username }}
         </p>
       </div>
-      <AppButton variant="primary" @click="save(head)">
+      <AppButton variant="primary" data-capture-save @click="save(head)">
         {{ t("app.loginCaptureSave") }}
       </AppButton>
       <IconButton

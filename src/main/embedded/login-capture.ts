@@ -150,6 +150,20 @@ export class LoginCaptureStore {
     return entry;
   }
 
+  /**
+   * Puts a taken entry back after the write that took it failed.
+   *
+   * The password exists in exactly one place — this map — and the page never
+   * sends it again. A failed vault write or a rejected draft would therefore
+   * destroy the only copy, leaving "save this login" permanently unable to save
+   * that account until the user signs in again. Restoring keeps the retry
+   * possible; the original `capturedAt` is kept so the TTL still expires it
+   * rather than granting a fresh window.
+   */
+  restore(entry: CapturedLogin): void {
+    if (!this.pending.has(entry.token)) this.pending.set(entry.token, entry);
+  }
+
   discard(token: string): void {
     this.pending.delete(token);
   }

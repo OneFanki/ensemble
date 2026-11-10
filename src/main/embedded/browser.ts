@@ -2497,6 +2497,18 @@ export class EmbeddedBrowser {
   private discardTab(tab: TabRecord): void {
     const index = this.tabs.indexOf(tab);
     if (index >= 0) this.tabs.splice(index, 1);
+    /*
+     * The panel goes with its page.
+     *
+     * `dropDevTools` used to be reachable only from the explicit close paths —
+     * the key, the toolbar row, the title band's button. Closing the *tab* is
+     * not one of them, so the panel's `WebContentsView` survived: the tab was
+     * gone from the strip while a full DevTools front-end stayed alive and kept
+     * painting wherever it had last been placed. Nothing would ever close it,
+     * because every path that could find it looked up a tab that no longer
+     * existed.
+     */
+    this.dropDevTools(tab);
     this.aiActiveUntil.delete(tab.id);
     this.frozenTabs.delete(tab.id);
     this.stagedTabs.delete(tab.id);
@@ -3895,13 +3907,19 @@ export class EmbeddedBrowser {
     const devtools = tab.devtools;
     if (!devtools) return;
     delete tab.devtools;
-    const contents = tab.view.webContents;
+    // Closing a tab can arrive while the page's already going away, so every
+    // step here tolerates a dead surface: the panel still has to be released.
     try {
-      if (!contents.isDestroyed()) contents.closeDevTools();
+      const contents = tab.view?.webContents;
+      if (contents && !contents.isDestroyed()) contents.closeDevTools();
     } catch {
-      // The page may be gone already; the panel still has to be released.
+      // The page is gone; the panel below is what still needs tearing down.
     }
-    this.host?.contentView.removeChildView(devtools.view);
+    try {
+      this.host?.contentView.removeChildView(devtools.view);
+    } catch {
+      // The window may be closing; the front-end is closed next either way.
+    }
     if (!devtools.view.webContents.isDestroyed()) devtools.view.webContents.close();
   }
 
@@ -3928,7 +3946,7 @@ export class EmbeddedBrowser {
     // `setDevtoolsParked`), or the next layout pass would resurface the panel
     // right through the menu.
     if (this.devtoolsParked) {
-      this.parkDevTools(tab);
+      this.parkDevTools(tab, true);
       return;
     }
     let rect = this.cellOf(tab);
@@ -3944,8 +3962,7 @@ export class EmbeddedBrowser {
       this.parkDevTools(tab);
       return;
     }
-    const split = Math.round(rect.width * (1 - devtools.width));
-    const left = Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
+    const left = this.splitWidth(rect, devtools.width);
     tab.view.setBounds({ ...rect, width: left });
     /*
      * The panel gives up a band at its top for the app's own title strip.
@@ -3969,11 +3986,36 @@ export class EmbeddedBrowser {
     devtools.view.webContents.invalidate();
   }
 
-  /** Keeps a panel out of sight without tearing it down. */
-  private parkDevTools(tab: TabRecord): void {
+  /**
+   * The width the page keeps when its panel is docked beside it.
+   *
+   * Shared by `placeDevTools` (which splits the cell) and `parkDevTools` (which
+   * hides the panel but must leave the page where it is), so the two can never
+   * disagree about where the split falls.
+   */
+  private splitWidth(rect: StageRect, width: number): number {
+    const split = Math.round(rect.width * (1 - width));
+    return Math.max(1, split - Math.round(EMBEDDED_DEVTOOLS_GRIP / 2));
+  }
+
+  /**
+   * Keeps a panel out of sight without tearing it down.
+   *
+   * `holdPage` keeps the page at its docked width instead of letting it grow
+   * back over the space the panel still owns. Without that, opening any floating
+   * layer (a menu, the downloads panel) made the page visibly jump wider and the
+   * panel blink out — which reads as "DevTools disappeared", not as "a menu
+   * opened". The panel is still hidden, because a native view cannot be covered
+   * by renderer HTML; what changes is that the layout holds still while it is.
+   */
+  private parkDevTools(tab: TabRecord, holdPage = false): void {
     const devtools = tab.devtools;
     if (!devtools) return;
     devtools.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    if (!holdPage) return;
+    const rect = this.cellOf(tab);
+    if (!rect) return;
+    tab.view.setBounds({ ...rect, width: this.splitWidth(rect, devtools.width) });
   }
 
   /**
@@ -3990,7 +4032,10 @@ export class EmbeddedBrowser {
     this.devtoolsParked = parked;
     for (const tab of this.tabs) {
       if (!tab.devtools) continue;
-      if (parked) this.parkDevTools(tab);
+      // Holding the page at its docked width while parked is what makes the
+      // panel read as "stepped aside" rather than "vanished and took the split
+      // with it": the layer covers the panel's old spot while the page stays put.
+      if (parked) this.parkDevTools(tab, true);
       else this.placeDevTools(tab);
     }
   }

@@ -2503,7 +2503,18 @@ function registerIpc(workspace: WorkspaceService): void {
     // below is what the form reads to report whether a password is stored.
     // Returning before the write landed made a saved capture look like an
     // account without a password.
-    await workspace.saveIdentity(merged, password ?? captured?.password);
+    try {
+      await workspace.saveIdentity(merged, password ?? captured?.password);
+    } catch (error) {
+      // Hand the capture back before surfacing the failure. The password lives
+      // only in `captured`; without this, one rejected write would retire the
+      // prompt and lose the secret, so the account could never be saved from it.
+      if (captured) {
+        loginCaptures.restore(captured);
+        sendPendingLogins();
+      }
+      throw error;
+    }
     broadcastWorkspace();
     // The saved entry leaves the pending list; the bar and the panel read the
     // same list, so both stop offering it.

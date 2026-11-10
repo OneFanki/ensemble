@@ -669,8 +669,10 @@ async function createSiteFromCapture(
     name: host,
     baseUrl: notice.origin,
     loginPath: notice.path || "/",
-    authCheckPath: "",
-    authCheckSignedOut: "",
+    // Omitted rather than empty: the schema rejects a present-but-blank check
+    // field, and the site dialog has always dropped blanks for that reason. This
+    // path went around the dialog and passed `""`, which failed validation and
+    // made "save this login" the one save that never worked.
     autoSubmit: undefined,
     tagIds: [],
   });

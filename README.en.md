@@ -91,7 +91,11 @@ real browser — a separate path, triggered explicitly.
 
 Site 1—N identities, site 1—N views. A view is optional: without one the surface behaves like a plain browser, and views are created explicitly from the running dock. Isolation is unchanged — one profile per identity, sessions never cross sites — but the site is no longer a global filter: the identities page groups every account by site, and a view may span several. One tag namespace is shared by sites, accounts and views, and an account also matches its site's tags.
 
-The first launch opens a **guide** on its own: one page that covers the three steps (site → account → launch) and the fact that an AI can do all of them. Close it and it stays closed; reopen it from the app menu in the toolbar whenever you like.
+The first launch opens a **guide** on its own: it explains what the window is first — the workbench on the left, the stage on the right — then the three-step path (site → account → launch), and finally what an AI can do instead. Close it and it stays closed; reopen it from the app menu in the toolbar whenever you like.
+
+<p align="center">
+  <img src="docs/screenshots/guide.png" alt="The guide's first screen: the workbench and stage layout, then the three-step path" width="900" />
+</p>
 
 **The browser is the default page.** The address bar and slot headers sit on top, live pages below, and the running dock occupies the upper half of the left column, listing which accounts are open and in which slot; below it in the same column are the navigation entries — browser, bookmarks, sites, identities, views, flows, tags, with Settings alone at the bottom. Picking any of them swaps the content area for that page; picking the browser returns to the pages themselves. With the column hidden the window is a plain browser. The grid glyph at the left of the tab strip is that column's switch — opening it puts you in the workbench, collapsing it leaves a plain browser — and it only shows or hides the column, never changing how many cells the stage is split into.
 

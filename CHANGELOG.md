@@ -10,18 +10,23 @@
 ### 中文
 
 - 书签或地址栏进入的网站登录后，提示「保存账号」会当场建好站点与独立身份，并直接以该身份启动。
+- 修好「保存账号」点了报错：在还没建过站点的网站上登录时，点提示条里的保存会校验失败、账号存不进去。现在能正常建站点并打开账号表单；万一保存仍然失败，密码会留在待保存列表里，不会随着一次报错丢掉。
+- 首次打开的使用指南重排：先讲这个窗口是什么——左边工作台、右边舞台，配一张结构示意——再说「建站点 → 录账号 → 启动」这条最短路径，最后才是 AI 能代做哪些事。
 - 关掉存账号提示不再丢密码：捕获会记进消息中心，随时回去保存，不必退出重登。
 - 多租户站点（租户名 + 用户名 + 密码）现在能正确识别账号：租户名随账号一起保存，同一用户名在不同租户下各算一个账号。
 - 打开会跳转的站点不再白等 10 秒；普通表单提交、以及提交后清空输入框的登录页，也都能弹出存账号提示。
 - 新增**消息中心**：登录捕获、账号问题、AI 操作三类记录统一留档，重启后仍在；每条都能直接处理——保存账号、重新登录、跳到 AI 动过的那一页。侧栏有入口，工具栏铃铛显示未读数。
 - 工具栏收窄：开发者工具与 AI 接入移入右上角应用菜单，低频入口不再和常用控件挤在一行；菜单里开发者工具带勾选，AI 接入直接标出是否在跑。
 - 页面内查找改为悬浮在页面右上角，不再占一行高度把页面往下压；Ctrl+F 在界面或页面里都能唤出，打开即聚焦并选中上次的查询词。
-- 停靠的开发者工具在下拉菜单打开期间会自己让位。这次按「有没有浮层」统一判定，所有菜单都覆盖，嵌套菜单也正确——此前只有标签菜单会这样做，还传错了状态。
+- 停靠的开发者工具在下拉菜单打开期间会自己让位。这次按「有没有浮层」统一判定，所有菜单都覆盖，嵌套菜单也正确——此前只有标签菜单会这样做，还传错了状态。让位时页面不再跟着长回整格宽度，所以打开下载面板或菜单时，分屏位置停在原处，不会再像是开发者工具消失了。
+- 关掉标签页时它的开发者工具会一起关闭。此前面板前端仍在运行，标签条里却已经没有对应的页，也没有入口能关掉它。
 - **AI 能看的东西补齐了**：新增 `read_browser_console`，一次读回页面的报错、控制台输出和网络请求，读完即清空，回答「上次读取之后发生了什么」；`wait_browser` 多了 `network-idle`，等页面所有请求发完并安静下来，不用再猜要等哪个元素；读页面时每个节点带上 `parent` 与 `depth`，能看出按钮属于哪个对话框；`screenshot_browser_tab` 加 `inline`，把图像本身随结果返回，供读不到本机路径的 AI 客户端使用。
 
 ### English
 
 - Signing in on a site opened from a bookmark or the address bar now offers to save the account, creating the site and an isolated identity on the spot and launching it right away.
+- Fixed "save this login" failing on a site the workspace had not seen yet: the capture path passed blank optional fields to the site schema, so the save was rejected. It now creates the site and opens the account form, and a save that still fails leaves the password in the pending list instead of consuming it.
+- The first-run guide was reordered: it first explains what the window is — the workbench on the left, the stage on the right, with a layout diagram — then the three-step path, and only then what an AI can do instead.
 - Closing the save prompt no longer loses the capture: it is recorded in the message centre, so you can go back and save it later instead of signing in again.
 - Multi-tenant logins (tenant + user + password) are recognised properly: the tenant is saved with the account, and the same username under another tenant counts as a separate account.
 - Sites that redirect no longer stall for ten seconds on open, and plain form logins — including pages that clear the fields after submitting — now offer to save the account too.
@@ -29,6 +34,8 @@
 - The toolbar is down to the everyday controls: DevTools and AI access moved into the app menu at its right end, where the DevTools row shows a tick while it is open and the AI row states whether the endpoint is running.
 - Find in page now floats over the page at the top right instead of taking a row of its own and pushing the page down. Ctrl+F works from the chrome and from inside the page, and opening it focuses and selects the previous query.
 - A docked DevTools panel steps aside while any dropdown is open. That is now decided once, by whether a floating layer is open at all, so every menu is covered and nested menus keep the right state — before, only one menu did it, and it reported the wrong state.
+- Stepping aside no longer widens the page back over the panel's half of the split, so opening the downloads panel or a menu leaves the seam where the user put it instead of looking like DevTools vanished.
+- Closing a tab now closes its DevTools too. The front-end used to keep running with nothing in the strip naming it and no way left to close it.
 - **The AI can now see more of a page**: `read_browser_console` returns the page's errors, console output and requests in one call and clears them, so it answers "what happened since I last looked"; `wait_browser` gained `network-idle`, which waits until every request has finished and the page has gone quiet instead of guessing which element to watch; page reads now carry `parent` and `depth` per node, so a button can be attributed to the dialog it sits in; and `screenshot_browser_tab` takes `inline` to return the image itself, for clients that cannot open a local path.
 
 ## [2.0.0] - 2026-11-08

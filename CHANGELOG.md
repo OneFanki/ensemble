@@ -5,10 +5,26 @@
 
 - 准备发版时，把 `
 
-## [未发布]
+## [2.1.0] - 2026-11-10
 
 ### 中文
 
+- 修好「保存账号」的三个连带问题：点保存后不再自动打开浏览器，提示条随保存立即消失，账号表单打开期间提示条不再压在遮罩上却点不动。首次启动的指南也不再挡住它。
+- 修好启动账号后页面长时间空白、必须手动刷新才显示内容：新标签页自带的空白占位页被当成「正在显示」，盖在了真实页面上面。切页、开关视图时同一处逻辑都会犯。
+- 修好启动账号时先闪出一个新建标签页、卡几秒才加载页面：标签一创建就立刻成为前台并带上目标地址，界面从第一帧起显示的就是正在加载的页面，而不是它的前一页。站点越慢，原先这段「卡住」越长。
+- 性能监视器重排：指标名、当前值、峰值收成一行，曲线独占下一行并占满整个面板宽度。纵轴三个刻度（顶 / 半 / 底）挪到曲线左侧的窄槽里，不再和曲线抢横向空间；底部零点在窄面板下自动省略。
+- 修好性能曲线「自己缩放」：刚打开时一秒的数据被拉满整个宽度，之后每来一批样本又被压窄一次。现在横轴固定为 20 秒窗口、右端恒为当前时刻，曲线从右边缘按真实时间生长，满窗后旧样本从左边滑出，全程比例不变。
+- 消息铃铛常驻显示，未读时只标一个红点，不再显示数字——数字会把图标撑变形、和旁边图标错位。保存账号后这条通知同时标记为已读。
+- 性能监视器加上纵轴刻度、网格线与色块填充，指标里一眼能看出「到了百分之多少」而不只是「有波动」。指标顺序改为 Chrome 性能监视器的顺序：CPU → JS 堆 → DOM 节点 / 事件监听器 / 文档 / 文档帧 → 布局/秒 / 样式重算/秒；颜色按类别分组（CPU 暖色、内存紫、结构蓝、抖动粉）。
+- **移动端模拟**：停靠面板新增「设备」页，可选 iPhone 15 / iPhone SE / Pixel 8 / Galaxy S24 / iPad mini，一次带上视口尺寸、像素比、触摸与移动端 UA。切换页面、跟随链接时模拟都保持，不会翻一页就变回桌面。
+- **拖拽调尺寸**：设备页里有一个预览框，拖右下角直接改宽高，松手即应用。预览框里一格就是一 CSS 像素，数字会跟着指针走，不用猜比例。
+- **设备与尺寸分开**：「应用设备」带全套移动端身份；「只改尺寸」只钉住视口大小，页面仍认为自己在桌面（无触摸、桌面 UA），用来验 768px 这类布局。清除设备时保留尺寸，只有「自适应」才回到铺满格位。
+- **性能监视器**：新增「性能」页，指标与 Chrome/Edge 的性能监视器一致——CPU 使用率、DOM 节点、JS 事件监听器、文档、文档帧、JS 堆、布局/秒、样式重算/秒，每项配一条走势图；点一行可以只看关心的指标。采样只在面板停在这一页时进行，切走即停。
+- 性能监视器改为每秒采样 5 次，并按「距上一次的间隔」计算速率。原先每秒一次、且用「从开始到现在的总时长」当分母，把每次尖峰都摊平到整段历史里，页面上忙着布局时曲线照样是一条直线。现在 200ms 的卡顿也看得见，曲线按真实时间轴排布。
+- 修好拖动面板分栏后原生 DevTools 盖回顶部：切到设备或性能页再拖分栏时，原生前端会被重新放回面板位置，而它是原生视图，必然盖住自绘面板。
+- 缩放控件从工具栏移到两处：分辨率菜单与应用菜单，形状仍是 − 数值 +（点数值复位）。用 Ctrl + 加号/减号、Ctrl + 滚轮或 Ctrl + 0 缩放时，页面顶部会浮出当前百分比并自动消失。
+- 开发者工具顶部控制条改为三个页签：前端（原生 DevTools）、设备、性能。页签窄到放不下文字时只留图标，悬停给出名称。
+- 面板分栏改按格位计算，选手机尺寸后不会再把自己的面板挤成一百多像素宽。
 - 书签或地址栏进入的网站登录后，提示「保存账号」会当场建好站点与独立身份，并直接以该身份启动。
 - 修好「保存账号」点了报错：在还没建过站点的网站上登录时，点提示条里的保存会校验失败、账号存不进去。现在能正常建站点并打开账号表单；万一保存仍然失败，密码会留在待保存列表里，不会随着一次报错丢掉。
 - 首次打开的使用指南重排：先讲这个窗口是什么——左边工作台、右边舞台，配一张结构示意——再说「建站点 → 录账号 → 启动」这条最短路径，最后才是 AI 能代做哪些事。
@@ -24,6 +40,22 @@
 
 ### English
 
+- Three fixes to "save account": saving no longer opens a browser on its own, the prompt disappears with the save, and it no longer sits over the dialog mask where it could be seen but not clicked. The first-run guide no longer hides it either.
+- Fixed a launched account sitting on a blank page until a manual refresh: the empty placeholder page every new tab starts with was counted as "on screen" and covered the real page. The same comparison was used when switching pages and views.
+- Fixed a launched account flashing a new tab for as long as the site takes to respond: the tab is now the foreground page from the moment it is created and already carries its destination, so the first frame shows a page that is loading rather than the one before it.
+- The performance monitor was rearranged: name, current value and peak share one line, and the chart owns the line below at the panel's full width. The three axis labels (top / half / zero) moved into a narrow gutter left of the plot instead of competing with it for horizontal space; the zero label drops out in a narrow panel.
+- Fixed the performance curve appearing to zoom by itself: a freshly opened panel stretched one second of data across the whole width and then squeezed it again with every batch of samples. The x axis is now a fixed 20-second window whose right edge is always "now" — the curve grows leftwards from the right edge in real time, and once full the oldest samples slide off the left, so the scale never changes.
+- The message bell is always visible and marks unread news with a red dot instead of a number — a number widened the button and pushed it out of line with the icons beside it. Saving an account now also marks that notice read.
+- The performance monitor gained a vertical scale, gridlines and a filled area, so a lane answers "at what percentage" instead of just "it moved". Metrics now follow Chrome's performance monitor order: CPU → JS heap → DOM nodes / listeners / documents / frames → layouts/s / style recalcs/s, with colour grouped by category (heat, memory, structure, churn).
+- **Mobile emulation**: the docked panel gained a Device tab with iPhone 15, iPhone SE, Pixel 8, Galaxy S24 and iPad mini — viewport size, pixel ratio, touch and a mobile UA in one click. The emulation survives navigation, so following a link no longer drops the page back to desktop.
+- **Drag to resize**: the Device tab has a preview box whose bottom-right corner drags the width and height, applying on release. One preview pixel is one CSS pixel, so the number tracks the pointer rather than a scale factor you have to guess.
+- **Device and size are separate choices**: Apply device carries the full mobile identity; Size only pins the viewport while the page still believes it is a desktop (no touch, desktop UA), which is what checking a 768px layout needs. Clearing a device keeps its size — only adaptive goes back to filling the cell.
+- **Performance monitor**: a new Performance tab with the same metrics as Chrome's and Edge's performance monitor — CPU usage, DOM nodes, JS event listeners, documents, document frames, JS heap, layouts/s and style recalcs/s — each with its own sparkline. Clicking a row hides that metric. Sampling only runs while the tab is showing.
+- The performance monitor now samples five times a second and derives each rate from the gap since the previous reading. At one sample a second, divided by the total elapsed time, every spike was averaged into the whole run and the chart was a flat line while the page was visibly busy. A 200ms stutter is now visible, and points are spaced by real time.
+- Fixed the native DevTools panel reappearing over the Device and Performance tabs when the split was dragged: it is a native view, so being written back into place put it on top of our own panel.
+- Zoom moved out of the toolbar into two places — the viewport menu and the app menu — keeping the − value + shape (click the number to reset). Ctrl + plus/minus, Ctrl + wheel and Ctrl + 0 raise a transient overlay with the new percentage, which fades on its own.
+- The DevTools top strip is now three tabs: front-end (the native panel), device and performance. When the panel is too narrow for labels the tabs keep only their icons, with the name on hover.
+- The panel's share of the split is now measured from the cell, so choosing a phone no longer squeezes the panel itself down to a hundred-odd pixels.
 - Signing in on a site opened from a bookmark or the address bar now offers to save the account, creating the site and an isolated identity on the spot and launching it right away.
 - Fixed "save this login" failing on a site the workspace had not seen yet: the capture path passed blank optional fields to the site schema, so the save was rejected. It now creates the site and opens the account form, and a save that still fails leaves the password in the pending list instead of consuming it.
 - The first-run guide was reordered: it first explains what the window is — the workbench on the left, the stage on the right, with a layout diagram — then the three-step path, and only then what an AI can do instead.

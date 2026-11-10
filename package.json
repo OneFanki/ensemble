@@ -1,6 +1,6 @@
 {
   "name": "ensemble",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "A multi-account browser for development and testing: every account of one system, signed in at once.",
   "license": "MIT",
@@ -79,7 +79,8 @@
     "e2e:mcp-tools": "node scripts/e2e-mcp-tools.mjs",
     "e2e:minimize": "node scripts/e2e-minimize.mjs",
     "e2e:all": "node scripts/run-all-e2e.mjs",
-    "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs"
+    "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs",
+    "e2e:devtools-panels": "node scripts/e2e-devtools-panels.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

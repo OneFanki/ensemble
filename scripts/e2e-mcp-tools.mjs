@@ -40,6 +40,32 @@ const page = createServer((req, res) => {
     }, ms);
     return;
   }
+  // A page that really works: layout thrash on a timer, so the performance tool
+  // has something to measure. Without it every metric reads as a flat zero and
+  // the assertion would pass on a sampler that never sampled.
+  if (url.startsWith("/busy")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html><html><head><meta charset="utf-8"><title>busy</title>
+<style>body{margin:0;font-family:system-ui}i{display:block}</style></head>
+<body><h1 id="head">busy</h1><div id="box"></div>
+<script>
+  // Forced synchronous layout plus restyles, repeatedly. This is the shape of
+  // work that shows up as CPU and as layouts/s — measuring an idle page would
+  // prove nothing.
+  var box = document.getElementById("box");
+  setInterval(function () {
+    for (var i = 0; i < 250; i += 1) {
+      var node = document.createElement("i");
+      node.textContent = "x" + i;
+      node.style.height = (i % 9) + "px";
+      box.appendChild(node);
+      box.getBoundingClientRect();
+    }
+    while (box.childElementCount > 300) box.firstElementChild.remove();
+  }, 60);
+</script></body></html>`);
+    return;
+  }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>应用 ${url}</title>
 <style>body{margin:0;font-family:system-ui}h1{padding:10px;background:#2563eb;color:#fff;margin:0}
@@ -381,6 +407,48 @@ try {
     (v) => v?.done === true && v.spent >= 800,
   );
   record("idle landed after the request finished, not before", settled.ok, settled.value);
+
+  // ---- performance: the page's real cost, as a summary a model can act on
+  const busyTab = await call("open_browser_tab", { url: `${BASE}/busy` });
+  const busyTabId = busyTab?.id;
+  record("a page that really works was opened for measurement", Boolean(busyTabId), busyTab?.url);
+  const measured = await tool(
+    "measure_browser_performance",
+    { tabId: busyTabId, durationMs: 1200 },
+    (v) =>
+      v?.samples >= 3 &&
+      v?.metrics?.cpu?.max > 0 &&
+      // The page thrashes layout on purpose: if layouts/s stays at zero, the
+      // sampler is reporting a real page as idle.
+      v?.metrics?.layouts?.max > 0 &&
+      typeof v?.metrics.cpu.maxAt === "number" &&
+      v.metrics.cpu.maxAt <= 1200,
+  );
+  record("the measurement reports real CPU and layout work", measured.ok, measured.value?.metrics);
+
+  // Consecutive calls must continue the window instead of restarting it: the
+  // second read covers what happened while the first was fresh, which is what
+  // makes "measure, click, measure" see the click.
+  await wait(700);
+  const remeasured = await tool(
+    "measure_browser_performance",
+    { tabId: busyTabId, durationMs: 900 },
+    (v) => v?.samples >= 2 && v?.metrics?.cpu?.max >= 0,
+  );
+  record("a second measurement continues rather than starting over", remeasured.ok, {
+    samples: remeasured.value?.samples,
+    from: remeasured.value?.from,
+    to: remeasured.value?.to,
+  });
+  const series = await tool(
+    "read_browser_performance",
+    { tabId: busyTabId },
+    (v) => Array.isArray(v) && v.length >= 2 && v.every((s) => typeof s.cpu === "number"),
+  );
+  record("the raw series is readable for a caller that wants the points", series.ok, {
+    points: series.value?.length,
+  });
+  await tool("close_browser_tab", { tabId: busyTabId }, (v) => v !== undefined);
 
   await tool("check_element_visible", { tabId, label: "备注" }, (v) => typeof v === "object");
   await tool("evaluate_browser_page", { tabId, expression: "document.title" }, (v) => typeof v === "string");

@@ -1790,7 +1790,8 @@ try {
     // What was actually on top of the surface's centre, as a selector chain.
     // "Something is covering the search box" is the whole genre of failure this
     // assertion catches, and the element that owns the pixel is the answer — a
-    // bare `false` would send the next reader hunting through the DOM by hand.
+    // bare boolean would send the next reader hunting through the DOM by hand.
+    // (No backticks in this comment: it lives inside a template literal.)
     const covering = [];
     for (let n = hit; n && covering.length < 6; n = n.parentElement) {
       covering.push(

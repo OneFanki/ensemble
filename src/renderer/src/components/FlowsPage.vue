@@ -281,7 +281,10 @@ async function saveDraft() {
           :all-collapsed="allCollapsed"
           @toggle="groupCollapse.toggleAll(groupKeys)"
         />
-        <AppButton variant="primary" :disabled="!store.sites.length"
+        <!-- The empty state below carries this action, next to the sentence that
+             explains it. One page with the same button in both places asks the
+             user which one is the real one. -->
+        <AppButton v-if="flows.length" variant="primary" :disabled="!store.sites.length"
           :title="store.sites.length ? '' : $t('app.flowNoSite')"
           @click="openEditor()">
           <Plus :size="13" />
@@ -292,9 +295,9 @@ async function saveDraft() {
 
     <!--
       With no site, "new flow" cannot be the suggestion: a flow has to belong to
-      one, so the button would only ever be inert. Point at the thing that is
-      actually missing instead, and give the header's button the reason it is
-      disabled as its tooltip.
+      one, so the button would only ever be inert. The empty state points at the
+      thing that is actually missing instead, which is also why it is the only
+      place the action appears while there is nothing to list.
     -->
     <div v-if="!flows.length" class="empty">
       <ListChecks :size="22" />

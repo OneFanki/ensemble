@@ -176,11 +176,13 @@ import IconButton from "./ui/IconButton.vue";
 
     <div class="page-body">
       <!--
-        Creating a tag is a form, and a form reads as one: a bounded box rather
-        than an input stretched across the full page width with its controls
-        scattered to the far edges. The old row also put the swatches and the
-        button on the same line as a 1000px-wide field, which made a one-word
-        action look like a toolbar.
+        One row: name, colour, create.
+
+        The controls were stacked in a narrow card, which put the create button
+        below the field it commits and left the rest of the pane empty. A tag is
+        a name and a colour — two short values — so they read as one line, and
+        the action closes that line at the column's right edge, where every other
+        page's primary action sits.
       -->
       <form class="create" @submit.prevent="createTag">
         <label class="create-field">
@@ -192,26 +194,24 @@ import IconButton from "./ui/IconButton.vue";
             @keydown.enter.prevent="createTag"
           />
         </label>
-        <div class="create-row">
-          <div class="create-colors">
-            <span class="create-label">{{ $t("app.tagColor") }}</span>
-            <span class="color-row">
-              <button
-                v-for="color in TAG_COLORS"
-                :key="color"
-                type="button"
-                class="color-dot"
-                :class="{ picked: newTagColor === color }"
-                :style="{ background: `var(--role-${color})` }"
-                :aria-label="color"
-                @click="newTagColor = color"
-              ></button>
-            </span>
-          </div>
-          <AppButton variant="primary" type="submit">
-            {{ $t("app.tagCreate") }}
-          </AppButton>
+        <div class="create-colors">
+          <span class="create-label">{{ $t("app.tagColor") }}</span>
+          <span class="color-row">
+            <button
+              v-for="color in TAG_COLORS"
+              :key="color"
+              type="button"
+              class="color-dot"
+              :class="{ picked: newTagColor === color }"
+              :style="{ background: `var(--role-${color})` }"
+              :aria-label="color"
+              @click="newTagColor = color"
+            ></button>
+          </span>
         </div>
+        <AppButton class="create-submit" variant="primary" type="submit">
+          {{ $t("app.tagCreate") }}
+        </AppButton>
       </form>
       <p v-if="tagError" class="error">{{ tagError }}</p>
 
@@ -295,15 +295,21 @@ import IconButton from "./ui/IconButton.vue";
 </template>
 
 <style scoped>
-/* One bounded form, not a stretched row: the name field keeps a readable
-   measure and the two controls below it are grouped by what they set. */
+/*
+ * The create row, full width like the list under it.
+ *
+ * It used to be a 720px card with the controls stacked, while sites, accounts
+ * and views filled the pane: the page read as a card pinned to the top-left with
+ * a third of the width left empty, so switching to it felt like the layout had
+ * shifted. A tag is a name and a colour, so the two read as one line, and the
+ * action closes that line at the column's right edge — the same right edge the
+ * header action sits on everywhere else.
+ */
 .create {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  /* One measure shared with the list below: two shapes of different widths
-     stacked in the same column read as two unrelated pages. */
-  max-width: 720px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-6);
   padding: var(--space-5) var(--space-6);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
@@ -314,6 +320,14 @@ import IconButton from "./ui/IconButton.vue";
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  /*
+   * Narrow on purpose. A tag name is a word or two, and a field stretched across
+   * the whole card is a 700px box for a four-character value — the row stops
+   * reading as a form and starts reading as a toolbar. It still shrinks on a
+   * narrow window, where the action wraps under it.
+   */
+  flex: 0 1 320px;
+  min-width: 0;
 }
 
 .create-field > span,
@@ -323,20 +337,16 @@ import IconButton from "./ui/IconButton.vue";
   color: var(--faint);
 }
 
-.create-row {
-  display: flex;
-  align-items: flex-end;
-  /* The create button follows the swatches, not the far edge of the card. Pushed
-     apart by `space-between`, a 40px action sat ~300px from the colour it acts
-     on and read as belonging to nothing. */
-  justify-content: flex-start;
-  gap: var(--space-6);
-}
-
 .create-colors {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* Pushed to the row's right edge: the form footer's commit side. */
+.create-submit {
+  margin-left: auto;
 }
 
 .create input {
@@ -394,21 +404,6 @@ import IconButton from "./ui/IconButton.vue";
   min-width: 60px;
 }
 
-/* Every page carries its own copy of the button skin; this component is
-   rendered inside SettingsPage, whose scoped styles do not reach it. */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius);
-  padding: 6px 10px;
-  font-size: 11px;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
 .error {
   margin: 0;
   font-size: 11px;
@@ -421,9 +416,6 @@ import IconButton from "./ui/IconButton.vue";
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   overflow: hidden;
-  /* Same measure as the form above it. A 420px create card followed by a
-     full-window list made the two look like they belonged to different pages. */
-  max-width: 720px;
 }
 
 .row {

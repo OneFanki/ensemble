@@ -123,7 +123,9 @@ import IconButton from "./ui/IconButton.vue";
           :all-collapsed="allCollapsed"
           @toggle="groupCollapse.toggleAll(groupKeys)"
         />
-        <AppButton variant="primary" @click="emit('newSite')">
+        <!-- Carried by the empty state below while there is nothing to list, so
+             the action sits with the sentence that explains it. -->
+        <AppButton v-if="sites.length" variant="primary" @click="emit('newSite')">
           <Plus :size="13" />
           {{ $t("app.newSite") }}
         </AppButton>

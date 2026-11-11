@@ -338,7 +338,10 @@ async function confirmCopy(): Promise<void> {
   <section class="page views">
     <PageHeader :title="$t('app.views')">
       <template #actions>
+        <!-- Carried by the empty state below while there is nothing to list, so
+             the action sits with the sentence that explains it. -->
         <AppButton
+          v-if="store.views.length"
           variant="primary"
           :disabled="!store.identities.length"
           :title="store.identities.length ? '' : $t('app.emptyViewsNoIdentity')"

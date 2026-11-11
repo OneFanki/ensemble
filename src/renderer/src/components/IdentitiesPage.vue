@@ -403,7 +403,11 @@ function extraFacts(identity: Identity): string[] {
         <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
       </template>
       <template #actions>
-        <AppButton variant="primary" @click="emit('newIdentity')">
+        <!-- With no accounts at all, the empty state below carries this action
+             beside the sentence that explains it; showing it here as well is the
+             same button twice on one page. Filtered-to-nothing still keeps it:
+             there the remedy is not to create another account. -->
+        <AppButton v-if="store.identities.length" variant="primary" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
         </AppButton>

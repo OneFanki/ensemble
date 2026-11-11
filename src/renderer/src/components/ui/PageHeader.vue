@@ -51,15 +51,20 @@ defineProps<{
   flex: 0 0 auto;
   padding-bottom: var(--space-6);
   /*
-   * Keep the actions out from under the window's own buttons.
+   * No inset for the window's own buttons, deliberately.
    *
-   * They are painted over the top-right corner of the client area on Windows,
-   * and this row is the topmost thing on a management page — the right-hand
-   * action was being clipped in half by them. The page already insets 28px, so
-   * only the remainder of the caption width has to be reserved here; measured
-   * rather than guessed, so a different caption size does not reintroduce it.
+   * The shell already reserves their band with a 34px strip above the page, so
+   * this row starts below the caption whatever the page's own padding is. An
+   * earlier version subtracted the caption width here as well — that kept the
+   * action clear of buttons it could no longer reach, and pushed it 110px left
+   * of the content below: every page's primary action floated in the middle of
+   * the width while its list ran to the pane edge.
+   *
+   * The subtraction also quietly assumed the page's side padding was 28px, so
+   * on the messages page (20px) it was wrong by 8px even when it applied.
+   * Reserving the band once, in the shell, is what makes this row align with
+   * the content at every padding.
    */
-  padding-right: max(0px, calc(var(--window-controls-width, 0px) - 28px));
 }
 
 /* Let the copy shrink so buttons keep their intrinsic width. Without this the

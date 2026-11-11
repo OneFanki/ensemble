@@ -563,7 +563,7 @@ function onDropOnNothing(): void {
           </AppButton>
           <AppButton @click="stopPicking">{{ t("app.cancel") }}</AppButton>
         </template>
-        <template v-else>
+        <template v-else-if="bookmarks.length || folders.length">
           <AppButton @click="startPicking">{{ t("app.bookmarksPickMode") }}</AppButton>
           <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
           <AppButton @click="openNewFolder(selected.kind === 'folder' ? selected.id : undefined)">
@@ -575,6 +575,8 @@ function onDropOnNothing(): void {
             {{ t("app.bookmarksPageNew") }}
           </AppButton>
         </template>
+        <!-- Fully empty: the empty state below owns both ways to start, so
+             nothing is repeated up here. -->
       </template>
     </PageHeader>
 

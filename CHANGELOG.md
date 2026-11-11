@@ -5,7 +5,7 @@
 
 - 准备发版时，把 `
 
-## [2.2.0] - 2026-11-11
+## [2.1.0] - 2026-11-11
 
 ### 中文
 
@@ -13,15 +13,20 @@
 - 修好启动账号后页面长时间空白、必须手动刷新才显示内容：新标签页自带的空白占位页被当成「正在显示」，盖在了真实页面上面。切页、开关视图时同一处逻辑都会犯。
 - 修好启动账号时先闪出一个新建标签页、卡几秒才加载页面：标签一创建就立刻成为前台并带上目标地址，界面从第一帧起显示的就是正在加载的页面，而不是它的前一页。站点越慢，原先这段「卡住」越长。
 - 性能监视器重排：指标名、当前值、峰值收成一行，曲线独占下一行并占满整个面板宽度。纵轴三个刻度（顶 / 半 / 底）挪到曲线左侧的窄槽里，不再和曲线抢横向空间；底部零点在窄面板下自动省略。
-- 修好性能曲线「自己缩放」：刚打开时一秒的数据被拉满整个宽度，之后每来一批样本又被压窄一次。现在横轴固定为 20 秒窗口、右端恒为当前时刻，曲线从右边缘按真实时间生长，满窗后旧样本从左边滑出，全程比例不变。
-- **性能采集区间与采样间隔可调**：设置页里能把横轴区间在 5 秒–2 分钟之间、采样间隔在 100ms–2 秒之间挑。查一次卡顿用窄窗口配细间隔（每一秒占更多像素），看内存慢涨用长窗口配粗间隔。面板当场跟随，不用重启。
+- 修好性能曲线「自己缩放」：刚打开时一秒的数据被拉满整个宽度，之后每来一批样本又被压窄一次。现在横轴固定为窗口长度、右端恒为当前时刻，曲线从右边缘按真实时间生长，满窗后旧样本从左边滑出，全程比例不变。
+- **采集区间与采样间隔都在性能面板表头调**：区间 10 秒–2 分钟、间隔 100ms–1 秒，改完当场生效，不用离开正在测的页面；设置页里那两行已去掉。查一次卡顿用窄窗口配细间隔（每一秒占更多像素），看内存慢涨用长窗口配粗间隔。
+- 曲线不再整行 hover 变暗：变暗会让曲线本身看起来在变，而 hover 提示的位置其实是左上角的指标名。
 - 修好性能读数的一个系统性偏低：每次开始采样时的第一个读数没有上一个计数可差分，速率其实是「未知」，此前被当成 0 计入统计。窗口短的时候这个假 0 能占掉一半——两个样本的窗口会把繁忙页面的 CPU 报成只有真实值的一半。
 - 消息铃铛常驻显示，未读时只标一个红点，不再显示数字——数字会把图标撑变形、和旁边图标错位。保存账号后这条通知同时标记为已读。
+- **地址栏旁的消息铃铛改为原地展开浮层**：列出最近几条，点任一条在旁边再浮出一层详情——完整内容、时间，以及它能做的事（保存账号 / 重新登录 / 查看页面）或它为什么失效；底部还有「查看全部消息」进消息中心。两层都是浮层：展开一条不会把下面几条往下推，列表始终停在原处。消息中心页点行同样是浮层，行内不再堆按钮。消息中心与浮层每次呈现都重读历史，失效的行不再显示点了没用的按钮。此前点铃铛直接切到消息页，而消息页没有入口回到刚才那一页——只为瞥一眼消息就要丢掉正在看的页面。
+- **管理页的页头按钮与内容重新对齐**：页头曾被多留了一整条窗口按钮的宽度，主按钮比下面的列表/卡片右缘左缩 100 多像素，右侧看上去空了一大块；页面也就显得歪。现在页头动作与内容共用同一条右边缘。
+- **空列表只留一个新建按钮**：流程、站点、视图、身份、书签在没有内容时，页头和空状态各有一个同样的按钮。现在空状态下只在说明文字旁边留一个，有内容时回到页头。
+- 标签页不再是缩在左上角的窄卡片：创建表单与列表都铺满内容宽度，名称、颜色、创建排成一行，创建按钮落在右缘。
 - 性能监视器加上纵轴刻度、网格线与色块填充，指标里一眼能看出「到了百分之多少」而不只是「有波动」。指标顺序改为 Chrome 性能监视器的顺序：CPU → JS 堆 → DOM 节点 / 事件监听器 / 文档 / 文档帧 → 布局/秒 / 样式重算/秒；颜色按类别分组（CPU 暖色、内存紫、结构蓝、抖动粉）。
 - **移动端模拟**：停靠面板新增「设备」页，可选 iPhone 15 / iPhone SE / Pixel 8 / Galaxy S24 / iPad mini，一次带上视口尺寸、像素比、触摸与移动端 UA。切换页面、跟随链接时模拟都保持，不会翻一页就变回桌面。
 - **拖拽调尺寸**：设备页里有一个预览框，拖右下角直接改宽高，松手即应用。预览框里一格就是一 CSS 像素，数字会跟着指针走，不用猜比例。
 - **设备与尺寸分开**：「应用设备」带全套移动端身份；「只改尺寸」只钉住视口大小，页面仍认为自己在桌面（无触摸、桌面 UA），用来验 768px 这类布局。清除设备时保留尺寸，只有「自适应」才回到铺满格位。
-- **性能监视器**：新增「性能」页，指标与 Chrome/Edge 的性能监视器一致——CPU 使用率、DOM 节点、JS 事件监听器、文档、文档帧、JS 堆、布局/秒、样式重算/秒，每项配一条走势图；点一行可以只看关心的指标。采样只在面板停在这一页时进行，切走即停。
+- **性能监视器**：新增「性能」页，指标与 Chrome/Edge 的性能监视器一致——CPU 使用率、DOM 节点、JS 事件监听器、文档、文档帧、JS 堆、布局/秒、样式重算/秒，每项配一条走势图；点指标名可以只看关心的几项。采样只在面板停在这一页时进行，切走即停。
 - 性能监视器改为每秒采样 5 次，并按「距上一次的间隔」计算速率。原先每秒一次、且用「从开始到现在的总时长」当分母，把每次尖峰都摊平到整段历史里，页面上忙着布局时曲线照样是一条直线。现在 200ms 的卡顿也看得见，曲线按真实时间轴排布。
 - 修好拖动面板分栏后原生 DevTools 盖回顶部：切到设备或性能页再拖分栏时，原生前端会被重新放回面板位置，而它是原生视图，必然盖住自绘面板。
 - 缩放控件从工具栏移到两处：分辨率菜单与应用菜单，形状仍是 − 数值 +（点数值复位）。用 Ctrl + 加号/减号、Ctrl + 滚轮或 Ctrl + 0 缩放时，页面顶部会浮出当前百分比并自动消失。
@@ -50,15 +55,20 @@
 - Fixed a launched account sitting on a blank page until a manual refresh: the empty placeholder page every new tab starts with was counted as "on screen" and covered the real page. The same comparison was used when switching pages and views.
 - Fixed a launched account flashing a new tab for as long as the site takes to respond: the tab is now the foreground page from the moment it is created and already carries its destination, so the first frame shows a page that is loading rather than the one before it.
 - The performance monitor was rearranged: name, current value and peak share one line, and the chart owns the line below at the panel's full width. The three axis labels (top / half / zero) moved into a narrow gutter left of the plot instead of competing with it for horizontal space; the zero label drops out in a narrow panel.
-- Fixed the performance curve appearing to zoom by itself: a freshly opened panel stretched one second of data across the whole width and then squeezed it again with every batch of samples. The x axis is now a fixed 20-second window whose right edge is always "now" — the curve grows leftwards from the right edge in real time, and once full the oldest samples slide off the left, so the scale never changes.
-- **The performance window and sampling interval are adjustable**: settings now offer a chart window from 5s to 2min and a sampling interval from 100ms to 2s. A narrow window with a fine interval is how you chase one stutter (more pixels per second); a long window with a coarse interval is how you watch memory creep. The panel follows immediately, no restart.
+- Fixed the performance curve appearing to zoom by itself: a freshly opened panel stretched one second of data across the whole width and then squeezed it again with every batch of samples. The x axis is now a fixed window whose right edge is always "now" — the curve grows leftwards from the right edge in real time, and once full the oldest samples slide off the left, so the scale never changes.
+- **Both the window and the interval are set in the performance panel's header**: a window of 10s–2min and an interval of 100ms–1s, applied on the spot, so you never leave the page being measured. The two Settings rows are gone. A narrow window with a fine interval is how you chase one stutter (more pixels per second); a long window with a coarse interval is how you watch memory creep.
+- Row hover no longer darkens the whole lane: a curve that dims under the pointer reads as the data changing, and the hover hint belongs to the label line, which is the part that is actually a control.
 - Fixed a systematic under-report in the performance readings: the first sample of a session has no previous counter to difference against, so its rate is unknown — it was being counted as zero. On a short window that fake zero could be half the answer: a two-sample window reported a busy page at half its real CPU.
 - The message bell is always visible and marks unread news with a red dot instead of a number — a number widened the button and pushed it out of line with the icons beside it. Saving an account now also marks that notice read.
+- **The bell beside the address bar now opens a popover in place**: it lists the newest few messages, and clicking one floats its detail beside the list — the full text, when it happened, and what it can still do (save the account / sign in again / show the page) or why it no longer has one. The foot of the panel opens the message centre for the full history. Both are layers: opening one message never pushes the others down, so the list stays exactly where it was. Rows on the message page itself work the same way. The bell used to switch straight to the message page, which had no way back — glancing at one message cost the page you were working on.
+- **Management pages line up**: the page header reserved a whole caption-button band a second time, after the shell already reserved it, so every primary action sat 100-odd pixels left of the right edge of its own content and left a visibly empty strip beside it. Header actions and content now share the column's right edge.
+- **One create button per empty page**: flows, sites, views, accounts and bookmarks drew the same action in the header and again in the empty state. While the list is empty the action now appears only next to the sentence explaining it, and returns to the header once there is something to list.
+- The tags page is no longer a narrow card pinned to the top-left: its create form and list fill the content width, name / colour / create share one row, and the action closes that row on the right.
 - The performance monitor gained a vertical scale, gridlines and a filled area, so a lane answers "at what percentage" instead of just "it moved". Metrics now follow Chrome's performance monitor order: CPU → JS heap → DOM nodes / listeners / documents / frames → layouts/s / style recalcs/s, with colour grouped by category (heat, memory, structure, churn).
 - **Mobile emulation**: the docked panel gained a Device tab with iPhone 15, iPhone SE, Pixel 8, Galaxy S24 and iPad mini — viewport size, pixel ratio, touch and a mobile UA in one click. The emulation survives navigation, so following a link no longer drops the page back to desktop.
 - **Drag to resize**: the Device tab has a preview box whose bottom-right corner drags the width and height, applying on release. One preview pixel is one CSS pixel, so the number tracks the pointer rather than a scale factor you have to guess.
 - **Device and size are separate choices**: Apply device carries the full mobile identity; Size only pins the viewport while the page still believes it is a desktop (no touch, desktop UA), which is what checking a 768px layout needs. Clearing a device keeps its size — only adaptive goes back to filling the cell.
-- **Performance monitor**: a new Performance tab with the same metrics as Chrome's and Edge's performance monitor — CPU usage, DOM nodes, JS event listeners, documents, document frames, JS heap, layouts/s and style recalcs/s — each with its own sparkline. Clicking a row hides that metric. Sampling only runs while the tab is showing.
+- **Performance monitor**: a new Performance tab with the same metrics as Chrome's and Edge's performance monitor — CPU usage, DOM nodes, JS event listeners, documents, document frames, JS heap, layouts/s and style recalcs/s — each with its own sparkline. Clicking a metric's name hides that metric. Sampling only runs while the tab is showing.
 - The performance monitor now samples five times a second and derives each rate from the gap since the previous reading. At one sample a second, divided by the total elapsed time, every spike was averaged into the whole run and the chart was a flat line while the page was visibly busy. A 200ms stutter is now visible, and points are spaced by real time.
 - Fixed the native DevTools panel reappearing over the Device and Performance tabs when the split was dragged: it is a native view, so being written back into place put it on top of our own panel.
 - Zoom moved out of the toolbar into two places — the viewport menu and the app menu — keeping the − value + shape (click the number to reset). Ctrl + plus/minus, Ctrl + wheel and Ctrl + 0 raise a transient overlay with the new percentage, which fades on its own.

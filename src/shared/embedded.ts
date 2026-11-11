@@ -762,41 +762,86 @@ export interface PerfSample {
   layouts: number;
   /** Style recalculations per second over the interval. */
   styleRecalcs: number;
+  /**
+   * This reading has no predecessor, so its rate fields are **unknown**, not
+   * zero.
+   *
+   * The first sample of a session cannot be differenced against anything. Marking
+   * it lets the chart and the summaries leave it out instead of drawing a drop
+   * to zero that never happened — a two-sample window averaged with that fake
+   * zero reported half the real CPU.
+   */
+  warmup?: true;
 }
 
 /**
- * How often the performance panel samples.
+ * How often the performance panel samples: the default and the accepted range.
  *
  * Edge and Chrome sample once a second, which is enough to see a trend and not
- * enough to see a stutter: a 200ms freeze lands entirely between two samples.
- * `Performance.getMetrics` is a cheap counter read, so the cost of 5 Hz is the
- * point read itself, not a tracing session.
+ * enough to see a stutter. `Performance.getMetrics` is a cheap counter read, not
+ * a tracing session, so a few samples a second costs little — but the read *is*
+ * a synchronous main-thread call in the page, so finer intervals start to show
+ * up in the numbers they are measuring. Below 100ms there is nothing new to
+ * see: Chromium updates these counters per task and per commit, not per
+ * microsecond, so a faster timer reads the same values twice.
  */
-export const PERF_SAMPLE_INTERVAL_MS = 200;
+export const PERF_SAMPLE_INTERVAL_DEFAULT_MS = 200;
+export const PERF_SAMPLE_INTERVAL_MIN_MS = 100;
+export const PERF_SAMPLE_INTERVAL_MAX_MS = 2_000;
 
 /**
- * The span the chart shows, in milliseconds.
+ * The span the chart shows, in milliseconds: the default and the range.
  *
- * Chosen for resolution, not for history: the docked panel is roughly 200–350px
- * wide, so a minute across it is ~4px per second and a 200ms stutter becomes
- * sub-pixel — the chart looks smooth while the page is not. Twenty seconds puts
- * ~11px between seconds, which is the range where a burst has a visible shape.
+ * Resolution, not history, is what this trades off: the docked panel is roughly
+ * 200–350px wide, so a minute across it is ~4px per second and a 200ms stutter
+ * becomes sub-pixel. Twenty seconds puts ~11px between seconds. A longer window
+ * is the right choice for a slow leak, where the question is "is it climbing
+ * over a minute" rather than "did it stutter just now".
  *
  * It is a *window*, not a cap: the axis is always this wide, its right edge is
- * "now", and older samples leave at the left. Deriving the axis from whatever
- * data exists (the earlier behaviour) rescaled the whole curve on every tick,
- * which read as the chart zooming on its own.
+ * "now", and older samples leave at the left.
  */
-export const PERF_WINDOW_MS = 20_000;
+export const PERF_WINDOW_DEFAULT_MS = 20_000;
+export const PERF_WINDOW_MIN_MS = 5_000;
+export const PERF_WINDOW_MAX_MS = 120_000;
 
 /**
- * Samples kept, newest last.
+ * Hard ceiling on samples kept, whatever window and interval are chosen.
  *
- * A window's worth at the interval above, and also the hard cap: trimming is by
- * time first (see `pushSample`), because a busy page delays the sampler and a
- * count-only cap would then keep more than a window of history.
+ * The two settings multiply: a two-minute window at 100ms is 1,200 samples per
+ * series, eight series, redrawn four times a second. This cap keeps a mistaken
+ * pair of settings from turning the monitor into the load it is measuring.
+ * Time-based trimming in `pushSample` is still the primary rule.
  */
-export const PERF_HISTORY_LIMIT = Math.round(PERF_WINDOW_MS / PERF_SAMPLE_INTERVAL_MS);
+export const PERF_HISTORY_MAX = 1_200;
+
+/** Rounds a requested sampling interval into the supported range. */
+export function normalizePerfSampleInterval(value: unknown): number {
+  // `null`/absent means "no setting yet", not zero. `Number(null)` is 0, which
+  // would otherwise clamp up to the minimum and silently change the default for
+  // anyone whose settings file predates this field.
+  if (value === undefined || value === null || value === "") return PERF_SAMPLE_INTERVAL_DEFAULT_MS;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return PERF_SAMPLE_INTERVAL_DEFAULT_MS;
+  return Math.min(
+    PERF_SAMPLE_INTERVAL_MAX_MS,
+    Math.max(PERF_SAMPLE_INTERVAL_MIN_MS, Math.round(number)),
+  );
+}
+
+/** Rounds a requested chart window into the supported range. */
+export function normalizePerfWindow(value: unknown): number {
+  if (value === undefined || value === null || value === "") return PERF_WINDOW_DEFAULT_MS;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return PERF_WINDOW_DEFAULT_MS;
+  return Math.min(PERF_WINDOW_MAX_MS, Math.max(PERF_WINDOW_MIN_MS, Math.round(number)));
+}
+
+/** How many samples those two settings imply, after the ceiling above. */
+export function perfHistoryLimit(windowMs: number, intervalMs: number): number {
+  const count = Math.ceil(normalizePerfWindow(windowMs) / normalizePerfSampleInterval(intervalMs));
+  return Math.min(PERF_HISTORY_MAX, Math.max(2, count));
+}
 
 /**
  * Rounds a series peak up to a readable axis top.
@@ -818,11 +863,16 @@ export function perfAxisMax(peak: number, ceiling = Number.POSITIVE_INFINITY): n
  * The largest value a metric reached across the samples, floored at 1.
  *
  * Floored so a series of zeros has something to scale against; every caller
- * feeds the result to `perfAxisMax`, which adds the readable rounding.
+ * feeds the result to `perfAxisMax`, which adds the readable rounding. Warmup
+ * readings are skipped for rate metrics, matching the chart and the summaries —
+ * a zero there is not a low reading, it is an absent one.
  */
 export function perfPeak(history: PerfSample[], metric: PerfMetric): number {
+  const series = RATE_METRICS.has(metric)
+    ? history.filter((sample) => !sample.warmup)
+    : history;
   let peak = 0;
-  for (const sample of history) {
+  for (const sample of series) {
     const value = sample[metric];
     if (value > peak) peak = value;
   }
@@ -847,18 +897,33 @@ export interface PerfMetricSummary {
   maxAt: number;
   /** Newest reading, which is what the panel's value column shows. */
   last: number;
+  /** How many readings the summary was computed from. */
+  samples: number;
 }
 
-/** Summarises one metric across the samples it is given. */
+/** Metrics whose value is a rate, and so are meaningless without a predecessor. */
+const RATE_METRICS = new Set<PerfMetric>(["cpu", "layouts", "styleRecalcs"]);
+
+/**
+ * Summarises one metric across the samples it is given.
+ *
+ * Warmup readings are dropped for rate metrics. Their zero is "no previous
+ * counter to difference against", and averaging it in is not a small error: a
+ * 200ms observation yields one or two samples, so that fake zero *is* the
+ * average, and the tool would report a busy page as idle.
+ */
 export function perfSummarize(
   history: PerfSample[],
   metric: PerfMetric,
 ): PerfMetricSummary | undefined {
-  if (history.length === 0) return undefined;
+  const usable = RATE_METRICS.has(metric)
+    ? history.filter((sample) => !sample.warmup)
+    : history;
+  if (usable.length === 0) return undefined;
   let sum = 0;
   let max = Number.NEGATIVE_INFINITY;
   let maxAt = 0;
-  for (const sample of history) {
+  for (const sample of usable) {
     const value = sample[metric];
     sum += value;
     if (value > max) {
@@ -866,14 +931,15 @@ export function perfSummarize(
       maxAt = sample.t;
     }
   }
-  const last = history[history.length - 1]!;
+  const last = usable[usable.length - 1]!;
   return {
     // Rounded here, not by the caller: three decimals of a percentage is noise,
     // and the same rounding on both sides keeps the panel and the tool agreeing.
-    avg: Math.round((sum / history.length) * 1000) / 1000,
+    avg: Math.round((sum / usable.length) * 1000) / 1000,
     max: Math.round(max * 1000) / 1000,
     maxAt,
     last: Math.round(last[metric] * 1000) / 1000,
+    samples: usable.length,
   };
 }
 
@@ -910,16 +976,23 @@ export function perfSparkPoints(
   width: number,
   height: number,
   axisMax: number,
-  windowMs = PERF_WINDOW_MS,
+  windowMs = PERF_WINDOW_DEFAULT_MS,
 ): Array<{ x: number; y: number }> {
-  if (history.length < 2) return [];
+  // Warmup readings are dropped when the metric is a rate: their zero means "no
+  // previous counter", and drawing it puts a visible drop to the baseline at the
+  // left edge of every session. Counts keep theirs — a node count is valid from
+  // the very first reading.
+  const series = RATE_METRICS.has(metric)
+    ? history.filter((sample) => !sample.warmup)
+    : history;
+  if (series.length < 2) return [];
   const span = Math.max(1, windowMs);
   // The right edge is "now"; the left edge is one window earlier. Not anchored
   // to the first sample: that would move the axis every tick, which is the
   // rescaling this fixed window exists to stop.
-  const origin = history[history.length - 1]!.t - span;
+  const origin = series[series.length - 1]!.t - span;
   const top = Math.max(1, axisMax);
-  return history.map((sample) => ({
+  return series.map((sample) => ({
     // Clamped: a sample older than the window would otherwise draw to the left
     // of the plot, into the tick gutter.
     x: Math.min(width, Math.max(0, ((sample.t - origin) / span) * width)),
@@ -959,7 +1032,7 @@ export function perfSparkPath(
   width: number,
   height: number,
   axisMax: number,
-  windowMs = PERF_WINDOW_MS,
+  windowMs = PERF_WINDOW_DEFAULT_MS,
 ): string {
   return perfPolyline(perfSparkPoints(history, metric, width, height, axisMax, windowMs));
 }

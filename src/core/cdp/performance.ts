@@ -28,13 +28,17 @@
  * performance monitor is for.
  */
 
-/** How many samples are kept before the oldest is dropped. */
-export { PERF_HISTORY_LIMIT, PERF_WINDOW_MS } from "@shared/embedded";
+/** The sampling defaults and the history ceiling, re-exported for callers. */
+export {
+  PERF_HISTORY_MAX,
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+  PERF_WINDOW_DEFAULT_MS,
+} from "@shared/embedded";
 
 import type { PerfMetric, PerfSample } from "@shared/embedded";
 import {
-  PERF_HISTORY_LIMIT,
-  PERF_WINDOW_MS,
+  PERF_WINDOW_DEFAULT_MS,
+  perfHistoryLimit,
   perfPeak,
   perfSparkPath,
 } from "@shared/embedded";
@@ -120,22 +124,37 @@ export function deriveSample(
     heap,
     layouts: rate(current.LayoutCount, previous?.LayoutCount),
     styleRecalcs: rate(current.RecalcStyleCount, previous?.RecalcStyleCount),
+    // The rates above are zero because there is nothing to difference against,
+    // not because the page was idle. Flagging it is what lets a summary ignore
+    // this sample instead of averaging a fake zero into its mean — with a short
+    // window that fake zero was half the answer.
+    ...(previous ? {} : { warmup: true }),
   };
 }
 
 /**
  * Appends a sample and trims the history back to the chart's window.
  *
- * Trimming is by **time**, with the count cap only as a backstop. A busy page
+ * Trimming is by **time**, with a count ceiling only as a backstop. A busy page
  * delays the sampler, so a count-only cap would keep a hundred samples spanning
  * more than the window the chart draws — those extra samples are invisible
  * anyway (they would be clamped to the left edge), and the "we hold one window
  * of data" claim would quietly stop being true.
+ *
+ * Both numbers come from the caller because both are settings now. The ceiling
+ * still matters: target window and interval multiply, and 120s at 100ms would
+ * otherwise be 1,200 samples per series across eight series.
  */
-export function pushSample(history: PerfSample[], sample: PerfSample): PerfSample[] {
-  const left = sample.t - PERF_WINDOW_MS;
+export function pushSample(
+  history: PerfSample[],
+  sample: PerfSample,
+  options: { windowMs?: number; intervalMs?: number } = {},
+): PerfSample[] {
+  const windowMs = options.windowMs ?? PERF_WINDOW_DEFAULT_MS;
+  const limit = perfHistoryLimit(windowMs, options.intervalMs ?? 200);
+  const left = sample.t - windowMs;
   const next = [...history.filter((item) => item.t >= left), sample];
-  return next.length > PERF_HISTORY_LIMIT ? next.slice(next.length - PERF_HISTORY_LIMIT) : next;
+  return next.length > limit ? next.slice(next.length - limit) : next;
 }
 
 /**

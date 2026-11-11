@@ -4,7 +4,17 @@ import {
   DEVICE_DPR_MIN,
   DEVICE_PRESETS,
   PERF_METRICS,
+  PERF_HISTORY_MAX,
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+  PERF_SAMPLE_INTERVAL_MAX_MS,
+  PERF_SAMPLE_INTERVAL_MIN_MS,
+  PERF_WINDOW_DEFAULT_MS,
+  PERF_WINDOW_MAX_MS,
+  PERF_WINDOW_MIN_MS,
   normalizeDevice,
+  normalizePerfSampleInterval,
+  normalizePerfWindow,
+  perfHistoryLimit,
   normalizeViewportSize,
   perfArea,
   perfAxisLabel,
@@ -14,7 +24,6 @@ import {
   perfSummarize,
 } from "@shared/embedded";
 import {
-  PERF_HISTORY_LIMIT,
   deriveSample,
   peakOf,
   pushSample,
@@ -146,12 +155,15 @@ describe("performance sampler", () => {
   });
 
   it("keeps the newest samples when the cap is reached", () => {
+    // Same timestamps, so only the count ceiling can trim: this is the backstop
+    // for a page whose sampler fires far faster than the window would imply.
+    const limit = perfHistoryLimit(PERF_WINDOW_DEFAULT_MS, PERF_SAMPLE_INTERVAL_DEFAULT_MS);
     let history = [] as ReturnType<typeof deriveSample>[];
-    for (let index = 0; index < PERF_HISTORY_LIMIT + 5; index += 1) {
+    for (let index = 0; index < limit + 5; index += 1) {
       history = pushSample(history, deriveSample(undefined, { Nodes: index }, 0, 0));
     }
-    expect(history).toHaveLength(PERF_HISTORY_LIMIT);
-    expect(history[history.length - 1]?.nodes).toBe(PERF_HISTORY_LIMIT + 4);
+    expect(history).toHaveLength(limit);
+    expect(history[history.length - 1]?.nodes).toBe(limit + 4);
   });
 
   it("drops samples that have left the window, not just those past the count", () => {
@@ -176,6 +188,47 @@ describe("performance sampler", () => {
     expect(history[0]?.t).toBeGreaterThanOrEqual(0);
     history = pushSample(history, { ...base, t: 25_000, nodes: 6 });
     expect(history.map((sample) => sample.t)).toEqual([5_000, 10_000, 15_000, 20_000, 25_000]);
+  });
+
+  it("trims to whatever window the setting names, not to a fixed one", () => {
+    // The window is a setting now. A short one has to forget quickly — a five
+    // second chart holding a minute of samples would silently draw the oldest
+    // ones clamped at the left edge, which reads as a flat past that never
+    // existed.
+    const base = { at: "", cpu: 0, listeners: 0, documents: 0, frames: 0, heap: 0, layouts: 0, styleRecalcs: 0 };
+    let history: PerfSample[] = [];
+    for (let t = 0; t <= 20_000; t += 1_000) {
+      history = pushSample(
+        history,
+        { ...base, t, nodes: t / 1_000 },
+        { windowMs: 5_000, intervalMs: 1_000 },
+      );
+    }
+    expect(history.map((sample) => sample.t)).toEqual([16_000, 17_000, 18_000, 19_000, 20_000]);
+  });
+
+  it("clamps both settings into the range the sampler supports", () => {
+    // A settings file can be edited by hand, and a zero interval would spin the
+    // timer as fast as the event loop allows. Normalising at the write boundary
+    // is what keeps that from ever reaching a running page.
+    expect(normalizePerfSampleInterval(0)).toBe(PERF_SAMPLE_INTERVAL_MIN_MS);
+    expect(normalizePerfSampleInterval(99_999)).toBe(PERF_SAMPLE_INTERVAL_MAX_MS);
+    expect(normalizePerfSampleInterval("250")).toBe(250);
+    expect(normalizePerfSampleInterval(undefined)).toBe(PERF_SAMPLE_INTERVAL_DEFAULT_MS);
+    expect(normalizePerfWindow(1)).toBe(PERF_WINDOW_MIN_MS);
+    expect(normalizePerfWindow(10 * 60_000)).toBe(PERF_WINDOW_MAX_MS);
+    expect(normalizePerfWindow(null)).toBe(PERF_WINDOW_DEFAULT_MS);
+  });
+
+  it("keeps the sample count bounded when both settings are at their extremes", () => {
+    // 2 minutes at 100ms is 1,200 readings per series across eight series; the
+    // ceiling is what stops a lawful pair of settings from becoming the load it
+    // is supposed to measure.
+    expect(perfHistoryLimit(PERF_WINDOW_MAX_MS, PERF_SAMPLE_INTERVAL_MIN_MS)).toBeLessThanOrEqual(
+      PERF_HISTORY_MAX,
+    );
+    // The defaults still cover exactly one window.
+    expect(perfHistoryLimit(PERF_WINDOW_DEFAULT_MS, PERF_SAMPLE_INTERVAL_DEFAULT_MS)).toBe(100);
   });
 
   it("floors a peak so an all-zero series still has a scale", () => {
@@ -362,6 +415,44 @@ describe("performance summary", () => {
     // line's timestamp, so an off-by-one here produces a confidently wrong story.
     expect(summary?.maxAt).toBe(200);
     expect(summary?.last).toBe(6);
+    expect(summary?.samples).toBe(3);
+  });
+
+  it("leaves the warmup reading out of a rate's mean", () => {
+    // The first reading of a session has no previous counter, so its rate is
+    // unknown — not zero. Averaging that zero in reported a busy page as half as
+    // busy: a two-sample window's mean was exactly half the real CPU.
+    const warm = { ...sample(0, 0), warmup: true as const };
+    const history = [warm, sample(200, 40), sample(400, 60)];
+    const summary = perfSummarize(history, "cpu");
+    expect(summary?.samples).toBe(2);
+    expect(summary?.avg).toBe(50);
+    expect(summary?.max).toBe(60);
+    expect(summary?.maxAt).toBe(400);
+  });
+
+  it("keeps a count's first reading, which needs no predecessor", () => {
+    // A DOM node count is valid the moment it is read; dropping it would throw
+    // away a real fact and, on a short window, leave nothing at all.
+    const history = [{ ...sample(0, 0), nodes: 42 }, sample(200, 0)];
+    expect(perfSummarize(history, "nodes")?.samples).toBe(2);
+    expect(perfSummarize(history, "nodes")?.max).toBe(42);
+  });
+
+  it("does not draw the warmup zero into a rate's line", () => {
+    // A visible drop to the baseline at the start of every session, which never
+    // happened. Counts keep their first point.
+    const warm = { ...sample(0, 0), warmup: true as const };
+    const ratePoints = perfSparkPoints([warm, sample(200, 40), sample(400, 60)], "cpu", 100, 20, 100);
+    expect(ratePoints).toHaveLength(2);
+    const countPoints = perfSparkPoints(
+      [{ ...sample(0, 0), nodes: 42 }, sample(200, 0), sample(400, 0)],
+      "nodes",
+      100,
+      20,
+      100,
+    );
+    expect(countPoints).toHaveLength(3);
   });
 
   it("says nothing at all for an empty window", () => {

@@ -586,6 +586,10 @@ export const messages = {
       browserZoomSetting: "默认缩放",
       browserZoomNote:
         "内置浏览器里每个页面的初始缩放。在页面上按 Ctrl 加号/减号只调这一页，Ctrl + 0 回到这里的默认值；手动调过的页面不会被这个设置覆盖。",
+      perfWindowSetting: "性能采集区间",
+      perfWindowNote: "性能监视器横轴覆盖的时长。区间越短，曲线上的每一秒越宽，短暂的卡顿越容易看出来。",
+      perfIntervalSetting: "性能采样间隔",
+      perfIntervalNote: "越小画得越细，但每次采样都要在页面上做一次同步读取。",
       searchEngineSetting: "默认搜索引擎",
       searchEngineNote:
         "新标签页的搜索框和地址栏里的文字默认用它。新标签页里也可以直接切换，或添加自定义引擎（模板用 %s 表示搜索词）。",
@@ -1662,6 +1666,12 @@ export const messages = {
       browserZoomSetting: "Default zoom",
       browserZoomNote:
         "Starting zoom for every page in the built-in browser. Ctrl plus/minus on a page adjusts only that page, Ctrl + 0 returns it here, and a page you adjusted by hand is never overwritten by this setting.",
+      perfWindowSetting: "Performance window",
+      perfWindowNote:
+        "How much time the performance monitor's chart covers. A shorter window gives every second more width, which makes a brief stutter easier to see.",
+      perfIntervalSetting: "Sampling interval",
+      perfIntervalNote:
+        "Smaller draws a finer line, but every sample is a synchronous read on the page.",
       searchEngineSetting: "Default search engine",
       searchEngineNote:
         "Used by the new-tab search box and by text typed into the address bar. You can switch it on the new tab itself, or add a custom engine there (%s stands for the query).",

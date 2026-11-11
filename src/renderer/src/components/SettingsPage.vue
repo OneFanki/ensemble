@@ -26,6 +26,10 @@ import { storeToRefs } from "pinia";
 import type { Component } from "vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import {
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+  PERF_WINDOW_DEFAULT_MS,
+} from "@shared/embedded";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
@@ -33,6 +37,28 @@ import AppButton from "./ui/AppButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SettingGroup from "./ui/SettingGroup.vue";
 import SettingRow from "./ui/SettingRow.vue";
+
+/**
+ * The performance monitor's two knobs, as fixed choices.
+ *
+ * Fixed rather than free-typed: both values multiply (window ÷ interval is how
+ * many points get drawn and kept), so a hand-typed pair can ask for a thousand
+ * points per series. These are the pairs that are actually useful — a stutter
+ * hunt wants a fine interval in a narrow window, a slow leak wants the opposite.
+ */
+const PERF_WINDOW_OPTIONS = [
+  { value: "10000", label: "10 s" },
+  { value: "20000", label: "20 s" },
+  { value: "60000", label: "1 min" },
+  { value: "120000", label: "2 min" },
+];
+
+const PERF_INTERVAL_OPTIONS = [
+  { value: "100", label: "100 ms" },
+  { value: "200", label: "200 ms" },
+  { value: "500", label: "500 ms" },
+  { value: "1000", label: "1 s" },
+];
 
 /**
  * The settings section on screen.
@@ -643,6 +669,32 @@ async function submitMaster() {
                   "
                 />
                 <span class="unit mono">%</span>
+              </div>
+              </SettingRow>
+              <SettingRow :label="$t('app.perfWindowSetting')" :hint="$t('app.perfWindowNote')">
+              <div class="select-slot">
+                <SelectField
+                  :model-value="String(store.settings.perfWindowMs || PERF_WINDOW_DEFAULT_MS)"
+                  :options="PERF_WINDOW_OPTIONS"
+                  @update:model-value="
+                    store.saveSettings({ perfWindowMs: Number($event ?? PERF_WINDOW_DEFAULT_MS) })
+                  "
+                />
+              </div>
+              </SettingRow>
+              <SettingRow :label="$t('app.perfIntervalSetting')" :hint="$t('app.perfIntervalNote')">
+              <div class="select-slot">
+                <SelectField
+                  :model-value="
+                    String(store.settings.perfSampleIntervalMs || PERF_SAMPLE_INTERVAL_DEFAULT_MS)
+                  "
+                  :options="PERF_INTERVAL_OPTIONS"
+                  @update:model-value="
+                    store.saveSettings({
+                      perfSampleIntervalMs: Number($event ?? PERF_SAMPLE_INTERVAL_DEFAULT_MS),
+                    })
+                  "
+                />
               </div>
               </SettingRow>
               <SettingRow :label="$t('app.searchEngineSetting')" :hint="$t('app.searchEngineNote')">

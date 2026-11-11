@@ -2,7 +2,7 @@
 import type { PerfMetric, PerfSample } from "@shared/embedded";
 import {
   PERF_METRICS,
-  PERF_WINDOW_MS,
+  PERF_WINDOW_DEFAULT_MS,
   perfArea,
   perfAxisLabel,
   perfAxisMax,
@@ -12,6 +12,7 @@ import {
 } from "@shared/embedded";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useWorkspaceStore } from "../stores/workspace";
 
 /**
  * Performance monitor: the same numbers Chrome's own panel shows, as a live
@@ -41,6 +42,18 @@ import { useI18n } from "vue-i18n";
 const props = defineProps<{ tabId: string }>();
 
 const { t } = useI18n();
+const workspace = useWorkspaceStore();
+
+/**
+ * The chart's span, in milliseconds.
+ *
+ * Read from settings rather than a constant: the window is a choice between
+ * resolution and reach, and the two readers want different answers — a stutter
+ * wants a narrow window with pixels per second, a slow climb wants a minute of
+ * shape. The main process samples with the same number, so the axis and the
+ * history it draws can never disagree.
+ */
+const windowMs = computed(() => workspace.settings.perfWindowMs || PERF_WINDOW_DEFAULT_MS);
 
 const history = ref<PerfSample[]>([]);
 const hidden = ref<Set<PerfMetric>>(new Set());
@@ -188,7 +201,14 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   const result = {} as Record<PerfMetric, Lane>;
   for (const metric of PERF_METRICS) {
     const top = axisFor(metric);
-    const points = perfSparkPoints(history.value, metric, CHART_WIDTH, CHART_HEIGHT, top);
+    const points = perfSparkPoints(
+      history.value,
+      metric,
+      CHART_WIDTH,
+      CHART_HEIGHT,
+      top,
+      windowMs.value,
+    );
     result[metric] = {
       ticks: [
         perfAxisLabel(metric, top),
@@ -203,7 +223,7 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
 });
 
 /** The window's own length, which is also the axis span; the header names it. */
-const windowLabel = computed(() => Math.round(PERF_WINDOW_MS / 1000));
+const windowLabel = computed(() => Math.round(windowMs.value / 1000));
 </script>
 
 <template>

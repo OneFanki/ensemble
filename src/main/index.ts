@@ -673,6 +673,10 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
   // (after the window was recreated) need it applied now.
   embedded.setDefaultZoom(settingsCache?.browserZoom ?? 100);
   embedded.setDefaultViewport(settingsCache?.browserViewport ?? undefined);
+  embedded.setPerfConfig({
+    intervalMs: settingsCache?.perfSampleIntervalMs,
+    windowMs: settingsCache?.perfWindowMs,
+  });
   return embedded;
 }
 
@@ -2385,6 +2389,14 @@ function applySettingsPatch(patch: SettingsPatch): SettingsPatch {
   // follow it, and a page that picked a size (or opted out) stays as it is.
   if ("browserViewport" in parsed) {
     embedded?.setDefaultViewport(settings.browserViewport ?? undefined);
+  }
+  // Sampling settings apply live too: a user who widened the window to watch a
+  // slow climb expects the chart in front of them to widen, not the next one.
+  if ("perfWindowMs" in parsed || "perfSampleIntervalMs" in parsed) {
+    embedded?.setPerfConfig({
+      intervalMs: settings.perfSampleIntervalMs,
+      windowMs: settings.perfWindowMs,
+    });
   }
   // Proxy changes apply live: a download already failing behind Clash should
   // recover when the user fixes the setting, not on the next launch. Only the

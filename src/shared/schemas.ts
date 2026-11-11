@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  PERF_SAMPLE_INTERVAL_MAX_MS,
+  PERF_SAMPLE_INTERVAL_MIN_MS,
+  PERF_WINDOW_MAX_MS,
+  PERF_WINDOW_MIN_MS,
+} from "./embedded";
 import { LOCALE_SETTINGS } from "./locale";
 
 const httpUrl = z
@@ -197,6 +203,25 @@ export const settingsPatchSchema = z.object({
       height: z.number().int().min(320).max(2160),
     })
     .nullable()
+    .optional(),
+  /**
+   * Performance monitor cadence and reach.
+   *
+   * The same ranges the sampler enforces, so a value that reached disk is
+   * always one the chart can draw. Both are optional: a settings file written
+   * before these existed keeps its other values and picks up the defaults.
+   */
+  perfWindowMs: z
+    .number()
+    .int()
+    .min(PERF_WINDOW_MIN_MS)
+    .max(PERF_WINDOW_MAX_MS)
+    .optional(),
+  perfSampleIntervalMs: z
+    .number()
+    .int()
+    .min(PERF_SAMPLE_INTERVAL_MIN_MS)
+    .max(PERF_SAMPLE_INTERVAL_MAX_MS)
     .optional(),
   /**
    * Only http(s) templates with `%s` are accepted. A custom engine is stored

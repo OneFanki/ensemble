@@ -1,4 +1,8 @@
 import type { AppSettings } from "@shared/types";
+import {
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+  PERF_WINDOW_DEFAULT_MS,
+} from "./embedded";
 import { DEFAULT_NEW_TAB_BACKDROP } from "./newtab";
 import { DEFAULT_SEARCH_ENGINE_ID } from "./search";
 
@@ -45,6 +49,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // applied to every account at once, which is exactly what a first launch
   // cannot know.
   browserViewport: null,
+  // Five readings a second and a twenty-second chart: fine enough that a 200ms
+  // stutter has a visible shape, wide enough to show a burst rather than one
+  // sample. Both are adjustable in settings for the other two cases — a slow
+  // climb wants a longer window, a one-off hitch wants a finer interval.
+  perfWindowMs: PERF_WINDOW_DEFAULT_MS,
+  perfSampleIntervalMs: PERF_SAMPLE_INTERVAL_DEFAULT_MS,
   // Bing by default: reachable from networks where Google is not, which for a
   // work tool matters more than index quality.
   searchEngineId: DEFAULT_SEARCH_ENGINE_ID,

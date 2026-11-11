@@ -64,7 +64,10 @@ import {
   stageDrawsSlotHeaders,
   neighborZoomStep,
   normalizeEmbeddedUrl,
-  PERF_SAMPLE_INTERVAL_MS as PERF_SAMPLE_INTERVAL_MS_SHARED,
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+  PERF_WINDOW_DEFAULT_MS,
+  normalizePerfSampleInterval,
+  normalizePerfWindow,
   PERF_METRICS,
   perfSummarize,
   planTabClick,
@@ -114,16 +117,12 @@ import { applyProxyToSession } from "../proxy";
  */
 const AI_ACTIVE_WINDOW_MS = 60_000;
 const FREEZE_SWEEP_INTERVAL_MS = 10_000;
-/**
- * Five samples per second.
- *
- * Chrome's own monitor samples once a second, which is enough for a trend and
- * not enough for a stutter: a 200ms freeze lands entirely between two samples.
- * `Performance.getMetrics` is a counter read, not a tracing session, so 5 Hz
- * costs little; the panel publishes at 1 Hz so the renderer's reactive pass
- * does not become the thing being measured.
- */
-const PERF_SAMPLE_INTERVAL_MS = PERF_SAMPLE_INTERVAL_MS_SHARED;
+
+/** The sampling knobs in force right now, already range-checked. */
+interface PerfConfig {
+  intervalMs: number;
+  windowMs: number;
+}
 
 export interface EmbeddedLoginPayload {
   username: string;
@@ -575,6 +574,17 @@ export class EmbeddedBrowser {
   /** Default zoom for pages that have not been adjusted by hand. */
   private defaultZoom = 100;
   /**
+   * Sampling cadence and chart window, mirrored from settings.
+   *
+   * Held here rather than read from settings at each tick: the sampler runs in a
+   * timer chain on the main thread, and reaching into the settings store from
+   * there would make every 200ms tick depend on disk-backed state.
+   */
+  private perfConfig: PerfConfig = {
+    intervalMs: PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+    windowMs: PERF_WINDOW_DEFAULT_MS,
+  };
+  /**
    * Workspace default fixed viewport, mirrored from settings.
    *
    * `undefined` means adaptive. Kept here rather than read from settings on
@@ -685,6 +695,39 @@ export class EmbeddedBrowser {
     }
     this.applyLayout();
     this.emitState();
+  }
+
+  /**
+   * Applies the sampling settings.
+   *
+   * Both numbers are read at sampling time rather than captured when a page is
+   * created, so a change has to reach the samplers already running. They are
+   * restarted rather than re-tuned in place: the interval lives in a `setTimeout`
+   * chain and the window decides what history is kept, and a chart drawn half at
+   * one cadence and half at another has a subtle lie in its x axis — the gap
+   * between two points would not mean what the spacing says.
+   *
+   * The restart is cheap and only affects pages whose panel is showing the
+   * performance tab, because that is the only time a sampler exists for the
+   * panel. An AI-owned sampler is left alone: it has its own cursor and the agent
+   * is mid-measurement.
+   */
+  setPerfConfig(config: { intervalMs?: number; windowMs?: number }): void {
+    const next: PerfConfig = {
+      intervalMs: normalizePerfSampleInterval(config.intervalMs ?? this.perfConfig.intervalMs),
+      windowMs: normalizePerfWindow(config.windowMs ?? this.perfConfig.windowMs),
+    };
+    if (
+      next.intervalMs === this.perfConfig.intervalMs &&
+      next.windowMs === this.perfConfig.windowMs
+    ) {
+      return;
+    }
+    this.perfConfig = next;
+    for (const tab of this.tabs) {
+      if (tab.perf?.owner !== "panel") continue;
+      void this.startPerfSampling(tab, "panel");
+    }
   }
 
   /**
@@ -4104,6 +4147,7 @@ export class EmbeddedBrowser {
     }
     const generation = (tab.perfGeneration ?? 0) + 1;
     tab.perfGeneration = generation;
+    const { intervalMs, windowMs } = this.perfConfig;
     /** Last time the renderer was told about new samples; see the note below. */
     let lastPublish = 0;
     const tick = async (): Promise<void> => {
@@ -4126,7 +4170,7 @@ export class EmbeddedBrowser {
           (raw as Record<string, number>)[item.name] = item.value;
         }
         const sample = deriveSample(tab.perf.previous, raw, interval, tab.perf.startedAt);
-        tab.perf.history = pushSample(tab.perf.history, sample);
+        tab.perf.history = pushSample(tab.perf.history, sample, { windowMs, intervalMs });
         tab.perf.previous = raw;
         /*
          * Publish at most once a second.
@@ -4146,10 +4190,10 @@ export class EmbeddedBrowser {
         // recovers or the tab is gone.
       }
       if (tab.perfGeneration !== generation || !tab.perf) return;
-      tab.perf.timer = setTimeout(() => void tick(), PERF_SAMPLE_INTERVAL_MS);
+      tab.perf.timer = setTimeout(() => void tick(), intervalMs);
       tab.perf.timer.unref?.();
     };
-    tab.perf.timer = setTimeout(() => void tick(), PERF_SAMPLE_INTERVAL_MS);
+    tab.perf.timer = setTimeout(() => void tick(), intervalMs);
     tab.perf.timer.unref?.();
     // Same reason as the device overrides: the counters reset with a new
     // document, so the series has to restart rather than draw a cliff.
@@ -4175,9 +4219,9 @@ export class EmbeddedBrowser {
    *
    * Starts the sampler if nobody is measuring, so a model that only wants the
    * series does not have to call `measurePerformance` first and throw its
-   * numbers away. The tail is what it gets: a full window is 100 points, and a
-   * request that asked for "the last 20 seconds" of a slow page should not
-   * return more than that window.
+   * numbers away. What it gets is the history as configured — the sampler has
+   * already trimmed it to one window, so a request never returns more than the
+   * chart is showing.
    */
   async readPerfHistory(tabId: string, idleMs = 15_000): Promise<PerfSample[]> {
     const tab = this.requireTab(tabId);
@@ -4228,7 +4272,12 @@ export class EmbeddedBrowser {
     /** Wall clock of the window this summary covers. */
     from: string;
     to: string;
+    /** How long this call waited, as asked. */
     durationMs: number;
+    /** The configured chart window, so a caller knows what the series holds. */
+    windowMs: number;
+    /** The configured sampling interval. */
+    intervalMs: number;
     samples: number;
     metrics: Record<PerfMetric, PerfMetricSummary>;
   }> {
@@ -4272,9 +4321,13 @@ export class EmbeddedBrowser {
     const metrics = {} as Record<PerfMetric, PerfMetricSummary>;
     for (const metric of PERF_METRICS) {
       const summary = perfSummarize(fresh, metric);
-      // A metric with no samples still needs a row: an absent key reads as "the
-      // tool forgot", while zeros read as "nothing happened".
-      metrics[metric] = summary ?? { avg: 0, max: 0, maxAt: 0, last: 0 };
+      /*
+       * A metric with no usable reading still needs a row, but it must not read
+       * as "zero". `samples: 0` is the honest answer for a rate whose window held
+       * only the warmup reading — callers are told to treat it as "not measured
+       * yet" rather than "the page was idle".
+       */
+      metrics[metric] = summary ?? { avg: 0, max: 0, maxAt: 0, last: 0, samples: 0 };
     }
     const newest = fresh[fresh.length - 1] ?? live.history[live.history.length - 1];
     if (newest) live.aiCursor = newest.t;
@@ -4300,6 +4353,8 @@ export class EmbeddedBrowser {
       from: new Date(live.startedAt + from).toISOString(),
       to: new Date(live.startedAt + (newest?.t ?? from)).toISOString(),
       durationMs: Date.now() - startedAt,
+      windowMs: this.perfConfig.windowMs,
+      intervalMs: this.perfConfig.intervalMs,
       samples: fresh.length,
       metrics,
     };

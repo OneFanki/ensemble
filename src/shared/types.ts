@@ -538,6 +538,23 @@ export interface AppSettings {
    */
   browserViewport: EmbeddedViewport | null;
   /**
+   * How far back the performance monitor's chart reaches, in milliseconds.
+   *
+   * The window is a trade-off between resolution and reach: a narrower one puts
+   * more pixels between seconds, which is what makes a stutter visible, and a
+   * wider one shows a slow climb. Range-checked on write by
+   * `normalizePerfWindow`, so a stored value is always one the chart can draw.
+   */
+  perfWindowMs: number;
+  /**
+   * How often the performance monitor samples, in milliseconds.
+   *
+   * Lower is finer and slightly more expensive: each reading is a synchronous
+   * CDP call on the page's main thread. The floor is the point where Chromium
+   * has nothing new to report rather than an arbitrary round number.
+   */
+  perfSampleIntervalMs: number;
+  /**
    * Engine a blank tab searches with, and the one the address bar falls back to
    * for text that is not an address.
    *
@@ -800,6 +817,8 @@ export type SettingsPatch = Partial<
     | "autoSubmitLogin"
     | "browserZoom"
     | "browserViewport"
+    | "perfWindowMs"
+    | "perfSampleIntervalMs"
     | "searchEngineId"
     | "customSearchEngines"
     | "newTabBackground"

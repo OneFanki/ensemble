@@ -40,6 +40,9 @@
 - 关掉标签页时它的开发者工具会一起关闭。此前面板前端仍在运行，标签条里却已经没有对应的页，也没有入口能关掉它。
 - **AI 能看的东西补齐了**：新增 `read_browser_console`，一次读回页面的报错、控制台输出和网络请求，读完即清空，回答「上次读取之后发生了什么」；`wait_browser` 多了 `network-idle`，等页面所有请求发完并安静下来，不用再猜要等哪个元素；读页面时每个节点带上 `parent` 与 `depth`，能看出按钮属于哪个对话框；`screenshot_browser_tab` 加 `inline`，把图像本身随结果返回，供读不到本机路径的 AI 客户端使用。
 - **AI 也能测性能了**：新增 `measure_browser_performance`，用与 Chrome 性能监视器同源的 CDP 计数器，给出八项指标在一段观察窗口里的均值、峰值、峰值时刻与最新值——回答「这个页面卡不卡」不再靠猜。连续调用会接着上一次继续、中间空档也在采样，所以「测一次 → 点一下 → 再测一次」能看见那次点击的开销；峰值时刻是相对毫秒，能与控制台日志的时间对上。另有 `read_browser_performance` 给需要逐点数据的调用方。面板正在采样时 AI 读取会接管而不重启，不会把用户正在看的图表清空。
+- **修好 macOS 上 Dock 图标消失**：悬浮条和身份标签窗在创建时会把整个进程转成菜单栏型应用（accessory），而代码从不转回，于是 Dock 图标、应用菜单和 Cmd+Tab 一起消失。现在跨 Space 显示保留，进程类型不再被改动。
+- **修好 macOS 应用菜单抢走页面快捷键**：Cmd+R / Cmd+Shift+R / Cmd+±/0 之前作用在应用外壳上——重载整个界面、缩放界面而不是当前页面；Cmd+W 更是直接关窗口或退出应用。现在这些都转发到当前页面，Cmd+W 先关标签页，没有标签页时才关窗口，关闭窗口改为 Cmd+Shift+W。
+- **修好 macOS 上引擎版本读不到、孤儿浏览器回收失效、后台检测退出时刷错误日志**：`Info.plist` 路径少退了一层导致版本恒为空；`ps` 输出的 profile 路径含空格被截断，导致退出后残留的浏览器进程一个也认不出来；非 Windows 平台仍去调 `taskkill`，每次都会抛一个抓不到的异步错误。
 
 ### English
 
@@ -75,6 +78,9 @@
 - Closing a tab now closes its DevTools too. The front-end used to keep running with nothing in the strip naming it and no way left to close it.
 - **The AI can now see more of a page**: `read_browser_console` returns the page's errors, console output and requests in one call and clears them, so it answers "what happened since I last looked"; `wait_browser` gained `network-idle`, which waits until every request has finished and the page has gone quiet instead of guessing which element to watch; page reads now carry `parent` and `depth` per node, so a button can be attributed to the dialog it sits in; and `screenshot_browser_tab` takes `inline` to return the image itself, for clients that cannot open a local path.
 - **The AI can measure performance too**: `measure_browser_performance` reports, for a short observation window, each of the eight metrics' mean, peak, when the peak happened and the latest reading — from the same CDP counters Chrome's performance monitor uses, so "is this page slow" stops being a guess. Consecutive calls continue where the previous one left off and sampling keeps running in between, which is what lets "measure, click, measure again" show the cost of that click; the peak's offset pairs with the timestamps of console lines. `read_browser_performance` serves callers that want the points. When the panel is already sampling, an AI read takes it over instead of restarting it, so a user's chart is never wiped.
+- **Fixed the Dock icon disappearing on macOS**: creating the floating strip or the identity label transformed the whole process into a menu-bar (accessory) app and nothing ever transformed it back, taking the Dock icon, the app menu and Cmd+Tab with it. Showing on every Space is kept; the process type is no longer touched.
+- **Fixed the macOS app menu stealing page shortcuts**: Cmd+R / Cmd+Shift+R / Cmd+±/0 acted on the shell — reloading the whole UI and zooming the chrome instead of the page — and Cmd+W closed the window or quit the app outright. They now forward to the framed page; Cmd+W closes the tab first and only falls back to the window when there is none, and closing the window moved to Cmd+Shift+W.
+- **Fixed macOS engine versions, orphan-browser sweeping and a spurious teardown error**: the `Info.plist` lookup walked one directory too far, so every engine reported no version; `ps` output holds an unquoted profile path with spaces, which was cut at the first space so no leftover browser was ever recognised; and `taskkill` was spawned on non-Windows platforms, raising an async error nothing could catch.
 
 ## [2.0.0] - 2026-11-08
 

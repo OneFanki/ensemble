@@ -20,6 +20,22 @@ describe("process registry", () => {
     expect(profileDirFromCommandLine("/usr/bin/chrome --no-first-run")).toBeUndefined();
   });
 
+  it("keeps an unquoted value that contains spaces", () => {
+    // `ps` joins argv with spaces and quotes nothing. Stopping at the first
+    // space turned the macOS profile root into `/Users/me/Library`, so orphan
+    // sweeping never recognised a single browser it had launched.
+    expect(
+      profileDirFromCommandLine(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/me/Library/Application Support/Ensemble/profiles/env/id --no-first-run",
+      ),
+    ).toBe("/Users/me/Library/Application Support/Ensemble/profiles/env/id");
+    expect(
+      profileDirFromCommandLine(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/Users/me/Library/Application Support/Ensemble/profiles/env/id",
+      ),
+    ).toBe("/Users/me/Library/Application Support/Ensemble/profiles/env/id");
+  });
+
   it("normalizes separators and case for comparison", () => {
     expect(normalizeForCompare("C:\\Users\\ME\\Profiles\\")).toBe("c:/users/me/profiles");
     expect(normalizeForCompare("/home/me/profiles/")).toBe("/home/me/profiles");

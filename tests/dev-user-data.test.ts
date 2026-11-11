@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEV_APP_NAME, DEV_USER_DATA_DIR_NAME, devUserDataDir, userDataDirArg } from "../src/main/user-data";
 
@@ -16,7 +17,7 @@ describe("development workspace directory", () => {
   it("gives a development build a directory beside the installed app", () => {
     expect(
       devUserDataDir({ packaged: false, appDataDir: APPDATA, argv: [] }),
-    ).toBe(`${APPDATA}\\${DEV_USER_DATA_DIR_NAME}`);
+    ).toBe(join(APPDATA, DEV_USER_DATA_DIR_NAME));
   });
 
   it("leaves a packaged build on Electron's default path", () => {

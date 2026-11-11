@@ -18,10 +18,29 @@ describe("macOS app menu contract", () => {
     expect(main).toMatch(/IPC\.appOpenSettings/);
   });
 
-  it("keeps the standard editing and window roles", () => {
-    for (const role of ['role: "quit"', 'role: "editMenu"', 'role: "minimize"', 'role: "close"']) {
+  it("keeps the standard window roles but owns the close bindings", () => {
+    for (const role of ['role: "quit"', 'role: "editMenu"', 'role: "minimize"']) {
       expect(main).toContain(role);
     }
+    // Cmd+W closes the framed page; only an empty stage falls back to the
+    // window. Cmd+Shift+W is the explicit window close.
+    expect(main).toContain('accelerator: "Command+W"');
+    expect(main).toContain("closeActiveTabOrWindow()");
+    expect(main).toContain('accelerator: "Command+Shift+W"');
+    expect(main).not.toContain('{ role: "close" }');
+  });
+
+  it("does not hand the View menu to the stock role", () => {
+    // AppKit consumes these accelerators before `before-input-event`, and the
+    // role acts on the shell: Cmd+R reloaded the whole UI and Cmd+± zoomed the
+    // chrome instead of the page the user was looking at.
+    expect(main).not.toContain('{ role: "viewMenu" }');
+    expect(main).toContain("embedded?.reloadActive()");
+    expect(main).toContain("embedded?.hardReloadActive()");
+    expect(main).toContain("embedded?.toggleDevToolsForFocusedPage()");
+    expect(main).toContain('embedded?.zoomActive("in")');
+    expect(main).toContain('embedded?.zoomActive("out")');
+    expect(main).toContain('embedded?.zoomActive("reset")');
   });
 
   it("holds the settings request until the page has finished loading", () => {
@@ -34,5 +53,18 @@ describe("macOS app menu contract", () => {
     expect(i18n).toMatch(/"menu\.settings": "Settings…"/);
     expect(i18n).toMatch(/"menu\.window": "窗口"/);
     expect(i18n).toMatch(/"menu\.window": "Window"/);
+    for (const key of [
+      "menu.view",
+      "menu.reload",
+      "menu.forceReload",
+      "menu.devtools",
+      "menu.zoomIn",
+      "menu.zoomOut",
+      "menu.zoomReset",
+      "menu.closeTab",
+      "menu.closeWindow",
+    ]) {
+      expect(i18n).toMatch(new RegExp(`"${key}":`));
+    }
   });
 });

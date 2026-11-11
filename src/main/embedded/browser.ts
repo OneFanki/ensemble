@@ -2483,6 +2483,18 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Zooms whatever page the chrome is currently framing (app-level Cmd+±/0).
+   *
+   * The menu accelerator is the only path left for these keys once the native
+   * View menu stops using Electron's `viewMenu` role, so the active page has to
+   * be addressable without the renderer naming a tab id.
+   */
+  zoomActive(direction: "in" | "out" | "reset"): number | undefined {
+    if (!this.activeTabId) return undefined;
+    return this.zoomBy(this.activeTabId, direction);
+  }
+
+  /**
    * Drops the page's HTTP cache, then reloads it — "empty cache and reload".
    *
    * The cache is per session, not per page: Electron offers no per-URL purge, so
@@ -2552,6 +2564,19 @@ export class EmbeddedBrowser {
     const contents = tab?.view?.webContents;
     if (!contents || contents.isDestroyed()) return;
     contents.focus();
+  }
+
+  /**
+   * Closes whatever page the chrome is currently framing.
+   *
+   * Returns false when nothing is open, so the caller can fall back to the
+   * window: on a settings page Cmd+W must still close the window, not do
+   * nothing.
+   */
+  closeActiveTab(): boolean {
+    if (!this.activeTabId) return false;
+    this.closeTab(this.activeTabId);
+    return true;
   }
 
   closeTab(tabId: string): EmbeddedState {

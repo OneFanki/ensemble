@@ -1319,7 +1319,14 @@ function ensureOverlay(): BrowserWindow {
   });
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "screen-saver");
   if (process.platform === "darwin") {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // skipTransformProcessType is load-bearing, not a tuning knob: without it
+    // Electron transforms the whole process to UIElementApplication (accessory)
+    // and never transforms it back, so the Dock icon, the app menu and Cmd+Tab
+    // all disappear the first time the strip is created.
+    win.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true,
+    });
   }
   // Topmost is not a one-time switch: loses to other topmost windows and to
   // focus transitions, so every state change that can drop it re-applies it.
@@ -1589,7 +1596,12 @@ function ensureFocusLabel(): BrowserWindow {
   win.setIgnoreMouseEvents(true);
   win.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "screen-saver");
   if (process.platform === "darwin") {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Same reason as the strip: the default transform would turn the process
+    // into a UIElementApplication and take the Dock icon with it.
+    win.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true,
+    });
   }
   win.on("closed", () => {
     if (focusLabelWindow === win) focusLabelWindow = null;
@@ -1835,8 +1847,10 @@ function ensureTrayMenuMatches(count: number): void {
  * live in the menu, not in Chromium. Windows and Linux keep the bare window —
  * there the menu bar would draw a strip the layout does not account for.
  *
- * Everything except the settings entry comes from Electron's own roles, so the
- * labels follow the system language.
+ * The app menu, the edit menu and the window roles come from Electron's own
+ * roles, so their labels follow the system language. View and the close
+ * bindings are built by hand: the stock roles act on the shell instead of the
+ * embedded page, and Cmd+W must close a tab before it closes a window.
  */
 function buildMacMenu(): Menu {
   return Menu.buildFromTemplate([
@@ -1861,22 +1875,83 @@ function buildMacMenu(): Menu {
       ],
     },
     { role: "editMenu" },
-    { role: "viewMenu" },
-    // `windowMenu` carries Minimize/Zoom/Front but not Close, and Cmd+W is a
-    // standard macOS binding — with `closeToTray` it hides the window instead of
-    // ending the session, which is exactly what the close button already does.
+    // Not Electron's stock View menu: AppKit consumes a menu accelerator before the
+    // key reaches `before-input-event`, and the role's reload/zoom act on the
+    // shell's own webContents — reloading the whole UI and zooming the chrome
+    // instead of the page the user is looking at. Every item below forwards to
+    // the embedded browser, which is the surface these keys drive.
+    {
+      label: t("menu.view"),
+      submenu: [
+        {
+          label: t("menu.reload"),
+          accelerator: "Command+R",
+          click: () => embedded?.reloadActive(),
+        },
+        {
+          label: t("menu.forceReload"),
+          accelerator: "Command+Shift+R",
+          click: () => embedded?.hardReloadActive(),
+        },
+        { type: "separator" },
+        {
+          label: t("menu.devtools"),
+          accelerator: "Command+Alt+I",
+          click: () => embedded?.toggleDevToolsForFocusedPage(),
+        },
+        { type: "separator" },
+        {
+          label: t("menu.zoomIn"),
+          accelerator: "Command+Plus",
+          click: () => embedded?.zoomActive("in"),
+        },
+        {
+          label: t("menu.zoomOut"),
+          accelerator: "Command+-",
+          click: () => embedded?.zoomActive("out"),
+        },
+        {
+          label: t("menu.zoomReset"),
+          accelerator: "Command+0",
+          click: () => embedded?.zoomActive("reset"),
+        },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    // Cmd+W is the browser binding first: close the page, and only fall back to
+    // the window when there is no page to close. The stock close role closed the
+    // window (or quit the app) no matter what the user was looking at.
     {
       label: t("menu.window"),
       submenu: [
+        {
+          label: t("menu.closeTab"),
+          accelerator: "Command+W",
+          click: () => closeActiveTabOrWindow(),
+        },
+        {
+          label: t("menu.closeWindow"),
+          accelerator: "Command+Shift+W",
+          click: () => mainWindow?.close(),
+        },
+        { type: "separator" },
         { role: "minimize" },
         { role: "zoom" },
-        { type: "separator" },
-        { role: "close" },
         { type: "separator" },
         { role: "front" },
       ],
     },
   ]);
+}
+
+/**
+ * Cmd+W closes the framed page; with nothing framed it means the window, which
+ * is what the close button already does (hide under `closeToTray`, else quit).
+ */
+function closeActiveTabOrWindow(): void {
+  if (embedded?.closeActiveTab()) return;
+  mainWindow?.close();
 }
 
 /** Opens Settings from the native menu; the renderer owns the page itself. */
@@ -2758,7 +2833,7 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.credentialsCopy, async (owner: PasswordOwner) => {
     const password = await workspace.copyPassword(passwordOwnerSchema.parse(owner));
     if (!password) return false;
-    clipboard.writeText(password);
+    await clipboard.writeText(password);
     setTimeout(() => {
       void clipboard.readText().then((current) => {
         if (current === password) clipboard.clear();

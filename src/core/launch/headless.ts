@@ -156,9 +156,18 @@ function stopProcessTree(pid: number, timeoutMs: number): Promise<void> {
       // its profile — the check may have refreshed a cookie, and a kill in the
       // middle of that write is how a profile loses its login state.
       if (await waitForProcessExit(pid, timeoutMs)) return resolve();
-      // Chromium's helper processes outlive a plain kill on Windows.
+      // Chromium's helper processes outlive a plain kill on Windows; elsewhere
+      // there is no taskkill at all, and spawning it produced an async ENOENT
+      // that the surrounding try/catch could not catch.
       try {
-        spawn("taskkill", ["/T", "/F", "/PID", String(pid)], { stdio: "ignore" });
+        if (process.platform === "win32") {
+          const child = spawn("taskkill", ["/T", "/F", "/PID", String(pid)], {
+            stdio: "ignore",
+          });
+          child.on("error", () => {});
+        } else {
+          process.kill(pid, "SIGKILL");
+        }
       } catch {
         // Best effort; the tree is already detached from us.
       }

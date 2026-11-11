@@ -53,7 +53,10 @@ export function macAppExecutable(appDir: string, appName: string): string {
 }
 
 export async function readMacBundleVersion(executable: string): Promise<string | undefined> {
-  const contents = join(executable, "..", "..", "..");
+  // `<name>.app/Contents/MacOS/<name>` → two levels up is `Contents`, which is
+  // where Info.plist lives. Three levels up is the bundle root and has none,
+  // which made every macOS engine report a missing version.
+  const contents = join(executable, "..", "..");
   const plist = join(contents, "Info.plist");
   if (!existsSync(plist)) return undefined;
   try {

@@ -60,8 +60,12 @@ export function parseWindowsProcessList(stdout: string): ProcessInfo[] {
 }
 
 export function profileDirFromCommandLine(commandLine: string): string | undefined {
-  const match = commandLine.match(/--user-data-dir=(?:"([^"]+)"|(\S+))/i);
-  return match?.[1] ?? match?.[2];
+  // `ps` joins argv with spaces and adds no quotes, so an unquoted value can
+  // contain spaces (`~/Library/Application Support/…` on macOS). Stop at the
+  // next option instead of the first space.
+  const match = commandLine.match(/--user-data-dir=(?:"([^"]+)"|(.+?)(?=\s+--|$))/i);
+  const value = match?.[1] ?? match?.[2];
+  return value?.trim() || undefined;
 }
 
 export function normalizeForCompare(path: string): string {

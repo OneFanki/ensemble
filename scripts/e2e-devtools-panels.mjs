@@ -382,45 +382,79 @@ try {
     cadence,
   );
 
-  // --- The sampling settings actually reach the sampler --------------------
+  // --- The interval knob reaches the sampler --------------------------------
   // Both knobs cross a process boundary: settings live in the main process, the
   // panel reads the window back out of them to draw its axis, and the sampler
   // reads the interval. A break in that wire leaves the UI looking correct while
-  // nothing behind it changed.
+  // nothing behind it changed. Driven through the panel's own select, because
+  // that is the only way a user can reach it now.
   const coarse = await client.evaluate(`(async () => {
-    await window.ensemble.saveAppSettings({ perfSampleIntervalMs: 500 });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const trigger = document.querySelector('[data-perf-interval] .select-trigger');
+    if (!trigger) return { trigger: false };
+    trigger.click();
+    await wait(250);
+    const options = [...document.querySelectorAll('[data-floating-panel] [role="option"]')];
+    [...options].find((el) => el.textContent.includes('500 ms'))?.click();
     // Re-entering the tab restarts the sampler, which is the documented way a
     // cadence change takes effect.
     await window.ensemble.showEmbeddedDevtoolsTab(${JSON.stringify(tabId)}, "front-end");
-    await new Promise((r) => setTimeout(r, 300));
+    await wait(300);
     await window.ensemble.showEmbeddedDevtoolsTab(${JSON.stringify(tabId)}, "performance");
-    await new Promise((r) => setTimeout(r, 3000));
+    await wait(3000);
     const samples = await window.ensemble.readEmbeddedPerf(${JSON.stringify(tabId)});
     const gaps = samples.slice(1).map((s, i) => s.t - samples[i].t);
+    const saved = (await window.ensemble.getWorkspace())?.settings ?? {};
     return {
+      trigger: true,
+      saved: saved.perfSampleIntervalMs ?? null,
+      shown: document.querySelector('[data-perf-interval] .select-value')?.textContent?.trim() ?? "",
       count: samples.length,
       meanGap: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : 0,
     };
   })()`);
   check(
-    "a coarser sampling interval slows the sampler down",
-    coarse?.count >= 3 && coarse.meanGap >= 400,
+    "the panel's interval knob saves, and a coarser value slows the sampler",
+    coarse?.trigger === true &&
+      coarse?.saved === 500 &&
+      coarse?.shown === "500 ms" &&
+      coarse?.count >= 3 &&
+      coarse.meanGap >= 400,
     coarse,
   );
 
+  // --- The window knob lives in the panel, and it really moves the axis ----
+  // Both knobs used to be Settings rows, which meant leaving the page being
+  // measured to change how it was being measured. They sit in the panel's header
+  // now, so this drives the panel's own control rather than the settings API: a
+  // select that draws the right window but never saves is exactly the failure
+  // this pairing is for.
   const wide = await client.evaluate(`(async () => {
-    await window.ensemble.saveAppSettings({ perfWindowMs: 60000 });
-    // The panel polls at 4 Hz, so its header needs a moment to pick the change up.
-    await new Promise((r) => setTimeout(r, 900));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const trigger = document.querySelector('[data-perf-window] .select-trigger');
+    if (!trigger) return { trigger: false };
+    trigger.click();
+    await wait(250);
+    const options = [...document.querySelectorAll('[data-floating-panel] [role="option"]')];
+    const labels = options.map((el) => el.textContent.replace(/\\s+/g, ' ').trim());
+    [...options].find((el) => el.textContent.includes('1 min'))?.click();
+    await wait(900);
     const saved = (await window.ensemble.getWorkspace())?.settings ?? {};
     return {
-      label: document.querySelector('[data-perf-clock]')?.textContent?.trim() ?? "",
+      trigger: true,
+      labels,
       settings: saved.perfWindowMs ?? null,
+      shown: document.querySelector('[data-perf-window] .select-value')?.textContent?.trim() ?? "",
+      // One sample is enough to prove the axis was rebuilt from the new window.
+      samples: (await window.ensemble.readEmbeddedPerf(${JSON.stringify(tabId)})).length,
     };
   })()`);
   check(
-    "the chart names the window the settings ask for",
-    /60/.test(wide?.label ?? "") && wide?.settings === 60_000,
+    "the panel carries the window knob and saves the choice",
+    wide?.trigger === true &&
+      wide?.labels?.join(",").includes("1 min") &&
+      wide?.settings === 60_000 &&
+      wide?.shown === "1 min",
     wide,
   );
   // Back to the defaults: later checks time their waits against them.

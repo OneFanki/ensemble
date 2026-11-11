@@ -2,6 +2,7 @@
 import type { PerfMetric, PerfSample } from "@shared/embedded";
 import {
   PERF_METRICS,
+  PERF_SAMPLE_INTERVAL_DEFAULT_MS,
   PERF_WINDOW_DEFAULT_MS,
   perfArea,
   perfAxisLabel,
@@ -13,6 +14,7 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
+import SelectField from "./SelectField.vue";
 
 /**
  * Performance monitor: the same numbers Chrome's own panel shows, as a live
@@ -38,11 +40,49 @@ import { useWorkspaceStore } from "../stores/workspace";
  * (see `showDevtoolsTab`). This component polls the history rather than waiting
  * for a state broadcast: pushing a full workspace state five times a second
  * would make the panel itself the load being measured.
+ *
+ * The window and the interval are configured here, not in Settings. Both are
+ * questions about the chart in front of you — "this stutter is too short to see"
+ * and "this climb needs a longer reach" — and answering them used to mean
+ * leaving the page you were measuring, changing a value, and coming back. The
+ * two controls sit in the panel's header, next to the numbers they change.
  */
 const props = defineProps<{ tabId: string }>();
 
 const { t } = useI18n();
 const workspace = useWorkspaceStore();
+
+/**
+ * The two knobs, as fixed choices.
+ *
+ * Fixed rather than free-typed: both values multiply (window ÷ interval is how
+ * many points get drawn and kept), so a hand-typed pair can ask for a thousand
+ * points per series. These are the pairs that are actually useful — a stutter
+ * hunt wants a fine interval in a narrow window, a slow leak wants the opposite.
+ */
+const WINDOW_OPTIONS = [
+  { value: "10000", label: "10 s" },
+  { value: "20000", label: "20 s" },
+  { value: "60000", label: "1 min" },
+  { value: "120000", label: "2 min" },
+];
+
+const INTERVAL_OPTIONS = [
+  { value: "100", label: "100 ms" },
+  { value: "200", label: "200 ms" },
+  { value: "500", label: "500 ms" },
+  { value: "1000", label: "1 s" },
+];
+
+function setWindow(value: string | undefined): void {
+  void workspace.saveSettings({ perfWindowMs: Number(value ?? PERF_WINDOW_DEFAULT_MS) });
+}
+
+function applySampleInterval(value: string | undefined): void {
+  void workspace.saveSettings({
+    perfSampleIntervalMs: Number(value ?? PERF_SAMPLE_INTERVAL_DEFAULT_MS),
+  });
+}
 
 /**
  * The chart's span, in milliseconds.
@@ -54,6 +94,11 @@ const workspace = useWorkspaceStore();
  * history it draws can never disagree.
  */
 const windowMs = computed(() => workspace.settings.perfWindowMs || PERF_WINDOW_DEFAULT_MS);
+
+/** The interval the main process is actually sampling at, for the header. */
+const intervalMs = computed(
+  () => workspace.settings.perfSampleIntervalMs || PERF_SAMPLE_INTERVAL_DEFAULT_MS,
+);
 
 const history = ref<PerfSample[]>([]);
 const hidden = ref<Set<PerfMetric>>(new Set());
@@ -221,26 +266,45 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   }
   return result;
 });
-
-/** The window's own length, which is also the axis span; the header names it. */
-const windowLabel = computed(() => Math.round(windowMs.value / 1000));
 </script>
 
 <template>
   <div class="perf-panel" data-perf-panel>
     <div class="perf-inner">
       <!--
-        Header mirrors the row layout: title left, counts at the right end, and
-        a "peak" caption over the column the peak numbers occupy — so the two
-        sides read as a table rather than as loose text.
+        Header: title, the two knobs, then the peak caption over the column the
+        peak numbers occupy — so the sides read as a table rather than as loose
+        text.
+
+        The knobs live here rather than in Settings because they are questions
+        about the chart in front of you: a 30ms stutter is invisible in a 200ms
+        series, and a slow leak needs a minute of reach. Changing either used to
+        mean leaving the page being measured, finding a settings row, and coming
+        back — with the sampler restarted from scratch on return.
       -->
       <div class="perf-head">
         <span class="perf-title">{{ t("app.perfTitle") }}</span>
-        <span class="perf-head-spacer">
-          <span v-if="latest" class="perf-clock mono" data-perf-clock>
-            {{ t("app.perfWindow", { seconds: windowLabel }) }}
+        <span class="perf-controls">
+          <span class="perf-knob" :title="t('app.perfWindowSetting')">
+            <SelectField
+              compact
+              :model-value="String(windowMs)"
+              :options="WINDOW_OPTIONS"
+              :aria-label="t('app.perfWindowSetting')"
+              data-perf-window
+              @update:model-value="setWindow"
+            />
           </span>
-          <span v-else class="perf-clock">{{ t("app.perfWaiting") }}</span>
+          <span class="perf-knob" :title="t('app.perfIntervalSetting')">
+            <SelectField
+              compact
+              :model-value="String(intervalMs)"
+              :options="INTERVAL_OPTIONS"
+              :aria-label="t('app.perfIntervalSetting')"
+              data-perf-interval
+              @update:model-value="applySampleInterval"
+            />
+          </span>
         </span>
         <span class="perf-peak-head">{{ t("app.perfPeak") }}</span>
       </div>
@@ -349,7 +413,7 @@ const windowLabel = computed(() => Math.round(windowMs.value / 1000));
 .perf-head {
   display: flex;
   flex: none;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   padding: 0 6px 8px;
   border-bottom: 1px solid var(--line-soft);
@@ -359,15 +423,26 @@ const windowLabel = computed(() => Math.round(windowMs.value / 1000));
   font-size: 10.5px;
   font-weight: 500;
   color: var(--text);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Takes the slack so the clock sits next to the peak label, mirroring where the
-   value and peak numbers sit below. */
-.perf-head-spacer {
+/* The two knobs sit together and take the slack, so the peak caption stays over
+   the peak column whether or not a page has started producing samples. */
+.perf-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   flex: 1 1 auto;
-  text-align: right;
-  font-size: 9.5px;
-  color: var(--faint);
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.perf-knob {
+  flex: 0 0 auto;
 }
 
 .perf-peak-head {
@@ -378,11 +453,6 @@ const windowLabel = computed(() => Math.round(windowMs.value / 1000));
   font-size: 9.5px;
   color: var(--faint);
   text-align: right;
-}
-
-.perf-clock {
-  font-size: 9.5px;
-  color: var(--faint);
 }
 
 .perf-rows {
@@ -410,8 +480,16 @@ const windowLabel = computed(() => Math.round(windowMs.value / 1000));
   cursor: pointer;
 }
 
-.metric-row:hover {
-  background: var(--surface-2);
+/*
+ * No hover fill on the row.
+ *
+ * The row is two lines tall — a name and a 40px chart — so tinting the whole box
+ * lit up the chart as well, and a curve that dims or brightens under the pointer
+ * reads as the data changing. The hover hint belongs to the part that is
+ * actually a control (the tick and the name), so it is scoped to that line.
+ */
+.metric-row:hover .metric-head {
+  color: var(--text);
 }
 
 .metric-row.off {

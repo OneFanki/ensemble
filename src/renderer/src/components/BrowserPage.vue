@@ -18,11 +18,13 @@ import {
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
 import type {
+  AppMessageView,
   Bookmark,
   BookmarkDraft,
   DownloadAction,
   DownloadEntry,
   Identity,
+  LoginCaptureNotice,
   SlotRect,
 } from "@shared/types";
 import {
@@ -65,6 +67,7 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFloatingLayer } from "../composables/floatingLayer";
+import { useMessageRows } from "../composables/messageRows";
 import { useStageGeometry } from "../composables/stageGeometry";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useNavigationStore } from "../stores/navigation";
@@ -72,6 +75,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
 import DevicePanel from "./DevicePanel.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
+import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
 import PerformancePanel from "./PerformancePanel.vue";
@@ -106,6 +110,8 @@ const emit = defineEmits<{
   openGuide: [];
   /** A manual update check from the menu found something to install. */
   updateFound: [result: UpdateCheckResult];
+  /** A message row's "save account": the shell owns the account dialog. */
+  saveCapture: [notice: LoginCaptureNotice];
 }>();
 
 /**
@@ -1387,6 +1393,81 @@ const downloadsAnchor = ref<HTMLElement | null>(null);
 // Same reason as the viewport menu: the panel is a floating layer, so a click on
 // the header has to reach the page to dismiss it.
 useFloatingLayer(downloadsOpen);
+
+/*
+ * The bell, as a popover rather than a door.
+ *
+ * Clicking it used to leave the browser page for the message centre, and there
+ * was no way back: the management page replaces the whole pane, and the browser
+ * has no "return to where I was" control. Someone glancing at an unread message
+ * paid a navigation for it. The bell now opens a list in place — same rows, same
+ * actions — with the full page one click away at its foot, for when the user
+ * wants the history rather than the last few things.
+ */
+const bellOpen = ref(false);
+const bellAnchor = ref<HTMLElement | null>(null);
+useFloatingLayer(bellOpen);
+
+/** What the popover lists: the newest handful, which is what a glance covers. */
+const BELL_ROWS = 5;
+const bellRows = computed(() => workspace.messages.slice(0, BELL_ROWS));
+
+/** Which row's detail is open, and the row itself — the layer positions on it. */
+const bellDetailId = ref<string | null>(null);
+const bellDetailAnchor = ref<HTMLElement | null>(null);
+const bellDetail = computed(
+  () => bellRows.value.find((item) => item.id === bellDetailId.value) ?? null,
+);
+
+const messageRows = useMessageRows((notice) => emit("saveCapture", notice));
+
+/** Opens (or closes) a row's detail beside this popover. */
+function openBellDetail(message: AppMessageView, event: MouseEvent): void {
+  if (!message.action && !message.stale) return;
+  if (bellDetailId.value === message.id) {
+    closeBellDetail();
+    return;
+  }
+  bellDetailAnchor.value = (event.currentTarget as HTMLElement | null) ?? null;
+  bellDetailId.value = message.id;
+}
+
+function closeBellDetail(): void {
+  bellDetailId.value = null;
+  bellDetailAnchor.value = null;
+}
+
+/** Runs a row's action and closes both layers — the action navigates away. */
+async function actFromBell(message: AppMessageView): Promise<void> {
+  bellOpen.value = false;
+  closeBellDetail();
+  await messageRows.act(message);
+}
+
+function removeFromBell(message: AppMessageView): void {
+  closeBellDetail();
+  void workspace.removeMessage(message.id);
+}
+
+/** The popover's own door to the full history. */
+function openMessageCentre(): void {
+  bellOpen.value = false;
+  closeBellDetail();
+  emit("openConsole", "messages");
+}
+
+function toggleBell(): void {
+  bellOpen.value = !bellOpen.value;
+  if (!bellOpen.value) {
+    closeBellDetail();
+    return;
+  }
+  // Opening is the moment to re-read: `stale` is decided by the main process
+  // when the history is fetched, and this popover lives on a page that never
+  // unmounts — without this it would keep offering actions that no longer work
+  // for the whole session.
+  void workspace.refreshMessages();
+}
 const activeDownloads = computed(
   () => downloadEntries.value.filter((entry) => entry.state === "progressing").length,
 );
@@ -1423,9 +1504,16 @@ async function actOnDownload(action: DownloadAction, id?: string) {
 
 /** Closes the panel on a click anywhere else, the way a menu does. */
 function onDocumentPointerDown(event: PointerEvent) {
-  if (!downloadsOpen.value) return;
-  if (downloadsAnchor.value?.contains(event.target as Node)) return;
+  if (!downloadsOpen.value && !bellOpen.value) return;
+  // One check for both panels: they are the same gesture (a press outside the
+  // anchor closes it), and two listeners would each have to re-check the
+  // other's state.
+  const inside =
+    downloadsAnchor.value?.contains(event.target as Node) ||
+    bellAnchor.value?.contains(event.target as Node);
+  if (inside) return;
   downloadsOpen.value = false;
+  bellOpen.value = false;
 }
 
 /* Ctrl+F pressed inside a page: the page swallowed the keystroke, so main tells
@@ -1626,8 +1714,13 @@ function onKeydown(event: KeyboardEvent): void {
       void zoom("reset");
     }
   }
-  if (event.key === "Escape" && findOpen.value) {
-    closeFindBar();
+  if (event.key === "Escape") {
+    // One key, most-specific first: the bell's row detail, then the bell itself,
+    // then the find bar. Otherwise Esc in a popover would also close whatever it
+    // is stacked on, which reads as two things happening at once.
+    if (bellDetailId.value) bellDetailId.value = null;
+    else if (bellOpen.value) bellOpen.value = false;
+    else if (findOpen.value) closeFindBar();
   }
 }
 
@@ -2326,35 +2419,118 @@ function fillMessage(reason?: string): string {
         in the toolbar; this menu is the once-in-a-while list.
       -->
       <!--
-        The bell is a permanent door to the message centre.
+        The bell opens the newest messages in place.
 
-        It used to appear only when something was unread, which made it hard to
-        find ("where do I read my messages?") and made the toolbar gain and lose
-        a control on its own. A dot says "there is news" without changing the
-        button's box — a count inside it did, which pushed the bell and the menu
-        button out of line with every other icon by a pixel, and "9+" is not a
-        number anyone reads before clicking anyway.
+        It used to be a door to the message centre, which cost a navigation for
+        a glance at one line — and the way back was not obvious, because the
+        management page replaces the entire pane. The popover lists the newest
+        few with the same rows and the same actions as the page, and its foot is
+        the door for when the history itself is what you came for.
+
+        A dot says "there is news" without changing the button's box — a count
+        inside it widened the button and pushed the bell and the menu button out
+        of line with every other icon by a pixel, and "9+" is not a number anyone
+        reads before clicking anyway.
       -->
-      <button
-        type="button"
-        class="icon messages-bell"
-        :class="{ unread: workspace.unreadMessages > 0 }"
-        :aria-label="
-          workspace.unreadMessages > 0
-            ? t('app.messagesUnread', { count: workspace.unreadMessages })
-            : t('app.messages')
-        "
-        v-tooltip="
-          workspace.unreadMessages > 0
-            ? t('app.messagesUnread', { count: workspace.unreadMessages })
-            : t('app.messages')
-        "
-        data-messages-bell
-        @click="emit('openConsole', 'messages')"
-      >
-        <Bell :size="15" />
-        <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
-      </button>
+      <div ref="bellAnchor" class="bell-anchor">
+        <button
+          type="button"
+          class="icon messages-bell"
+          :class="{ unread: workspace.unreadMessages > 0, active: bellOpen }"
+          :aria-label="
+            workspace.unreadMessages > 0
+              ? t('app.messagesUnread', { count: workspace.unreadMessages })
+              : t('app.messages')
+          "
+          :aria-expanded="bellOpen"
+          v-tooltip="
+            workspace.unreadMessages > 0
+              ? t('app.messagesUnread', { count: workspace.unreadMessages })
+              : t('app.messages')
+          "
+          data-messages-bell
+          @click="toggleBell"
+        >
+          <Bell :size="15" />
+          <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
+        </button>
+
+        <div v-if="bellOpen" class="bell-panel" role="dialog" :aria-label="t('app.messages')" data-bell-panel>
+          <div class="bell-head">
+            <span>{{ t("app.messages") }}</span>
+            <span v-if="workspace.unreadMessages > 0" class="bell-head-count mono">
+              {{ workspace.unreadMessages }}
+            </span>
+          </div>
+
+          <p v-if="!bellRows.length" class="bell-empty">{{ t("app.messagesEmpty") }}</p>
+
+          <ul v-else class="bell-rows">
+            <li
+              v-for="message in bellRows"
+              :key="message.id"
+              class="bell-row"
+              :class="[message.tone, { unread: !message.read, stale: message.stale, open: bellDetailId === message.id }]"
+              :data-message-kind="message.kind"
+            >
+              <!--
+                Clicking a row opens its detail as a second layer, not as an
+                expansion inside this one.
+
+                Expanding pushed every row below it down, so the list the user
+                was choosing from re-ordered itself under the pointer — and the
+                row they had just read moved away from where they left it. A
+                peek must not rearrange the list it peeks at.
+
+                A row with nothing underneath (no action and not stale) is not a
+                control at all, rather than a disabled button: the shared rule
+                for disabled controls dims the whole row to 45%, which reads as
+                "unavailable" instead of "there is nothing more to see".
+              -->
+              <component
+                :is="message.action || message.stale ? 'button' : 'div'"
+                :type="message.action || message.stale ? 'button' : undefined"
+                class="bell-row-main"
+                :class="{ static: !message.action && !message.stale }"
+                :aria-expanded="message.action || message.stale ? bellDetailId === message.id : undefined"
+                :data-bell-row="message.id"
+                @click="openBellDetail(message, $event)"
+              >
+                <span class="bell-dot-mark" aria-hidden="true"></span>
+                <component :is="messageRows.iconOf(message)" :size="13" class="bell-kind" />
+                <span class="bell-copy">
+                  <span class="bell-title">{{ messageRows.titleOf(message) }}</span>
+                  <span
+                    v-if="message.detail"
+                    class="bell-detail mono"
+                    :title="message.detail"
+                  >{{ message.detail }}</span>
+                </span>
+                <span class="bell-when mono">{{ messageRows.whenOf(message) }}</span>
+              </component>
+            </li>
+          </ul>
+
+          <button type="button" class="bell-foot" data-bell-open-centre @click="openMessageCentre">
+            {{ t("app.messagesOpenCentre") }}
+          </button>
+        </div>
+
+        <!--
+          The row's detail, beside the popover rather than inside it: opening it
+          below the row would push the rest of the list down and move the row the
+          user was reading.
+        -->
+        <MessageDetailLayer
+          :message="bellDetail"
+          :anchor="bellDetailAnchor"
+          placement="left"
+          :width="320"
+          @close="closeBellDetail"
+          @act="actFromBell"
+          @remove="removeFromBell"
+        />
+      </div>
       <div class="app-menu-anchor">
         <button
           type="button"
@@ -3529,6 +3705,11 @@ function fillMessage(reason?: string): string {
  * sit a pixel lower than the rest of the row. `aria-label` on the button still
  * carries the number, so nothing is lost for a screen reader.
  */
+.bell-anchor {
+  position: relative;
+  display: flex;
+}
+
 .messages-bell {
   position: relative;
 }
@@ -3548,6 +3729,187 @@ function fillMessage(reason?: string): string {
   /* A ring in the toolbar's colour keeps the dot legible on hover, where the
      button's own background lights up behind it. */
   box-shadow: 0 0 0 2px var(--surface);
+}
+
+/*
+ * The bell's popover.
+ *
+ * Anchored to the bell's right edge like the downloads panel, because both hang
+ * off the toolbar's right end and a panel that grew leftwards from the button's
+ * centre would look like it belonged to the address bar.
+ */
+.bell-panel {
+  position: absolute;
+  z-index: 71;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 360px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
+}
+
+.bell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+/* The unread count, in the panel: here a number is fine. It sits on its own
+   line inside the panel rather than in the button's box, so it cannot widen the
+   bell and push the toolbar icons out of line. */
+.bell-head-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 9.5px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.bell-empty {
+  margin: 0;
+  padding: 22px 12px;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+  text-align: center;
+}
+
+.bell-rows {
+  list-style: none;
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.bell-row + .bell-row {
+  border-top: 1px solid var(--line-soft);
+}
+
+.bell-row.stale {
+  opacity: 0.55;
+}
+
+/* The row whose detail is open: the layer is beside the popover, so the row
+   itself is the only thing saying which message the layer is about. */
+.bell-row.open .bell-row-main {
+  background: var(--selected);
+}
+
+.bell-row-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 6px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  min-width: 0;
+}
+
+/* A row with nothing underneath: same box, no pointer, no hover. */
+.bell-row-main.static {
+  cursor: default;
+}
+
+.bell-row-main:hover:not(.static) {
+  background: var(--surface-2);
+}
+
+/* The unread marker is a dot, not a tinted row: rows are not selectable, and a
+   tinted row reads as selected. */
+.bell-dot-mark {
+  width: 4px;
+  height: 4px;
+  flex: 0 0 4px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.bell-row.unread .bell-dot-mark {
+  background: var(--accent);
+}
+
+/* The "there is news" dot in the toolbar is the same idea, so it keeps the same
+   hue; only its size differs (it has to be visible at 6px). */
+.bell-kind {
+  flex: 0 0 13px;
+  color: var(--muted);
+}
+
+.bell-row.error .bell-kind {
+  color: var(--red);
+}
+
+.bell-row.warning .bell-kind {
+  color: var(--amber);
+}
+
+.bell-row.success .bell-kind {
+  color: var(--green);
+}
+
+.bell-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bell-title {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bell-row.unread .bell-title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.bell-detail {
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bell-when {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+}
+
+.bell-foot {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-2xs);
+  color: var(--accent-text);
+  text-align: left;
+}
+
+.bell-foot:hover {
+  background: var(--surface-2);
 }
 
 .icon:disabled {

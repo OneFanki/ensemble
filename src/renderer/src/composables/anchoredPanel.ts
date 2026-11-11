@@ -30,6 +30,23 @@ export interface AnchoredPanelOptions {
   style: Ref<Record<string, string>>;
   /** Smallest width the panel may take, in CSS pixels. Defaults to the anchor's. */
   minWidth?: number;
+  /**
+   * Preferred width, overriding the anchor's own.
+   *
+   * A list row spans the whole pane, and a detail panel as wide as the row it
+   * hangs off would be a second page rather than a popover. The width is still
+   * clamped to the window, so a narrow pane shrinks the panel instead of
+   * pushing it off the edge.
+   */
+  width?: number;
+  /**
+   * Which side of the anchor the panel opens on.
+   *
+   * `left` exists for a popover stacked on another popover: opening it below
+   * the row would cover the list it was opened from, so a detail that belongs
+   * to a row in a narrow panel opens beside that panel instead.
+   */
+  placement?: "below" | "left";
   /** Gap between the trigger and the panel. */
   gap?: number;
   /** Margin kept from the window edges. */
@@ -47,7 +64,40 @@ export function useAnchoredPanel(options: AnchoredPanelOptions): {
     const anchor = options.anchor();
     if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
-    const width = Math.max(rect.width, options.minWidth ?? 0);
+    const available = Math.max(0, window.innerWidth - margin * 2);
+    const width = Math.min(options.width ?? Math.max(rect.width, options.minWidth ?? 0), available);
+
+    if (options.placement === "left") {
+      /*
+       * Open to the left of the anchor, vertically aligned with it.
+       *
+       * Used when this panel belongs to a row inside another popover: below the
+       * row it would cover the sibling rows the user is choosing between. If
+       * the left edge would leave the window, the panel goes right instead —
+       * an overlapping panel is still readable, one clipped at the screen edge
+       * is not.
+       */
+      const preferred = rect.left - gap - width;
+      const left = preferred >= margin ? preferred : Math.min(rect.right + gap, window.innerWidth - width - margin);
+      options.style.value = {
+        left: `${Math.max(margin, left)}px`,
+        top: `${Math.max(margin, rect.top)}px`,
+        width: `${width}px`,
+      };
+      void nextTick(() => {
+        // Keep the panel's bottom inside the window: a row near the bottom would
+        // otherwise hang its detail off the edge.
+        const height = options.panel.value?.offsetHeight ?? 0;
+        if (!height) return;
+        const top = Math.min(
+          Math.max(margin, rect.top),
+          Math.max(margin, window.innerHeight - height - margin),
+        );
+        options.style.value = { ...options.style.value, top: `${top}px` };
+      });
+      return;
+    }
+
     const left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
     options.style.value = {
       left: `${left}px`,

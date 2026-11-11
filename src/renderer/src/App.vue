@@ -891,6 +891,7 @@ async function handleLocale(locale: LocaleSetting) {
           @open-workspace="openWorkspace"
           @open-guide="openGuide"
           @update-found="(result) => (updatePrompt = result)"
+          @save-capture="saveCapturedLogin"
         />
         <SitesPage
           v-else-if="view === 'sites'"

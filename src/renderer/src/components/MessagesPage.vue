@@ -1,21 +1,16 @@
 <script setup lang="ts">
 import type { AppMessageView, LoginCaptureNotice, MessageKind } from "@shared/types";
-import {
-  Bot,
-  CircleAlert,
-  CircleCheck,
-  Globe,
-  Info,
-  KeyRound,
-  TriangleAlert,
-  Trash2,
-  X,
-} from "lucide-vue-next";
-import { computed, ref } from "vue";
+import { ChevronRight } from "lucide-vue-next";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import {
+  MESSAGE_KINDS,
+  MESSAGE_KIND_LABELS,
+  useMessageRows,
+} from "../composables/messageRows";
 import { useConfirmStore } from "../stores/confirm";
-import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import MessageDetailLayer from "./MessageDetailLayer.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
 /**
@@ -30,11 +25,13 @@ import PageHeader from "./ui/PageHeader.vue";
  *
  * Rows keep their action as data, so history from a previous run still shows what
  * happened and simply stops offering what it can no longer do.
+ *
+ * This page and the toolbar bell's popover show the same rows; everything about
+ * a row that is not layout comes from `useMessageRows`, so the two cannot drift.
  */
 const store = useWorkspaceStore();
-const embedded = useEmbeddedStore();
 const confirm = useConfirmStore();
-const { t, te } = useI18n();
+const { t } = useI18n();
 
 /**
  * Saving a captured login is the shell's job: it owns the account dialog and the
@@ -42,91 +39,77 @@ const { t, te } = useI18n();
  */
 const emit = defineEmits<{ saveCapture: [notice: LoginCaptureNotice] }>();
 
+const { titleOf, iconOf, whenOf, staleReason, actionLabelOf, act } = useMessageRows(
+  (notice) => emit("saveCapture", notice),
+);
+
+/** The open row, and the row element the detail hangs off. */
+const openedId = ref<string | null>(null);
+const openedAnchor = ref<HTMLElement | null>(null);
+const opened = computed(() => rows.value.find((item) => item.id === openedId.value) ?? null);
+
+/**
+ * Clicking a row opens its detail as a layer.
+ *
+ * The row carries two buttons of its own (act, remove) and used to have them
+ * inline; the click on the row itself had nothing to open. Expanding in place
+ * moves every row below it, which is the one thing a list must not do while you
+ * are reading it — so the detail floats, anchored to its row, and the list stays
+ * put.
+ */
+function openDetail(message: AppMessageView, event: MouseEvent | KeyboardEvent): void {
+  if (!message.action && !message.stale) return;
+  openedAnchor.value = (event.currentTarget as HTMLElement | null) ?? null;
+  openedId.value = message.id;
+  if (!message.read) void store.markMessageRead(message.id);
+}
+
+function closeDetail(): void {
+  openedId.value = null;
+  openedAnchor.value = null;
+}
+
+async function actFromDetail(message: AppMessageView): Promise<void> {
+  closeDetail();
+  await act(message);
+}
+
+function removeFromDetail(message: AppMessageView): void {
+  closeDetail();
+  void store.removeMessage(message.id);
+}
+
 /** null = every kind. */
 const filter = ref<MessageKind | null>(null);
 
-const KINDS: MessageKind[] = ["login-capture", "account", "ai", "app"];
-
-/**
- * Filter labels, named explicitly rather than built from the kind id.
- *
- * Deriving them from the string ("login-capture" → "logincapture") produced keys
- * that exist but read like a machine made them; naming the four is clearer than
- * a transform nobody can check at a glance.
- */
-const KIND_LABELS: Record<MessageKind, string> = {
-  "login-capture": "app.messageKindLoginCapture",
-  account: "app.messageKindAccount",
-  ai: "app.messageKindAi",
-  app: "app.messageKindApp",
-};
+const KINDS = MESSAGE_KINDS;
+const KIND_LABELS = MESSAGE_KIND_LABELS;
 
 const rows = computed(() =>
   filter.value === null ? store.messages : store.messages.filter((item) => item.kind === filter.value),
 );
+
+// The open row can vanish under the layer (cleared, removed, filtered out).
+watch(rows, () => {
+  if (openedId.value && !rows.value.some((item) => item.id === openedId.value)) closeDetail();
+});
+
+/*
+ * Re-read the history on every visit.
+ *
+ * `stale` is decided by the main process when the list is fetched — a capture's
+ * token dies with the process, a tab closes — so a page that keeps the copy it
+ * loaded at startup shows actions that no longer work, and misses messages
+ * recorded while another page was on screen. This page is a destination you
+ * come back to; coming back is the moment to ask again.
+ */
+onMounted(() => void store.refreshMessages());
 
 function kindCount(kind: MessageKind | null): number {
   if (kind === null) return store.messages.length;
   return store.messages.filter((item) => item.kind === kind).length;
 }
 
-/** The headline, translated. A key that no longer exists shows its detail
- * instead of a raw `messages.x` — history survives releases that rename copy. */
-function titleOf(message: AppMessageView): string {
-  if (!te(message.titleKey)) return message.detail ?? message.titleKey;
-  return t(message.titleKey, message.titleParams ?? {});
-}
-
-const ICONS = {
-  "login-capture": KeyRound,
-  account: Globe,
-  ai: Bot,
-  app: Info,
-} as const;
-
-function toneIcon(tone: AppMessageView["tone"]) {
-  if (tone === "error") return CircleAlert;
-  if (tone === "warning") return TriangleAlert;
-  if (tone === "success") return CircleCheck;
-  return ICONS.app;
-}
-
-/**
- * Why a row can no longer act.
- *
- * The two cases differ and the difference matters: a capture's secret is only
- * ever held in memory, so a row from a previous run is unrecoverable by design
- * (nothing was written to disk); a tab or an identity simply is not there any
- * more. Saying "expired" for both would suggest the password might still be
- * somewhere.
- */
-function staleReason(message: AppMessageView): string {
-  if (message.action?.type === "login-capture") return t("app.messageStaleCapture");
-  return t("app.messageStaleTarget");
-}
-
-function whenOf(message: AppMessageView): string {
-  const at = new Date(message.at);
-  if (Number.isNaN(at.getTime())) return "";
-  const sameDay = new Date().toDateString() === at.toDateString();
-  return sameDay
-    ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : at.toLocaleString(undefined, {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}
-
-/**
- * Runs a row's action.
- *
- * Each kind means a different "show me": a capture opens the account form, an
- * account reopens its login page, an AI row switches to the page it touched. The
- * row is marked read on the way, because using it is the strongest possible
- * statement that it was seen.
- */
 /** Clearing also drops every capture the history pointed at, so it asks first. */
 async function clearAll(): Promise<void> {
   const ok = await confirm.ask({
@@ -134,26 +117,6 @@ async function clearAll(): Promise<void> {
     body: t("app.messagesClearBody"),
   });
   if (ok) await store.clearMessages();
-}
-
-async function act(message: AppMessageView): Promise<void> {
-  if (message.stale || !message.action) return;
-  void store.markMessageRead(message.id);
-  if (message.action.type === "login-capture") {
-    const notice = store.pendingLogins.find((item) => item.token === (message.action as { token: string }).token);
-    if (notice) emit("saveCapture", notice);
-    return;
-  }
-  if (message.action.type === "identity") {
-    const { identityId } = message.action;
-    const identity = store.identities.find((item) => item.id === identityId);
-    if (!identity) return;
-    // Opening the account is the fix for every reason a login failed: it puts
-    // the login page on screen with the saved password already typed.
-    await embedded.openIdentity(identityId);
-    return;
-  }
-  await embedded.activate(message.action.tabId);
 }
 </script>
 
@@ -218,60 +181,67 @@ async function act(message: AppMessageView): Promise<void> {
         v-for="message in rows"
         :key="message.id"
         class="row"
-        :class="[message.tone, { unread: !message.read, stale: message.stale }]"
+        :class="[
+          message.tone,
+          {
+            unread: !message.read,
+            stale: message.stale,
+            open: openedId === message.id,
+            static: !message.action && !message.stale,
+          },
+        ]"
         :data-message-kind="message.kind"
+        :data-message-id="message.id"
+        :aria-expanded="message.action || message.stale ? openedId === message.id : undefined"
+        :tabindex="message.action || message.stale ? 0 : undefined"
+        role="button"
+        @click="openDetail(message, $event)"
+        @keydown.enter.prevent="openDetail(message, $event)"
+        @keydown.space.prevent="openDetail(message, $event)"
       >
         <span class="dot" aria-hidden="true"></span>
-        <component
-          :is="message.kind === 'app' ? toneIcon(message.tone) : ICONS[message.kind]"
-          :size="14"
-          class="kind-icon"
-        />
+        <component :is="iconOf(message)" :size="14" class="kind-icon" />
         <div class="copy">
           <p class="title">{{ titleOf(message) }}</p>
           <p v-if="message.detail" class="detail mono">{{ message.detail }}</p>
         </div>
         <span class="when mono">{{ whenOf(message) }}</span>
-        <button
-          v-if="message.action && !message.stale"
-          type="button"
-          class="act"
-          data-message-action
-          @click="act(message)"
-        >
-          {{
-            message.kind === "login-capture"
-              ? $t("app.loginCaptureSave")
-              : message.kind === "ai"
-                ? $t("app.messageGotoTab")
-                : $t("app.messageRelogin")
-          }}
-        </button>
-        <span v-else-if="message.stale" class="stale-note" :title="staleReason(message)">{{
+        <!--
+          The row's state, not its actions: the action and the delete live in the
+          detail layer, so the row stays one target instead of three. "Stale" is
+          the exception — it is why the row has no action, so it belongs here.
+        -->
+        <span v-if="message.stale" class="stale-note" :title="staleReason(message)">{{
           $t("app.messageStale")
         }}</span>
-        <button
-          type="button"
-          class="drop"
-          :aria-label="$t('app.messageRemove')"
-          :title="$t('app.messageRemove')"
-          data-message-remove
-          @click="store.removeMessage(message.id)"
-        >
-          <X :size="11" />
-        </button>
+        <ChevronRight :size="12" class="chevron" aria-hidden="true" />
       </li>
     </ul>
+
+    <!-- The row's detail, anchored to it. `below` here: this page has the room,
+         and the list is not what the user is picking between at that moment. -->
+    <MessageDetailLayer
+      :message="opened"
+      :anchor="openedAnchor"
+      @close="closeDetail"
+      @act="actFromDetail"
+      @remove="removeFromDetail"
+    />
   </section>
 </template>
 
 <style scoped>
+/*
+ * The shared page frame's padding, not this page's own.
+ *
+ * It was inset by 20px with no top padding, which put the title 24px higher than
+ * the same title on every other management page and 8px further left — so
+ * switching to messages read as the whole layout shifting. The shell's band
+ * above the page is what reserves the caption area; the page's own 24/28 inset
+ * sits on top of it like everywhere else.
+ */
 .page {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-  padding: 0 20px 20px;
+  padding: 24px 28px;
 }
 
 .filters {
@@ -314,12 +284,10 @@ async function act(message: AppMessageView): Promise<void> {
   color: var(--text-secondary);
 }
 
-.empty {
-  margin: 40px 0 0;
-  text-align: center;
-  font-size: var(--fs-sm);
-  color: var(--faint);
-}
+/* The shared `.empty` frame owns the margin and the centring. This page used to
+   override the margin to `40px 0 0`, which cancelled the horizontal auto margin:
+   the sentence stayed 560px wide in the top-left corner with its own
+   `text-align: center` only centring it inside that box. */
 
 .rows {
   list-style: none;
@@ -336,10 +304,26 @@ async function act(message: AppMessageView): Promise<void> {
   padding: 9px 4px;
   border-top: 1px solid var(--line-soft);
   min-width: 0;
+  cursor: pointer;
 }
 
 .row:first-child {
   border-top: 0;
+}
+
+.row:hover:not(.static) {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+/* The row whose detail is open. It is the only thing on screen saying which
+   message the layer belongs to, since the layer floats free of the list. */
+.row.open {
+  background: var(--selected);
+}
+
+/* A row with nothing to open: no pointer, no hover, no chevron. */
+.row.static {
+  cursor: default;
 }
 
 .row.unread .title {
@@ -411,36 +395,25 @@ async function act(message: AppMessageView): Promise<void> {
   color: var(--faint);
 }
 
-.act {
-  flex: 0 0 auto;
-  font-size: var(--fs-xs);
-  color: var(--accent-text);
-  padding: 3px 8px;
-  border-radius: 4px;
-}
-
-.act:hover {
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-}
-
 .stale-note {
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   color: var(--faint);
 }
 
-.drop {
+.chevron {
   flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
   color: var(--faint);
-  padding: 3px;
-  border-radius: 4px;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
-.drop:hover {
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  color: var(--text-secondary);
+.row.open .chevron {
+  transform: rotate(90deg);
+}
+
+/* A row with nothing to open has no chevron to offer. */
+.row.static .chevron {
+  visibility: hidden;
 }
 
 .ghost {

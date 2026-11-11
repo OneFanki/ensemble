@@ -382,6 +382,53 @@ try {
     cadence,
   );
 
+  // --- The sampling settings actually reach the sampler --------------------
+  // Both knobs cross a process boundary: settings live in the main process, the
+  // panel reads the window back out of them to draw its axis, and the sampler
+  // reads the interval. A break in that wire leaves the UI looking correct while
+  // nothing behind it changed.
+  const coarse = await client.evaluate(`(async () => {
+    await window.ensemble.saveAppSettings({ perfSampleIntervalMs: 500 });
+    // Re-entering the tab restarts the sampler, which is the documented way a
+    // cadence change takes effect.
+    await window.ensemble.showEmbeddedDevtoolsTab(${JSON.stringify(tabId)}, "front-end");
+    await new Promise((r) => setTimeout(r, 300));
+    await window.ensemble.showEmbeddedDevtoolsTab(${JSON.stringify(tabId)}, "performance");
+    await new Promise((r) => setTimeout(r, 3000));
+    const samples = await window.ensemble.readEmbeddedPerf(${JSON.stringify(tabId)});
+    const gaps = samples.slice(1).map((s, i) => s.t - samples[i].t);
+    return {
+      count: samples.length,
+      meanGap: gaps.length ? Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length) : 0,
+    };
+  })()`);
+  check(
+    "a coarser sampling interval slows the sampler down",
+    coarse?.count >= 3 && coarse.meanGap >= 400,
+    coarse,
+  );
+
+  const wide = await client.evaluate(`(async () => {
+    await window.ensemble.saveAppSettings({ perfWindowMs: 60000 });
+    // The panel polls at 4 Hz, so its header needs a moment to pick the change up.
+    await new Promise((r) => setTimeout(r, 900));
+    const saved = (await window.ensemble.getWorkspace())?.settings ?? {};
+    return {
+      label: document.querySelector('[data-perf-clock]')?.textContent?.trim() ?? "",
+      settings: saved.perfWindowMs ?? null,
+    };
+  })()`);
+  check(
+    "the chart names the window the settings ask for",
+    /60/.test(wide?.label ?? "") && wide?.settings === 60_000,
+    wide,
+  );
+  // Back to the defaults: later checks time their waits against them.
+  await client.evaluate(
+    `window.ensemble.saveAppSettings({ perfSampleIntervalMs: 200, perfWindowMs: 20000 })`,
+  );
+  await wait(400);
+
   // --- Dragging the split must not bring the native front-end back ---------
   // Regression: `placeDevTools` wrote the panel's bounds on every layout pass,
   // so a split drag re-showed the native DevTools over the Device tab. It is a

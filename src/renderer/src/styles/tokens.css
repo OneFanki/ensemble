@@ -46,6 +46,27 @@
   --selected: #2f353d;
   --selected-strong: #3a4048;
 
+  /*
+   * Segmented controls: an inset track with the chosen chip raised inside it.
+   *
+   * Depth, not shadow. On dark the track is *darker* than the surface and the
+   * chip sits between the two, which is the same relationship the light theme
+   * uses in the opposite direction — the chip always comes toward the viewer.
+   * A hairline outlines the chip; nothing casts.
+   */
+  --seg-track: #16191d;
+  --seg-thumb: #333a42;
+  --seg-thumb-line: #3f4650;
+
+  /* The in-app mark (not the application icon): the two back frames recede in
+     greys that invert with the theme, while the front card stays gold. The back
+     frame has to stay visible as a separate outline — at 2:1 against the page it
+     collapsed into the background and the mark read as a single card. */
+  --logo-back: #7a8592;
+  --logo-mid: #98a3b0;
+  --logo-card: #e0a44e;
+  --logo-glyph: #171b22;
+
   /* Text scale: every level clears 4.5:1 on --content. --faint is for icons and
      hairline hints only, never for text that has to be read. */
   --text: #e9edf2;
@@ -59,15 +80,35 @@
   /* Text and fills are different constraints; on dark, both are the amber. */
   --accent-text: #e0a05a;
   --accent-foreground: #1a1206;
-  --accent-soft: rgb(224 160 90 / 14%);
+  /*
+   * A solid tint, not a transparent wash.
+   *
+   * These surfaces sit on more than one background — the chrome, the frame, a
+   * field — and a half-transparent gold re-mixes with each of them: on a white
+   * card it made a cream, on the grey frame an olive. One token cannot hold a
+   * hue across backgrounds. Mixed against the surface where it is actually
+   * used, the result stays the same family wherever it lands.
+   */
+  --accent-soft: color-mix(in srgb, #e0a05a 16%, var(--chrome));
+  /* The strongest action: on dark the accent already is the extreme, so gold
+     stays. See the light theme's note. */
+  --action: var(--accent);
+  --action-hover: var(--accent-strong);
+  --action-foreground: var(--accent-foreground);
   --green: #4fc79b;
-  --amber: #e0a44e;
+  /* Warning, not gold — see the light theme's note. Same hue shift, raised to
+     stay legible on a dark surface. */
+  --amber: #f08b3e;
   --violet: #9d8cf0;
   --rose: #e88a9d;
   --blue: #7aa5ef;
   --red: #e37f76;
+  /* See the light theme's note: the dot is a mark, not text. */
+  --red-mark: #f0604f;
 
-  --role-amber: #e0a44e;
+  /* See the light theme's note. Kept distinct from `--accent` (#e0a05a): the
+     role a user picks is theirs, not the app's. */
+  --role-amber: #d99a4a;
   --role-teal: #3fbfa8;
   --role-violet: #9d8cf0;
   --role-rose: #e88a9d;
@@ -204,10 +245,31 @@
   --line-soft: #eceff3;
   --surface-3: #e9ecef;
 
-  /* Selection on a light surface: a step toward the frame colour rather than the
-     accent, for the same reason the dark theme dropped the amber. */
-  --selected: #e4e8ec;
-  --selected-strong: #d8dee5;
+  /*
+   * Selection on a light surface: a step toward the frame colour rather than the
+   * accent, for the same reason the dark theme dropped the amber.
+   *
+   * Kept deliberately light. An earlier version darkened this to #cfd6de to make
+   * a segmented control's chosen half stand out — computed against the wrong
+   * backdrop. Those chips sit on the chrome, which is pure white, so the extra
+   * weight bought nothing and turned every switch into a grey slab. The
+   * segmented control draws its own recessed track now; this token is for rows
+   * and badges, where it only has to be a step, not a statement.
+   */
+  --selected: #eef1f4;
+  --selected-strong: #e2e7ec;
+
+  /* See the dark theme's note. On light the track sinks to the field colour and
+     the chip comes back up to the card, so a two-pixel-thin selection reads
+     without a heavy fill — and without a shadow, since the shell is flat. */
+  --seg-track: #f1f3f5;
+  --seg-thumb: #ffffff;
+  --seg-thumb-line: #dfe4ea;
+
+  --logo-back: #aeb8c3;
+  --logo-mid: #8a939e;
+  --logo-card: #edb33c;
+  --logo-glyph: #fffaf0;
 
   --text: #14181d;
   --text-secondary: #4d5661;
@@ -216,32 +278,99 @@
   --faint: #7c8691;
 
   /*
-   * The accent on light splits in two, because one colour cannot both fill a
-   * button and carry text on white. Fills take the bright brand gold — the
-   * foreground on them is dark, so the fill is free to be luminous; anything
-   * rendered as text or a glyph takes --accent-text, a deep gold that clears
-   * 4.5:1 on white. Forcing one value to do both is what made every selected
-   * control read as mud. Hover goes *darker* on light (the more extreme
-   * direction), which keeps a pressed control reading as pressed.
+   * The accent on light splits in three, because one colour cannot fill a
+   * button, carry text on white, and mark a row without turning to mush.
+   *
+   *  - `--accent` is the gold that *marks*: a badge, an unread dot, an insertion
+   *    line, a progress bar. Small areas only.
+   *
+   *    It has to be a clean gold, not a brown one. An attempt at "deepening" it
+   *    landed on #c98f2a — hue 38 at 65% saturation — which is the range the eye
+   *    reads as ochre or mustard: a muddy yellow rather than a metal. What makes
+   *    gold read as gold is saturation, not darkness, so this sits at 83%. The
+   *    brightness that made #f3cb59 shout is gone, but the purity is back.
+   *
+   *  - `--accent-text` is for anything that has to be read: links, active icons,
+   *    small labels. Deep gold, 7.2:1 on white.
+   *
+   *  - `--accent-soft` is a solid tint mixed against the surface it is used on,
+   *    so it cannot drift in hue when it lands on the frame instead of a card.
+   *
+   * Nothing here is a large fill. The size is what keeps a bright gold from
+   * becoming the loudest thing on the page — not desaturating it into mud.
+   *
+   * The foreground on gold stays dark in both themes, so the fill is free to be
+   * warm and a badge reads the same in either one.
+   *
+   * Hover goes *darker* on light (the more extreme direction), so a pressed
+   * control keeps reading as pressed.
    */
-  --accent: #f3cb59;
-  --accent-strong: #e0b13a;
-  --accent-text: #8a5c06;
-  --accent-foreground: #2e1f06;
-  --accent-soft: rgb(243 203 89 / 18%);
+  --accent: #edb33c;
+  --accent-strong: #d99e28;
+  --accent-text: #7a4e05;
+  --accent-foreground: #1a1206;
+  --accent-soft: color-mix(in srgb, #edb33c 16%, var(--chrome));
+  /*
+   * The strongest action on the surface — a dialog's save, its create.
+   *
+   * Separate from the accent because "most prominent" and "brand colour" are
+   * different jobs, and on light they point in opposite directions: white is
+   * bright, so the loudest control has to be the *darkest* one, which gold is
+   * not. A gold save button on a white dialog is also the single largest gold
+   * area in the app, exactly where the accent stops reading as an accent. Dark
+   * keeps gold here: against a near-black surface it already is the extreme.
+   */
+  --action: #14181d;
+  --action-hover: #2b3138;
+  --action-foreground: #ffffff;
   --green: #0f7a57;
-  --amber: #8a5c06;
+  /*
+   * `--amber` is the *warning* colour and has nothing to do with the brand gold.
+   *
+   * They used to share a hue: brand #edb33c at H40, warning #8a5c06 at H39, and
+   * the amber role tag at H40 too — four meanings, one hue, differing only in
+   * lightness. An amber dot was ambiguous between "brand mark", "needs
+   * attention", and "this account is tagged amber", and choosing the amber role
+   * looked like choosing the app's own colour. Pushing this to H26 makes it a
+   * true orange: unmistakably a warning, no longer mistakable for the gold, and
+   * 5:1 on white.
+   */
+  --amber: #b45309;
   --violet: #5b46b0;
   --rose: #b23f5c;
   --blue: #2b5fb8;
   --red: #b0342a;
+  /*
+   * The unread dot, kept apart from `--red`.
+   *
+   * `--red` is tuned to be *read* — it is the colour of a destructive button's
+   * label, so it has to clear 4.5:1 on white and lands on a dark brick. Painted
+   * on a 6px dot that shade reads as a dried fleck, not as a signal. This one is
+   * saturated and lifted instead: it survives being three pixels wide, and it is
+   * never used for text.
+   */
+  --red-mark: #e0392b;
 
-  --role-amber: #9a6a0c;
-  --role-teal: #0f7a6c;
-  --role-violet: #5b46b0;
-  --role-rose: #b23f5c;
-  --role-blue: #2b5fb8;
-  --role-slate: #5c6775;
+  /* Role tags are the user's own pick, so this one stays warm — but it moves off
+     the brand hue for the same reason `--amber` did: an identity tagged "amber"
+     should not read as wearing the app's colour, and the six roles have to stay
+     apart from one another.
+   *
+   * These are *marks*, not text, and that changes the colour rule completely.
+   *
+   * A role colour is painted on a 4px dot, a 3px view stripe, a 6px tile corner.
+   * Darkening such a mark to reach text contrast is exactly wrong: at that size
+   * the eye cannot resolve form, only hue, and a dark hue at 4px reads as a dirty
+   * speck rather than as a colour. So these run at 66–84% saturation and mid
+   * lightness — they carry a hue you can name at a glance, and they are never
+   * asked to carry a letter. Text built from these uses the mix helpers instead.
+   */
+  --role-amber: #d89015;
+  --role-teal: #0fa37f;
+  --role-violet: #7b5ce0;
+  --role-rose: #d9456b;
+  --role-blue: #2f7bd8;
+  --role-slate: #6b7a8c;
 
   /*
    * Two layers (a tight contact shadow plus a wide soft one) keep the edge

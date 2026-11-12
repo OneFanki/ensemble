@@ -1130,12 +1130,12 @@ function extraFacts(identity: Identity): string[] {
   background: var(--bg-elevated);
   display: grid;
   place-items: center;
-  color: var(--accent-foreground);
+  color: var(--action-foreground);
 }
 
 .pick-mark.on {
-  border-color: var(--accent-text);
-  background: var(--accent);
+  border-color: transparent;
+  background: var(--action);
 }
 
 /* The status text sits in the same corner, so it yields while selecting. */

@@ -1202,6 +1202,13 @@ async function openBlankInView(
    that has to be learned. Filled, not outlined: on a dock of flat rows an
    outlined button is the one box left, and the accent fill is what makes this
    read as the action rather than as a chip. */
+/* Neutral surface, and the accent is spent on the glyph instead of the label.
+ *
+ * This was a gold-tinted chip with deep-gold text (#7a4e05). Text has to be dark
+ * enough to read, and dark gold is exactly the shade that reads as dirty rather
+ * than as gold — the chip looked like a stain on the frame. The label now uses
+ * the normal secondary text colour, which is legible by construction, and the
+ * only gold left is the plus sign: a mark, at the size where gold works. */
 .add-view {
   margin-left: auto;
   display: inline-flex;
@@ -1210,18 +1217,26 @@ async function openBlankInView(
   height: 22px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
-  border: 0;
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  border: 1px solid var(--line);
+  background: var(--chrome);
+  color: var(--text-secondary);
   font-size: 10.5px;
   white-space: nowrap;
   cursor: pointer;
   flex: none;
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
+}
+
+.add-view :deep(svg) {
+  color: var(--accent);
 }
 
 .add-view:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--accent-strong);
+  background: var(--field);
+  border-color: color-mix(in srgb, var(--line) 60%, var(--accent));
+  color: var(--text);
 }
 
 .collapse-btn {
@@ -1490,10 +1505,6 @@ async function openBlankInView(
   color: var(--faint);
 }
 
-/* The identity colour rides the favicon's corner — the same mark the collapsed
-   strip paints on its tiles — instead of a free-standing dot that pushed every
-   root row 11px deeper than its children. Drawn always: with a placeholder
-   icon the corner is the only thing saying which account the row belongs to. */
 .tab-icon-wrap {
   position: relative;
   flex: none;
@@ -1503,14 +1514,26 @@ async function openBlankInView(
   height: 12px;
 }
 
+/* The identity colour rides the favicon's corner — the same mark the collapsed
+   strip paints on its tiles — instead of a free-standing dot that pushed every
+   root row 11px deeper than its children. Drawn always: with a placeholder
+   icon the corner is the only thing saying which account the row belongs to.
+ *
+ * Six pixels, not four, and ringed in the row's own background.
+ *
+ * At 4px with a grey ring the mark did not read as "this row's account"; it read
+ * as a smudge stuck to the icon's lower-left corner — a couple of users took it
+ * for a rendering misalignment rather than a colour. The mark needs enough area
+ * to show its hue, and the ring has to be the surface colour so it punches the
+ * icon out underneath it instead of blending with it. */
 .row-role {
   position: absolute;
   right: -3px;
   bottom: -3px;
-  width: 4px;
-  height: 4px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 9%, var(--bg));
+  box-shadow: 0 0 0 1.5px var(--chrome);
 }
 
 .tab-label {

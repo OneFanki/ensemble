@@ -850,23 +850,29 @@ function onDropOnNothing(): void {
   gap: 0;
 }
 
+/*
+ * Both panes sit on the content surface, not the window frame.
+ *
+ * They used `--bg`, which is the frame band — the grey of the sidebar and the
+ * dock. Inside the white page that painted two large grey slabs, and the frame
+ * colour is a step *darker* than any surface around them, so they read as
+ * disabled panels rather than as the two halves of one browser. The hairline
+ * border is enough to separate them from the page.
+ *
+ * `flex: 0 0 auto` grows the tree to its content and lets the pane scroll: as a
+ * flex item with the default `flex: 0 1 auto` inside a scrolling column, the
+ * tree was shrunk to the pane's height and its remaining rows painted outside
+ * the bordered box — a long tree looked like two lists, one inside a frame and
+ * one spilling below it.
+ */
 .tree {
   display: flex;
   flex-direction: column;
   gap: 1px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  background: var(--bg);
+  background: var(--chrome);
   padding: 4px;
-  /*
-   * Grow to the content; the pane scrolls.
-   *
-   * As a flex item with the default `flex: 0 1 auto` inside a scrolling column,
-   * the tree was shrunk to the pane's height and its remaining rows simply
-   * painted outside the bordered box — a long tree looked like two lists, one
-   * inside a frame and one spilling below it. The list column already owns the
-   * scroll (`SplitPane`), so this box must not be shortened at all.
-   */
   flex: 0 0 auto;
 }
 
@@ -906,15 +912,18 @@ div.tree-row {
 }
 
 .tree-row.on {
-  --row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
+  --row-bg: var(--selected);
   background: var(--row-bg);
   color: var(--text);
 }
 
-/* Shared drop highlight with the list rows: one visual word for "lands here". */
+/* Shared drop highlight with the list rows: one visual word for "lands here".
+   A drop target is a momentary gesture, so the accent is allowed here — it is a
+   mark, not a state the list sits in. The tint is mixed against the row so it
+   stays the same hue on the pane's white and the frame's grey. */
 .tree-row.drop,
 .row.drop {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--accent-soft);
   outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: -2px;
 }
@@ -1003,7 +1012,7 @@ div.tree-row {
   align-items: center;
   gap: 2px;
   padding-left: 14px;
-  background: linear-gradient(to right, transparent, var(--row-bg, var(--bg)) 10px);
+  background: linear-gradient(to right, transparent, var(--row-bg, var(--chrome)) 10px);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-fast) var(--ease-out);
@@ -1082,7 +1091,7 @@ div.tree-row {
   border-radius: var(--radius);
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--bg);
+  background: var(--chrome);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -1187,11 +1196,12 @@ div.tree-row {
 }
 
 /*
- * Picking mode: a checkbox column and a lit row.
+ * Picking mode: a checkbox column and a raised row.
  *
  * The box is a fixed slot even when unchecked, so rows do not reflow when a
- * check appears; the row itself takes the accent tint, which is how the rest
- * of this shell marks "this one is selected".
+ * check appears; the row takes the same neutral selection step the rest of this
+ * shell uses. A selected row is a position, not an alarm, and picking mode can
+ * have forty of them at once — gold there would turn the list into a warning.
  */
 .pick-box {
   display: grid;
@@ -1201,19 +1211,18 @@ div.tree-row {
   flex: none;
   border-radius: 3px;
   border: 1px solid var(--line);
-  color: var(--bg);
+  color: var(--chrome);
 }
 
 .pick-box.on {
-  background: var(--accent);
-  border-color: var(--accent-text);
+  background: var(--action);
+  border-color: transparent;
+  color: var(--action-foreground);
 }
 
 .row.picked {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--selected);
 }
-
 .pick-count {
   font-size: var(--fs-sm);
   color: var(--text-secondary);

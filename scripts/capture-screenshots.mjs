@@ -506,7 +506,19 @@ const SHOTS = [
   { name: "settings-en", locale: "en", view: "settings-general" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
+  { name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
+  { name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
   { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-main"] },
+  {
+    // The message bell's popover: the same rows the message page shows, with
+    // mark-read available without leaving the browser. Hovered, because the
+    // per-row mark-read button only exists while the pointer is there.
+    name: "bell-popover",
+    locale: "zh",
+    view: "browser",
+    clicks: ["[data-messages-bell]"],
+    hover: "[data-bell-panel] .bell-row-main",
+  },
   {
     // The app menu: the once-in-a-while list, including the launch-surface
     // switch that has no other home now that the title bar is gone.

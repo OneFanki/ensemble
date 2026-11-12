@@ -252,22 +252,21 @@ a {
  * colour being the only filled thing on the row, not from pretending it has
  * thickness.
  *
- * `--accent-strong` is the hover state rather than a computed shade: each theme
- * defines it as the more extreme direction (lighter in dark, darker in light),
- * which is exactly what a flat hover needs and what a single mix formula cannot
- * do for both.
+ * `--action` is the fill, `--action-hover` the hover step, and neither carries a
+ * border: repeating the accent-text gold around a gold fill drew a dark ring
+ * around every primary button. The fill separates itself from the page already.
  */
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent-text);
-  color: var(--accent-foreground);
+  background: var(--action);
+  border: 0;
+  color: var(--action-foreground);
   font-weight: 500;
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: var(--accent-foreground);
+  background: var(--action-hover);
+  border: 0;
+  color: var(--action-foreground);
 }
 
 .btn.ghost {

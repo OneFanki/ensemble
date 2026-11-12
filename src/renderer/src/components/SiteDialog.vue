@@ -419,9 +419,9 @@ function normalizePath(event: Event) {
    not turn gray while the cursor is over it. The shared sheet already does this —
    the local copy exists only because a scoped block outranks it. */
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: var(--accent-foreground);
+  background: var(--action-hover);
+  border-color: transparent;
+  color: var(--action-foreground);
 }
 
 .spacer {

@@ -451,9 +451,9 @@ function iconFor(preset: EmbeddedDevice) {
 }
 
 .btn.primary {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-foreground);
+  border: 0;
+  background: var(--action);
+  color: var(--action-foreground);
 }
 
 .btn.ghost {

@@ -6,6 +6,23 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
 </script>
 
 <template>
+  <!--
+    The same deck as scripts/make-icon.mjs: two recessed frames behind, one
+    filled card in front.
+
+    No plate behind the mark in the interface.
+
+    The application icon keeps its dark plate — it sits among other icons on a
+    taskbar or dock, and the dark square is what makes it hold its ground there.
+    In the interface the plate has the opposite effect: it is a black sticker
+    pasted onto a white page, and it fights the wordmark beside it instead of
+    belonging to it. Dropping the plate also lets the two back frames carry the
+    depth they were drawn for, which the dark plate used to flatten.
+
+    The frames are drawn in greys that invert with the theme, so the stack keeps
+    receding on either surface. Only the front card stays gold in both: that is
+    the mark.
+  -->
   <svg
     class="logo"
     :width="size"
@@ -14,35 +31,36 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
     role="img"
     :aria-label="label"
   >
-    <!--
-      Same deck as scripts/make-icon.mjs: two recessed frames behind, one filled
-      card in front. The plate is dark so the amber shape carries the identity;
-      an amber plate with a dark glyph read as a generic placeholder.
-    -->
-    <rect width="32" height="32" rx="7.5" fill="#171b22" />
     <rect
-      x="6.5"
-      y="5.5"
+      x="4.5"
+      y="3.5"
       width="15"
       height="11"
       rx="2.2"
       fill="none"
-      stroke="#8b7040"
-      stroke-width="1.6"
+      stroke="var(--logo-back, #c9d1d9)"
+      stroke-width="1.7"
     />
     <rect
-      x="9.5"
-      y="8.8"
+      x="7.5"
+      y="6.8"
       width="15"
       height="11"
       rx="2.2"
       fill="none"
-      stroke="#b98544"
-      stroke-width="1.6"
+      stroke="var(--logo-mid, #8a939e)"
+      stroke-width="1.7"
     />
-    <rect x="12.5" y="12.2" width="15" height="11.5" rx="2.2" fill="#e0a44e" />
-    <rect x="15.2" y="15.2" width="6" height="2" rx="1" fill="#0b0d10" />
-    <circle cx="23" cy="18.6" r="1.5" fill="#0b0d10" />
+    <rect x="10.5" y="10.2" width="15" height="11.5" rx="2.2" fill="var(--logo-card, #e0a44e)" />
+    <rect
+      x="13.2"
+      y="13.2"
+      width="6"
+      height="2"
+      rx="1"
+      fill="var(--logo-glyph, #1a1206)"
+    />
+    <circle cx="21" cy="16.6" r="1.5" fill="var(--logo-glyph, #1a1206)" />
   </svg>
 </template>
 

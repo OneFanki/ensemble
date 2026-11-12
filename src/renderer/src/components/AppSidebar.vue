@@ -444,8 +444,15 @@ function startResize(event: PointerEvent): void {
   color: var(--text);
 }
 
+/* The active row's icon keeps the row's own text colour.
+ *
+ * It used to take the accent-text gold (#7a4e05 on light) — a dark brown sitting
+ * beside a near-black label. Two different darks in one row read as
+ * misalignment: the glyph looked like it had slipped out of line with its text
+ * rather than like it was tinted. A 14px mark cannot carry a hue anyway; the
+ * word next to it already says where you are. */
 .nav-item.active .nav-icon {
-  color: var(--accent-text);
+  color: inherit;
 }
 
 .nav-icon {

@@ -1405,13 +1405,20 @@ async function submitMaster() {
  * with every section and ends up as wide as the window; a column reads as a
  * table of contents, has room to grow, and keeps the section title as the only
  * heading on the screen.
+ *
+ * Cancels the shell page's right padding, the same way `.settings-head` cancels
+ * its top one. Without this the scroller stopped 28px short of the window, so
+ * the scrollbar was drawn with a strip of bare background beside it — the track
+ * has to reach the edge. The section still stops where it always did: that gap
+ * moved inward, onto `.scroll`'s own padding.
  */
 .settings-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   gap: var(--space-8);
-  padding: var(--space-6) var(--space-8) 0 0;
+  margin: 0 -28px 0 0;
+  padding: var(--space-6) 0 0 0;
 }
 
 /* Padding is on the body, not on the tab column: the column's own background
@@ -1427,12 +1434,20 @@ async function submitMaster() {
   scrollbar-width: thin;
 }
 
+/* The scroller fills the column edge to edge: its padding is inside itself, so
+   the track sits against the window edge while the cards stop short. The header
+   above it is not inside the scroller, so it carries the same gap on its own —
+   see `.settings-main > .page-head` below. */
 .settings-main {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.settings-main > .page-head {
+  padding-right: var(--space-8);
 }
 
 .tab {
@@ -1457,6 +1472,11 @@ async function submitMaster() {
  * The selected row is a filled surface, the same one the app's own navigation
  * uses for its current item — settings is part of the same window even while it
  * covers it.
+ *
+ * The icon takes the row's own text colour, not the accent. The sidebar's items
+ * work the same way: a row that is on says so with its background, and tinting
+ * its 14px glyph gold added a second, louder signal that the word beside it did
+ * not share. Two cues for one state is what made the row look busy.
  */
 .tab.active {
   background: var(--chrome);
@@ -1464,17 +1484,28 @@ async function submitMaster() {
 }
 
 .tab.active svg {
-  color: var(--accent-text);
+  color: inherit;
 }
 
+/*
+ * The scroller reaches the window edge; only its content is inset.
+ *
+ * The 26px gap used to sit on `.settings-body`, which is this element's parent —
+ * so the scrollbar was painted *inside* that padding and the track ended 26px
+ * short of the window, leaving a strip of bare background to its right. Moving
+ * the inset to this element's own padding puts the track against the edge, where
+ * a scrollbar belongs, and leaves the cards exactly where they were.
+ *
+ * The header is outside the scroller, so it takes the same gap on its own
+ * (`.settings-main > .page-head`) rather than inheriting this padding.
+ */
 .scroll {
-  padding: var(--space-2) 0 var(--space-6);
+  padding: var(--space-2) var(--space-8) var(--space-6) 0;
   overflow-y: auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding-right: 2px;
 }
 
 /*
@@ -1734,27 +1765,38 @@ async function submitMaster() {
   color: var(--faint);
 }
 
+/*
+ * A recessed track with the chosen half standing back up.
+ *
+ * No shadow, no gradient: the shell is flat, and a cast shadow under a 20px chip
+ * was the only place a control pretended to float. Flat does not mean "no
+ * signal" — the chip is a step lighter than the track it sits in, and a hairline
+ * keeps its edge. That difference in depth is what says "chosen"; it just does
+ * not need baked lighting to do it.
+ *
+ * This replaced two earlier attempts, and each failed for its own reason. Gold
+ * fills said "chosen" clearly but a settings page holds a dozen of them, so the
+ * accent stopped being an accent. A grey fill then replaced it — measured
+ * against a field colour this control does not actually sit on, so the chosen
+ * half came out darker than the track and read as a heavy slab.
+ */
 .segmented {
   display: flex;
   gap: 2px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  background: var(--seg-track);
   padding: 2px;
 }
 
-/*
- * The chosen half is filled and the other is not.
- *
- * Both halves used to sit on `--surface-3`, which in the light theme is a barely
- * tinted grey — so a row of these switches showed two identical pale chips and
- * said nothing about which way it was set.
- */
 .seg {
   padding: 5px 10px;
   border-radius: 3px;
   font-size: var(--fs-xs);
   color: var(--muted);
+  transition:
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
 }
 
 .seg:hover {
@@ -1762,9 +1804,10 @@ async function submitMaster() {
 }
 
 .seg.on {
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--seg-thumb);
+  color: var(--text);
   font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--seg-thumb-line);
 }
 
 .vault-row {

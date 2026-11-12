@@ -461,7 +461,9 @@ function submit() {
 .order {
   margin-left: auto;
   font-size: 10.5px;
-  color: var(--role);
+  /* Role colours are tuned as marks, not as text — mixed toward the text colour
+     so the digit stays readable while the ring keeps the identity's hue. */
+  color: color-mix(in srgb, var(--role) 45%, var(--text));
   border: 1px solid color-mix(in srgb, var(--role) 40%, var(--line));
   border-radius: 999px;
   width: 16px;

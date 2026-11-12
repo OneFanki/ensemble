@@ -50,21 +50,31 @@ withDefaults(
   color: var(--text);
 }
 
-/* Flat: one colour, no bevel. The hover step is the theme's own "more extreme"
-   accent, because lighter means more prominent in dark and darker does in light. */
+/*
+ * Flat: one colour, no bevel, no border.
+ *
+ * The border used to repeat the accent-text gold, which on a gold fill drew a
+ * dark outline around every primary button — the one ring in the app. The fill
+ * already separates itself from the page; a second colour around it only made
+ * the shape look printed on.
+ *
+ * The colour comes from `--action`, not `--accent`: on light the most prominent
+ * control has to be the darkest thing available, and gold is not. See the token
+ * definitions.
+ */
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent-text);
-  color: var(--accent-foreground);
+  background: var(--action);
+  border: 0;
+  color: var(--action-foreground);
   font-weight: 500;
 }
 
 /* `.btn:hover` matches a primary button too; restate the fill so it does not
    turn gray under the cursor. */
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: var(--accent-foreground);
+  background: var(--action-hover);
+  border: 0;
+  color: var(--action-foreground);
 }
 
 .btn.ghost {

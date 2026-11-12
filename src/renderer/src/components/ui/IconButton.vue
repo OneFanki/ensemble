@@ -22,6 +22,10 @@ const props = withDefaults(
     variant?: "default" | "danger";
     size?: "md" | "sm";
     active?: boolean;
+    /** Declared rather than falling through: the root is a plain button, so the
+     *  attribute would work anyway, but the type checker rejects unknown props
+     *  on a component and every call site would need a cast. */
+    disabled?: boolean;
   }>(),
   { variant: "default", size: "md" },
 );
@@ -35,6 +39,7 @@ const hint = computed(() => props.title ?? props.ariaLabel);
     class="icon-btn"
     :class="[variant, `size-${size}`, { active }]"
     :aria-label="ariaLabel"
+    :disabled="disabled"
     v-tooltip="hint"
     :aria-pressed="active === undefined ? undefined : active"
   >

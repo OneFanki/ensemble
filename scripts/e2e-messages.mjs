@@ -263,7 +263,37 @@ try {
     bellPanel,
   );
 
-  // 2c) A row's detail is a layer, and opening it must not move the popover.
+  // 2c) A row can be marked read from the popover without opening its detail.
+  // Before this the only path to `read` was the detail layer, so clearing a dot
+  // for a title you had already read meant opening a panel first.
+  const bellMarkRead = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const panel = document.querySelector('[data-bell-panel]');
+    const mark = panel?.querySelector('[data-bell-mark-read]');
+    // The button is hover-revealed; a click works without the pointer.
+    const before = panel?.querySelectorAll('.bell-row.unread').length ?? -1;
+    mark?.click();
+    await wait(450);
+    const after =
+      document.querySelector('[data-bell-panel]')?.querySelectorAll('.bell-row.unread').length ?? -1;
+    return {
+      hadButton: Boolean(mark),
+      before,
+      after,
+      // The popover is still open: marking one read is not a navigation.
+      stillOpen: Boolean(document.querySelector('[data-bell-panel]')),
+    };
+  })()`);
+  check(
+    "a row can be marked read from the popover itself",
+    bellMarkRead?.hadButton === true &&
+      bellMarkRead?.before === 1 &&
+      bellMarkRead?.after === 0 &&
+      bellMarkRead?.stillOpen === true,
+    bellMarkRead,
+  );
+
+  // 2d) A row's detail is a layer, and opening it must not move the popover.
   // This is the regression the design exists for: expanding inside the list
   // pushed every following row down, so the list rearranged itself under the
   // pointer while the user was choosing from it.

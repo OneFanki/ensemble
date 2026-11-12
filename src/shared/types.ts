@@ -415,6 +415,14 @@ export interface AutoFillReport {
    * lets the toast point at the dialog that actually fixes it.
    */
   missingCredential?: "identity-empty" | "site-empty" | "no-site" | "reference-broken";
+  /**
+   * True when the launch actively navigated to the site's login page and then
+   * found no form there.
+   *
+   * "No login form" is ordinary on a landing page and a defect on `/login`; the
+   * flag is what lets the history keep the second case and drop the first.
+   */
+  navigatedToLogin?: boolean;
 }
 
 export interface AppSettings {

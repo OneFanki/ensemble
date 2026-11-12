@@ -7,6 +7,7 @@ import { setCoreLocale, t } from "@core/i18n/translate";
 import { resolveAuthTokenSource } from "@core/cdp/login";
 import { nextActiveInstanceId } from "@core/launch/active-instance";
 import { resolveLoginFields } from "@core/login-fields";
+import { shouldRecordAutoFill } from "@core/autofill-history";
 import {
   disposeWindowFocus,
   foregroundWindowPid,
@@ -796,6 +797,17 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
     loggedIn?: boolean;
     missingFields?: string[];
     skipped?: "no-password" | "not-login-page" | "cross-origin" | "login-failed";
+    /**
+     * True when this run actively navigated to the site's login page and *then*
+     * failed to find a form there.
+     *
+     * "No login form" means two very different things depending on how the run
+     * got to the page. Reaching a landing page or a dashboard that never shows a
+     * password box is the ordinary case — the launch did the right thing by
+     * leaving it alone. Stepping onto `/login` and finding no form is a broken
+     * site or a wrong `loginPath`, which the user does need to know about.
+     */
+    navigatedToLogin?: boolean;
   }): void => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.authAutoFilled, {
@@ -814,10 +826,24 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
      * action reopens that identity's login page, which is the fix for every one
      * of these reasons — missing password, wrong origin, form not found, and the
      * generic "still signed out after signing in".
+     *
+     * "not-login-page" is the exception, because it is not a failure.
+     *
+     * It means the tab came up on a page with no password field — a landing
+     * page, a dashboard, anything reached without a login step — and the poll
+     * simply found nothing to type into. Nothing is broken and there is nothing
+     * to fix; the message said "no login form found", which reads to the user as
+     * "the app failed at something" when the app in fact did exactly the right
+     * thing by leaving the page alone. Recording one of these per launched tab
+     * buried the outcomes that do matter under a note about the ordinary case.
+     *
+     * The one that stays is the contradictory one: the run navigated to the
+     * site's own login path and *still* found no form. That is a real defect —
+     * a wrong `loginPath`, or a site that renders its form somewhere the field
+     * scan cannot see — and it is exactly the sort of thing someone scrolls back
+     * for. It stays visible as a toast either way; this only decides history.
      */
-    if (!extra.skipped && !(extra.filled && extra.submitted && extra.loggedIn === false)) {
-      return;
-    }
+    if (!shouldRecordAutoFill(extra)) return;
     messageStore().add(
       {
         kind: "account",
@@ -913,6 +939,7 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
           report({
             filled: false,
             submitted: false,
+            navigatedToLogin: true,
             skipped:
               filled?.reason === "cross-origin"
                 ? "cross-origin"

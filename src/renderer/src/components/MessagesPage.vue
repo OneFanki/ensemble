@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { AppMessageView, LoginCaptureNotice, MessageKind } from "@shared/types";
-import { ChevronRight } from "lucide-vue-next";
+import { Check, CheckCheck, ChevronRight } from "lucide-vue-next";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
@@ -11,6 +11,7 @@ import {
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
+import IconButton from "./ui/IconButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
 /**
@@ -124,15 +125,14 @@ async function clearAll(): Promise<void> {
   <section class="page">
     <PageHeader :title="$t('app.messages')">
       <template #actions>
-        <button
-          type="button"
-          class="ghost"
+        <IconButton
+          :ariaLabel="$t('app.messagesReadAll')"
           :disabled="store.unreadMessages === 0"
           data-messages-read-all
           @click="store.markAllMessagesRead()"
         >
-          {{ $t("app.messagesReadAll") }}
-        </button>
+          <CheckCheck :size="14" />
+        </IconButton>
         <button
           type="button"
           class="ghost"
@@ -206,6 +206,25 @@ async function clearAll(): Promise<void> {
           <p v-if="message.detail" class="detail mono">{{ message.detail }}</p>
         </div>
         <span class="when mono">{{ whenOf(message) }}</span>
+        <!--
+          Marking a single row read without opening it.
+
+          The row is a `li` with `role="button"`, not a real button, so a nested
+          control is valid here — and the alternative, requiring a click into the
+          detail layer to clear a dot the title already told you about, made the
+          list feel like it was holding the read state hostage.
+        -->
+        <button
+          v-if="!message.read"
+          type="button"
+          class="row-mark"
+          :aria-label="$t('app.messagesMarkRead')"
+          v-tooltip="$t('app.messagesMarkRead')"
+          :data-message-mark-read="message.id"
+          @click.stop="store.markMessageRead(message.id)"
+        >
+          <Check :size="12" />
+        </button>
         <!--
           The row's state, not its actions: the action and the delete live in the
           detail layer, so the row stays one target instead of three. "Stale" is
@@ -393,6 +412,37 @@ async function clearAll(): Promise<void> {
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   color: var(--faint);
+}
+
+/*
+ * The single-row mark-read affordance.
+ *
+ * It lives in the row's flex line rather than absolutely positioned, because
+ * this row keeps its trailing chevron — reserving the slot from the start means
+ * clearing an unread dot does not shift the timestamp or the arrow sideways.
+ * Invisible until hover so an idle list of titles stays quiet, but focusable, so
+ * the keyboard can reach it too.
+ */
+.row-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 4px;
+  color: var(--dim);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+
+.row:hover .row-mark,
+.row-mark:focus-visible {
+  opacity: 1;
+}
+
+.row-mark:hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .stale-note {

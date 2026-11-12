@@ -37,6 +37,7 @@ import {
   BookOpenText,
   Bug,
   Check,
+  CheckCheck,
   Copy,
   CornerDownLeft,
   Download,
@@ -2458,8 +2459,29 @@ function fillMessage(reason?: string): string {
         <div v-if="bellOpen" class="bell-panel" role="dialog" :aria-label="t('app.messages')" data-bell-panel>
           <div class="bell-head">
             <span>{{ t("app.messages") }}</span>
-            <span v-if="workspace.unreadMessages > 0" class="bell-head-count mono">
-              {{ workspace.unreadMessages }}
+            <span class="bell-head-actions">
+              <span v-if="workspace.unreadMessages > 0" class="bell-head-count mono">
+                {{ workspace.unreadMessages }}
+              </span>
+              <!--
+                Marking everything read belongs here, not only on the message
+                page. The popover is where the list is actually skimmed, and
+                before this the only way to clear the badge was to open the full
+                page — a trip out of the browser for something the popover had
+                already shown you.
+              -->
+              <button
+                v-if="bellRows.length"
+                type="button"
+                class="bell-mark-all"
+                :disabled="workspace.unreadMessages === 0"
+                :aria-label="t('app.messagesReadAll')"
+                v-tooltip="t('app.messagesReadAll')"
+                data-bell-mark-all
+                @click="workspace.markAllMessagesRead()"
+              >
+                <CheckCheck :size="13" />
+              </button>
             </span>
           </div>
 
@@ -2508,6 +2530,23 @@ function fillMessage(reason?: string): string {
                 </span>
                 <span class="bell-when mono">{{ messageRows.whenOf(message) }}</span>
               </component>
+              <!--
+                A sibling of `.bell-row-main`, never a child: that element is a
+                button, and a button inside a button is invalid markup with an
+                unreliable hit target. The `li` is the flex container, so this
+                widens into the row on hover instead of covering the timestamp.
+              -->
+              <button
+                v-if="!message.read"
+                type="button"
+                class="bell-row-mark"
+                :aria-label="t('app.messagesMarkRead')"
+                v-tooltip="t('app.messagesMarkRead')"
+                :data-bell-mark-read="message.id"
+                @click.stop="workspace.markMessageRead(message.id)"
+              >
+                <Check :size="12" />
+              </button>
             </li>
           </ul>
 
@@ -3301,9 +3340,11 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
+/* The tint alone says "on"; the glyph keeps the normal text tone rather than
+   the deep accent-text gold, which at this size read as a brown smudge. */
 .layout-btn.is-bench {
   background: var(--accent-soft);
-  color: var(--accent-text);
+  color: var(--text);
 }
 
 /*
@@ -3725,7 +3766,7 @@ function fillMessage(reason?: string): string {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--red);
+  background: var(--red-mark);
   /* A ring in the toolbar's colour keeps the dot legible on hover, where the
      button's own background lights up behind it. */
   box-shadow: 0 0 0 2px var(--surface);
@@ -3769,16 +3810,50 @@ function fillMessage(reason?: string): string {
 /* The unread count, in the panel: here a number is fine. It sits on its own
    line inside the panel rather than in the button's box, so it cannot widen the
    bell and push the toolbar icons out of line. */
+/* A count is information, not an action: it takes the neutral filled step the
+   rest of the shell uses for "there is something here", so the popover's only
+   saturated colour stays the unread dot on the rows themselves. */
 .bell-head-count {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
   border-radius: 8px;
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--selected-strong);
+  color: var(--text-secondary);
   font-size: 9.5px;
   line-height: 16px;
   text-align: center;
+}
+
+/* The count and the mark-all button sit as one group at the end of the header,
+   so a panel with no unread work still keeps the button on the right edge rather
+   than letting `space-between` centre it. */
+.bell-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bell-mark-all {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--dim);
+}
+
+.bell-mark-all:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Nothing unread: the action stays in place but goes quiet. Hiding it would move
+   the count under the cursor every time the last row was read. */
+.bell-mark-all:disabled {
+  color: var(--faint);
+  opacity: 0.5;
+  cursor: default;
 }
 
 .bell-empty {
@@ -3801,8 +3876,65 @@ function fillMessage(reason?: string): string {
   border-top: 1px solid var(--line-soft);
 }
 
+/* Anchor for the row's own mark-read button, which rides beside the row. */
+.bell-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .bell-row.stale {
   opacity: 0.55;
+}
+
+/*
+ * "Mark this one read" appears beside the timestamp on hover.
+ *
+ * Reading a row used to mean opening it — `read` was only ever set by the detail
+ * layer, so clearing a dot for a title you had already read meant opening a
+ * panel first.
+ *
+ * The first version absolutely positioned the button over the timestamp and
+ * faded the time out. Two things were wrong: the timestamp vanished under the
+ * pointer, which reads as the row losing information rather than gaining an
+ * action, and the swap happened on the same hover that highlighted the row, so
+ * one gesture changed three things at once.
+ *
+ * Now it is a flex child that grows from 0 to 18px, so it takes its space from
+ * the title's ellipsis rather than covering anything — and the timestamp never
+ * moves or disappears. Nothing is hard-coded to a timestamp width.
+ */
+.bell-row-mark {
+  display: grid;
+  place-items: center;
+  width: 0;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  color: var(--dim);
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    width var(--motion-fast) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-out);
+}
+
+.bell-row:hover .bell-row-mark,
+.bell-row-mark:focus-visible {
+  width: 18px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bell-row-mark:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Already read: nothing to do, so nothing to hover. */
+.bell-row:not(.unread) .bell-row-mark {
+  display: none;
 }
 
 /* The row whose detail is open: the layer is beside the popover, so the row
@@ -3815,7 +3947,9 @@ function fillMessage(reason?: string): string {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
+  /* Fills the row so its hover highlight spans the whole width; the mark-read
+     button is the `li`'s second child and takes its space from the ellipsis. */
+  flex: 1 1 auto;
   padding: 7px 6px;
   border-radius: var(--radius-sm);
   text-align: left;
@@ -3827,8 +3961,17 @@ function fillMessage(reason?: string): string {
   cursor: default;
 }
 
+/*
+ * Hover is a whisper, not a fill.
+ *
+ * This used `--surface-2`, which is the *field* colour — on the dark panel that
+ * is darker than the panel itself (#1b1f24 under #262b31), so pointing at a row
+ * plunged it into a hole instead of lifting it. Every other hover in the shell
+ * mixes a little of the text colour over whatever is behind, which works in both
+ * themes by construction: it lightens on dark and darkens on light.
+ */
 .bell-row-main:hover:not(.static) {
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 /* The unread marker is a dot, not a tinted row: rows are not selectable, and a
@@ -3985,7 +4128,7 @@ function fillMessage(reason?: string): string {
 }
 
 .zoom-stepper.changed .zoom-value {
-  color: var(--accent-text);
+  color: var(--text);
 }
 
 .zoom-step {

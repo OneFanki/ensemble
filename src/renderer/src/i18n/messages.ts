@@ -920,6 +920,7 @@ export const messages = {
       messagesAll: "全部",
       messagesEmpty: "还没有消息。登录、账号问题与 AI 操作都会记在这里。",
       messagesReadAll: "全部标为已读",
+      messagesMarkRead: "标为已读",
       messagesClear: "清空",
       messagesClearBody: "清空后历史不可恢复，其中未保存的登录也会一并丢弃。",
       messagesOpenCentre: "查看全部消息",
@@ -976,7 +977,7 @@ export const messages = {
       bookmarksBulkDeleteTitle: "删除所选书签",
       bookmarksBulkDeleteBody: "即将删除 {folders} 个文件夹（连同其中全部内容）与 {bookmarks} 个书签。",
       bookmarksBulkDeleted: "已删除 {folders} 个文件夹与 {bookmarks} 个书签",
-      bookmarksPageImport: "导入",
+      bookmarksPageImport: "从其他浏览器导入",
       bookmarkImportTitle: "从浏览器导入书签",
       bookmarkImportHint:
         "直接读取本机已安装浏览器的书签（只读，不改动原浏览器）。重复的地址会自动跳过。",
@@ -2011,6 +2012,7 @@ export const messages = {
       messagesAll: "All",
       messagesEmpty: "Nothing here yet. Sign-ins, account problems and AI actions are recorded here.",
       messagesReadAll: "Mark all read",
+      messagesMarkRead: "Mark read",
       messagesClear: "Clear",
       messagesClearBody: "Clearing cannot be undone, and unsaved logins recorded here are discarded with it.",
       messagesOpenCentre: "View all messages",
@@ -2070,7 +2072,7 @@ export const messages = {
       bookmarksBulkDeleteBody:
         "This removes {folders} folders (with everything inside them) and {bookmarks} bookmarks.",
       bookmarksBulkDeleted: "Removed {folders} folders and {bookmarks} bookmarks",
-      bookmarksPageImport: "Import",
+      bookmarksPageImport: "Import from browser",
       bookmarkImportTitle: "Import bookmarks from a browser",
       bookmarkImportHint:
         "Reads the bookmarks of browsers installed on this machine (read-only; the browsers are not touched). Addresses already here are skipped.",

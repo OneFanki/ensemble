@@ -912,12 +912,23 @@ export interface McpSettings {
   allowRun: boolean;
   allowDelete: boolean;
   /**
-   * Origins where the AI may type and click inside the **daily profile**.
+   * How the AI may act in pages that belong to a profile rather than an account.
    *
-   * Empty by default, and that default is the point: a page in the daily profile
-   * is the user's own signed-in browsing, so an AI gets read access there and
-   * nothing more until the user names the origin. Identity and clean-session
-   * pages are unaffected — those exist to be driven.
+   * `allowlist` and `denylist` read {@link aiOrigins}; the two whole-profile modes
+   * ignore it. The mode and the list are stored separately so switching between
+   * them never loses the addresses the user entered.
+   *
+   * A settings file written before this field existed is loaded as `allowlist`,
+   * which is what those installs already did: an empty list stays read-only and
+   * is never silently widened to "allow all".
+   */
+  aiMode: "allowlist" | "denylist" | "allow-all" | "deny-all";
+  /**
+   * Origins the user named for the profile-page gate.
+   *
+   * Interpreted according to {@link aiMode}: allowed in an allowlist, blocked in a
+   * denylist. Kept as-is in the two whole-profile modes, so returning to a list
+   * mode restores the previous configuration rather than an empty one.
    */
   aiOrigins: string[];
 }
@@ -934,6 +945,7 @@ export interface McpStatus {
   allowWrite: boolean;
   allowRun: boolean;
   allowDelete: boolean;
+  aiMode: "allowlist" | "denylist" | "allow-all" | "deny-all";
   aiOrigins: string[];
   toolCount: number;
   /** Last bind error, if the port could not be used. */
@@ -963,8 +975,19 @@ export interface McpPatch {
   allowWrite?: boolean;
   allowRun?: boolean;
   allowDelete?: boolean;
-  /** Grants or revokes AI input permission for one origin in the daily profile. */
+  /** Which policy the stored origin list is read under. */
+  aiMode?: "allowlist" | "denylist" | "allow-all" | "deny-all";
+  /** Adds or removes one entry of the stored origin list. */
   aiOrigin?: { origin: string; allowed: boolean };
+  /**
+   * Adds several entries at once.
+   *
+   * "Add from bookmarks" can produce dozens of origins, and one call per origin
+   * would rewrite the settings file dozens of times — each write a chance to
+   * leave a half-applied list if the app closes mid-way. Duplicates are dropped
+   * by the server.
+   */
+  aiOriginsAdd?: string[];
   /** Replaces the bearer token; every client must update its config. */
   rotateToken?: boolean;
 }

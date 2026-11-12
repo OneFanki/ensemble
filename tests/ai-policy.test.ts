@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
-import { aiNavigationAllowed, aiOriginOf, aiWriteDenial } from "@shared/ai-policy";
+import { aiNavigationAllowed, aiOriginOf, aiWriteDenial, normalizeAiOrigin } from "@shared/ai-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EmbeddedSurface } from "../src/main/mcp/server";
 import { McpServer, loadMcpSettings, saveMcpSettings } from "../src/main/mcp/server";
@@ -166,7 +166,7 @@ describe("origin policy", () => {
     expect(
       aiWriteDenial(
         { identityId: "id-1", origin: "https://admin.example.com" },
-        { authorizedOrigins: [], knownUrls: [] },
+        { dailyMode: "allowlist", listedOrigins: [], knownUrls: [] },
       ),
     ).toBeUndefined();
   });
@@ -175,24 +175,28 @@ describe("origin policy", () => {
     expect(
       aiWriteDenial(
         { clean: true, origin: "https://admin.example.com" },
-        { authorizedOrigins: [], knownUrls: [] },
+        { dailyMode: "allowlist", listedOrigins: [], knownUrls: [] },
       ),
     ).toBeUndefined();
   });
 
   it("denies a daily page until its origin is authorized", () => {
     const page = { origin: "https://bank.example.com" };
-    expect(aiWriteDenial(page, { authorizedOrigins: [], knownUrls: [] })).toBe(
-      "daily-origin-unauthorized",
-    );
     expect(
-      aiWriteDenial(page, { authorizedOrigins: ["https://bank.example.com"], knownUrls: [] }),
+      aiWriteDenial(page, { dailyMode: "allowlist", listedOrigins: [], knownUrls: [] }),
+    ).toBe("daily-origin-unauthorized");
+    expect(
+      aiWriteDenial(page, {
+        dailyMode: "allowlist",
+        listedOrigins: ["https://bank.example.com"],
+        knownUrls: [],
+      }),
     ).toBeUndefined();
   });
 
   it("denies a page with no web origin", () => {
     expect(
-      aiWriteDenial({ origin: "" }, { authorizedOrigins: [], knownUrls: [] }),
+      aiWriteDenial({ origin: "" }, { dailyMode: "allowlist", listedOrigins: [], knownUrls: [] }),
     ).toBe("unknown-origin");
   });
 
@@ -202,21 +206,104 @@ describe("origin policy", () => {
     expect(
       aiWriteDenial(
         { origin: "https://evil.bank.example.com" },
-        { authorizedOrigins: ["https://bank.example.com"], knownUrls: [] },
+        {
+          dailyMode: "allowlist",
+          listedOrigins: ["https://bank.example.com"],
+          knownUrls: [],
+        },
       ),
     ).toBe("daily-origin-unauthorized");
     expect(
       aiWriteDenial(
         { origin: "https://bank.example.com:8443" },
-        { authorizedOrigins: ["https://bank.example.com"], knownUrls: [] },
+        {
+          dailyMode: "allowlist",
+          listedOrigins: ["https://bank.example.com"],
+          knownUrls: [],
+        },
       ),
     ).toBe("daily-origin-unauthorized");
+  });
+
+  /*
+   * The four modes are four answers to one question, and two of them are
+   * absolute. What matters in the list modes is that the same stored list means
+   * the opposite thing — which is exactly why the mode is a separate field
+   * rather than encoded in the list.
+   */
+  it("reads the same list as an allowlist and as a denylist", () => {
+    const page = { origin: "https://ops.example.com" };
+    const listed = ["https://ops.example.com"];
+    expect(aiWriteDenial(page, { dailyMode: "allowlist", listedOrigins: listed, knownUrls: [] }))
+      .toBeUndefined();
+    expect(aiWriteDenial(page, { dailyMode: "denylist", listedOrigins: listed, knownUrls: [] }))
+      .toBe("daily-origin-blocked");
+
+    const unlisted = { origin: "https://other.example.com" };
+    expect(aiWriteDenial(unlisted, { dailyMode: "allowlist", listedOrigins: listed, knownUrls: [] }))
+      .toBe("daily-origin-unauthorized");
+    expect(aiWriteDenial(unlisted, { dailyMode: "denylist", listedOrigins: listed, knownUrls: [] }))
+      .toBeUndefined();
+  });
+
+  it("lets the two absolute modes win over the list entirely", () => {
+    const listed = ["https://ops.example.com"];
+    // Allow-all: even an address the user explicitly blocked is operable,
+    // because that is what "全部允许" says. The list survives for when they
+    // switch back — see the update test below.
+    expect(
+      aiWriteDenial(
+        { origin: "https://ops.example.com" },
+        { dailyMode: "allow-all", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBeUndefined();
+    expect(
+      aiWriteDenial(
+        { origin: "https://anything.example.com" },
+        { dailyMode: "allow-all", listedOrigins: [], knownUrls: [] },
+      ),
+    ).toBeUndefined();
+    // Deny-all: even a listed address is refused, for the same reason.
+    expect(
+      aiWriteDenial(
+        { origin: "https://ops.example.com" },
+        { dailyMode: "deny-all", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBe("daily-denied-by-policy");
+  });
+
+  it("still allows identity and clean pages under deny-all", () => {
+    // The two absolute modes govern the user's own browsing only. An account
+    // page exists to be driven, and closing that would break the product rather
+    // than protect anything.
+    const policy = { dailyMode: "deny-all" as const, listedOrigins: [], knownUrls: [] };
+    expect(
+      aiWriteDenial({ identityId: "id-1", origin: "https://admin.example.com" }, policy),
+    ).toBeUndefined();
+    expect(
+      aiWriteDenial({ clean: true, origin: "https://admin.example.com" }, policy),
+    ).toBeUndefined();
+  });
+});
+
+describe("origin input", () => {
+  it("accepts a bare host and reduces a URL to its origin", () => {
+    expect(normalizeAiOrigin("example.com")).toBe("https://example.com");
+    expect(normalizeAiOrigin("http://example.com:8080/path?q=1")).toBe("http://example.com:8080");
+    expect(normalizeAiOrigin("  https://例え.jp/  ")).toBe("https://xn--r8jz45g.jp");
+  });
+
+  it("refuses anything that is not a web address", () => {
+    expect(normalizeAiOrigin("")).toBeUndefined();
+    expect(normalizeAiOrigin("file:///C:/Windows")).toBeUndefined();
+    expect(normalizeAiOrigin("javascript:alert(1)")).toBeUndefined();
   });
 });
 
 describe("navigation policy", () => {
   const policy = {
-    authorizedOrigins: [],
+    dailyMode: "allowlist" as const,
+    listedOrigins: [],
     knownUrls: ["http://127.0.0.1:3000", "https://docs.example.com/guide"],
   };
 
@@ -382,6 +469,66 @@ describe("gate at the tool boundary", () => {
     await expect(
       server.update({ aiOrigin: { origin: "file:///C:/", allowed: true } }),
     ).rejects.toThrow();
+  });
+
+  /*
+   * The regression this guards is the one a user hits immediately: they switch
+   * to "allow all" for an afternoon, switch back, and find every address gone.
+   * The mode and the list are separate fields for exactly this reason.
+   */
+  it("keeps the address list across every mode change", async () => {
+    const { surface, touched } = surfaceFor({ url: "https://ops.example.com/panel" });
+    await startServer(surface);
+    await server.update({ aiOrigin: { origin: "https://ops.example.com", allowed: true } });
+
+    for (const aiMode of ["allow-all", "deny-all", "denylist", "allowlist"] as const) {
+      const status = await server.update({ aiMode });
+      expect(status.aiMode, aiMode).toBe(aiMode);
+      expect(status.aiOrigins, aiMode).toEqual(["https://ops.example.com"]);
+    }
+
+    // Back on the allowlist, the address still grants what it granted before.
+    const result = await rpc("click_browser_element", { text: "投放" });
+    expect(result.isError).toBe(false);
+    expect(touched).toEqual(["click"]);
+  });
+
+  it("refuses input under deny-all and restores it under allow-all", async () => {
+    const { surface } = surfaceFor({ url: "https://ops.example.com/panel" });
+    await startServer(surface);
+
+    await server.update({ aiMode: "deny-all" });
+    const denied = await rpc("click_browser_element", { text: "投放" });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain("全部关闭");
+
+    await server.update({ aiMode: "allow-all" });
+    const allowed = await rpc("click_browser_element", { text: "投放" });
+    expect(allowed.isError).toBe(false);
+  });
+
+  it("treats a blocklisted origin as read-only", async () => {
+    const { surface, touched } = surfaceFor({ url: "https://ops.example.com/panel" });
+    await startServer(surface);
+    await server.update({ aiMode: "denylist" });
+    await server.update({ aiOrigin: { origin: "https://ops.example.com", allowed: true } });
+
+    const denied = await rpc("click_browser_element", { text: "投放" });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain("禁止名单");
+    expect(touched).toEqual([]);
+  });
+
+  it("loads a settings file written before the mode existed as an allowlist", () => {
+    const path = join(dir, "mcp-legacy.json");
+    // Exactly what the previous version wrote: no `aiMode`, one authorized origin.
+    writeFileSync(
+      path,
+      JSON.stringify({ enabled: false, port: 0, aiOrigins: ["https://ops.example.com"] }),
+    );
+    const loaded = loadMcpSettings(path, 0);
+    expect(loaded.aiMode).toBe("allowlist");
+    expect(loaded.aiOrigins).toEqual(["https://ops.example.com"]);
   });
 
   it("refuses a cross-origin navigation the workspace never named", async () => {

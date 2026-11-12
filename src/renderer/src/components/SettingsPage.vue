@@ -20,7 +20,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Upload,
-  X,
 } from "lucide-vue-next";
 import { storeToRefs } from "pinia";
 import type { Component } from "vue";
@@ -29,7 +28,9 @@ import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
+import AiPolicyEditor from "./AiPolicyEditor.vue";
 import AppButton from "./ui/AppButton.vue";
+import HintIcon from "./ui/HintIcon.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SettingGroup from "./ui/SettingGroup.vue";
 import SettingRow from "./ui/SettingRow.vue";
@@ -1238,29 +1239,17 @@ async function submitMaster() {
             <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
 
             <!--
-              Origins where the AI may act inside the daily profile. Listed here as
-              well as in the browser toolbar because this is where the user thinks
-              about what the AI is allowed to do; the toolbar entry exists because
-              that is where they notice it needs granting.
+              The AI gate for profile pages. One shared editor with the toolbar
+              shield: this page is where the policy is thought about, the shield is
+              where it is noticed, and both must offer the same four modes.
             -->
-            <SettingRow v-if="mcp" :label="$t('app.mcpAiOrigins')" :hint="$t('app.mcpAiOriginsNote')">
-              <div class="origin-list">
-                <span v-if="!mcp.aiOrigins.length" class="origin-empty">
-                  {{ $t("app.mcpAiOriginsEmpty") }}
-                </span>
-                <span v-for="origin in mcp.aiOrigins" :key="origin" class="origin-chip mono">
-                  {{ origin }}
-                  <button
-                    type="button"
-                    class="origin-remove"
-                    :aria-label="$t('app.mcpAiOriginRevoke')"
-                    @click="refreshMcp({ aiOrigin: { origin, allowed: false } })"
-                  >
-                    <X :size="10" />
-                  </button>
-                </span>
+            <div v-if="mcp" class="ai-policy-block">
+              <div class="ai-policy-head">
+                <span>{{ $t("app.mcpAiOrigins") }}</span>
+                <HintIcon :text="$t('app.mcpAiOriginsNote')" />
               </div>
-            </SettingRow>
+              <AiPolicyEditor :status="mcp" />
+            </div>
 
             <div v-if="mcp" class="mcp-endpoint">
               <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
@@ -2043,62 +2032,24 @@ async function submitMaster() {
   gap: 14px;
 }
 
-/* One chip per authorized origin; the cross is the revoke, so the list itself
-   doubles as the place a mistake gets undone. The label sits above the chips
-   rather than beside them: it is a sentence, not a one-word field name, and
-   squeezing it into the 132px label column wrapped it into two lines. */
-.origin-block {
+/* The AI policy is a block, not a row: four modes stacked and a list under them
+   do not fit a label/control column, and squeezing them into one put the mode
+   notes beside the radio instead of under their own names. */
+.ai-policy-block {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
 }
 
-/* Its own class rather than `.option-label`: that one carries a 132px
-   `flex-basis` that aligns a row's switch column, and inside this column it
-   would apply to the height, leaving a large empty band above the chips. */
-.origin-label {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.origin-list {
+.ai-policy-head {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.origin-empty {
-  font-size: 11px;
-  color: var(--faint);
-}
-
-.origin-chip {
-  display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 22px;
-  padding: 0 4px 0 8px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  background: var(--surface-2);
-  font-size: 10.5px;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
-}
-
-.origin-remove {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: var(--faint);
-}
-
-.origin-remove:hover {
-  background: color-mix(in srgb, var(--red) 18%, transparent);
-  color: var(--red);
 }
 
 .mcp-endpoint {

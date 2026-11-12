@@ -1,20 +1,20 @@
 /**
  * What an AI client is allowed to do on one page.
  *
- * The premise of the daily profile is that the browser holds a real, long-lived
- * login — that is what makes an assistant useful in it. The same login is what
- * makes a page's own text dangerous: a page can suggest an action, and an AI
- * that follows page text will follow an attacker's text too. So pages that
- * belong to the user's everyday browsing are read-only by default, and the user
- * grants an origin explicitly.
+ * The premise of a profile with no account is that the browser holds a real,
+ * long-lived login — that is what makes an assistant useful in it. The same login
+ * is what makes a page's own text dangerous: a page can suggest an action, and an
+ * AI that follows page text will follow an attacker's text too. So pages that
+ * belong to the user's everyday browsing are gated, and the user decides how wide
+ * that gate is.
  *
  * Three kinds of pages, and only one of them needs the gate:
  *
  * - an **identity** page belongs to a test account the user created for this
  *   purpose, in its own partition. Driving it is the product; it stays allowed.
  * - a **clean** session has no persistent login to protect. It stays allowed.
- * - a **daily** page is the user's own browsing, signed in for real. Read-only
- *   until its origin is authorized.
+ * - a **profile** page is the user's own browsing, signed in for real. Governed by
+ *   the address list and the mode below.
  */
 
 /** The origin of a URL, or "" for anything that is not an http(s) page. */
@@ -35,9 +35,34 @@ export interface AiPageContext {
   origin: string;
 }
 
+/**
+ * How the stored addresses are read.
+ *
+ * Separated from the list itself on purpose: switching from allowlist to
+ * blocklist must not throw away the addresses the user typed, or turning the
+ * gate off and back on would mean re-entering every one of them. The list is
+ * kept whatever the mode says, and the mode only changes how it is interpreted.
+ */
+export type AiDailyMode = "allowlist" | "denylist" | "allow-all" | "deny-all";
+
+export const AI_DAILY_MODES: readonly AiDailyMode[] = [
+  "allowlist",
+  "denylist",
+  "allow-all",
+  "deny-all",
+] as const;
+
 export interface AiPolicy {
-  /** Origins the user has explicitly let the AI operate in. */
-  authorizedOrigins: readonly string[];
+  /** How {@link listedOrigins} is applied. */
+  dailyMode: AiDailyMode;
+  /**
+   * Origins the user named, in the order they were added.
+   *
+   * Kept across every mode change: in an allowlist these are what may be driven,
+   * in a denylist these are what may not. The two other modes ignore it without
+   * deleting it.
+   */
+  listedOrigins: readonly string[];
   /**
    * Addresses that came from the user or the workspace: a site's base URL, a
    * bookmark. A navigation towards one of these is a known destination rather
@@ -46,21 +71,40 @@ export interface AiPolicy {
   knownUrls: readonly string[];
 }
 
-export type AiWriteDenial = "daily-origin-unauthorized" | "unknown-origin";
+export type AiWriteDenial =
+  | "daily-origin-unauthorized"
+  | "daily-origin-blocked"
+  | "daily-denied-by-policy"
+  | "unknown-origin";
 
 /**
  * Whether the AI may send input to this page.
  *
  * A page with no usable origin (still on `about:blank`, or an error page) is
- * denied for the same reason a daily page is: it is not a target the user named,
- * and there is nothing there to operate on.
+ * denied: it is not a target the user named, and there is nothing there to
+ * operate on.
+ *
+ * The two whole-profile modes are absolute. "允许全部" is the answer for someone
+ * who wants the assistant to be able to drive their own browsing and has decided
+ * the risk is theirs; "全部拒绝" is the answer for someone who does not want the
+ * gate reasoned about at all. Neither consults the list — the list is preserved
+ * for when the user comes back to a list-based mode.
  */
 export function aiWriteDenial(page: AiPageContext, policy: AiPolicy): AiWriteDenial | undefined {
   if (page.identityId) return undefined;
   if (page.clean) return undefined;
   if (!page.origin) return "unknown-origin";
-  if (policy.authorizedOrigins.includes(page.origin)) return undefined;
-  return "daily-origin-unauthorized";
+  const listed = policy.listedOrigins.includes(page.origin);
+  switch (policy.dailyMode) {
+    case "allow-all":
+      return undefined;
+    case "deny-all":
+      return "daily-denied-by-policy";
+    case "denylist":
+      return listed ? "daily-origin-blocked" : undefined;
+    case "allowlist":
+      return listed ? undefined : "daily-origin-unauthorized";
+  }
 }
 
 /**
@@ -76,6 +120,10 @@ export function aiWriteDenial(page: AiPageContext, policy: AiPolicy): AiWriteDen
  *
  * Anything else has to come from the user. Same-origin includes following real
  * links on the page, which is what the AI legitimately does most of the time.
+ *
+ * Navigation is not input, so the daily mode does not gate it: moving a page does
+ * not type into the user's account. Whether the AI may then *act* there is
+ * `aiWriteDenial`'s question.
  */
 export function aiNavigationAllowed(input: {
   currentUrl: string;
@@ -95,10 +143,38 @@ export function aiWriteDenialMessage(denial: AiWriteDenial, origin: string): str
   switch (denial) {
     case "unknown-origin":
       return "这个标签页当前不是可操作的 http(s) 页面，不能发送输入。";
+    case "daily-denied-by-policy":
+      return "AI 在非账号页面上的操作已全部关闭，请在 Ensemble 设置的「AI 接入」里调整策略。";
+    case "daily-origin-blocked":
+      return `来源 ${origin} 已被列入禁止名单，AI 不能在这里操作。`;
     case "daily-origin-unauthorized":
-      return (
-        `来源 ${origin} 在「默认档案」里，AI 默认只读。` +
-        "要让 AI 在这里操作，请在浏览器工具栏的 AI 权限里允许这个来源。"
-      );
+      return `来源 ${origin} 不在允许名单里，AI 默认只读。要让 AI 在这里操作，请在浏览器工具栏的 AI 权限里允许这个来源。`;
   }
+}
+
+/**
+ * Normalises an address a user typed into the list.
+ *
+ * Accepts a bare host (`example.com`), a host with a port, or a full URL, and
+ * reduces it to its origin — because the origin is the unit the policy compares
+ * against, and storing a path would produce an entry that never matches.
+ * Returns `undefined` for anything that is not http(s), which is reported to the
+ * user rather than silently stored.
+ */
+export function normalizeAiOrigin(input: string): string | undefined {
+  const value = input.trim();
+  if (!value) return undefined;
+  const attempt = (candidate: string): string | undefined => {
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+      return parsed.origin;
+    } catch {
+      return undefined;
+    }
+  };
+  if (value.includes("://")) return attempt(value);
+  // A bare `example.com:8080` parses as a URL with scheme "example.com:", so a
+  // scheme-less value always gets one prepended rather than being parsed as-is.
+  return attempt(`https://${value}`);
 }

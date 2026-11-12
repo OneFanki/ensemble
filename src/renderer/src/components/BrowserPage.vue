@@ -484,17 +484,49 @@ const aiGateOrigin = computed<string | undefined>(() => {
 });
 
 const aiGateVisible = computed(() => Boolean(aiGateOrigin.value));
-const aiOriginAuthorized = computed(() => {
+
+/**
+ * How the AI may act on the page that is open right now.
+ *
+ * The shield used to be a bare toggle whose on state meant "authorized", which
+ * could only tell half the story once a denylist and two absolute modes existed:
+ * the same icon would have to mean four different things. It now reports the
+ * decision for this one origin, worked out by the same function the MCP server
+ * uses — so the icon cannot claim a permission the tool gate would refuse.
+ */
+const aiGateState = computed<"open" | "blocked" | "unlisted">(() => {
+  const mode = workspace.mcp?.aiMode ?? "allowlist";
   const origin = aiGateOrigin.value;
-  return origin ? (workspace.mcp?.aiOrigins ?? []).includes(origin) : false;
+  if (!origin) return "unlisted";
+  const listed = (workspace.mcp?.aiOrigins ?? []).includes(origin);
+  if (mode === "allow-all") return "open";
+  if (mode === "deny-all") return "blocked";
+  if (mode === "denylist") return listed ? "blocked" : "open";
+  return listed ? "open" : "unlisted";
+});
+
+/** True when the AI may type and click on this page. */
+const aiOriginAuthorized = computed(() => aiGateState.value === "open");
+
+const aiGateHint = computed(() => {
+  switch (aiGateState.value) {
+    case "open":
+      return t("app.aiOriginOpenHint");
+    case "blocked":
+      return t("app.aiOriginBlockedHint");
+    case "unlisted":
+      return t("app.aiOriginUnlistedHint");
+  }
 });
 
 /**
- * Grants or revokes AI input for the page's origin.
+ * Adds or removes this page's origin from the stored list.
  *
- * Per origin rather than per tab, and reversible in one click: the user's model
- * is "this site may be operated", and a permission that takes a trip to Settings
- * to undo would stay on long after they stopped needing it.
+ * One click, because this is where the user notices the gate: an address that
+ * needs granting should not cost a trip to Settings. Which way the click goes is
+ * decided by whether the address is already in the list — not by whether the AI
+ * may act right now, since under "allow all" the answer is yes without the
+ * address being listed at all.
  */
 async function toggleAiOrigin(): Promise<void> {
   const origin = aiGateOrigin.value;
@@ -502,7 +534,7 @@ async function toggleAiOrigin(): Promise<void> {
     workspace.notify(t("app.aiOriginNoOrigin"), "error");
     return;
   }
-  const next = !aiOriginAuthorized.value;
+  const next = !(workspace.mcp?.aiOrigins ?? []).includes(origin);
   const status = await workspace.updateMcp({ aiOrigin: { origin, allowed: next } });
   if (!status) return;
   workspace.notify(t(next ? "app.aiOriginGranted" : "app.aiOriginRevoked", { origin }), "success");
@@ -2197,7 +2229,7 @@ function fillMessage(reason?: string): string {
         class="icon"
         data-ai-origin-switch
         :class="{ active: aiOriginAuthorized }"
-        v-tooltip="aiOriginAuthorized ? t('app.aiOriginRevokeHint') : t('app.aiOriginGrantHint')"
+        v-tooltip="aiGateHint"
         :aria-label="t('app.aiOriginTitle')"
         :aria-pressed="aiOriginAuthorized"
         @click="toggleAiOrigin"

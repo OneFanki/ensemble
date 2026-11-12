@@ -522,6 +522,13 @@ const SHOTS = [
     clicks: [".toolbar .split-main", '.open-menu .mode[data-mode="profiles"]'],
   },
   {
+    // The AI policy editor: four scopes, the address list, and the two ways to
+    // add to it. This is the settings section that used to be a bare chip list.
+    name: "ai-policy",
+    locale: "zh",
+    view: "settings-mcp",
+  },
+  {
     // The message bell's popover: the same rows the message page shows, with
     // mark-read available without leaving the browser. Hovered, because the
     // per-row mark-read button only exists while the pointer is there.

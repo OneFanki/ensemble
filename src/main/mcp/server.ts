@@ -5,7 +5,13 @@ import { dirname } from "node:path";
 import type { ElementTarget, WaitResult } from "@core/cdp/inspect";
 import type { WorkspaceService } from "@core/service";
 import { JsonStore } from "@core/storage/json-store";
-import { aiNavigationAllowed, aiWriteDenial, aiWriteDenialMessage } from "@shared/ai-policy";
+import {
+  AI_DAILY_MODES,
+  aiNavigationAllowed,
+  aiWriteDenial,
+  aiWriteDenialMessage,
+  type AiDailyMode,
+} from "@shared/ai-policy";
 import {
   embeddedSlotCount,
   isEmbeddedLayout,
@@ -383,9 +389,9 @@ const targetProps = (extra: Record<string, unknown> = {}): Record<string, unknow
  *
  * Deliberately absent, and not accidentally:
  * - every key of `McpSettings` (`enabled`, `port`, `token`, `allowWrite`,
- *   `allowRun`, `allowDelete`, `aiOrigins`). Letting a tool edit the endpoint's
- *   own permissions is self-elevation: one call turns `allowDelete` on, the next
- *   call deletes the workspace. The person decides those in Settings.
+ *   `allowRun`, `allowDelete`, `aiMode`, `aiOrigins`). Letting a tool edit the
+ *   endpoint's own permissions is self-elevation: one call turns `allowDelete` on,
+ *   the next call deletes the workspace. The person decides those in Settings.
  * - credentials and vault state. MCP is write-only for secrets and has no
  *   read-back; a settings tool that could touch them would be that hole by
  *   another name.
@@ -442,7 +448,7 @@ const writableSettingsProps = (): Record<string, unknown> => ({
   newTabBackground: string("新标签页背景预设 id"),
   newTabBookmarks: { type: "boolean", description: "新标签页是否显示书签栏" },
   restoreLastView: { type: "boolean", description: "启动时恢复上次启动的视图" },
-  overlayEnabled: { type: "boolean", description: "是否显示置顶的实例切换浮层" },
+  overlayEnabled: { type: "boolean", description: "是否显示置顶的浏览器切换浮层" },
   focusLabelEnabled: { type: "boolean", description: "切换窗口后短暂显示账号名" },
   launchIntervalMs: integer("同一视图内两次启动之间的等待毫秒数，0–5000"),
   headlessCheckUa: {
@@ -484,8 +490,9 @@ export function defaultMcpSettings(port: number = DEFAULT_PORT): McpSettings {
     allowWrite: true,
     allowRun: true,
     allowDelete: false,
-    // Nothing is authorized up front: the daily profile is the user's own
-    // signed-in browsing, so an origin becomes operable only when they say so.
+    // Nothing is authorized up front: a profile page is the user's own
+    // signed-in browsing, so it stays read-only until they say otherwise.
+    aiMode: "allowlist",
     aiOrigins: [],
   };
 }
@@ -539,6 +546,9 @@ export function loadMcpSettings(path: string, defaultPort: number = DEFAULT_PORT
     // Repaired to http(s) origins only: the list is compared against `URL.origin`,
     // so a malformed entry would never match and would look like a granted
     // permission that silently does nothing.
+    aiMode: AI_DAILY_MODES.includes(raw.aiMode as (typeof AI_DAILY_MODES)[number])
+      ? (raw.aiMode as McpSettings["aiMode"])
+      : "allowlist",
     aiOrigins: Array.isArray(raw.aiOrigins)
       ? [...new Set(raw.aiOrigins.filter((item): item is string => isOriginString(item)))]
       : [],
@@ -717,6 +727,7 @@ export class McpServer {
       allowWrite: this.settings.allowWrite,
       allowRun: this.settings.allowRun,
       allowDelete: this.settings.allowDelete,
+      aiMode: this.settings.aiMode,
       aiOrigins: [...this.settings.aiOrigins],
       toolCount: this.toolList().length,
       ...(this.lastError ? { error: this.lastError } : {}),
@@ -729,8 +740,12 @@ export class McpServer {
     allowWrite?: boolean;
     allowRun?: boolean;
     allowDelete?: boolean;
-    /** Adds or removes one origin from the daily-profile allow list. */
+    /** Which policy the stored origin list is read under. */
+    aiMode?: "allowlist" | "denylist" | "allow-all" | "deny-all";
+    /** Adds or removes one origin from the stored list. */
     aiOrigin?: { origin: string; allowed: boolean };
+    /** Adds several origins in one write; duplicates and malformed entries are dropped. */
+    aiOriginsAdd?: string[];
     rotateToken?: boolean;
   }): Promise<McpStatus> {
     const next: McpSettings = { ...this.settings };
@@ -738,12 +753,26 @@ export class McpServer {
     if (patch.allowWrite !== undefined) next.allowWrite = patch.allowWrite;
     if (patch.allowRun !== undefined) next.allowRun = patch.allowRun;
     if (patch.allowDelete !== undefined) next.allowDelete = patch.allowDelete;
+    if (patch.aiMode !== undefined) {
+      if (!AI_DAILY_MODES.includes(patch.aiMode)) throw new Error("未知的 AI 权限策略");
+      // The list is deliberately untouched here. A user who switches to "allow
+      // all" for an afternoon and back must find their addresses still there.
+      next.aiMode = patch.aiMode;
+    }
     if (patch.aiOrigin) {
       const { origin, allowed } = patch.aiOrigin;
       if (!isOriginString(origin)) throw new Error("AI 权限只接受 http(s) 来源");
       next.aiOrigins = allowed
         ? [...new Set([...next.aiOrigins, origin])]
         : next.aiOrigins.filter((item) => item !== origin);
+    }
+    if (patch.aiOriginsAdd) {
+      // Malformed entries are dropped rather than thrown on: this arrives from a
+      // bulk action over the user's own bookmarks, and one bad address must not
+      // cancel the other thirty. The single-add path above still throws, because
+      // there the user typed the value and needs to hear about it.
+      const valid = patch.aiOriginsAdd.filter((item): item is string => isOriginString(item));
+      next.aiOrigins = [...new Set([...next.aiOrigins, ...valid])];
     }
     if (patch.rotateToken) next.token = newMcpToken();
     if (patch.port !== undefined) next.port = clampPort(patch.port);
@@ -1141,7 +1170,7 @@ export class McpServer {
    * a bookmark are destinations the user named, so moving there is not the AI
    * being talked into something by a page.
    */
-  private aiPolicyArgs(): { authorizedOrigins: string[]; knownUrls: string[] } {
+  private aiPolicyArgs(): { dailyMode: AiDailyMode; listedOrigins: string[]; knownUrls: string[] } {
     let knownUrls: string[] = [];
     try {
       const snapshot = this.options.service.snapshot();
@@ -1152,7 +1181,11 @@ export class McpServer {
     } catch {
       knownUrls = [];
     }
-    return { authorizedOrigins: this.settings.aiOrigins, knownUrls };
+    return {
+      dailyMode: this.settings.aiMode,
+      listedOrigins: this.settings.aiOrigins,
+      knownUrls,
+    };
   }
 
   /**
@@ -1378,7 +1411,7 @@ export class McpServer {
     return [
       {
         name: "get_workspace_summary",
-        description: "查看当前 Ensemble 工作区概览：站点、身份、视图、运行中实例的数量与名称。",
+        description: "查看当前 Ensemble 工作区概览：站点、身份、视图、运行中浏览器的数量与名称。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -2348,9 +2381,9 @@ export class McpServer {
       },
       {
         name: "stop_instance",
-        description: "关闭一个正在运行的实例。",
+        description: "关闭一个正在运行的浏览器。",
         kind: "run",
-        inputSchema: object({ instanceId: string("实例 id") }, ["instanceId"]),
+        inputSchema: object({ instanceId: string("浏览器 id") }, ["instanceId"]),
         run: async (args) => {
           await service.stopInstance(String(args["instanceId"] ?? ""));
           return { stopped: true };
@@ -2986,7 +3019,7 @@ export class McpServer {
             .map((tab) => tab.id);
           if (secondary.length > 0) {
             throw new Error(
-              `这些标签页是某个实例里的次要页面（弹窗），格位显示的是该实例的根页面：${secondary.join(", ")}。` +
+              `这些标签页是某个浏览器里的次要页面（弹窗），格位显示的是该浏览器的根页面：${secondary.join(", ")}。` +
                 "请改用根页面 id。",
             );
           }
@@ -3230,7 +3263,7 @@ export class McpServer {
       {
         name: "set_tab_page",
         description:
-          "在一个实例里切换显示哪一页。一个格位放的是一个浏览器实例，实例可以有多个页面（页面里点开的链接）；这个工具决定该实例当前显示哪一页。",
+          "在一个浏览器里切换显示哪一页。一个格位放的是一个浏览器，它可以有多个页面（页面里点开的链接）；这个工具决定该浏览器当前显示哪一页。",
         kind: "run",
         inputSchema: object({ pageId: string("要显示的那个页面 id") }, ["pageId"]),
         run: (args) => surface().activate(String(args["pageId"] ?? "")),

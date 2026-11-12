@@ -126,10 +126,15 @@ describe("AI origin gate contract", () => {
 
   it("keeps the daily profile read-only by default", () => {
     // An empty default allow list is the policy; a non-empty one would mean a
-    // fresh install lets the AI drive a signed-in session.
+    // fresh install lets the AI drive a signed-in session. The mode defaults to
+    // the list-based one, so an empty list means "nothing", never "everything".
     expect(policy).toMatch(/if \(page\.identityId\) return undefined;/);
     expect(policy).toMatch(/if \(page\.clean\) return undefined;/);
-    expect(policy).toMatch(/return "daily-origin-unauthorized";/);
+    expect(policy).toMatch(/case "allowlist":/);
+    expect(policy).toMatch(/return listed \? undefined : "daily-origin-unauthorized";/);
+    const defaults = readFileSync(join(process.cwd(), "src/main/mcp/server.ts"), "utf8");
+    expect(defaults).toMatch(/aiMode: "allowlist",/);
+    expect(defaults).toMatch(/aiOrigins: \[\],/);
   });
 
   it("sends an AI's own identity-less tab to a clean session, never the profile", () => {

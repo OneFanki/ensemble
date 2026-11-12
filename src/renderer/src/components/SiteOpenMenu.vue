@@ -1,40 +1,48 @@
 <script setup lang="ts">
-import type { Identity, Site } from "@shared/types";
-import { ChevronRight, FilePlus, Globe, ShieldOff } from "lucide-vue-next";
+import type { BrowserProfile, Identity, Site } from "@shared/types";
+import { ChevronRight, Globe, Layers, ShieldOff } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 /**
- * The account chooser: "new page, as whom?".
+ * The new-browser chooser: "a browser, as what?".
  *
- * Sites are the bookmarks: open one in the daily profile, open it clean, or open
- * it as one of its accounts. "Daily" is the default *meaning* of a bookmark in an
- * ordinary browser — the login is already there — but it is not the default
- * *action* here: nothing is created until a row is picked. A bare "+" used to
- * produce a daily-profile page every time, which inside a view meant an
- * anonymous page in a grid of accounts.
+ * Two modes, because the two reasons to open a browser are different questions:
+ *
+ * - **Account** (the default): the user knows which login they need. Pick the
+ *   system on the left, then the account on the right. The site's own openings —
+ *   its default profile and a throwaway — sit above the accounts so a site with
+ *   thirty accounts never pushes them out of view.
+ * - **Profile**: the user does not want a particular login, they want an empty
+ *   browser in a particular cookie jar and will find the site afterwards (usually
+ *   from a bookmark). Clicking a profile opens a blank page in it.
+ *
+ * Accounts and profiles are not the same axis, which is why they are two lists
+ * rather than one merged one: an account *is* a profile, but it also carries a
+ * system, credentials and a start page — and the account list is only meaningful
+ * once a system is chosen.
  *
  * `lockedSiteId` narrows the chooser to one system, which is what a view's own
- * "+" needs: the container already says which system this is, so offering every
- * site in the workspace would be a second sites page inside a 260px dock.
+ * "+" needs: the container already says which system this is.
  *
- * Tags are deliberately not shown here: a lone tag name at the bottom of the
- * account column reads as an empty section, and tags are for finding things on
- * the sites page rather than for picking a login.
+ * The profile list is read-only here on purpose. Creating and renaming profiles
+ * is a management task and lives on the profiles page; a create form inside a
+ * 400px popover would be one more thing competing with the list it belongs to.
  */
 const props = defineProps<{
   sites: Site[];
   identities: Identity[];
+  profiles: BrowserProfile[];
+  /** Profile a page with no account opens in when none is picked. */
+  defaultProfileId: string;
   /** Show only this site's rows; the site column and the search box disappear. */
   lockedSiteId?: string;
 }>();
 
 const emit = defineEmits<{
-  /** The explicit "no account" choice: a blank page in the daily profile. */
-  openBlank: [];
-  /** A blank page in a throwaway session: no account, nothing kept. */
-  openBlankClean: [];
-  /** Open the site in the daily profile, reusing whatever login it has. */
+  /** Open a blank browser in one profile (its retention decides what survives). */
+  openProfile: [profileId: string];
+  /** Open the site in the profile used for account-less pages. */
   openDaily: [siteId: string];
   /** Open the site in a throwaway session. */
   openClean: [siteId: string];
@@ -43,6 +51,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const mode = ref<"accounts" | "profiles">("accounts");
 const activeSiteId = ref<string | null>(null);
 const term = ref("");
 
@@ -70,6 +79,13 @@ const accounts = computed(() => {
   return props.identities.filter((identity) => identity.siteId === site.id);
 });
 
+const defaultProfile = computed(
+  () => props.profiles.find((profile) => profile.id === props.defaultProfileId) ?? props.profiles[0],
+);
+
+/** Only the search box belongs to the account tab; a profile has no address. */
+const showSearch = computed(() => !locked.value && mode.value === "accounts");
+
 function openDaily(site: Site): void {
   emit("openDaily", site.id);
 }
@@ -81,112 +97,152 @@ function openClean(site: Site): void {
 function openIdentity(identity: Identity): void {
   emit("openIdentity", identity.id);
 }
+
+function openProfile(profile: BrowserProfile): void {
+  emit("openProfile", profile.id);
+}
+
+/**
+ * The two lifetimes, as words a user can act on.
+ *
+ * Not "persist"/"ephemeral": those name the mechanism. What matters when
+ * choosing a row is whether the sign-in is still there tomorrow.
+ */
+function retentionNote(profile: BrowserProfile): string {
+  return profile.retention === "ephemeral"
+    ? t("app.profileEphemeralNote")
+    : t("app.profilePersistNote");
+}
 </script>
 
 <template>
-  <div class="open-menu" :class="{ locked }" role="menu" :aria-label="t('app.newPageAs')">
+  <div class="open-menu" :class="{ locked }" role="menu" :aria-label="t('app.newBrowser')">
     <div class="head">
-      <span class="title">{{ locked ? locked.name : t("app.newPageAs") }}</span>
-      <!-- A locked chooser has one system and a handful of accounts; a search
-           field there would be a control with nothing to filter. -->
+      <span class="title">{{ t("app.newBrowser") }}</span>
+      <!-- Two modes, side by side: an account pick needs a system first, a
+           profile pick does not. -->
+      <div class="modes" role="tablist">
+        <button
+          type="button"
+          class="mode"
+          :class="{ on: mode === 'accounts' }"
+          role="tab"
+          :aria-selected="mode === 'accounts'"
+          data-mode="accounts"
+          @click="mode = 'accounts'"
+        >
+          {{ t("app.newBrowserAccounts") }}
+        </button>
+        <button
+          type="button"
+          class="mode"
+          :class="{ on: mode === 'profiles' }"
+          role="tab"
+          :aria-selected="mode === 'profiles'"
+          data-mode="profiles"
+          @click="mode = 'profiles'"
+        >
+          {{ t("app.newBrowserProfiles") }}
+        </button>
+      </div>
       <input
-        v-if="!locked"
+        v-if="showSearch"
         v-model="term"
         class="search"
         type="search"
-        :placeholder="t('app.search')"
+        :placeholder="t('app.newBrowserSearch')"
       />
     </div>
 
-    <div v-if="!filtered.length" class="empty">{{ t("app.emptySites") }}</div>
-
-    <div v-else class="body">
-      <div v-if="!locked" class="sites">
-        <button
-          v-for="site in filtered"
-          :key="site.id"
-          type="button"
-          class="site-row"
-          :class="{ active: site.id === activeSite?.id }"
-          @click="activeSiteId = site.id"
-        >
-          <Globe :size="11" class="site-icon" />
-          <span class="site-copy">
-            <span class="site-name">{{ site.name }}</span>
-            <span class="site-url mono">{{ site.baseUrl }}</span>
-          </span>
-          <ChevronRight :size="11" class="chev" />
-        </button>
-        <p v-if="!filtered.length" class="empty">{{ t("app.noMatchingSites") }}</p>
+    <!-- Accounts: system on the left, its accounts on the right. -->
+    <template v-if="mode === 'accounts'">
+      <div v-if="locked" class="locked-site">
+        <Globe :size="11" />
+        <span class="site-name">{{ locked.name }}</span>
       </div>
 
-      <div v-if="activeSite" class="accounts">
-        <!--
-          Opening the site itself: these two belong to the selected site, so they
-          stay at the top of its column.
-        -->
-        <button type="button" class="account-row anonymous" @click="openDaily(activeSite)">
-          <Globe :size="11" />
-          <span class="acc-copy">
-            <span class="acc-name">{{ t("app.openSiteDaily") }}</span>
-            <span class="acc-note">{{ t("app.openSiteDailyHint") }}</span>
-          </span>
-        </button>
-        <button type="button" class="account-row anonymous dashed" @click="openClean(activeSite)">
-          <ShieldOff :size="11" />
-          <span class="acc-copy">
-            <span class="acc-name">{{ t("app.openSiteClean") }}</span>
-            <span class="acc-note">{{ t("app.openSiteCleanHint") }}</span>
-          </span>
-        </button>
+      <div v-if="!filtered.length" class="empty">{{ t("app.emptySites") }}</div>
 
-        <div class="accounts-sep"></div>
-        <p class="accounts-title">{{ t("app.openSiteAccounts") }}</p>
-        <div class="accounts-list">
+      <div v-else class="body">
+        <div v-if="!locked" class="sites">
           <button
-            v-for="identity in accounts"
-            :key="identity.id"
+            v-for="site in filtered"
+            :key="site.id"
             type="button"
-            class="account-row"
-            :style="{ '--role': `var(--role-${identity.color})` }"
-            @click="openIdentity(identity)"
+            class="site-row"
+            :class="{ active: site.id === activeSite?.id }"
+            @click="activeSiteId = site.id"
           >
-            <span class="acc-dot"></span>
+            <Globe :size="11" class="site-icon" />
+            <span class="site-copy">
+              <span class="site-name">{{ site.name }}</span>
+              <span class="site-url mono">{{ site.baseUrl }}</span>
+            </span>
+            <ChevronRight :size="11" class="chev" />
+          </button>
+        </div>
+
+        <div v-if="activeSite" class="accounts">
+          <!--
+            The site's own two openings: no account, so they are about the
+            session rather than about a login. They stay fixed above the
+            scrolling list — a site with thirty accounts must not push them past
+            the fold.
+          -->
+          <button type="button" class="account-row anonymous" data-open-daily @click="openDaily(activeSite)">
+            <Globe :size="11" />
             <span class="acc-copy">
-              <span class="acc-name">{{ identity.name }}</span>
-              <span class="acc-note mono">{{ identity.username }}</span>
+              <span class="acc-name">{{ t("app.openSiteDefault", { name: defaultProfile?.name ?? "" }) }}</span>
+              <span class="acc-note">{{ t("app.openSiteDailyHint") }}</span>
             </span>
           </button>
-          <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
+          <button type="button" class="account-row anonymous dashed" data-open-clean @click="openClean(activeSite)">
+            <ShieldOff :size="11" />
+            <span class="acc-copy">
+              <span class="acc-name">{{ t("app.openSiteClean") }}</span>
+              <span class="acc-note">{{ t("app.openSiteCleanHint") }}</span>
+            </span>
+          </button>
+
+          <div class="accounts-sep"></div>
+          <p class="accounts-title">{{ t("app.openSiteAccounts") }}</p>
+          <div class="accounts-list">
+            <button
+              v-for="identity in accounts"
+              :key="identity.id"
+              type="button"
+              class="account-row"
+              :style="{ '--role': `var(--role-${identity.color})` }"
+              @click="openIdentity(identity)"
+            >
+              <span class="acc-dot"></span>
+              <span class="acc-copy">
+                <span class="acc-name">{{ identity.name }}</span>
+                <span class="acc-note mono">{{ identity.username }}</span>
+              </span>
+            </button>
+            <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
+          </div>
         </div>
       </div>
-    </div>
+    </template>
 
-    <!--
-      Blank pages belong to no site, so they sit outside both columns, under
-      their own rule — one for the daily profile, one for a throwaway session.
-      Inside the account column they would read as "the fourth thing you can
-      open in 后台管理", which is the one thing they are not: these are what you
-      get when you want none of the above.
-    -->
-    <div class="foot">
-      <button type="button" class="account-row anonymous plain" @click="emit('openBlank')">
-        <FilePlus :size="11" />
-        <span class="acc-copy">
-          <span class="acc-name">{{ t("app.openBlankPage") }}</span>
-          <span class="acc-note">{{ t("app.openBlankPageHint") }}</span>
-        </span>
-      </button>
+    <!-- Profiles: an empty browser in one cookie jar. -->
+    <div v-else class="profiles">
       <button
+        v-for="profile in profiles"
+        :key="profile.id"
         type="button"
-        class="account-row anonymous dashed"
-        @click="emit('openBlankClean')"
+        class="account-row profile-row"
+        :data-profile-id="profile.id"
+        @click="openProfile(profile)"
       >
-        <ShieldOff :size="11" />
+        <Layers :size="11" class="profile-icon" />
         <span class="acc-copy">
-          <span class="acc-name">{{ t("app.openSiteClean") }}</span>
-          <span class="acc-note">{{ t("app.openBlankCleanHint") }}</span>
+          <span class="acc-name">{{ profile.name }}</span>
+          <span class="acc-note">{{ retentionNote(profile) }}</span>
         </span>
+        <span v-if="profile.id === defaultProfileId" class="badge">{{ t("app.profileDefaultBadge") }}</span>
       </button>
     </div>
   </div>
@@ -196,8 +252,8 @@ function openIdentity(identity: Identity): void {
 .open-menu {
   /* Wide enough for the two-column chooser; a locked chooser drops the site
      column, so it narrows with it instead of leaving an empty gutter. */
-  width: 400px;
-  max-height: 380px;
+  width: 420px;
+  max-height: 400px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -208,7 +264,7 @@ function openIdentity(identity: Identity): void {
 }
 
 .open-menu.locked {
-  width: 250px;
+  width: 270px;
 }
 
 .head {
@@ -229,9 +285,52 @@ function openIdentity(identity: Identity): void {
   white-space: nowrap;
 }
 
+/*
+ * The mode switch.
+ *
+ * Two plain labels rather than a segmented control: the panel is small, and a
+ * chip inside a chip inside a 420px popover is three nested frames for six
+ * characters. The active one takes the text colour and an underline; the other
+ * stays quiet until hovered.
+ */
+.modes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mode {
+  position: relative;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  color: var(--faint);
+  border-radius: var(--radius-sm);
+}
+
+.mode:hover {
+  color: var(--text-secondary);
+}
+
+.mode.on {
+  color: var(--text);
+}
+
+.mode.on::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
 .search {
   margin-left: auto;
-  width: 150px;
+  /* Narrow enough that the two mode labels and the title keep their space at
+     420px; the field only filters sites, which are short names. */
+  width: 120px;
   height: 24px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
@@ -246,25 +345,26 @@ function openIdentity(identity: Identity): void {
   border-color: var(--line);
 }
 
+/* A locked chooser names its one system above the accounts instead of drawing a
+   column with a single row in it. */
+.locked-site {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
 .body {
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr);
   min-height: 0;
-  /* Takes the height the footer leaves, so the account list is the only thing
+  /* Takes the height the header leaves, so the account list is the only thing
      that has to scroll. */
   flex: 1 1 auto;
-}
-
-/* The blank-page rows live below both columns: they belong to no site. Two
-   side by side — the daily profile and the throwaway session are the same kind
-   of answer at the same level. */
-.foot {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 5px;
-  border-top: 1px solid var(--line-soft);
-  padding: 5px;
 }
 
 .sites {
@@ -409,21 +509,61 @@ function openIdentity(identity: Identity): void {
 }
 
 /* A throwaway session is not the ordinary open, so it is drawn differently —
-   dashed instead of plain. Same distinction the two rows had before, now at the
-   bottom where they belong. */
+   dashed instead of plain. */
 .account-row.dashed {
   border: 1px dashed var(--line);
 }
 
-/* The blank page sits outside the site columns; it gets no dashed or tinted
-   treatment because it is not a special case of opening a site at all. */
-.account-row.plain {
-  color: var(--muted);
+.profiles {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 5px;
 }
 
-.account-row.plain:hover {
-  background: var(--surface-2);
-  color: var(--text);
+/*
+ * The rows wrap instead of clipping.
+ *
+ * A profile row carries a name, a one-line lifetime note and sometimes a
+ * "default" chip. At 420px the note is the first thing to be cut, and a note cut
+ * to "登录状态…" says nothing. Letting the name and chip share one line and
+ * putting the note under them keeps both readable.
+ */
+.profile-row {
+  align-items: flex-start;
+  padding: 8px;
+}
+
+.profile-row .acc-copy {
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.profile-row .acc-note {
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.profile-icon {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+/* The default marker is a state, not an action: a quiet chip at the row's right
+   edge, the same shape the profiles page uses. */
+.badge {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  /* `--selected` is only a shade off `--surface` in the dark theme, which made
+     this chip read as a smudge. The strong step plus a hairline is what makes it
+     legible as a marker rather than as a rendering artefact. */
+  background: var(--selected-strong);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.02em;
 }
 
 .acc-dot {

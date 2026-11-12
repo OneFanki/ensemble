@@ -108,6 +108,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     }
   }
 
+  /**
+   * Replaces the settings half of the snapshot from a settings reply.
+   *
+   * The profile actions answer with `AppSettings` rather than a whole workspace
+   * snapshot, because a profile is a settings row and nothing else in the
+   * workspace changed. Merging stops the reply from being applied twice: the
+   * service also emits, so the broadcast lands with the same value a moment
+   * later and this makes that second write a no-op rather than a rerender.
+   */
+  function applySettings(next: AppSettings) {
+    if (!snapshot.value) return;
+    snapshot.value = { ...snapshot.value, settings: next };
+  }
+
   async function init() {
     loading.value = true;
     try {
@@ -969,6 +983,40 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("settings", () => window.ensemble.saveSettings(toPlain(patch)));
   }
 
+  /*
+   * Profile actions.
+   *
+   * All four return the settings object, and the caller patches `snapshot` from
+   * it rather than waiting for the broadcast: the profile page renders the new
+   * row immediately, and a broadcast that arrives a frame later would otherwise
+   * make the list flicker back to its old contents.
+   */
+  async function createProfile(name: string) {
+    return run("profile", async () => {
+      applySettings(await window.ensemble.createProfile(name));
+      notify(tr("app.toastProfileCreated"));
+    });
+  }
+
+  async function renameProfile(id: string, name: string) {
+    return run("profile", async () => {
+      applySettings(await window.ensemble.renameProfile(id, name));
+    });
+  }
+
+  async function deleteProfile(id: string) {
+    return run("profile", async () => {
+      applySettings(await window.ensemble.deleteProfile(id));
+      notify(tr("app.toastProfileDeleted"));
+    });
+  }
+
+  async function setDefaultProfile(id: string) {
+    return run("profile", async () => {
+      applySettings(await window.ensemble.setDefaultProfile(id));
+    });
+  }
+
   /**
    * Fires the connectivity probes for the proxy settings.
    *
@@ -1123,6 +1171,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMasterPassword,
     changeMasterPassword,
     saveSettings,
+    createProfile,
+    renameProfile,
+    deleteProfile,
+    setDefaultProfile,
     testProxyConnectivity,
     exportWorkspace,
     pickImport,

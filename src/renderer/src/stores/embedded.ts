@@ -273,14 +273,24 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     await window.ensemble.openEmbeddedTab({ viewId: null });
   }
 
-  /** The clean counterpart of `openTab`: a blank page in a throwaway session. */
-  async function openCleanTab(): Promise<void> {
-    await window.ensemble.openEmbeddedTab({ clean: true });
-  }
-
-  /** The clean counterpart of `openLooseTab`. */
-  async function openCleanLooseTab(): Promise<void> {
-    await window.ensemble.openEmbeddedTab({ viewId: null, clean: true });
+  /**
+   * Opens a blank browser in a named profile.
+   *
+   * A profile with `ephemeral` retention gets its own in-memory session rather
+   * than a shared one, which is what makes two clean browsers independent. The
+   * retention is read here rather than passed in by each call site: every caller
+   * would otherwise have to look up the same row and could get it wrong.
+   */
+  async function openProfileTab(
+    profileId: string,
+    options?: { viewId?: string | null },
+  ): Promise<void> {
+    const profile = useWorkspaceStore().settings.profiles?.find((item) => item.id === profileId);
+    await window.ensemble.openEmbeddedTab({
+      profileId,
+      ...(options?.viewId !== undefined ? { viewId: options.viewId } : {}),
+      ...(profile?.retention === "ephemeral" ? { ephemeral: true } : {}),
+    });
   }
 
   /**
@@ -640,8 +650,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     slots,
     openTab,
     openLooseTab,
-    openCleanTab,
-    openCleanLooseTab,
+    openProfileTab,
     openTabWith,
     openLooseTabWith,
     openTabInto,

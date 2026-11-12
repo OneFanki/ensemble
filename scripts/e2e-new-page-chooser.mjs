@@ -372,26 +372,35 @@ try {
       await new Promise((r) => setTimeout(r, 900));
     }
     const panel = document.querySelector('.open-panel');
+    const modes = [...document.querySelectorAll('.open-menu .mode')].map((el) => ({
+      label: el.textContent?.trim() ?? '',
+      on: el.classList.contains('on'),
+    }));
     const anonymous = [...document.querySelectorAll('.account-row.anonymous')].map((el) =>
       el.querySelector('.acc-name')?.textContent?.trim() ?? '',
     );
     const before = await api.getEmbeddedState();
-    // The explicit blank page is the fourth answer, and the only one that still
-    // produces a daily-profile page — by name, never by guess.
-    const blankRow = [...document.querySelectorAll('.account-row.anonymous')].find((el) =>
-      el.textContent.includes('空白页'),
-    );
-    blankRow?.click();
+    // A profile row opens a blank browser in that profile — the same thing the
+    // old "blank page" row did, now named by which cookie jar it lands in.
+    // The account tab is the default, so the profile list only exists after the
+    // mode switch.
+    document.querySelector('.open-menu .mode[data-mode="profiles"]')?.click();
+    await new Promise((r) => setTimeout(r, 200));
+    const profiles = document.querySelectorAll('.open-menu .profile-row').length;
+    document.querySelector('.open-menu .profile-row')?.click();
     await new Promise((r) => setTimeout(r, 2200));
     const state = await api.getEmbeddedState();
     const added = state.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
     const page = added[0] ?? null;
     return {
       open: Boolean(panel),
+      modes,
       anonymous,
+      profiles,
       added: added.length,
       label: page?.label ?? null,
       identityId: page?.identityId ?? null,
+      profileId: page?.profileId ?? null,
       url: page?.url ?? null,
       viewId: page?.viewId ?? null,
     };
@@ -399,16 +408,25 @@ try {
   );
   check(
     "the toolbar button opens the same chooser with a view on stage",
-    // Two site openings plus the footer's two blank pages (daily profile and
-    // clean session side by side).
-    toolbar?.open === true && toolbar?.anonymous?.length === 4,
+    toolbar?.open === true &&
+      toolbar?.modes?.length === 2 &&
+      toolbar?.modes?.[0]?.on === true &&
+      toolbar?.modes?.[0]?.label === "账号" &&
+      toolbar?.modes?.[1]?.label === "档案",
     toolbar,
   );
   check(
-    "asking for a blank page is explicit and still lands in the view",
-    toolbar?.added === 1 &&
+    "the account tab keeps the site's own two openings above its accounts",
+    toolbar?.anonymous?.length === 2,
+    toolbar,
+  );
+  check(
+    "the profile tab lists profiles and opens a blank browser in one",
+    toolbar?.profiles > 0 &&
+      toolbar?.added === 1 &&
       toolbar?.identityId === null &&
       toolbar?.label === "新标签页" &&
+      Boolean(toolbar?.profileId) &&
       toolbar?.viewId === opened?.container,
     toolbar,
   );

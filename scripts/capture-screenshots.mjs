@@ -508,7 +508,19 @@ const SHOTS = [
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
   { name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
   { name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
+  { name: "profiles", locale: "zh", view: "profiles" },
+  { name: "profiles-en", locale: "en", view: "profiles" },
+  { name: "profiles-light", locale: "zh", view: "profiles", theme: "light" },
   { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-main"] },
+  {
+    // The chooser's second tab: the same panel, answering "which cookie jar"
+    // instead of "whose login". Shown separately because one shot cannot show
+    // both modes, and the profile list is the new half.
+    name: "env-menu-profiles",
+    locale: "zh",
+    view: "browser",
+    clicks: [".toolbar .split-main", '.open-menu .mode[data-mode="profiles"]'],
+  },
   {
     // The message bell's popover: the same rows the message page shows, with
     // mark-read available without leaving the browser. Hovered, because the

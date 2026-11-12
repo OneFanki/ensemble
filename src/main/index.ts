@@ -1829,7 +1829,7 @@ function createTray(): void {
         ...(running > 0
           ? [
               {
-                label: `关闭所有实例 (${running})`,
+                label: `关闭所有浏览器 (${running})`,
                 click: () => {
                   void service?.stopAll().then(() => broadcastWorkspace());
                 },
@@ -2845,6 +2845,17 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
+  // Profiles live in settings, and the service emits on every change, so
+  // `broadcastWorkspace` has already gone out by the time these return. The
+  // reply carries the settings object because the caller renders the new row
+  // from it instead of waiting for the broadcast.
+  handle(IPC.profileCreate, (name: string) => workspace.createProfile(String(name ?? "")));
+  handle(IPC.profileRename, (id: string, name: string) =>
+    workspace.renameProfile(String(id), String(name ?? "")),
+  );
+  handle(IPC.profileDelete, (id: string) => workspace.deleteProfile(String(id)));
+  handle(IPC.profileSetDefault, (id: string) => workspace.setDefaultProfile(String(id)));
+
   handle(IPC.credentialsSet, async (owner: PasswordOwner, password: string) => {
     await workspace.setPassword(passwordOwnerSchema.parse(owner), String(password));
     broadcastWorkspace();
@@ -3325,6 +3336,8 @@ function registerIpc(workspace: WorkspaceService): void {
       color?: string;
       viewId?: string | null;
       clean?: boolean;
+      profileId?: string;
+      ephemeral?: boolean;
     }) => {
       const browser = ensureEmbeddedBrowser();
       // "+" while a view is on stage adds to that view; a loose tab would vanish
@@ -3338,6 +3351,20 @@ function registerIpc(workspace: WorkspaceService): void {
       const resolvedUrl =
         input?.url ??
         (input?.identityId ? embeddedStartUrl(String(input.identityId)) : undefined);
+      /*
+       * A page with no account belongs to a profile, and omitting the id has to
+       * mean "the user's default" rather than "the built-in one" — otherwise a
+       * bookmark would ignore the default profile setting, which is the whole
+       * point of having that setting.
+       *
+       * An account's page ignores profiles entirely: its partition comes from the
+       * identity, which is what keeps one account's logins away from every other.
+       */
+      const profile = input?.identityId
+        ? undefined
+        : input?.profileId
+          ? workspace.settingsSnapshot().profiles.find((item) => item.id === input.profileId)
+          : workspace.defaultProfile();
       const tab = await browser.createTab({
         ...(resolvedUrl ? { url: resolvedUrl } : {}),
         ...(input?.identityId ? { identityId: input.identityId } : {}),
@@ -3348,6 +3375,16 @@ function registerIpc(workspace: WorkspaceService): void {
         // An identity always owns its own partition; `clean` only decides for a
         // page that has none, so the two never disagree.
         ...(input?.clean ? { clean: true } : {}),
+        ...(profile ? { profileId: profile.id } : {}),
+        /*
+         * The profile's own retention decides, not the caller. `ephemeral` exists
+         * on the wire only so an older renderer could ask for it explicitly; a
+         * profile row knows its retention, so trusting a flag that agrees with
+         * the id it sent would be a second source of truth for a storage
+         * boundary. `clean` above stays separate because it is the one case with
+         * no profile row behind it.
+         */
+        ...(profile?.retention === "ephemeral" || input?.ephemeral ? { ephemeral: true } : {}),
         origin: "manual",
       });
       // Opening a bookmark as one of its accounts is the same intent as

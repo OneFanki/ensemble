@@ -15,7 +15,8 @@ import SiteOpenMenu from "./SiteOpenMenu.vue";
  * one-click "+" therefore had to guess, and the guess was the daily profile — so
  * a view built to compare accounts got an anonymous page in a cell instead. Now
  * the click is a question: pick an account (opened at its start page and filled),
- * open the site daily or clean, or explicitly ask for a blank page.
+ * open the site in the default profile or a throwaway, or open a blank browser in
+ * one of the profiles.
  *
  * `lockedSiteId` is set where the surrounding container already names the
  * system — a view's own "+" — so the chooser lists that site's accounts and
@@ -33,10 +34,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** A blank page in the daily profile was asked for by name. */
-  openBlank: [];
-  /** A blank page in a throwaway session was asked for by name. */
-  openBlankClean: [];
+  /** A blank browser in one profile was asked for by name. */
+  openProfile: [profileId: string];
   openDaily: [siteId: string];
   openClean: [siteId: string];
   openIdentity: [identityId: string];
@@ -138,14 +137,9 @@ function placePanel(): void {
   };
 }
 
-function chooseBlank(): void {
+function chooseProfile(profileId: string): void {
   open.value = false;
-  emit("openBlank");
-}
-
-function chooseBlankClean(): void {
-  open.value = false;
-  emit("openBlankClean");
+  emit("openProfile", profileId);
 }
 
 function chooseDaily(siteId: string): void {
@@ -183,9 +177,10 @@ function chooseIdentity(identityId: string): void {
       <SiteOpenMenu
         :sites="store.sites"
         :identities="store.identities"
+        :profiles="store.settings.profiles ?? []"
+        :default-profile-id="store.settings.defaultProfileId"
         :locked-site-id="effectiveLock"
-        @open-blank="chooseBlank"
-        @open-blank-clean="chooseBlankClean"
+        @open-profile="chooseProfile"
         @open-daily="chooseDaily"
         @open-clean="chooseClean"
         @open-identity="chooseIdentity"

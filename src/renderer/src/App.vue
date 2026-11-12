@@ -29,6 +29,7 @@ import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import BookmarksPage from "./components/BookmarksPage.vue";
 import MessagesPage from "./components/MessagesPage.vue";
+import ProfilesPage from "./components/ProfilesPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
 import ToastStack from "./components/ToastStack.vue";
@@ -212,9 +213,12 @@ onMounted(async () => {
   // before the first settings visit.
   void store.mcpStatus();
   applyTheme(store.settings.theme);
-  setLocale(resolvedLocale.value);  const saved = store.settings.lastView;
+  setLocale(resolvedLocale.value);
+  const saved = store.settings.lastView;
   // The browser is the default page; returning to where the user left off beats
-  // resetting them to a management page they only visited once.
+  // resetting them to a management page they only visited once. Bookmarks and
+  // profiles are never restored for the same reason settings is not: they are
+  // places you go to change something, not where work sits.
   view.value =
     saved === "sites" ||
     saved === "identities" ||
@@ -299,11 +303,12 @@ onUnmounted(() => systemTheme.removeEventListener("change", handleSystemThemeCha
 
 function switchView(next: View) {
   view.value = next;
-  // "settings" and "bookmarks" are deliberately not persisted as the view to
-  // restore: settings is a place you go to change something, and bookmarks is a
-  // management page whose content is also on the start page. Restoring either on
-  // launch would look like the app opened on the wrong screen.
-  if (next !== "settings" && next !== "bookmarks") {
+  // "settings", "bookmarks" and "profiles" are deliberately not persisted as the
+  // view to restore: settings is a place you go to change something, and the
+  // other two are management pages whose content is also reachable from the
+  // browser. Restoring any of them on launch would look like the app opened on
+  // the wrong screen.
+  if (next !== "settings" && next !== "bookmarks" && next !== "profiles") {
     void store.saveSettings({ lastView: next });
   }
 }
@@ -314,7 +319,7 @@ function switchView(next: View) {
  * The menu names a destination; without one it lands on Settings, because the
  * menu's other rows are already there to be clicked instead.
  */
-function openConsole(target: "sites" | "bookmarks" | "settings" | "messages" = "settings") {
+function openConsole(target: "sites" | "bookmarks" | "profiles" | "settings" | "messages" = "settings") {
   if (target === "settings") {
     openSettings("general");
     return;
@@ -917,6 +922,7 @@ async function handleLocale(locale: LocaleSetting) {
         <FlowsPage v-else-if="view === 'flows'" />
         <TagsPage v-else-if="view === 'tags'" />
         <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
+        <ProfilesPage v-else-if="view === 'profiles'" />
         <BookmarksPage v-else />
       </main>
     </div>

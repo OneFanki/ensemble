@@ -501,13 +501,6 @@ async function openSiteInView(
 async function openIdentityInView(view: EmbeddedView, identityId: string): Promise<void> {
   await embedded.openTabInto(view.id, { identityId });
 }
-
-async function openBlankInView(
-  view: EmbeddedView,
-  options?: { clean?: boolean },
-): Promise<void> {
-  await embedded.openTabInto(view.id, options);
-}
 </script>
 
 <template>
@@ -684,8 +677,7 @@ async function openBlankInView(
             <OpenSiteButton
               compact
               :locked-site-id="embedded.viewSiteId(view.id)"
-              @open-blank="openBlankInView(view)"
-              @open-blank-clean="openBlankInView(view, { clean: true })"
+              @open-profile="embedded.openProfileTab($event, { viewId: view.id })"
               @open-daily="openSiteInView(view, $event)"
               @open-clean="openSiteInView(view, $event, { clean: true })"
               @open-identity="openIdentityInView(view, $event)"
@@ -820,8 +812,7 @@ async function openBlankInView(
             <span v-else class="layout-spacer"></span>
             <OpenSiteButton
               compact
-              @open-blank="embedded.openLooseTab()"
-              @open-blank-clean="embedded.openCleanLooseTab()"
+              @open-profile="embedded.openProfileTab($event, { viewId: null })"
               @open-daily="openSiteBookmark($event)"
               @open-clean="openSiteBookmark($event, { clean: true })"
               @open-identity="openIdentityBookmark"

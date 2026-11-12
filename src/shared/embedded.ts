@@ -61,6 +61,14 @@ export interface EmbeddedTab {
    */
   clean?: boolean;
   /**
+   * Profile this browser instance was opened under.
+   *
+   * Absent means the built-in default profile. The chrome shows it so someone
+   * comparing two windows can tell which logins each one has; the partition
+   * already encodes it, but a partition string is not something to show a person.
+   */
+  profileId?: string;
+  /**
    * Session partition this page's renderer lives in.
    *
    * Sent with the tab rather than re-derived in the renderer: the partition is
@@ -1369,10 +1377,33 @@ export function embeddedPartition(key: string): string {
  *
  * The value still reads "clean" because that is the partition earlier versions
  * gave every identity-less page. Keeping the exact string adopts whatever logins
- * the user already has: an upgrade must not sign them out of everything. The
- * throwaway session below is a new name, so nothing old has to be migrated there.
+ * the user already has: an upgrade must not sign them out of everything.
+ *
+ * Profiles added later get their own name (see {@link embeddedProfilePartition}),
+ * so this constant is now specifically *the built-in default profile's*
+ * partition rather than "the daily partition" in general.
  */
 export const EMBEDDED_DAILY_PARTITION = "persist:embedded-clean";
+
+/** Id of the built-in everyday profile. Stable across every version. */
+export const EMBEDDED_DEFAULT_PROFILE_ID = "default";
+
+/** Id of the built-in ephemeral profile ("clean session"). */
+export const EMBEDDED_CLEAN_PROFILE_ID = "clean";
+
+/**
+ * Prefix for a user-created profile's partition.
+ *
+ * Separate from the built-in default's literal name so that adding profiles did
+ * not have to rename the one that already holds logins. The id is user-generated
+ * but goes through the same sanitiser as a clean session: a partition string is
+ * part of a filesystem path.
+ */
+export const EMBEDDED_PROFILE_PREFIX = "persist:profile-";
+
+export function embeddedProfilePartition(profileId: string): string {
+  return `${EMBEDDED_PROFILE_PREFIX}${profileId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
 
 /**
  * Prefix for a throwaway session, one per browser instance.
@@ -1395,17 +1426,31 @@ export function embeddedCleanPartition(instanceId: string): string {
 /**
  * Which partition a page belongs to.
  *
- * An identity gets its own partition; an everyday page shares the daily profile;
- * an explicit clean open gets a throwaway session of its own.
+ * An identity gets its own partition. Otherwise the page comes from a profile:
+ * the built-in default keeps its historical literal, a user-created profile gets
+ * a name derived from its id, and an ephemeral one gets a throwaway session keyed
+ * by the running browser so two of them never share a login.
  */
 export function embeddedTabPartition(input: {
   identityId?: string;
   clean?: boolean;
   /** Instance the page belongs to; names the throwaway session. */
   instanceId: string;
+  /**
+   * Profile the page belongs to. Absent means the built-in default, which keeps
+   * every existing caller — and every login already stored under that
+   * partition — working unchanged.
+   */
+  profileId?: string;
+  /** True when `profileId` names an ephemeral profile. */
+  ephemeral?: boolean;
 }): string {
   if (input.identityId) return embeddedPartition(input.identityId);
-  return input.clean ? embeddedCleanPartition(input.instanceId) : EMBEDDED_DAILY_PARTITION;
+  if (input.ephemeral || input.clean) return embeddedCleanPartition(input.instanceId);
+  if (!input.profileId || input.profileId === EMBEDDED_DEFAULT_PROFILE_ID) {
+    return EMBEDDED_DAILY_PARTITION;
+  }
+  return embeddedProfilePartition(input.profileId);
 }
 
 /**

@@ -45,6 +45,7 @@ import {
   FolderOpen,
   Info,
   KeyRound,
+  Layers,
   LayoutGrid,
   Minus,
   Monitor,
@@ -102,7 +103,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** Open a management page; `null` means "settings", the menu's default. */
-  openConsole: [view?: "sites" | "bookmarks" | "settings" | "messages"];
+  openConsole: [view?: "sites" | "bookmarks" | "profiles" | "settings" | "messages"];
   /** Single cell ↔ workbench. */
   switchMode: [mode: "browse" | "bench"];
   /** The app menu's "open the workbench" — same action as the layout button. */
@@ -200,7 +201,7 @@ function openWorkspaceFromMenu(): void {
   emit("openWorkspace");
 }
 
-function openPageFromMenu(view: "sites" | "bookmarks" | "settings"): void {
+function openPageFromMenu(view: "sites" | "bookmarks" | "profiles" | "settings"): void {
   appMenuOpen.value = false;
   emit("openConsole", view);
 }
@@ -2405,8 +2406,7 @@ function fillMessage(reason?: string): string {
         overlay with the new percentage, like every browser.
       -->
       <OpenSiteButton
-        @open-blank="store.openTab()"
-        @open-blank-clean="store.openCleanTab()"
+        @open-profile="store.openProfileTab($event)"
         @open-daily="openSiteBookmark"
         @open-clean="openSiteClean"
         @open-identity="openIdentityBookmark"
@@ -2649,6 +2649,16 @@ function fillMessage(reason?: string): string {
           >
             <BookmarkIcon :size="14" />
             <span>{{ t("app.bookmarks") }}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="app-menu-item"
+            data-menu-item="profiles"
+            @click="openPageFromMenu('profiles')"
+          >
+            <Layers :size="14" />
+            <span>{{ t("app.profiles") }}</span>
           </button>
           <!--
             Developer tools and AI access: both are "tools for this browser",

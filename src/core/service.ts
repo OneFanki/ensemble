@@ -12,7 +12,8 @@ import {
   type BundleSecrets,
   buildAccountBundle,
 } from "@shared/accounts-transfer";
-import { DEFAULT_SETTINGS } from "@shared/defaults";
+import { BUILTIN_PROFILES, DEFAULT_SETTINGS } from "@shared/defaults";
+import { EMBEDDED_DEFAULT_PROFILE_ID } from "@shared/embedded";
 import { type Flow, type FlowDraft, validateFlow } from "@shared/flows";
 import { findLayout, isFreeLayout } from "@shared/layouts";
 import {
@@ -31,6 +32,7 @@ import type {
   BookmarkDraft,
   BookmarkFolder,
   BookmarkFolderDraft,
+  BrowserProfile,
   CredentialPresence,
   Engine,
   Identity,
@@ -207,10 +209,12 @@ export class WorkspaceService {
       () => ({ version: 1, scannedAt: "", engines: [] }),
     );
     this.data = sanitizeWorkspace(this.store.read());
-    this.settings = this.adoptDefaultLayout({
-      ...DEFAULT_SETTINGS,
-      ...this.settingsStore.read(),
-    });
+    this.settings = this.repairProfiles(
+      this.adoptDefaultLayout({
+        ...DEFAULT_SETTINGS,
+        ...this.settingsStore.read(),
+      }),
+    );
 
     const vaultStore = new JsonStore<VaultFile>(join(options.userDataDir, "vault.json"), () => ({
       version: 2,
@@ -2014,6 +2018,104 @@ export class WorkspaceService {
     return this.settingsSnapshot();
   }
 
+  // ---------- profiles ----------
+
+  /**
+   * Adds a profile.
+   *
+   * New profiles persist by default. An ephemeral one has nothing to keep, so
+   * creating it in advance is pointless — "clean session" is built in and a
+   * second one behaves identically — hence no option to ask for one here.
+   */
+  createProfile(name: string): AppSettings {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("档案名称不能为空");
+    const profile: BrowserProfile = {
+      id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      name: trimmed,
+      retention: "persist",
+    };
+    this.settings = { ...this.settings, profiles: [...this.settings.profiles, profile] };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
+  renameProfile(id: string, name: string): AppSettings {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("档案名称不能为空");
+    const target = this.settings.profiles.find((profile) => profile.id === id);
+    if (!target) throw new Error("档案不存在");
+    this.settings = {
+      ...this.settings,
+      profiles: this.settings.profiles.map((profile) =>
+        profile.id === id ? { ...profile, name: trimmed } : profile,
+      ),
+    };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
+  /**
+   * Removes a profile.
+   *
+   * The built-ins stay: "default" is where a bookmark with no account lands, and
+   * removing it would leave that case with nothing to open in. A user profile can
+   * go, and if it was the default the choice moves to the built-in rather than
+   * dangling.
+   *
+   * The partition on disk is deliberately left alone. Deleting cookies is not
+   * something "remove this row from a list" should do behind the user's back, and
+   * re-adding a profile with the same id is not possible anyway (ids are fresh).
+   */
+  deleteProfile(id: string): AppSettings {
+    const target = this.settings.profiles.find((profile) => profile.id === id);
+    if (!target) throw new Error("档案不存在");
+    if (target.builtin) throw new Error("内置档案不能删除");
+    const profiles = this.settings.profiles.filter((profile) => profile.id !== id);
+    const defaultProfileId =
+      this.settings.defaultProfileId === id
+        ? (profiles.find((profile) => profile.id === EMBEDDED_DEFAULT_PROFILE_ID)?.id ??
+          profiles[0]?.id ??
+          EMBEDDED_DEFAULT_PROFILE_ID)
+        : this.settings.defaultProfileId;
+    this.settings = { ...this.settings, profiles, defaultProfileId };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
+  /** The profile a page with no account opens in when none is named. */
+  defaultProfile(): BrowserProfile {
+    return (
+      this.settings.profiles.find((profile) => profile.id === this.settings.defaultProfileId) ??
+      this.settings.profiles[0] ?? {
+        id: EMBEDDED_DEFAULT_PROFILE_ID,
+        name: "默认档案",
+        retention: "persist",
+      }
+    );
+  }
+
+  /**
+   * Chooses which profile a new page opens in when nobody names one.
+   *
+   * The ephemeral built-in is refused on purpose: a "default profile" that forgets
+   * everything on quit would silently turn every bookmark into a signed-out page,
+   * and the user would have no way to tell that from a broken login.
+   */
+  setDefaultProfile(id: string): AppSettings {
+    const target = this.settings.profiles.find((profile) => profile.id === id);
+    if (!target) throw new Error("档案不存在");
+    if (target.retention === "ephemeral") throw new Error("干净会话不能设为默认档案");
+    if (this.settings.defaultProfileId === id) return this.settingsSnapshot();
+    this.settings = { ...this.settings, defaultProfileId: id };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
   /**
    * Takes the factory default layout while the user has never picked one.
    *
@@ -2025,6 +2127,46 @@ export class WorkspaceService {
   private adoptDefaultLayout(loaded: AppSettings): AppSettings {
     if (loaded.layoutExplicit) return loaded;
     return { ...loaded, layout: DEFAULT_SETTINGS.layout };
+  }
+
+  /**
+   * Guarantees the two built-in profiles exist and that `defaultProfileId` points
+   * at a real one.
+   *
+   * Three ways a settings file can be wrong here, all of them ordinary:
+   *
+   * - written before profiles existed, so the field is absent;
+   * - hand-edited, with a built-in row removed;
+   * - pointing `defaultProfileId` at a profile the user has since deleted.
+   *
+   * Any of these would leave a bookmark or a typed address with nowhere to open,
+   * and the failure would surface as a blank page rather than as an error. The
+   * built-ins are therefore re-inserted in place (keeping their position, so the
+   * chooser does not reshuffle) and a dangling default falls back to the first
+   * persistent profile.
+   */
+  private repairProfiles(loaded: AppSettings): AppSettings {
+    const existing = Array.isArray(loaded.profiles) ? loaded.profiles : [];
+    const known = new Set(existing.map((profile) => profile.id));
+    const missing = BUILTIN_PROFILES.filter((profile) => !known.has(profile.id));
+    // Built-ins first, in their declared order, then whatever the user added —
+    // but only if the file had none of them, otherwise the user's own ordering
+    // is what they chose to look at.
+    const profiles = missing.length
+      ? [...existing, ...missing.map((profile) => ({ ...profile }))]
+      : existing;
+    const fallback =
+      profiles.find((profile) => profile.id === EMBEDDED_DEFAULT_PROFILE_ID)?.id ??
+      profiles.find((profile) => profile.retention === "persist")?.id ??
+      profiles[0]?.id ??
+      EMBEDDED_DEFAULT_PROFILE_ID;
+    const defaultProfileId = profiles.some((profile) => profile.id === loaded.defaultProfileId)
+      ? loaded.defaultProfileId
+      : fallback;
+    if (profiles === loaded.profiles && defaultProfileId === loaded.defaultProfileId) {
+      return loaded;
+    }
+    return { ...loaded, profiles, defaultProfileId };
   }
 
   // ---------- credentials ----------

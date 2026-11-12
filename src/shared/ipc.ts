@@ -147,6 +147,14 @@ export const IPC = {
   siteOriginNotice: "site:origin-notice",
   layoutPresetSave: "layout:save",
   layoutPresetDelete: "layout:delete",
+  /** Creates a profile; new profiles persist, so no retention is asked for. */
+  profileCreate: "profile:create",
+  /** Renames a profile, built-in ones included. */
+  profileRename: "profile:rename",
+  /** Deletes a user profile; built-ins are refused by the service. */
+  profileDelete: "profile:delete",
+  /** Chooses which profile a page with no account opens in. */
+  profileSetDefault: "profile:set-default",
   dataExport: "data:export",
   dataImportPick: "data:import-pick",
   dataImportApply: "data:import-apply",
@@ -481,6 +489,17 @@ export interface EnsembleApi {
   pickAccountsImport(): Promise<AccountsImportPickOutcome>;
   applyAccountsImport(passphrase?: string): Promise<AccountsImportApplyOutcome>;
   saveSettings(patch: SettingsPatch): Promise<WorkspaceSnapshot>;
+  /**
+   * Creates a profile and returns the new settings.
+   *
+   * Profiles are settings, not workspace content: they belong to this machine's
+   * browser sessions rather than to the accounts being tested, so they travel
+   * with the app's own settings file and never appear in an export.
+   */
+  createProfile(name: string): Promise<AppSettings>;
+  renameProfile(id: string, name: string): Promise<AppSettings>;
+  deleteProfile(id: string): Promise<AppSettings>;
+  setDefaultProfile(id: string): Promise<AppSettings>;
   /** Fires the connectivity test; every probe is one GET through the session. */
   testProxyConnectivity(): Promise<ConnectivityProbeResult[]>;
 
@@ -617,6 +636,16 @@ export interface EnsembleApi {
      * omits it, so the login already in the daily profile is reused.
      */
     clean?: boolean;
+    /**
+     * Profile to open the page under, when it has no identity.
+     *
+     * Omitted means the user's default profile, which is what every caller that
+     * predates profiles wants. `ephemeral` says the chosen profile keeps nothing
+     * on disk, so the main process gives this browser its own in-memory session
+     * instead of a shared persistent one.
+     */
+    profileId?: string;
+    ephemeral?: boolean;
   }): Promise<EmbeddedTab>;
   /**
    * Opens a page in a specific view and returns the new state.

@@ -80,7 +80,8 @@
     "e2e:minimize": "node scripts/e2e-minimize.mjs",
     "e2e:all": "node scripts/run-all-e2e.mjs",
     "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs",
-    "e2e:devtools-panels": "node scripts/e2e-devtools-panels.mjs"
+    "e2e:devtools-panels": "node scripts/e2e-devtools-panels.mjs",
+    "e2e:profiles": "node scripts/e2e-profiles.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

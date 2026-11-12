@@ -532,6 +532,17 @@ export class EmbeddedBrowser {
    * daily profile.
    */
   private cleanInstances = new Set<string>();
+  /**
+   * Profile each instance was opened under.
+   *
+   * Also per instance rather than per page, and for the same reason as `clean`:
+   * a popup must inherit the profile its opener lives in, or completing an OAuth
+   * handshake would drop the resulting cookie into a different jar than the page
+   * that started it. Absent means the built-in default profile.
+   */
+  private instanceProfiles = new Map<string, string>();
+  /** Instances whose profile is ephemeral (nothing survives the process). */
+  private ephemeralInstances = new Set<string>();
   private activeTabId: string | undefined;
   private activeViewId: string | undefined;
   private stage: StageRect | null = null;
@@ -808,6 +819,9 @@ export class EmbeddedBrowser {
       instanceId: tab.instanceId,
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
       ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
+      ...(this.instanceProfiles.get(tab.instanceId)
+        ? { profileId: this.instanceProfiles.get(tab.instanceId) }
+        : {}),
       partition: this.partitionOf(tab),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       // In viewport mode the fit scale *is* the effective zoom; reporting the
@@ -943,6 +957,11 @@ export class EmbeddedBrowser {
   /** The page id that doubles as the instance id. */
   private instanceRoot(instanceId: string): TabRecord | undefined {
     return this.tabs.find((tab) => tab.id === instanceId) ?? this.instanceTabs(instanceId)[0];
+  }
+
+  /** Profile an instance was opened under; absent means the built-in default. */
+  private profileOfInstance(instanceId: string): string | undefined {
+    return this.instanceProfiles.get(instanceId);
   }
 
   /** Page the instance is currently showing; falls back to its first page. */
@@ -1717,10 +1736,17 @@ export class EmbeddedBrowser {
      * Open with no shared state at all.
      *
      * Only an explicit "clean open" sets this. A page with no identity that
-     * omits it lands in the daily profile — that is what makes a bookmark and a
-     * typed address reuse the login the user already has.
+     * omits it lands in the default profile — that is what makes a bookmark and
+     * a typed address reuse the login the user already has.
      */
     clean?: boolean;
+    /**
+     * Profile to open in when the page has no identity. Absent means the
+     * default, so every caller that predates profiles keeps its behaviour.
+     */
+    profileId?: string;
+    /** True when the resolved profile is ephemeral (a "clean" profile row). */
+    ephemeral?: boolean;
     /** Existing instance that should own this page; omitted creates a new one. */
     instanceId?: string;
     openerId?: string;
@@ -1738,14 +1764,27 @@ export class EmbeddedBrowser {
     // A popup inherits its opener's world, including a deliberate clean open: it
     // must not jump into the daily profile halfway through a throwaway flow.
     const clean = input.clean ?? (parent ? this.cleanInstances.has(parent.instanceId) : false);
+    /*
+     * The profile a popup belongs to is its opener's, never a fresh default.
+     *
+     * Same reason as `clean`: a login flow that opens a popup must stay in the
+     * profile it started in, or the sign-in completes into a different cookie
+     * jar than the page that asked for it.
+     */
+    const profileId = input.profileId ?? this.profileOfInstance(instanceId);
+    const ephemeral = input.ephemeral ?? this.ephemeralInstances.has(instanceId);
     const partition = embeddedTabPartition({
       ...(identityId ? { identityId } : {}),
       clean,
       instanceId,
+      ...(profileId ? { profileId } : {}),
+      ephemeral,
     });
-    // Remembered per instance: `clean` is not part of the tab record, and the
-    // next page opened by this instance has to agree with it.
-    if (clean) this.cleanInstances.add(instanceId);
+    // Remembered per instance: neither `clean` nor the profile is part of the tab
+    // record, and the next page opened by this instance has to agree with it.
+    if (clean || ephemeral) this.cleanInstances.add(instanceId);
+    if (profileId) this.instanceProfiles.set(instanceId, profileId);
+    if (ephemeral) this.ephemeralInstances.add(instanceId);
     this.configureSession(partition);
     /*
      * Resolve the target before the tab exists.
@@ -2043,10 +2082,13 @@ export class EmbeddedBrowser {
    * the page uses (cookies, region, referrer), not the app's default session.
    */
   private partitionOf(tab: TabRecord): string {
+    const profileId = this.instanceProfiles.get(tab.instanceId);
     return embeddedTabPartition({
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
       clean: this.cleanInstances.has(tab.instanceId),
       instanceId: tab.instanceId,
+      ...(profileId ? { profileId } : {}),
+      ephemeral: this.ephemeralInstances.has(tab.instanceId),
     });
   }
 
@@ -2661,7 +2703,7 @@ export class EmbeddedBrowser {
    */
   async openInInstance(instanceId: string): Promise<EmbeddedState> {
     const root = this.instanceRoot(instanceId);
-    if (!root) throw new Error(`浏览器实例不存在：${instanceId}`);
+    if (!root) throw new Error(`浏览器不存在：${instanceId}`);
     const tab = await this.createTab({ instanceId: root.id });
     this.activate(tab.id);
     return this.state();
@@ -2717,6 +2759,8 @@ export class EmbeddedBrowser {
     // clean-session marker with it so the set does not grow forever.
     if (!this.tabs.some((item) => item.instanceId === tab.instanceId)) {
       this.cleanInstances.delete(tab.instanceId);
+      this.instanceProfiles.delete(tab.instanceId);
+      this.ephemeralInstances.delete(tab.instanceId);
       this.instanceActive.delete(tab.instanceId);
     }
     // A page still waiting for its carrier has neither an executor nor a
@@ -2739,6 +2783,8 @@ export class EmbeddedBrowser {
     this.tabs = [];
     this.views = [];
     this.cleanInstances.clear();
+    this.instanceProfiles.clear();
+    this.ephemeralInstances.clear();
     this.activeTabId = undefined;
     this.activeViewId = undefined;
   }

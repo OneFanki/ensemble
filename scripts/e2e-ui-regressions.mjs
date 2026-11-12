@@ -836,40 +836,34 @@ try {
     const anonymous = rows.filter((el) => el.classList.contains('anonymous'));
     const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
     const firstAccountIndex = rows.findIndex((el) => !el.classList.contains('anonymous'));
-    // The blank pages sit in the chooser's own footer, outside the site columns:
-    // they belong to no site, so they must not read as that site's openings.
-    const foot = document.querySelector('.open-menu .foot');
-    const footNames = foot
-      ? [...foot.querySelectorAll('.acc-name')].map((el) => el.textContent?.trim() ?? '')
-      : [];
-    // Only the site's own fixed rows count for ordering; the blank pages live in
-    // the chooser's footer and are deliberately last.
-    const siteAnonymous = anonymous.filter((el) => !el.closest('.foot'));
+    // The blank pages are gone as separate rows: a browser with no account is
+    // now one of the profiles, and it lives under its own mode rather than in
+    // this column — the account tab answers "which login", the profile tab
+    // answers "which cookie jar".
+    const modes = [...document.querySelectorAll('.open-menu .mode')];
     return {
       accounts: accounts.length,
       anonymous: anonymous.length,
-      names: siteAnonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
-      footNames,
-      // The two blank openings sit side by side in the footer: daily profile and
-      // throwaway session are the same kind of answer at the same level.
-      footSideBySide: foot ? getComputedStyle(foot).gridTemplateColumns.split(' ').length === 2 : false,
+      names: anonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
+      modes: modes.length,
+      modesOn: modes.filter((el) => el.classList.contains('on')).length,
+      profilesHidden: document.querySelectorAll('.open-menu .profile-row').length,
       // The site's own openings are fixed above the scrolling account list: a
       // site with thirty accounts must not push "open daily" past the fold.
       anonymousBeforeAccounts:
-        rows.map((el) => siteAnonymous.includes(el)).lastIndexOf(true) < firstAccountIndex,
+        rows.map((el) => anonymous.includes(el)).lastIndexOf(true) < firstAccountIndex,
     };
   })()`);
   check(
-    "the chooser lists accounts, the site's two openings and two blank pages",
-    menuShape?.accounts > 0 &&
-      menuShape?.anonymous === 4 &&
-      menuShape?.footNames?.[0] === '空白页' &&
-      menuShape?.footNames?.[1] === '干净会话',
+    "the chooser lists the site's two openings and its accounts",
+    menuShape?.accounts > 0 && menuShape?.anonymous === 2,
     menuShape,
   );
   check(
-    "the blank pages sit side by side in the footer",
-    menuShape?.footSideBySide === true,
+    "the chooser opens on the account tab with the profile list behind it",
+    menuShape?.modes === 2 &&
+      menuShape?.modesOn === 1 &&
+      menuShape?.profilesHidden === 0,
     menuShape,
   );
   check(

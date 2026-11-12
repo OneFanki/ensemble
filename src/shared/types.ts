@@ -425,12 +425,67 @@ export interface AutoFillReport {
   navigatedToLogin?: boolean;
 }
 
+/**
+ * A browsing profile: one environment with its own login state.
+ *
+ * Accounts and everyday browsing look like different features, but they are the
+ * same thing underneath: a partition that keeps cookies under its own name.
+ * {@link Identity} stays a richer object — it also carries credentials, a site
+ * and login checks — while a profile is just the partition and how long it
+ * lives. Treating them as one concept in the interface is what lets "new
+ * browser" offer both without explaining the difference twice.
+ *
+ * `retention` is the only real difference between the built-ins:
+ *
+ * - `persist` writes to disk, so a sign-in survives a restart. That is what
+ *   everyday browsing means.
+ * - `ephemeral` lives in memory and is keyed per running browser, so it dies
+ *   with the process. "Clean session" is not a separate feature — it is a
+ *   profile with this retention.
+ */
+export interface BrowserProfile {
+  id: string;
+  /** Shown in the chooser and in the profile page; the built-in one is renamed. */
+  name: string;
+  retention: BrowserProfileRetention;
+  /**
+   * Set on the two rows the app ships with. A built-in profile can be renamed
+   * but not deleted, and its partition name is stable so old logins keep
+   * working.
+   */
+  builtin?: boolean;
+}
+
+export type BrowserProfileRetention = "persist" | "ephemeral";
+
 export interface AppSettings {
   theme: "dark" | "light" | "system";
   /** UI language; `"system"` follows the OS. See {@link LocaleSetting}. */
   locale: LocaleSetting;
+  /**
+   * Profiles available for everyday pages, in the order the chooser lists them.
+   *
+   * The two built-ins (`default`, `clean`) are always present; the loader
+   * re-inserts them if a file predates this field or lost them in an edit. A
+   * user-created profile is a third row with the same shape.
+   */
+  profiles: BrowserProfile[];
+  /**
+   * Profile a page with no account opens in when the caller does not name one —
+   * a bookmark, a typed address, the toolbar's "+".
+   */
+  defaultProfileId: string;
   lastSiteId?: string;
-  lastView: "browser" | "messages" | "sites" | "identities" | "views" | "flows" | "tags";
+  lastView:
+    | "browser"
+    | "messages"
+    | "sites"
+    | "identities"
+    | "views"
+    | "flows"
+    | "tags"
+    | "bookmarks"
+    | "profiles";
   /**
    * Which shell the window opens in.
    *

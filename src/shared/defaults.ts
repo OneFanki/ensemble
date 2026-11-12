@@ -1,10 +1,35 @@
-import type { AppSettings } from "@shared/types";
+import type { AppSettings, BrowserProfile } from "@shared/types";
 import {
+  EMBEDDED_CLEAN_PROFILE_ID,
+  EMBEDDED_DEFAULT_PROFILE_ID,
   PERF_SAMPLE_INTERVAL_DEFAULT_MS,
   PERF_WINDOW_DEFAULT_MS,
 } from "./embedded";
 import { DEFAULT_NEW_TAB_BACKDROP } from "./newtab";
 import { DEFAULT_SEARCH_ENGINE_ID } from "./search";
+
+/**
+ * The two profiles the app ships with.
+ *
+ * A plain array rather than only defaults on `AppSettings`, because the loader
+ * needs to re-insert these into a settings file that was written before profiles
+ * existed — or that lost one to a hand edit. Deleting "default" would leave no
+ * landing place for a bookmark, so it is not offered.
+ */
+export const BUILTIN_PROFILES: BrowserProfile[] = [
+  {
+    id: EMBEDDED_DEFAULT_PROFILE_ID,
+    name: "默认档案",
+    retention: "persist",
+    builtin: true,
+  },
+  {
+    id: EMBEDDED_CLEAN_PROFILE_ID,
+    name: "干净会话",
+    retention: "ephemeral",
+    builtin: true,
+  },
+];
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark",
@@ -45,6 +70,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 100% is what a site expects; the setting exists for high-DPI screens and
   // small laptops, not as something to tune up front.
   browserZoom: 100,
+  // Two profiles to start: the everyday one holding real logins, and a
+  // throwaway. Everything else the user adds themselves — most people only ever
+  // need the first.
+  profiles: BUILTIN_PROFILES.map((profile) => ({ ...profile })),
+  defaultProfileId: EMBEDDED_DEFAULT_PROFILE_ID,
   // Adaptive: pages fill their cell. A fixed default would be a layout opinion
   // applied to every account at once, which is exactly what a first launch
   // cannot know.

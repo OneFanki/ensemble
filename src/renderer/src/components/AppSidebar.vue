@@ -29,6 +29,7 @@ import {
   Bookmark,
   Globe,
   Inbox,
+  Layers,
   LayoutGrid,
   Settings,
   Tag,
@@ -51,7 +52,8 @@ export type AppView =
   | "views"
   | "flows"
   | "tags"
-  | "bookmarks";
+  | "bookmarks"
+  | "profiles";
 
 defineProps<{ view: AppView }>();
 const emit = defineEmits<{ navigate: [view: AppView]; settings: [] }>();
@@ -69,15 +71,18 @@ const reservesControls = computed(() => platform.value !== "darwin");
 /**
  * Where you can go, in two groups.
  *
- * The first group is the browser itself plus the bookmarks — both are about
- * *going somewhere*: the page you have open, and the addresses you keep. The
- * second is the workspace's own assets.
+ * The first group is the browser itself plus the bookmarks and profiles — all
+ * three are about *going somewhere*: the page you have open, the addresses you
+ * keep, and the cookie jars you open them in. The second is the workspace's own
+ * assets.
  *
  * Bookmarks used to sit in the asset group, beside sites, and that pairing was
  * the whole confusion: a site is a login recipe for a system you keep accounts
  * in, a bookmark is one address. Reading them as two entries of one list made
  * people ask what the difference was. They answer different questions, so they
- * no longer share a list.
+ * no longer share a list. Profiles belong on this side for the same reason: they
+ * are how everyday browsing is organised, while sites and accounts describe
+ * systems under test.
  */
 const browserEntries = computed<Array<{ view: AppView; label: string; icon: Component; count: number }>>(
   () => [
@@ -94,6 +99,12 @@ const browserEntries = computed<Array<{ view: AppView; label: string; icon: Comp
       label: t("app.bookmarks"),
       icon: Bookmark,
       count: workspace.bookmarks.length,
+    },
+    {
+      view: "profiles",
+      label: t("app.profiles"),
+      icon: Layers,
+      count: workspace.settings.profiles?.length ?? 0,
     },
   ],
 );

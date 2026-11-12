@@ -53,13 +53,24 @@ const ALLOWED_PARAMS = new Set(["src", "partition", "useragent", "allowpopups"])
  * storage boundary: a guest pointed at `persist:something-else` would read
  * cookies this surface never meant to share, so the value is checked rather
  * than trusted.
+ *
+ * Every prefix here is one this app creates: an identity's session, a user
+ * profile's session, and a throwaway one. A prefix missing from this list does
+ * not fail loudly — `will-attach-webview` refuses the guest, the node never
+ * fires `dom-ready`, and the open times out ten seconds later with a message
+ * about the page not being ready. Adding a new partition scheme therefore means
+ * adding its prefix here in the same change.
  */
 export function guestPartitionAllowed(partition: string | undefined): boolean {
   // Absent means "whatever the default is", which the manager always sets to a
   // partition of its own. An empty string is different: Chromium reads it as
   // the default session, i.e. the app's own — never allowed for a guest.
   if (partition === undefined) return true;
-  return partition.startsWith("persist:embedded-") || partition.startsWith("embedded-clean-");
+  return (
+    partition.startsWith("persist:embedded-") ||
+    partition.startsWith("persist:profile-") ||
+    partition.startsWith("embedded-clean-")
+  );
 }
 
 /**

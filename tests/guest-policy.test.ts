@@ -4,6 +4,12 @@ import {
   guestSrcAllowed,
   hardenGuestPreferences,
 } from "@core/cdp/guest-policy";
+import {
+  EMBEDDED_DAILY_PARTITION,
+  embeddedCleanPartition,
+  embeddedPartition,
+  embeddedProfilePartition,
+} from "@shared/embedded";
 
 describe("what a webview guest may load", () => {
   it("accepts remote pages and the initial blank document", () => {
@@ -24,14 +30,36 @@ describe("what a webview guest may load", () => {
 describe("which partition a guest may join", () => {
   it("accepts the partitions this surface creates", () => {
     expect(guestPartitionAllowed("persist:embedded-identity-1")).toBe(true);
+    expect(guestPartitionAllowed("persist:profile-p1abc")).toBe(true);
     expect(guestPartitionAllowed("embedded-clean-abc123")).toBe(true);
     expect(guestPartitionAllowed(undefined)).toBe(true);
   });
 
   it("refuses a partition that belongs to something else", () => {
     expect(guestPartitionAllowed("persist:other-app")).toBe(false);
+    expect(guestPartitionAllowed("persist:profile")).toBe(false);
     expect(guestPartitionAllowed("")).toBe(false);
     expect(guestPartitionAllowed("persist:")).toBe(false);
+  });
+
+  /*
+   * The regression: a user profile's partition was left out of the allow list
+   * when profiles were added, so every browser opened under a new profile
+   * awaited a `dom-ready` that could never arrive and failed ten seconds later
+   * with "the page was not ready in time". The refusal happened in
+   * `will-attach-webview`, which logs nothing, so the message pointed at the
+   * wrong layer entirely.
+   */
+  it("accepts every partition the embed helper can produce", () => {
+    const produced = [
+      embeddedPartition("identity-1"),
+      embeddedProfilePartition("p1abc"),
+      embeddedCleanPartition("instance-1"),
+      EMBEDDED_DAILY_PARTITION,
+    ];
+    for (const partition of produced) {
+      expect(guestPartitionAllowed(partition), partition).toBe(true);
+    }
   });
 });
 

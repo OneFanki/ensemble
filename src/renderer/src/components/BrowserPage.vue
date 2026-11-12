@@ -2165,7 +2165,7 @@ function fillMessage(reason?: string): string {
         v-if="activeTab && !isBlankTab(activeTab)"
         type="button"
         class="icon star"
-        :class="{ active: Boolean(bookmarkedEntry) }"
+        :class="{ marked: Boolean(bookmarkedEntry) }"
         v-tooltip="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
         :aria-label="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAdd')"
         :aria-pressed="Boolean(bookmarkedEntry)"
@@ -3919,10 +3919,27 @@ function fillMessage(reason?: string): string {
 }
 
 /* On state for a toggle (DevTools open): the control is clearly "on", not just
-   hovered. */
+   hovered.
+ *
+ * A tinted rectangle is right for these because they are *temporary* — a panel
+ * is open right now, and the tint disappears the moment it closes. */
 .icon.active {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent-text);
+}
+
+/*
+ * A saved bookmark is a different kind of "on": it is a property of the page,
+ * not of the toolbar, and it stays that way every time you come back.
+ *
+ * So it is marked once, in the glyph, and the button keeps its plain background.
+ * The filled star already reads as "saved"; tinting the 24px box around it as
+ * well said the same thing twice and made one toolbar icon look like it was
+ * pressed. It also spent the accent on a rectangle, which is exactly the heavy
+ * use of gold this shell avoids everywhere else.
+ */
+.icon.star.marked {
+  color: var(--accent);
 }
 
 /* Zoom beside the viewport control, in the toolbar's own row.

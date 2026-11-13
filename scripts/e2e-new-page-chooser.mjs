@@ -420,6 +420,48 @@ try {
     toolbar?.anonymous?.length === 2,
     toolbar,
   );
+
+  /*
+   * The two openings are one line each. They used to carry a second line of
+   * explanation, which cost every visit a sentence the reader learned on the
+   * first one; the text now lives on hover. Both halves are asserted, because
+   * deleting the line without wiring the tooltip would just lose the text.
+   */
+  const openings = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (!document.querySelector('.open-menu')) {
+      document.querySelector('.toolbar .split-main')?.click();
+      await wait(900);
+    }
+    document.querySelector('.open-menu .mode[data-mode="accounts"]')?.click();
+    await wait(200);
+    const rows = [...document.querySelectorAll('.open-menu .account-row.anonymous')];
+    const heights = rows.map((el) => Math.round(el.getBoundingClientRect().height));
+    const notes = document.querySelectorAll('.open-menu .account-row.anonymous .acc-note').length;
+    const daily = document.querySelector('[data-open-daily]');
+    daily?.dispatchEvent(new PointerEvent('pointerenter'));
+    await wait(700);
+    const tip = document.querySelector('.app-tooltip');
+    const tipText = tip?.textContent.trim() ?? '';
+    const tipVisible = tip?.classList.contains('visible') ?? false;
+    daily?.dispatchEvent(new PointerEvent('pointerleave'));
+    return { heights, notes, tipText, tipVisible };
+  `,
+  );
+  check(
+    "each opening is a single line",
+    openings?.notes === 0 &&
+      openings?.heights?.length === 2 &&
+      Math.max(...(openings?.heights ?? [0])) <= 40,
+    openings,
+  );
+  check(
+    "the explanation is available on hover instead",
+    openings?.tipVisible === true && Boolean(openings?.tipText),
+    openings,
+  );
   check(
     "the profile tab lists profiles and opens a blank browser in one",
     toolbar?.profiles > 0 &&

@@ -155,6 +155,7 @@ function retentionNote(profile: BrowserProfile): string {
           class="row"
           :class="{ editing: editingId === profile.id }"
           :data-profile-id="profile.id"
+          v-tooltip="{ text: retentionNote(profile) }"
         >
           <span class="row-icon"><Layers :size="13" /></span>
           <input
@@ -169,7 +170,7 @@ function retentionNote(profile: BrowserProfile): string {
           />
           <span v-else class="row-name">{{ profile.name }}</span>
           <span v-if="profile.id === defaultId" class="badge">{{ t("app.profileDefaultBadge") }}</span>
-          <span class="row-note">{{ retentionNote(profile) }}</span>
+          <span class="row-spacer"></span>
           <AppButton
             v-if="profile.retention !== 'ephemeral' && profile.id !== defaultId"
             class="row-default"
@@ -294,14 +295,12 @@ function retentionNote(profile: BrowserProfile): string {
   letter-spacing: 0.02em;
 }
 
-.row-note {
+/* A spacer where the note used to be. The lifetime is now on hover (it is
+   something you learn once), but the row still needs the flexible column so the
+   actions stay pinned to the right edge instead of following the name. */
+.row-spacer {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* A default candidate only shows its button on hover: the list is usually in a

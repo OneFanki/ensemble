@@ -454,9 +454,23 @@ try {
         Boolean(el.querySelector('[data-profile-delete]')) &&
         !el.querySelector('[data-profile-delete]')?.disabled,
     }));
+    // The lifetime is something you learn once, so it lives on hover rather
+    // than as a permanent column. Asserting the tooltip too keeps a future
+    // change from deleting the text without putting it back somewhere.
+    const first = document.querySelector('.profiles .row');
+    first?.dispatchEvent(new PointerEvent('pointerenter'));
+    await new Promise((r) => setTimeout(r, 700));
+    const tip = document.querySelector('.app-tooltip');
+    const tipText = tip?.textContent.trim() ?? '';
+    const tipVisible = tip?.classList.contains('visible') ?? false;
+    first?.dispatchEvent(new PointerEvent('pointerleave'));
+    const rowNotes = document.querySelectorAll('.profiles .row-note').length;
     return {
       opened: Boolean(document.querySelector('.profiles')),
       rows,
+      rowNotes,
+      tipText,
+      tipVisible,
       menuFound: Boolean(document.querySelector('[data-menu-item="profiles"]')),
       hadMenu: Boolean(menu),
     };
@@ -467,6 +481,12 @@ try {
     page?.opened === true && page?.rows?.length === 4,
     { opened: page?.opened, rows: page?.rows, menuFound: page?.menuFound },
   );
+  check(
+    "the profile row keeps its one-line shape and explains itself on hover",
+    page?.rowNotes === 0 && page?.tipVisible === true && Boolean(page?.tipText),
+    { rowNotes: page?.rowNotes, tipVisible: page?.tipVisible, tipText: page?.tipText },
+  );
+
   check(
     "the page marks the default and hides delete on built-ins",
     page?.rows?.filter((row) => row.default)?.length === 1 &&

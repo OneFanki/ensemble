@@ -188,20 +188,31 @@ function retentionNote(profile: BrowserProfile): string {
             session rather than about a login. They stay fixed above the
             scrolling list — a site with thirty accounts must not push them past
             the fold.
+
+            One line each, with the explanation on hover. "默认档案" and
+            "干净会话" already say what they are to anyone who has used the app
+            once; a second line repeating it would cost every visit to explain
+            something the reader learned the first time.
           -->
-          <button type="button" class="account-row anonymous" data-open-daily @click="openDaily(activeSite)">
+          <button
+            type="button"
+            class="account-row anonymous"
+            data-open-daily
+            v-tooltip="{ text: t('app.openSiteDailyHint') }"
+            @click="openDaily(activeSite)"
+          >
             <Globe :size="11" />
-            <span class="acc-copy">
-              <span class="acc-name">{{ t("app.openSiteDefault", { name: defaultProfile?.name ?? "" }) }}</span>
-              <span class="acc-note">{{ t("app.openSiteDailyHint") }}</span>
-            </span>
+            <span class="acc-name">{{ t("app.openSiteDefault", { name: defaultProfile?.name ?? "" }) }}</span>
           </button>
-          <button type="button" class="account-row anonymous dashed" data-open-clean @click="openClean(activeSite)">
+          <button
+            type="button"
+            class="account-row anonymous dashed"
+            data-open-clean
+            v-tooltip="{ text: t('app.openSiteCleanHint') }"
+            @click="openClean(activeSite)"
+          >
             <ShieldOff :size="11" />
-            <span class="acc-copy">
-              <span class="acc-name">{{ t("app.openSiteClean") }}</span>
-              <span class="acc-note">{{ t("app.openSiteCleanHint") }}</span>
-            </span>
+            <span class="acc-name">{{ t("app.openSiteClean") }}</span>
           </button>
 
           <div class="accounts-sep"></div>
@@ -235,13 +246,11 @@ function retentionNote(profile: BrowserProfile): string {
         type="button"
         class="account-row profile-row"
         :data-profile-id="profile.id"
+        v-tooltip="{ text: retentionNote(profile) }"
         @click="openProfile(profile)"
       >
         <Layers :size="11" class="profile-icon" />
-        <span class="acc-copy">
-          <span class="acc-name">{{ profile.name }}</span>
-          <span class="acc-note">{{ retentionNote(profile) }}</span>
-        </span>
+        <span class="acc-name">{{ profile.name }}</span>
         <span v-if="profile.id === defaultProfileId" class="badge">{{ t("app.profileDefaultBadge") }}</span>
       </button>
     </div>
@@ -521,27 +530,14 @@ function retentionNote(profile: BrowserProfile): string {
   padding: 5px;
 }
 
-/*
- * The rows wrap instead of clipping.
- *
- * A profile row carries a name, a one-line lifetime note and sometimes a
- * "default" chip. At 420px the note is the first thing to be cut, and a note cut
- * to "登录状态…" says nothing. Letting the name and chip share one line and
- * putting the note under them keeps both readable.
- */
+/* One line per profile: the name, and the "default" chip when it is one. What
+   the row keeps is on hover — see the account column's comment for why. */
 .profile-row {
-  align-items: flex-start;
-  padding: 8px;
+  padding: 7px;
 }
 
-.profile-row .acc-copy {
+.profile-row .acc-name {
   flex: 1 1 auto;
-  gap: 2px;
-}
-
-.profile-row .acc-note {
-  white-space: normal;
-  line-height: 1.4;
 }
 
 .profile-icon {
@@ -553,7 +549,6 @@ function retentionNote(profile: BrowserProfile): string {
    edge, the same shape the profiles page uses. */
 .badge {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 1px 6px;
   border-radius: 999px;
   /* `--selected` is only a shade off `--surface` in the dark theme, which made

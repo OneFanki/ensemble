@@ -12,14 +12,19 @@ import {
   Power,
   X,
 } from "lucide-vue-next";
-import { computed, nextTick, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import Modal from "./Modal.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
 import SelectField from "./SelectField.vue";
 import TabIcon from "./TabIcon.vue";
+import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import IconButton from "./ui/IconButton.vue";
+import TextField from "./ui/TextField.vue";
 
 const workspace = useWorkspaceStore();
 const embedded = useEmbeddedStore();
@@ -56,9 +61,6 @@ const draggedTabId = ref<string | null>(null);
  * object is replaced on every drag event, so shallow reactivity is enough.
  */
 const dropHint = shallowRef<DropHint | null>(null);
-const renamingViewId = ref<string | null>(null);
-const renameText = ref("");
-const renameInput = ref<HTMLInputElement | null>(null);
 /** True while the left edge is being dragged, so the width transition stays off. */
 const resizing = ref(false);
 
@@ -422,17 +424,31 @@ async function closeInstance(root: EmbeddedTab): Promise<void> {
   for (const page of pages) await embedded.closeTab(page.id);
 }
 
+/**
+ * Renaming a view happens in a dialog.
+ *
+ * The name used to become an input inside the dock header, which is a 26px row
+ * that also holds the layout picker, the "+" and the close button: the input
+ * pushed those sideways and the row reflowed under the pointer mid-click.
+ */
+const renamingView = ref<EmbeddedView | null>(null);
+const renameText = ref("");
+
 function startRename(view: EmbeddedView): void {
-  renamingViewId.value = view.id;
+  renamingView.value = view;
   renameText.value = view.name;
-  void nextTick(() => renameInput.value?.select());
 }
 
-async function commitRename(view: EmbeddedView): Promise<void> {
-  if (renamingViewId.value !== view.id) return;
+async function commitRename(): Promise<void> {
+  const view = renamingView.value;
+  if (!view) return;
   const name = renameText.value.trim();
-  renamingViewId.value = null;
-  if (name && name !== view.name) await embedded.renameView(view.id, name);
+  if (!name || name === view.name) {
+    renamingView.value = null;
+    return;
+  }
+  await embedded.renameView(view.id, name);
+  renamingView.value = null;
 }
 
 async function closeView(view: EmbeddedView): Promise<void> {
@@ -593,15 +609,13 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
           <Plus :size="12" />
           <span>{{ t("app.browserNewView") }}</span>
         </button>
-        <button
-          type="button"
-          class="icon-btn collapse-btn no-drag"
-          v-tooltip="t('app.browserCollapseDock')"
-          :aria-label="t('app.browserCollapseDock')"
+        <IconButton
+          class="collapse-btn no-drag"
+          :ariaLabel="t('app.browserCollapseDock')"
           @click="toggleCollapsed"
         >
           <PanelLeftClose :size="13" />
-        </button>
+        </IconButton>
       </header>
 
       <div class="scroll">
@@ -630,35 +644,22 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
               <ChevronRight v-if="view.collapsed" :size="11" />
               <ChevronLeft v-else :size="11" class="down" />
             </button>
-            <span
-              class="view-dot"
+            <span class="view-dot"
               :style="{
                 background: view.color ? `var(--role-${view.color})` : 'var(--accent)',
               }"
             ></span>
-            <input
-              v-if="renamingViewId === view.id"
-              ref="renameInput"
-              v-model="renameText"
-              class="rename mono"
-              @click.stop
-              @keydown.enter.prevent="commitRename(view)"
-              @keydown.esc.prevent="renamingViewId = null"
-              @blur="commitRename(view)"
-            />
-            <template v-else>
-              <span
-                class="view-name"
-                v-tooltip="t('app.browserRenameHint')"
-                @dblclick.stop="startRename(view)"
-                @contextmenu.prevent.stop="startRename(view)"
-              >
-                {{ view.name }}
-              </span>
-              <span class="view-count mono">
-                {{ dockRows(view).length }}/{{ embedded.slots(view) }}
-              </span>
-            </template>
+            <span
+              class="view-name"
+              v-tooltip="t('app.browserRenameHint')"
+              @dblclick.stop="startRename(view)"
+              @contextmenu.prevent.stop="startRename(view)"
+            >
+              {{ view.name }}
+            </span>
+            <span class="view-count mono">
+              {{ dockRows(view).length }}/{{ embedded.slots(view) }}
+            </span>
             <span class="grow"></span>
             <SelectField
               class="layout-field"
@@ -682,15 +683,9 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
               @open-clean="openSiteInView(view, $event, { clean: true })"
               @open-identity="openIdentityInView(view, $event)"
             />
-            <button
-              type="button"
-              class="icon-btn"
-              v-tooltip="t('app.browserCloseView')"
-              :aria-label="t('app.browserCloseView')"
-              @click.stop="closeView(view)"
-            >
+            <IconButton :ariaLabel="t('app.browserCloseView')" @click.stop="closeView(view)">
               <X :size="12" />
-            </button>
+            </IconButton>
           </header>
 
           <div v-if="!view.collapsed" class="rows">
@@ -927,6 +922,31 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
         </button>
       </footer>
     </div>
+
+    <Modal
+      v-if="renamingView"
+      :open="true"
+      :title="t('app.browserRenameView')"
+      width="380px"
+      @close="renamingView = null"
+    >
+      <FormField :label="t('app.browserViewName')">
+        <TextField
+          v-model="renameText"
+          type="text"
+          maxlength="40"
+          data-view-name
+          @keydown.enter.prevent="commitRename"
+        />
+      </FormField>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="renamingView = null">{{ t("app.cancel") }}</AppButton>
+        <AppButton variant="primary" data-view-rename-save @click="commitRename">
+          {{ t("app.save") }}
+        </AppButton>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -1171,22 +1191,11 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
   padding: 0 5px;
 }
 
-.icon-btn {
-  display: grid;
-  place-items: center;
+/* The dock's rows are denser than a page's, so its icon buttons are a size
+   smaller than the shared default. */
+.dock-main :deep(.icon-btn) {
   width: 22px;
   height: 22px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--faint);
-  cursor: pointer;
-  flex: none;
-}
-
-.icon-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
 }
 
 /* The only way to create a view, so it gets a label instead of an icon shape
@@ -1378,16 +1387,17 @@ async function openIdentityInView(view: EmbeddedView, identityId: string): Promi
   white-space: nowrap;
 }
 
-.rename {
+/* Scoped styles do not reach Modal's slots, so the footer spacer and the field
+   caption have to be defined here rather than reused from another component. */
+.spacer {
   flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: var(--text);
-  padding: 1px 4px;
-  outline: none;
+}
+
+.field .field-label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
 }
 
 /* Counts sit next to the name they belong to; pushing them to the right made

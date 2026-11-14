@@ -110,8 +110,23 @@ async function remove(site: Site) {
   await store.deleteSite(site.id);
 }
 
+/**
+ * Opens the site's login page in an external browser.
+ *
+ * A site with no account named is exactly the throwaway case: `launchCleanSession`
+ * takes a site id and starts on its login page in a browser window that forgets
+ * everything on close. That is the right answer for a login recipe — the site
+ * defines where to go, and no account defines whose session it would be.
+ */
+async function openSiteExternal(site: Site, engineId: string): Promise<void> {
+  store.markSiteUsed(site.id);
+  await store.launchCleanSession(site.id, engineId);
+}
+
 import AppButton from "./ui/AppButton.vue";
+import EmptyState from "./ui/EmptyState.vue";
 import IconButton from "./ui/IconButton.vue";
+import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 </script>
 
 <template>
@@ -133,16 +148,13 @@ import IconButton from "./ui/IconButton.vue";
     </PageHeader>
 
     <div class="page-body">
-      <div v-if="!sites.length" class="empty">
-        <Globe :size="22" />
-        <p>{{ $t("app.emptySites") }}</p>
-        <div class="empty-actions">
-          <AppButton variant="primary" @click="emit('newSite')">
-            <Plus :size="13" />
-            {{ $t("app.newSite") }}
-          </AppButton>
-        </div>
-      </div>
+      <EmptyState v-if="!sites.length" :text="$t('app.emptySites')">
+        <template #icon><Globe :size="22" /></template>
+        <AppButton variant="primary" @click="emit('newSite')">
+          <Plus :size="13" />
+          {{ $t("app.newSite") }}
+        </AppButton>
+      </EmptyState>
 
       <div v-else class="group-list">
         <!--
@@ -221,19 +233,33 @@ import IconButton from "./ui/IconButton.vue";
                 a site look like a place to visit — the same kind of thing as a
                 bookmark. It is not: a site is a login recipe and the header of a
                 group of accounts, and the thing people do with it is add one
-                more. Opening still exists, as the quiet button beside it.
+                more.
+
+                Opening is a launch, so it uses the same split control as every
+                other launch point: the main half opens the login page in the
+                built-in surface, the arrow offers an external browser. Two filled
+                buttons side by side made the card look like a toolbar with no
+                hierarchy — one primary action plus one launch control says which
+                of the two is the thing you usually came to do.
               -->
               <div class="card-foot">
-                <AppButton size="sm" variant="primary" :title="$t('app.newIdentityHere')"
-                  @click="emit('addIdentity', site.id)">
+                <AppButton
+                  size="sm"
+                  variant="primary"
+                  :title="$t('app.newIdentityHere')"
+                  :data-add-identity="site.id"
+                  @click="emit('addIdentity', site.id)"
+                >
                   <Plus :size="12" />
                   {{ $t("app.newIdentity") }}
                 </AppButton>
-                <AppButton size="sm" :title="$t('app.openSiteHint')"
-                  @click="store.markSiteUsed(site.id); emit('openSite', site.id)">
-                  <Globe :size="12" />
-                  {{ $t("app.openSite") }}
-                </AppButton>
+                <LaunchSplitButton
+                  :label="$t('app.openSite')"
+                  :aria-label="$t('app.openSiteHint')"
+                  :data-hook="`site-${site.id}`"
+                  @launch="store.markSiteUsed(site.id); emit('openSite', site.id)"
+                  @launch-external="openSiteExternal(site, $event)"
+                />
               </div>
             </article>
           </div>
@@ -396,12 +422,21 @@ import IconButton from "./ui/IconButton.vue";
 }
 
 /* Pushed to the card's bottom edge without a rule above it: the card's own
-   border already separates it from the next one. */
+   border already separates it from the next one.
+   One primary action and one launch control, both 26px tall so their baselines
+   agree — a 24px and a 29px control side by side is what made this row look
+   like two unrelated buttons sharing a line. */
 .card-foot {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-top: auto;
+}
+
+.card-foot > :deep(.btn) {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
 }
 
 .card-actions {

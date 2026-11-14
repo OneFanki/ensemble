@@ -12,6 +12,15 @@
  * where the platform decides; on a toolbar of icon-only controls that reads as
  * something bolted on. `title` remains the prop name because that is what the
  * value means here — the text of the hint.
+ *
+ * ## Why `revealOnRow`
+ *
+ * The bookmark and folder rows show their actions only under the pointer: eight
+ * permanent glyphs beside eight list rows turn the column into a wall of
+ * controls, and every one of them is an edit or a delete. That is a property of
+ * the *row*, not of the button, so it is a prop rather than a CSS override from
+ * outside — the row opts in, and the hover/focus rule it needs lives with the
+ * button that owns the transition.
  */
 import { computed } from "vue";
 
@@ -26,8 +35,10 @@ const props = withDefaults(
      *  attribute would work anyway, but the type checker rejects unknown props
      *  on a component and every call site would need a cast. */
     disabled?: boolean;
+    /** Hidden until the surrounding row is hovered, focused or contains focus. */
+    revealOnRow?: boolean;
   }>(),
-  { variant: "default", size: "md" },
+  { variant: "default", size: "md", revealOnRow: false },
 );
 
 const hint = computed(() => props.title ?? props.ariaLabel);
@@ -37,7 +48,7 @@ const hint = computed(() => props.title ?? props.ariaLabel);
   <button
     type="button"
     class="icon-btn"
-    :class="[variant, `size-${size}`, { active }]"
+    :class="[variant, `size-${size}`, { active, reveal: revealOnRow }]"
     :aria-label="ariaLabel"
     :disabled="disabled"
     v-tooltip="hint"
@@ -61,6 +72,10 @@ const hint = computed(() => props.title ?? props.ariaLabel);
    */
   color: var(--dim);
   flex: 0 0 auto;
+  transition:
+    opacity var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
 }
 
 .icon-btn.size-md {
@@ -86,5 +101,28 @@ const hint = computed(() => props.title ?? props.ariaLabel);
 .icon-btn.active {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent-text);
+}
+
+/*
+ * Revealed on row hover — and on keyboard focus, and while the focus is inside
+ * it. A control that only exists under a mouse is unreachable by keyboard and
+ * invisible to anyone who is not moving the pointer, so the rule cannot be
+ * `:hover` alone.
+ *
+ * The row selectors are global because the row belongs to the page: this
+ * component cannot know whether its host calls itself `.row` or `.tree-row`, and
+ * `:deep()` from the page would reach into a component's internals — which is
+ * exactly the coupling this pass is removing.
+ */
+.icon-btn.reveal {
+  opacity: 0;
+}
+
+:global(.row:hover) .icon-btn.reveal,
+:global(.tree-row:hover) .icon-btn.reveal,
+:global(.row:focus-within) .icon-btn.reveal,
+:global(.tree-row:focus-within) .icon-btn.reveal,
+.icon-btn.reveal:focus-visible {
+  opacity: 1;
 }
 </style>

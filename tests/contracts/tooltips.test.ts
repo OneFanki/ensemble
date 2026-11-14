@@ -74,9 +74,27 @@ describe("hover labels", () => {
   });
 
   it("gives every icon-only dock control a label through the directive", () => {
-    expect(dock).toContain('v-tooltip="t(\'app.browserCollapseDock\')"');
+    /*
+     * The dock's two icon-only controls are `IconButton`s now, so the label
+     * arrives as `ariaLabel` and the component turns it into the drawn hint.
+     * Asserting the raw `v-tooltip` string here would fail on the component doing
+     * exactly what it is for; what still matters is that both controls carry the
+     * label at all, and that no native `title` crept back in.
+     */
+    expect(dock).toContain(":ariaLabel=\"t('app.browserCollapseDock')\"");
     expect(dock).toContain('v-tooltip="t(\'app.browserExpandDock\')"');
-    expect(dock).toContain('v-tooltip="t(\'app.browserCloseView\')"');
+    expect(dock).toContain(":ariaLabel=\"t('app.browserCloseView')\"");
+    // The remaining `:title`s in this file are a page URL (a different job: the
+    // OS tooltip lets a long address be read) and the rename dialog's title
+    // prop. Only a control's hint is the offence, and those live in the markup
+    // — the dialog's `:title` is one prop among many on `<Modal>`.
+    const controls = dock.slice(dock.indexOf("<template>"));
+    const dialogStart = controls.indexOf("<Modal");
+    const dialogEnd = controls.lastIndexOf("</Modal>");
+    const pageMarkup = dialogStart >= 0
+      ? controls.slice(0, dialogStart) + controls.slice(dialogEnd)
+      : controls;
+    expect(pageMarkup).not.toMatch(/:title="t\('app\./);
     // The collapsed strip's tiles carry a computed label with a placement, since
     // they sit against the column's edge.
     expect(dock).toContain("placement: 'top'");

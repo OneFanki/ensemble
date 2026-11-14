@@ -22,10 +22,15 @@ import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import Checkbox from "./ui/Checkbox.vue";
+import EmptyState from "./ui/EmptyState.vue";
+import FormField from "./ui/FormField.vue";
 import GroupHeader from "./ui/GroupHeader.vue";
 import IconButton from "./ui/IconButton.vue";
+import LinkButton from "./ui/LinkButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SplitPane from "./ui/SplitPane.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * Flows: the fourth kind of asset, next to sites, accounts and views.
@@ -299,22 +304,22 @@ async function saveDraft() {
       thing that is actually missing instead, which is also why it is the only
       place the action appears while there is nothing to list.
     -->
-    <div v-if="!flows.length" class="empty">
-      <ListChecks :size="22" />
-      <p>{{ store.sites.length ? $t("app.flowsEmpty") : $t("app.flowsEmptyNoSite") }}</p>
-      <div class="empty-actions">
-        <AppButton
-          v-if="store.sites.length"
-          variant="primary"
-          @click="openEditor()">
-          <Plus :size="13" />
-          {{ $t("app.newFlow") }}
-        </AppButton>
-        <AppButton v-else variant="primary" @click="navigation.navigate('sites')">
-          {{ $t("app.flowGoToSites") }}
-        </AppButton>
-      </div>
-    </div>
+    <EmptyState
+      v-if="!flows.length"
+      :text="store.sites.length ? $t('app.flowsEmpty') : $t('app.flowsEmptyNoSite')"
+    >
+      <template #icon><ListChecks :size="22" /></template>
+      <AppButton
+        v-if="store.sites.length"
+        variant="primary"
+        @click="openEditor()">
+        <Plus :size="13" />
+        {{ $t("app.newFlow") }}
+      </AppButton>
+      <AppButton v-else variant="primary" @click="navigation.navigate('sites')">
+        {{ $t("app.flowGoToSites") }}
+      </AppButton>
+    </EmptyState>
 
     <SplitPane v-else dense>
       <template #list>
@@ -422,34 +427,33 @@ async function saveDraft() {
       @close="running = null"
     >
       <div class="run-form">
-        <label v-if="runnableIdentities.length > 1" class="field">
-          <span class="field-label">{{ $t("app.flowRunIdentity") }}</span>
+        <FormField v-if="runnableIdentities.length > 1" :label="$t('app.flowRunIdentity')">
           <SelectField
             :model-value="runIdentityId || undefined"
             :options="runnableIdentities.map((i) => ({ value: i.id, label: i.name, hint: i.username }))"
             :aria-label="$t('app.flowRunIdentity')"
             @update:model-value="runIdentityId = $event ?? ''"
           />
-        </label>
+        </FormField>
         <p v-else-if="runnableIdentities.length === 1" class="run-note">
           {{ $t("app.flowRunIdentity") }}：{{ runnableIdentities[0]?.name }}
         </p>
         <p v-else class="run-note">{{ $t("app.flowNoSite") }}</p>
 
         <p v-if="!running.params.length" class="run-note">{{ $t("app.flowRunNoParams") }}</p>
-        <label v-for="param in running.params" :key="param.name" class="field">
-          <span class="field-label">
+        <FormField v-for="param in running.params" :key="param.name">
+          <template #label>
             {{ param.label }}
             <span class="field-var mono">{{ param.name }}</span>
             <span v-if="param.required" class="param-flag">{{ $t("app.flowParamRequiredShort") }}</span>
-          </span>
-          <input
+          </template>
+          <TextField
             v-model="runParams[param.name]"
             :type="param.secret ? 'password' : 'text'"
             :placeholder="param.default ?? ''"
             autocomplete="off"
           />
-        </label>
+        </FormField>
 
         <p v-if="runError" class="run-error">{{ runError }}</p>
         <p v-if="runResult && !runResult.ok" class="run-error">
@@ -481,50 +485,41 @@ async function saveDraft() {
     >
       <div class="editor">
         <div class="editor-row">
-          <label class="field grow">
-            <span class="field-label">{{ $t("app.flowName") }}</span>
-            <input v-model="draft.name" type="text" :placeholder="$t('app.flowNamePlaceholder')" />
-          </label>
-          <label class="field">
-            <span class="field-label">{{ $t("app.flowSite") }}</span>
+          <FormField grow :label="$t('app.flowName')">
+            <TextField v-model="draft.name" type="text" :placeholder="$t('app.flowNamePlaceholder')" />
+          </FormField>
+          <FormField :label="$t('app.flowSite')">
             <SelectField
               :model-value="draft.siteId || undefined"
               :options="siteOptions"
               :aria-label="$t('app.flowSite')"
               @update:model-value="draft.siteId = $event ?? ''"
             />
-          </label>
+          </FormField>
         </div>
-        <label class="field">
-          <span class="field-label">{{ $t("app.flowDescription") }}</span>
-          <input
+        <FormField :label="$t('app.flowDescription')">
+          <TextField
             v-model="draft.description"
             type="text"
             :placeholder="$t('app.flowDescriptionPlaceholder')"
           />
-        </label>
+        </FormField>
 
         <div class="block">
           <div class="block-head">
             <span class="block-title">{{ $t("app.flowParams") }}</span>
-            <button type="button" class="link-btn" @click="addParam">
+            <LinkButton @click="addParam">
               <Plus :size="11" />
               {{ $t("app.flowParamAdd") }}
-            </button>
+            </LinkButton>
           </div>
           <p v-if="!draft.params.length" class="hint">{{ $t("app.flowAddParamFirst") }}</p>
           <div v-for="(param, index) in draft.params" :key="index" class="param-row">
-            <input v-model="param.name" class="mono" type="text" :placeholder="$t('app.flowParamName')" />
-            <input v-model="param.label" type="text" :placeholder="$t('app.flowParamLabel')" />
-            <input v-model="param.default" type="text" :placeholder="$t('app.flowParamDefault')" />
-            <label class="check">
-              <input v-model="param.required" type="checkbox" />
-              {{ $t("app.flowParamRequired") }}
-            </label>
-            <label class="check">
-              <input v-model="param.secret" type="checkbox" />
-              {{ $t("app.flowParamSecret") }}
-            </label>
+            <TextField v-model="param.name" mono type="text" :placeholder="$t('app.flowParamName')" />
+            <TextField v-model="param.label" type="text" :placeholder="$t('app.flowParamLabel')" />
+            <TextField v-model="param.default" type="text" :placeholder="$t('app.flowParamDefault')" />
+            <Checkbox v-model="param.required">{{ $t("app.flowParamRequired") }}</Checkbox>
+            <Checkbox v-model="param.secret">{{ $t("app.flowParamSecret") }}</Checkbox>
             <IconButton variant="danger" :ariaLabel="$t('app.flowParamRemove')" @click="draft.params.splice(index, 1)">
               <X :size="12" />
             </IconButton>
@@ -534,10 +529,10 @@ async function saveDraft() {
         <div class="block">
           <div class="block-head">
             <span class="block-title">{{ $t("app.flowSteps") }}</span>
-            <button type="button" class="link-btn" @click="addStep">
+            <LinkButton @click="addStep">
               <Plus :size="11" />
               {{ $t("app.flowStepAdd") }}
-            </button>
+            </LinkButton>
           </div>
           <div
             v-for="(step, index) in draft.steps"
@@ -580,41 +575,42 @@ async function saveDraft() {
             </div>
 
             <div class="step-fields">
-              <input
+              <TextField
                 v-if="step.action === 'navigate'"
                 v-model="step.url"
-                class="mono full"
+                class="full"
+                mono
                 type="text"
                 :placeholder="$t('app.flowStepUrl')"
               />
               <template v-if="needsTarget(step)">
-                <input
+                <TextField
                   v-model="step.label"
                   type="text"
                   :placeholder="$t('app.flowStepLabel')"
                   :disabled="step.action === 'click' && Boolean(step.text)"
                 />
-                <input
+                <TextField
                   v-if="step.action === 'click' || step.action === 'read'"
                   v-model="step.text"
                   type="text"
                   :placeholder="$t('app.flowStepText')"
                 />
-                <input
+                <TextField
                   v-model="step.selector"
-                  class="mono"
+                  mono
                   type="text"
                   :placeholder="$t('app.flowStepSelector')"
                 />
               </template>
-              <input
+              <TextField
                 v-if="step.action === 'fill'"
                 v-model="step.value"
-                class="mono"
+                mono
                 type="text"
                 :placeholder="$t('app.flowStepValue')"
               />
-              <input
+              <TextField
                 v-if="step.action === 'select'"
                 v-model="step.option"
                 type="text"
@@ -641,20 +637,17 @@ async function saveDraft() {
                   :aria-label="$t('app.flowStepCondition')"
                   @update:model-value="step.condition = ($event as FlowStep['condition'])"
                 />
-                <input
+                <TextField
                   v-model="step.expect"
                   type="text"
                   :placeholder="$t('app.flowStepExpect')"
                 />
-                <label class="check">
-                  <input v-model="step.optional" type="checkbox" />
-                  {{ $t("app.flowStepOptional") }}
-                </label>
+                <Checkbox v-model="step.optional">{{ $t("app.flowStepOptional") }}</Checkbox>
               </template>
-              <input
+              <TextField
                 v-if="step.action === 'read'"
                 v-model="step.as"
-                class="mono"
+                mono
                 type="text"
                 :placeholder="$t('app.flowStepAs')"
               />
@@ -902,22 +895,19 @@ async function saveDraft() {
   gap: 10px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
+/* The editor's fields are denser than a form's: a step row holds five of them
+   and the dialog is already 760px of columns. */
+.run-form :deep(.field),
+.editor :deep(.field) {
   gap: 5px;
 }
 
-.field.grow {
-  flex: 1 1 auto;
-}
-
-.field-label {
+.run-form :deep(.label),
+.editor :deep(.label) {
   font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--faint);
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .field-var {
@@ -925,20 +915,10 @@ async function saveDraft() {
   color: var(--muted);
 }
 
-.run-form input,
-.editor input {
+.run-form :deep(.input),
+.editor :deep(.input) {
   padding: 6px 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--bg-elevated);
-  color: var(--text);
   font-size: 12px;
-  outline: 0;
-}
-
-.run-form input:focus,
-.editor input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .run-note {
@@ -967,13 +947,11 @@ async function saveDraft() {
   align-items: center;
 }
 
-.check {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+/* The two checkboxes are the densest in the app: they share a row with three
+   inputs, so they take the quieter colour the editor uses for its captions. */
+.param-row :deep(.check) {
   font-size: 11px;
   color: var(--faint);
-  white-space: nowrap;
 }
 
 .step-editor {
@@ -1020,7 +998,7 @@ async function saveDraft() {
   gap: 6px;
 }
 
-.step-fields input {
+.step-fields :deep(.input) {
   flex: 1 1 160px;
   min-width: 120px;
 }

@@ -2,6 +2,8 @@
 import type { LoginField } from "@shared/types";
 import { Plus, X } from "lucide-vue-next";
 import { computed } from "vue";
+import IconButton from "./ui/IconButton.vue";
+import TextField from "./ui/TextField.vue";
 
 const props = defineProps<{
   modelValue: LoginField[] | undefined;
@@ -43,23 +45,28 @@ function removeRow(index: number) {
     </div>
 
     <div v-for="(row, index) in rows" :key="index" class="row">
-      <input
-        class="input mono"
-        :value="row.label"
+      <TextField
+        mono
+        :model-value="row.label"
         :disabled="disabled"
         :placeholder="$t('app.fieldNamePlaceholder')"
-        @input="update(index, { label: ($event.target as HTMLInputElement).value })"
+        @update:model-value="update(index, { label: $event })"
       />
-      <input
-        class="input mono"
-        :value="row.value"
+      <TextField
+        mono
+        :model-value="row.value"
         :disabled="disabled"
         :placeholder="$t('app.fieldValuePlaceholder')"
-        @input="update(index, { value: ($event.target as HTMLInputElement).value })"
+        @update:model-value="update(index, { value: $event })"
       />
-      <button v-if="!disabled" type="button" class="del" :aria-label="$t('app.removeField')" @click="removeRow(index)">
+      <IconButton
+        v-if="!disabled"
+        size="sm"
+        :ariaLabel="$t('app.removeField')"
+        @click="removeRow(index)"
+      >
         <X :size="12" />
-      </button>
+      </IconButton>
     </div>
 
     <p class="hint">
@@ -92,8 +99,7 @@ function removeRow(index: number) {
   color: var(--faint);
 }
 
-.add,
-.del {
+.add {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -101,8 +107,7 @@ function removeRow(index: number) {
   font-size: 11px;
 }
 
-.add:hover,
-.del:hover {
+.add:hover {
   color: var(--text);
 }
 
@@ -111,32 +116,6 @@ function removeRow(index: number) {
   grid-template-columns: 1fr 1fr auto;
   gap: 7px;
   align-items: center;
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 6px 9px;
-  font-size: 11px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
-}
-
-.del {
-  width: 22px;
-  height: 22px;
-  justify-content: center;
-  border-radius: 5px;
-}
-
-.del:hover {
-  background: var(--surface-3);
 }
 
 .hint {

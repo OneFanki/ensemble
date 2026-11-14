@@ -308,27 +308,29 @@ try {
     !JSON.stringify(site.value).includes(SUPER.password),
   );
 
-  // The app menu's AI row is the everyday way into this endpoint, so it has to
-  // report the live state. It no longer prints the port: the row is one line in
-  // a menu of destinations, and the address belongs on the settings page it
-  // opens — which is where this checks the port appears.
+  // The toolbar's AI button is the everyday way into this endpoint, so it has to
+  // report the live state. It does not print the port: the address belongs on the
+  // settings page its gear opens — which is where this checks the port appears.
   const mcpEntry = await client.evaluate(`(async () => {
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    const row = document.querySelector('[data-menu-item="ai"]');
-    if (!row) return null;
-    const hint = row.querySelector('.app-menu-hint')?.textContent?.trim() ?? '';
-    row.click();
+    const button = document.querySelector('[data-ai-panel]');
+    if (!button) return null;
+    button.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const status = document.querySelector('[data-ai-panel-body] .ai-head-status');
+    document.querySelector('[data-ai-open-settings]')?.click();
     await new Promise((r) => setTimeout(r, 700));
     return {
-      hint,
+      // The dot is the at-a-glance signal; the panel's status row spells it out.
+      live: Boolean(button.querySelector('.ai-live-dot')),
+      status: status?.textContent?.trim() ?? '',
       onSettings: Boolean(document.querySelector('.mcp-endpoint')),
       address: document.querySelector('.mcp-endpoint')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
     };
   })()`);
   check(
     "the AI entry states the endpoint is running and opens a page naming its port",
-    mcpEntry?.hint === "已开启" &&
+    mcpEntry?.live === true &&
+      mcpEntry?.status === "已开启" &&
       mcpEntry?.onSettings === true &&
       mcpEntry.address.includes(String(MCP_PORT)),
     mcpEntry,

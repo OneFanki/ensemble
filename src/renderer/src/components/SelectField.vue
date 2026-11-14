@@ -137,9 +137,9 @@ function onKeydown(event: KeyboardEvent) {
             <span class="option-label">{{ option.label }}</span>
             <span v-if="option.hint" class="option-hint mono">{{ option.hint }}</span>
           </span>
-          <Check v-if="option.value === modelValue" :size="12" class="check" />
+          <Check v-if="option.value === modelValue" :size="12" class="option-check" />
         </button>
-        <p v-if="!options.length" class="empty">{{ $t("app.noOptions") }}</p>
+        <p v-if="!options.length" class="empty-line">{{ $t("app.noOptions") }}</p>
       </div>
     </Teleport>
   </div>
@@ -291,13 +291,13 @@ function onKeydown(event: KeyboardEvent) {
   white-space: nowrap;
 }
 
-.check {
+.option-check {
   margin-left: auto;
   color: var(--accent-text);
   flex: 0 0 12px;
 }
 
-.empty {
+.empty-line {
   margin: 6px 8px;
   font-size: 11px;
   color: var(--faint);

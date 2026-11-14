@@ -12,6 +12,9 @@ import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import LinkButton from "./ui/LinkButton.vue";
+import TextField from "./ui/TextField.vue";
 
 const props = defineProps<{
   draft: IdentityDraft;
@@ -284,28 +287,24 @@ async function rebuildProfile() {
   >
     <div class="form">
       <div class="row">
-        <label class="field grow">
-          <span class="label">{{ $t("app.displayName") }}</span>
-          <input
+        <FormField grow :label="$t('app.displayName')">
+          <TextField
             v-model="form.name"
-            class="input"
             :readonly="referencing"
             :placeholder="$t('app.displayNameExample')"
           />
-        </label>
-        <label class="field" style="width: 150px">
-          <span class="label">{{ $t("app.role") }}</span>
+        </FormField>
+        <FormField style="width: 150px" :label="$t('app.role')">
           <ComboBox
             v-model="form.role"
             :suggestions="roleSuggestions"
             :placeholder="t('app.rolePlaceholder')"
             :disabled="referencing"
           />
-        </label>
+        </FormField>
       </div>
 
-      <label class="field">
-        <span class="label">{{ $t("app.identitySite") }}</span>
+      <FormField :label="$t('app.identitySite')">
         <SelectField
           :model-value="form.siteId || undefined"
           :options="siteOptions"
@@ -313,43 +312,35 @@ async function rebuildProfile() {
           :aria-label="$t('app.identitySite')"
           @update:model-value="form.siteId = $event ?? ''"
         />
-        <button
-          type="button"
-          class="link-btn"
-          @click="creatingSite = !creatingSite"
-        >
+        <LinkButton class="site-new" @click="creatingSite = !creatingSite">
           {{ creatingSite ? $t("app.cancel") : $t("app.identitySiteNew") }}
-        </button>
-      </label>
+        </LinkButton>
+      </FormField>
 
       <div v-if="creatingSite" class="new-site">
         <div class="row">
-          <label class="field grow">
-            <span class="label">{{ $t("app.envNameLabel") }}</span>
-            <input v-model="newSiteName" class="input" :placeholder="$t('app.siteNameExample')" />
-          </label>
-          <label class="field grow">
-            <span class="label">{{ $t("app.envUrlLabel") }}</span>
-            <input v-model="newSiteUrl" class="input mono" placeholder="http://localhost:5173" />
-          </label>
+          <FormField grow :label="$t('app.envNameLabel')">
+            <TextField v-model="newSiteName" :placeholder="$t('app.siteNameExample')" />
+          </FormField>
+          <FormField grow :label="$t('app.envUrlLabel')">
+            <TextField v-model="newSiteUrl" mono placeholder="http://localhost:5173" />
+          </FormField>
         </div>
         <AppButton @click="createSiteNow">
           {{ $t("app.identitySiteCreate") }}
         </AppButton>
       </div>
 
-      <label class="field">
-        <span class="label">{{ $t("app.username") }}</span>
-        <input
+      <FormField :label="$t('app.username')">
+        <TextField
           v-model="form.username"
-          class="input mono"
+          mono
           placeholder="admin@test.local"
           :readonly="referencing"
         />
-      </label>
+      </FormField>
 
-      <div class="field">
-        <span class="label">{{ $t("app.identityColor") }}</span>
+      <FormField as="div" :label="$t('app.identityColor')">
         <div class="colors" :class="{ locked: referencing }">
           <button
             v-for="color in ROLE_COLORS"
@@ -364,20 +355,18 @@ async function rebuildProfile() {
             @click="form.color = color"
           ></button>
         </div>
-      </div>
+      </FormField>
 
-      <div class="field">
-        <span class="label">{{ $t("app.tags") }}</span>
+      <FormField as="div" :label="$t('app.tags')">
         <TagPicker v-model="form.tagIds" :tags="store.snapshot?.tags ?? []" />
-      </div>
+      </FormField>
 
       <section class="group">
         <div class="group-head">
           <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
         </div>
 
-        <div class="field">
-          <span class="label">{{ $t("app.credentialsLabel") }}</span>
+        <FormField as="div" :label="$t('app.credentialsLabel')">
           <div class="segmented">
             <button
               type="button"
@@ -412,7 +401,7 @@ async function rebuildProfile() {
               {{ $t("app.passwordReference") }}
             </button>
           </div>
-        </div>
+        </FormField>
 
         <div v-if="referencing" class="ref-box">
           <div class="ref-head">
@@ -468,9 +457,9 @@ async function rebuildProfile() {
 
         <div v-if="form.passwordMode === 'custom' || editingSitePassword" class="password-row">
           <div class="pw-input">
-            <input
+            <TextField
               v-model="password"
-              class="input mono"
+              mono
               :type="reveal ? 'text' : 'password'"
               :placeholder="
                 editingSitePassword
@@ -517,12 +506,10 @@ async function rebuildProfile() {
       </section>
 
       <div class="row">
-        <label class="field grow">
-          <span class="label">{{ $t("app.startPathLabel") }}</span>
-          <input v-model="form.startPath" class="input mono" placeholder="/" />
-        </label>
-        <label class="field grow">
-          <span class="label">{{ $t("app.engineOverride") }}</span>
+        <FormField grow :label="$t('app.startPathLabel')">
+          <TextField v-model="form.startPath" mono placeholder="/" />
+        </FormField>
+        <FormField grow :label="$t('app.engineOverride')">
           <SelectField
             :model-value="engineValue"
             :options="engineOptions"
@@ -530,18 +517,16 @@ async function rebuildProfile() {
               form.engineId = $event === '__inherit__' ? undefined : $event
             "
           />
-        </label>
+        </FormField>
       </div>
 
-      <label class="field">
-        <span class="label">{{ $t("app.noteOptional") }}</span>
-        <input
+      <FormField :label="$t('app.noteOptional')">
+        <TextField
           v-model="form.note"
-          class="input"
           :readonly="referencing"
           :placeholder="$t('app.noteExample')"
         />
-      </label>
+      </FormField>
 
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
@@ -576,32 +561,11 @@ async function rebuildProfile() {
   gap: 12px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.grow {
-  flex: 1 1 0;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
 /* Inline "create a site" affordance: a text link inside the site field, so the
-   form does not need a whole extra section for a rare action. */
-.link-btn {
+   form does not need a whole extra section for a rare action. Only the position
+   is local — the look is `LinkButton`'s. */
+.site-new {
   align-self: flex-start;
-  font-size: 11px;
-  color: var(--accent-text);
-  text-decoration: underline;
-  padding: 0;
 }
 
 .new-site {
@@ -621,21 +585,6 @@ async function rebuildProfile() {
 .hint {
   font-size: 10.5px;
   color: var(--faint);
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .colors {
@@ -820,18 +769,5 @@ async function rebuildProfile() {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-/* `.btn:hover` matches primary buttons too; restate the fill so the button does
-   not turn gray while the cursor is over it. The shared sheet already does this —
-   the local copy exists only because a scoped block outranks it. */
-.btn.primary:hover:not(:disabled) {
-  background: var(--action-hover);
-  border-color: transparent;
-  color: var(--action-foreground);
-}
-
-.spacer {
-  flex: 1;
 }
 </style>

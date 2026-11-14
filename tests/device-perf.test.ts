@@ -19,6 +19,9 @@ import {
   perfArea,
   perfAxisLabel,
   perfAxisMax,
+  perfCamera,
+  perfClock,
+  perfPolyline,
   perfSparkPath,
   perfSparkPoints,
   perfSummarize,
@@ -381,6 +384,114 @@ describe("performance sampler", () => {
       "layouts",
       "styleRecalcs",
     ]);
+  });
+
+  /*
+   * The camera.
+   *
+   * The panel used to pin the plot's right edge to the newest sample, which
+   * froze the chart between samples and snapped it one step when the next one
+   * landed. These functions are what let it move every frame instead, so their
+   * arithmetic is the whole fix — a wrong factor here scrolls at the wrong
+   * speed or in the wrong direction, and no amount of rAF hides that.
+   */
+  it("draws an explicit origin without clamping to the plot", () => {
+    const base = { at: "", cpu: 0, listeners: 0, documents: 0, frames: 0, heap: 0, layouts: 0, styleRecalcs: 0 };
+    const history = [
+      { ...base, t: 0, nodes: 1 },
+      { ...base, t: 1_000, nodes: 2 },
+      { ...base, t: 2_000, nodes: 3 },
+    ];
+    // Origin at t=1_000 over a 1s window: t=0 is a full window to the left and
+    // has to stay there. Clamping it to 0 would pile the oldest sample onto the
+    // left edge and draw a flat past that never happened.
+    const points = perfSparkPoints(history, "nodes", 100, 20, 10, 1_000, { origin: 1_000 });
+    expect(points.map((point) => Math.round(point.x))).toEqual([-100, 0, 100]);
+  });
+
+  it("keeps the static plot's clamping when no origin is given", () => {
+    // The default path is the one `measure_performance` and older callers use;
+    // it must keep behaving exactly as before.
+    const base = { at: "", cpu: 0, listeners: 0, documents: 0, frames: 0, heap: 0, layouts: 0, styleRecalcs: 0 };
+    const history = [
+      { ...base, t: 0, nodes: 1 },
+      { ...base, t: 500, nodes: 2 },
+      { ...base, t: 2_000, nodes: 3 },
+    ];
+    const points = perfSparkPoints(history, "nodes", 100, 20, 10, 1_000);
+    expect(points[0]?.x).toBe(0);
+    expect(points.at(-1)?.x).toBe(100);
+  });
+
+  it("extends the last reading past the right edge when asked", () => {
+    // Without this the curve stops at the newest sample and a gap opens as wide
+    // as the time since it was taken — exactly the seam the camera would expose.
+    const base = { at: "", cpu: 0, listeners: 0, documents: 0, frames: 0, heap: 0, layouts: 0, styleRecalcs: 0 };
+    const history = [
+      { ...base, t: 0, nodes: 4 },
+      { ...base, t: 1_000, nodes: 9 },
+    ];
+    const plain = perfSparkPoints(history, "nodes", 100, 20, 10, 1_000, { origin: 0 });
+    const extended = perfSparkPoints(history, "nodes", 100, 20, 10, 1_000, {
+      origin: 0,
+      extendRight: true,
+    });
+    expect(extended).toHaveLength(plain.length + 1);
+    // Flat and one full plot-width further right: off-screen, clipped, and the
+    // same height as the reading it continues.
+    expect(extended.at(-1)).toEqual({ x: 200, y: plain.at(-1)!.y });
+  });
+
+  it("draws counts as a staircase and cpu as a slope", () => {
+    // A DOM count did not climb from 3 to 4; it was 3 and then it was 4. A
+    // slope invents a value nobody measured. CPU is a share of an interval, so
+    // its slope is real.
+    const points = [
+      { x: 0, y: 10 },
+      { x: 50, y: 4 },
+      { x: 100, y: 7 },
+    ];
+    expect(perfPolyline(points)).toBe("M0.0,10.0 L50.0,4.0 L100.0,7.0");
+    // Hold the old value until the new sample's own moment, then step.
+    expect(perfPolyline(points, { step: true })).toBe("M0.0,10.0 H50.0 V4.0 H100.0 V7.0");
+    // The fill follows the same shape, or it cuts corners under the line.
+    expect(perfArea(points, 20, { step: true })).toContain("H50.0 V4.0");
+  });
+
+  it("advances the camera only once the window is full", () => {
+    // While the series is still filling, the newest sample IS the right edge —
+    // sliding then would drag a short curve off into an empty chart.
+    const windowMs = 10_000;
+    const width = 100;
+    // A full window has been laid out: nothing to slide yet.
+    expect(perfCamera(10_000, 0, windowMs, width)).toBe(0);
+    // Half a window later the plot has moved half a plot-width.
+    expect(perfCamera(15_000, 0, windowMs, width)).toBeCloseTo(50, 5);
+    // Rewinding (a clock that went backwards) must not scroll the other way.
+    expect(perfCamera(9_000, 0, windowMs, width)).toBe(0);
+  });
+
+  it("derives the current moment from the newest sample", () => {
+    // Samples carry `t` relative to sampling start, not a wall clock, so "now"
+    // has to be reconstructed from the moment the newest one was taken.
+    const sample: PerfSample = {
+      at: "2026-01-01T00:00:01.000Z",
+      t: 1_000,
+      cpu: 0,
+      nodes: 0,
+      listeners: 0,
+      documents: 0,
+      frames: 0,
+      heap: 0,
+      layouts: 0,
+      styleRecalcs: 0,
+    };
+    const nowMs = Date.parse("2026-01-01T00:00:01.250Z");
+    expect(perfClock(sample, nowMs)).toBe(1_250);
+    // No samples yet, and a sample stamped in the future, both have to be safe:
+    // the first is "nothing drawn", the second must not rewind the camera.
+    expect(perfClock(undefined, nowMs)).toBe(0);
+    expect(perfClock(sample, Date.parse("2026-01-01T00:00:00.000Z"))).toBe(1_000);
   });
 });
 

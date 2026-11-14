@@ -363,12 +363,31 @@ try {
 
   const renamed = await inApp(
     client,
-    `return await window.ensemble.renameProfile("default", "日常档案");`,
+    `return await window.ensemble.renameProfile("default", "日常档案").then(() => "renamed").catch((e) => String(e?.message ?? e));`,
   );
   check(
-    "the built-in profile can be renamed",
-    renamed?.profiles?.some((item) => item.id === "default" && item.name === "日常档案") === true,
-    renamed?.profiles?.map((item) => item.name),
+    "the built-in profile cannot be renamed",
+    String(renamed).includes("内置"),
+    { renamed },
+  );
+
+  // The lock covers the shipped rows only: a profile the user added is theirs
+  // to rename. Renamed back straight away, because the page check below looks
+  // rows up by name.
+  const renamedUser = await inApp(
+    client,
+    `return await window.ensemble.renameProfile(${JSON.stringify(profileA?.id ?? "")}, "工作档案-改名");`,
+  );
+  check(
+    "a user profile can still be renamed",
+    renamedUser?.profiles?.some(
+      (item) => item.id === profileA?.id && item.name === "工作档案-改名",
+    ) === true,
+    renamedUser?.profiles?.map((item) => item.name),
+  );
+  await inApp(
+    client,
+    `return await window.ensemble.renameProfile(${JSON.stringify(profileA?.id ?? "")}, "工作档案");`,
   );
 
   const ephemeralDefault = await inApp(
@@ -454,43 +473,172 @@ try {
         Boolean(el.querySelector('[data-profile-delete]')) &&
         !el.querySelector('[data-profile-delete]')?.disabled,
     }));
-    // The lifetime is something you learn once, so it lives on hover rather
-    // than as a permanent column. Asserting the tooltip too keeps a future
-    // change from deleting the text without putting it back somewhere.
+    // Every row on this page persists, so a per-row lifetime note would repeat
+    // one fact once per profile — the header says it once instead. What must not
+    // come back is a second line of text under the name: the row carries the
+    // name, the default chip and its buttons, and no note element.
     const first = document.querySelector('.profiles .row');
-    first?.dispatchEvent(new PointerEvent('pointerenter'));
-    await new Promise((r) => setTimeout(r, 700));
-    const tip = document.querySelector('.app-tooltip');
-    const tipText = tip?.textContent.trim() ?? '';
-    const tipVisible = tip?.classList.contains('visible') ?? false;
-    first?.dispatchEvent(new PointerEvent('pointerleave'));
     const rowNotes = document.querySelectorAll('.profiles .row-note').length;
+    const noteish = first?.querySelectorAll('.row-note, .row-desc, .acc-note').length ?? -1;
     return {
       opened: Boolean(document.querySelector('.profiles')),
       rows,
       rowNotes,
-      tipText,
-      tipVisible,
+      noteish,
       menuFound: Boolean(document.querySelector('[data-menu-item="profiles"]')),
       hadMenu: Boolean(menu),
     };
   `,
   );
   check(
-    "the profiles page is reachable from the app menu",
-    page?.opened === true && page?.rows?.length === 4,
+    // Three persistent rows plus the throwaway, which is listed last and drawn
+    // apart: opening a clean jar in a real browser is a reason to be on this
+    // page, but it is not a row anyone names or deletes.
+    "the profiles page lists the persistent profiles and the clean session last",
+    page?.opened === true &&
+      page?.rows?.length === 4 &&
+      page?.rows?.[3]?.name === "干净会话",
     { opened: page?.opened, rows: page?.rows, menuFound: page?.menuFound },
   );
   check(
-    "the profile row keeps its one-line shape and explains itself on hover",
-    page?.rowNotes === 0 && page?.tipVisible === true && Boolean(page?.tipText),
-    { rowNotes: page?.rowNotes, tipVisible: page?.tipVisible, tipText: page?.tipText },
+    "the profile row keeps its one-line shape",
+    // No note element under the name: the lifetime is one fact about the whole
+    // page, so the header carries it once instead of once per row.
+    page?.rowNotes === 0 && page?.noteish === 0,
+    { rowNotes: page?.rowNotes, noteish: page?.noteish },
+  );
+
+  // A built-in row offers neither rename nor delete; a user row offers both.
+  const affordances = await inApp(
+    client,
+    `
+    const row = (name) => [...document.querySelectorAll('.profiles .row')]
+      .find((el) => el.querySelector('.row-name')?.textContent?.trim() === name);
+    return {
+      builtinRename: Boolean(row('默认档案')?.querySelector('[data-profile-rename]')),
+      builtinDelete: Boolean(row('默认档案')?.querySelector('[data-profile-delete]')),
+      userRename: Boolean(row('工作档案')?.querySelector('[data-profile-rename]')),
+      userDelete: Boolean(row('工作档案')?.querySelector('[data-profile-delete]')),
+    };
+  `,
+  );
+  check(
+    "built-in rows offer neither rename nor delete",
+    affordances?.builtinRename === false &&
+      affordances?.builtinDelete === false &&
+      affordances?.userRename === true &&
+      affordances?.userDelete === true,
+    affordances,
+  );
+
+  // Every row launches, and the launch control offers the built-in surface plus
+  // the scanned browsers. This is the path the user asked for: "open this jar in
+  // a real browser" is a decision made here, not a mode flipped elsewhere.
+  const rowLaunchers = await inApp(
+    client,
+    `
+    const rows = [...document.querySelectorAll('.profiles .row')];
+    const of = (name) => rows.find((el) => el.querySelector('.row-name')?.textContent?.trim() === name);
+    const workspace = await window.ensemble.getWorkspace();
+    const clean = of('干净会话');
+    const work = of('工作档案');
+    const trigger = work?.querySelector('[data-launch-menu]');
+    trigger?.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const panel = document.querySelector('[data-launch-panel]');
+    const engines = panel
+      ? [...panel.querySelectorAll('[data-engine]')].map((el) => el.dataset.engine)
+      : [];
+    trigger?.click();
+    return {
+      rowsWithLauncher: rows.filter((el) => el.querySelector('[data-launch-main]')).length,
+      totalRows: rows.length,
+      engines,
+      scanned: workspace.engines.length,
+      cleanHasLauncher: Boolean(clean?.querySelector('[data-launch-main]')),
+      cleanHasRename: Boolean(clean?.querySelector('[data-profile-rename]')),
+      cleanHasDelete: Boolean(clean?.querySelector('[data-profile-delete]')),
+    };
+  `,
+  );
+  check(
+    "every profile row can launch, and the throwaway row cannot be renamed or deleted",
+    rowLaunchers?.rowsWithLauncher === rowLaunchers?.totalRows &&
+      rowLaunchers?.cleanHasLauncher === true &&
+      rowLaunchers?.cleanHasRename === false &&
+      rowLaunchers?.cleanHasDelete === false,
+    rowLaunchers,
+  );
+  check(
+    "the row's launch menu lists the built-in surface and every scanned browser",
+    rowLaunchers?.engines?.[0] === "embedded" &&
+      rowLaunchers?.engines?.length === rowLaunchers?.scanned + 1,
+    rowLaunchers,
+  );
+
+  // Creating goes through a dialog, and the dialog closes once the write lands.
+  // The old inline form stayed open with the typed name still in it, which read
+  // as "nothing happened" while the new row was already in the list.
+  const created = await inApp(
+    client,
+    `
+    const api = window.ensemble;
+    document.querySelector('[data-profile-new]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const input = document.querySelector('.content [data-profile-name]');
+    const opened = Boolean(input);
+    input.value = '弹窗档案';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-profile-create]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const after = await api.getWorkspace();
+    return {
+      opened,
+      closed: document.querySelector('.content [data-profile-name]') === null,
+      names: after.settings.profiles.map((item) => item.name),
+      listed: [...document.querySelectorAll('.profiles .row-name')].map((el) => el.textContent?.trim()),
+    };
+  `,
+  );
+  check(
+    "creating a profile uses a dialog and closes it on success",
+    created?.opened === true &&
+      created?.closed === true &&
+      created?.names?.includes("弹窗档案") &&
+      created?.listed?.includes("弹窗档案"),
+    created,
+  );
+
+  // Leaving the dialog without saving must not write anything.
+  const cancelled = await inApp(
+    client,
+    `
+    const api = window.ensemble;
+    document.querySelector('[data-profile-new]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const input = document.querySelector('.content [data-profile-name]');
+    input.value = '不该存在';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // The dialog's own close button, top right.
+    document.querySelector('.content .close')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const after = await api.getWorkspace();
+    return {
+      closed: document.querySelector('.content [data-profile-name]') === null,
+      names: after.settings.profiles.map((item) => item.name),
+    };
+  `,
+  );
+  check(
+    "cancelling the dialog writes nothing",
+    cancelled?.closed === true && cancelled?.names?.includes("不该存在") === false,
+    cancelled,
   );
 
   check(
     "the page marks the default and hides delete on built-ins",
     page?.rows?.filter((row) => row.default)?.length === 1 &&
-      page?.rows?.find((row) => row.name === "日常档案")?.canDelete === false &&
+      page?.rows?.find((row) => row.name === "默认档案")?.canDelete === false &&
       page?.rows?.find((row) => row.name === "工作档案")?.canDelete === true,
     page?.rows,
   );

@@ -27,6 +27,7 @@ import { useI18n } from "vue-i18n";
 import { useAnchoredPanel } from "../composables/anchoredPanel";
 import { useFloatingLayer } from "../composables/floatingLayer";
 import { MESSAGE_KIND_LABELS, useMessageRows } from "../composables/messageRows";
+import AppButton from "./ui/AppButton.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -152,18 +153,18 @@ watch(open, async (isOpen) => {
       <p v-if="message.stale" class="detail-note">{{ rows.staleReason(message) }}</p>
 
       <div class="detail-actions">
-        <button
+        <AppButton
           v-if="message.action && !message.stale"
-          type="button"
-          class="btn primary small"
+          variant="primary"
+          size="sm"
           data-message-action
           @click="emit('act', message)"
         >
           {{ rows.actionLabelOf(message) }}
-        </button>
-        <button type="button" class="btn small" data-message-remove @click="emit('remove', message)">
+        </AppButton>
+        <AppButton size="sm" data-message-remove @click="emit('remove', message)">
           {{ t("app.messageRemove") }}
-        </button>
+        </AppButton>
       </div>
     </div>
   </Teleport>

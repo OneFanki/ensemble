@@ -7,6 +7,16 @@
  * copying the styles rendered bare text — two pages shipped that way. Owning the
  * markup and the styles together makes that impossible.
  *
+ * `type` is a prop, not a fall-through attribute.
+ *
+ * It used to be pinned to `"button"` on the root, so a caller who wrote
+ * `type="submit"` got a submit button only because Vue's fall-through overwrote
+ * the static attribute — behaviour nobody had verified, and which one dialog's
+ * comment correctly guessed the opposite of. A button inside a form with no
+ * `type` submits it, which is the one default that can fire a request the caller
+ * did not intend; saying `type="button"` explicitly is the safe default and
+ * making it a prop is what lets a form's own submit button opt in.
+ *
  * Extra attributes (`disabled`, `title`, `data-*`) and `class` fall through to
  * the root button, so page-specific tweaks stay possible without re-declaring
  * the base look.
@@ -15,13 +25,15 @@ withDefaults(
   defineProps<{
     variant?: "default" | "primary" | "ghost" | "danger";
     size?: "md" | "sm";
+    type?: "button" | "submit";
+    disabled?: boolean;
   }>(),
-  { variant: "default", size: "md" },
+  { variant: "default", size: "md", type: "button" },
 );
 </script>
 
 <template>
-  <button type="button" class="btn" :class="[variant, size === 'sm' && 'sm']">
+  <button :type="type" class="btn" :class="[variant, size === 'sm' && 'sm']" :disabled="disabled">
     <slot />
   </button>
 </template>
@@ -40,8 +52,8 @@ withDefaults(
   font-size: 12px;
   white-space: nowrap;
   transition:
-    background 0.14s ease,
-    border-color 0.14s ease;
+    background var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out);
 }
 
 .btn:hover:not(:disabled) {
@@ -113,5 +125,4 @@ withDefaults(
   opacity: 1;
   cursor: not-allowed;
 }
-
 </style>

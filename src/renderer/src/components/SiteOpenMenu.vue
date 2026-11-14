@@ -83,6 +83,22 @@ const defaultProfile = computed(
   () => props.profiles.find((profile) => profile.id === props.defaultProfileId) ?? props.profiles[0],
 );
 
+/**
+ * The jar list, and the throwaway kept apart from it.
+ *
+ * A profile is something the user names, keeps and manages. The clean session is
+ * not: it is one fixed empty jar that forgets everything on quit, so it sits at
+ * the bottom as its own opening instead of as a row among jars that persist. The
+ * account tab draws it the same way, which is what makes the two tabs agree on
+ * what it is.
+ */
+const persistentProfiles = computed(() =>
+  props.profiles.filter((profile) => profile.retention !== "ephemeral"),
+);
+const cleanProfile = computed(() =>
+  props.profiles.find((profile) => profile.retention === "ephemeral"),
+);
+
 /** Only the search box belongs to the account tab; a profile has no address. */
 const showSearch = computed(() => !locked.value && mode.value === "accounts");
 
@@ -161,7 +177,7 @@ function retentionNote(profile: BrowserProfile): string {
         <span class="site-name">{{ locked.name }}</span>
       </div>
 
-      <div v-if="!filtered.length" class="empty">{{ t("app.emptySites") }}</div>
+      <div v-if="!filtered.length" class="empty-line">{{ t("app.emptySites") }}</div>
 
       <div v-else class="body">
         <div v-if="!locked" class="sites">
@@ -232,16 +248,18 @@ function retentionNote(profile: BrowserProfile): string {
                 <span class="acc-note mono">{{ identity.username }}</span>
               </span>
             </button>
-            <p v-if="!accounts.length" class="empty">{{ t("app.openSiteNoAccounts") }}</p>
+            <p v-if="!accounts.length" class="empty-line">{{ t("app.openSiteNoAccounts") }}</p>
           </div>
         </div>
       </div>
     </template>
 
-    <!-- Profiles: an empty browser in one cookie jar. -->
+    <!-- Profiles: an empty browser in one cookie jar. The clean session is a
+         separate opening at the bottom — it is one fixed throwaway, not a jar
+         anyone keeps, so it must not read as a row of the same kind. -->
     <div v-else class="profiles">
       <button
-        v-for="profile in profiles"
+        v-for="profile in persistentProfiles"
         :key="profile.id"
         type="button"
         class="account-row profile-row"
@@ -252,6 +270,17 @@ function retentionNote(profile: BrowserProfile): string {
         <Layers :size="11" class="profile-icon" />
         <span class="acc-name">{{ profile.name }}</span>
         <span v-if="profile.id === defaultProfileId" class="badge">{{ t("app.profileDefaultBadge") }}</span>
+      </button>
+      <button
+        v-if="cleanProfile"
+        type="button"
+        class="account-row profile-row dashed"
+        :data-profile-id="cleanProfile.id"
+        v-tooltip="{ text: retentionNote(cleanProfile) }"
+        @click="openProfile(cleanProfile)"
+      >
+        <ShieldOff :size="11" class="profile-icon" />
+        <span class="acc-name">{{ cleanProfile.name }}</span>
       </button>
     </div>
   </div>
@@ -536,6 +565,12 @@ function retentionNote(profile: BrowserProfile): string {
   padding: 7px;
 }
 
+/* The clean session is not a jar among jars, so it is drawn as the account tab
+   draws its throwaway: dashed, and last. */
+.profile-row.dashed {
+  border: 1px dashed var(--line);
+}
+
 .profile-row .acc-name {
   flex: 1 1 auto;
 }
@@ -591,7 +626,7 @@ function retentionNote(profile: BrowserProfile): string {
   white-space: nowrap;
 }
 
-.empty {
+.empty-line {
   padding: 12px 10px;
   font-size: 10.5px;
   color: var(--faint);

@@ -163,9 +163,9 @@ function chooseIdentity(identityId: string): void {
     <button
       type="button"
       class="split-main"
-      :title="label"
       :aria-label="label"
       :aria-expanded="open"
+      v-tooltip="label"
       @click.stop="toggle"
     >
       <Plus :size="compact ? 11 : 14" />

@@ -20,6 +20,9 @@ import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import EmptyState from "./ui/EmptyState.vue";
+import LinkButton from "./ui/LinkButton.vue";
+import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 import IconButton from "./ui/IconButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SplitPane from "./ui/SplitPane.vue";
@@ -260,46 +263,47 @@ function openContainer(view: View) {
   return embedded.views.find((item) => item.viewDefinitionId === view.id);
 }
 
-/** The title bar's launch target decides which surface this button acts on. */
-const launchTarget = computed(() => store.settings.launchTarget ?? "embedded");
-
-/** Whether this view is running on the surface the launch switch points at. */
-const runningHere = computed(() => {
+/** Whether the view is running on the built-in surface. */
+const runningEmbedded = computed(() => {
   const view = selectedView.value;
-  if (!view) return false;
-  return launchTarget.value === "embedded"
-    ? Boolean(openContainer(view))
-    : view.identityIds.some((id) => store.instanceFor(id));
+  return view ? Boolean(openContainer(view)) : false;
 });
 
-const launchLabel = computed(() => {
-  if (launchTarget.value === "embedded") {
-    return runningHere.value ? t("app.browserStopView") : t("app.runView");
-  }
-  return runningHere.value ? t("app.closeViewWindows") : t("app.runExternal");
+/** Whether any member is running as an external browser window. */
+const runningExternal = computed(() => {
+  const view = selectedView.value;
+  return view ? view.identityIds.some((id) => store.instanceFor(id)) : false;
 });
 
 /**
- * One action, routed by the title bar.
+ * The built-in half of the launch control.
  *
- * Two buttons side by side ("run" and "run external") made the same decision
- * twice and forced every user to re-answer it per view. The switch in the title
- * bar is the single place that decides.
+ * A running view toggles off, because that is the same button doing the same
+ * thing twice — the alternative is a second "close" control this page would then
+ * have to explain. External windows are closed from the run dock, where they are
+ * listed; this page's own button only ever closes the container it owns.
  */
-async function launchHere() {
+async function launchEmbedded() {
   const view = selectedView.value;
   if (!view) return;
-  if (launchTarget.value === "embedded") {
-    const container = openContainer(view);
-    if (container) {
-      await embedded.closeView(container.id, "opened");
-      return;
-    }
-    await embedded.openView(view.id);
+  const container = openContainer(view);
+  if (container) {
+    await embedded.closeView(container.id, "opened");
     return;
   }
-  if (view.identityIds.some((id) => store.instanceFor(id))) await store.stopView(view.id);
-  else await store.launchView(view.id);
+  await embedded.openView(view.id);
+}
+
+/**
+ * The external half: one window per member, tiled by the view's layout.
+ *
+ * Already-running members are raised rather than relaunched, so picking a
+ * browser here never disturbs a session the user already has open.
+ */
+async function launchExternal(engineId: string) {
+  const view = selectedView.value;
+  if (!view) return;
+  await store.launchView(view.id, engineId);
 }
 
 /** Other sites this view can be copied to; the source site is excluded. */
@@ -357,22 +361,22 @@ async function confirmCopy(): Promise<void> {
       produce a savable view — it would open, reject the save, and send the user
       looking for accounts anyway. Name the missing piece and link to it.
     -->
-    <div v-if="!store.views.length" class="empty">
-      <Layers :size="22" />
-      <p>{{ store.identities.length ? $t("app.emptyViews") : $t("app.emptyViewsNoIdentity") }}</p>
-      <div class="empty-actions">
-        <AppButton
-          v-if="store.identities.length"
-          variant="primary"
-          @click="emit('newView')">
-          <Plus :size="13" />
-          {{ $t("app.newView") }}
-        </AppButton>
-        <AppButton v-else variant="primary" @click="navigation.navigate('identities')">
-          {{ $t("app.viewGoToIdentities") }}
-        </AppButton>
-      </div>
-    </div>
+    <EmptyState
+      v-if="!store.views.length"
+      :text="store.identities.length ? $t('app.emptyViews') : $t('app.emptyViewsNoIdentity')"
+    >
+      <template #icon><Layers :size="22" /></template>
+      <AppButton
+        v-if="store.identities.length"
+        variant="primary"
+        @click="emit('newView')">
+        <Plus :size="13" />
+        {{ $t("app.newView") }}
+      </AppButton>
+      <AppButton v-else variant="primary" @click="navigation.navigate('identities')">
+        {{ $t("app.viewGoToIdentities") }}
+      </AppButton>
+    </EmptyState>
 
     <SplitPane v-else class="workspace">
       <template #list>
@@ -448,13 +452,22 @@ async function confirmCopy(): Promise<void> {
             </p>
           </div>
           <div class="detail-actions">
-            <AppButton size="sm" :class="{ running: runningHere }"
+            <!--
+              One control, two levels of specificity: the main half runs the view
+              on the built-in surface (and closes the container when it is already
+              up), the arrow lists the external browsers. The arrow stays available
+              while the view runs embedded — a fidelity check of a view you have
+              open is exactly what someone does next, and the two surfaces are
+              separate sessions, so neither disturbs the other.
+            -->
+            <LaunchSplitButton
+              :label="runningEmbedded ? $t('app.browserStopView') : $t('app.runView')"
+              :busy="runningEmbedded"
               :disabled="store.busy === 'launch'"
-              @click="launchHere">
-              <Square v-if="runningHere" :size="11" />
-              <Play v-else :size="11" />
-              {{ launchLabel }}
-            </AppButton>
+              :data-hook="selectedView.id"
+              @launch="launchEmbedded"
+              @launch-external="launchExternal"
+            />
             <IconButton :ariaLabel="$t('app.copyViewToSite')"
               :title="$t('app.copyViewToSiteHint')"
               :disabled="!copyTargets.length"
@@ -509,10 +522,10 @@ async function confirmCopy(): Promise<void> {
         <div class="layout-block">
           <div class="section-head">
             <span class="section-title">{{ $t("app.windowLayout") }}</span>
-            <button type="button" class="link-btn" @click="editActiveLayout">
+            <LinkButton @click="editActiveLayout">
               <Wand2 :size="11" />
               {{ $t("app.customizeLayout") }}
-            </button>
+            </LinkButton>
           </div>
           <div class="layout-picker">
             <button

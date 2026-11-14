@@ -8,8 +8,22 @@
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 
+/**
+ * Suites that open real browser windows and are therefore opt-in.
+ *
+ * Everything here is discovered by the glob below, but running it unasked pops
+ * visible windows on whatever the user is doing. Naming them (rather than
+ * renaming the files) keeps the "every e2e-* runs" rule intact while making the
+ * exception one readable line.
+ */
+const VISIBLE_WINDOW_SUITES = new Set(["e2e-external-launch.mjs"]);
+
 const files = readdirSync("scripts")
   .filter((name) => /^e2e-[a-z-]+\.mjs$/.test(name))
+  .filter((name) => !VISIBLE_WINDOW_SUITES.has(name))
+  .sort();
+const skipped = readdirSync("scripts")
+  .filter((name) => VISIBLE_WINDOW_SUITES.has(name))
   .sort();
 
 const rows = [];
@@ -35,6 +49,11 @@ for (const file of files) {
 
 const broken = rows.filter((row) => row.code !== 0 || row.failures.length > 0);
 console.log(`\n${rows.length - broken.length}/${rows.length} suites clean`);
+if (skipped.length) {
+  // Said out loud rather than silently omitted: "all e2e passed" would otherwise
+  // be a claim about a smaller set than the user thinks.
+  console.log(`skipped (opens real browser windows, run by hand): ${skipped.join(", ")}`);
+}
 if (broken.length) {
   console.log("failing:", broken.map((row) => row.file).join(", "));
   process.exitCode = 1;

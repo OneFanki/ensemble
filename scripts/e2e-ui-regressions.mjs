@@ -329,7 +329,7 @@ try {
       tabs: state.tabs.length,
       url: state.tabs[0]?.url ?? "",
       surface: Boolean(document.querySelector('.stage .blank-slot .new-tab')),
-      empty: Boolean(document.querySelector('.stage .empty')),
+      empty: Boolean(document.querySelector('.stage .stage-empty')),
     };
   })()`);
   check(
@@ -359,12 +359,12 @@ try {
       await window.ensemble.closeEmbeddedTab(tab.id);
     }
     await new Promise((r) => setTimeout(r, 300));
-    const empty = document.querySelector('.stage .empty');
+    const empty = document.querySelector('.stage .stage-empty');
     const panel = {
       present: Boolean(empty),
       buttons: empty?.querySelectorAll('button').length ?? 0,
       text: empty?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
-      siteChips: document.querySelectorAll('.stage .empty .site-chip, .stage .empty .chip').length,
+      siteChips: document.querySelectorAll('.stage .stage-empty .site-chip, .stage .stage-empty .chip').length,
     };
     // Restore the launch state: later checks expect one blank page.
     await window.ensemble.openEmbeddedTab({});
@@ -504,6 +504,69 @@ try {
     { rows: tagsPage?.rows, expected: tags.length },
   );
 
+  // Writing a tag happens in a dialog. The page used to carry a permanent
+  // create row and turn a row into inputs for an edit; both pushed the list
+  // around, and the create form stayed open after a successful save.
+  const tagDialog = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    document.querySelector('[data-tag-new]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const input = document.querySelector('[data-tag-name]');
+    const opened = Boolean(input);
+    input.value = '弹窗标签';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('[data-tag-color="rose"]')?.click();
+    document.querySelector('[data-tag-save]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const after = await api.getWorkspace();
+    const saved = after.tags.find((item) => item.name === '弹窗标签');
+    return {
+      opened,
+      closed: document.querySelector('[data-tag-name]') === null,
+      color: saved?.color ?? null,
+      listed: document.querySelectorAll('.tags .list > .row').length,
+      // The old inline create row is gone for good.
+      inlineForm: Boolean(document.querySelector('.tags form')),
+    };
+  })()`);
+  check(
+    "creating a tag uses a dialog, closes it, and saves the picked colour",
+    tagDialog?.opened === true &&
+      tagDialog?.closed === true &&
+      tagDialog?.color === "rose" &&
+      tagDialog?.inlineForm === false &&
+      tagDialog?.listed === tags.length + 1,
+    tagDialog,
+  );
+
+  // Editing is the same dialog, prefilled, and a colour-only change lands.
+  const tagEdit = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    const before = (await api.getWorkspace()).tags.find((item) => item.name === '弹窗标签');
+    document.querySelector('[data-tag-edit="' + before.id + '"]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const input = document.querySelector('[data-tag-name]');
+    const prefilled = input?.value ?? null;
+    document.querySelector('[data-tag-color="teal"]')?.click();
+    document.querySelector('[data-tag-save]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const after = (await api.getWorkspace()).tags.find((item) => item.id === before.id);
+    return {
+      prefilled,
+      closed: document.querySelector('[data-tag-name]') === null,
+      name: after?.name ?? null,
+      color: after?.color ?? null,
+    };
+  })()`);
+  check(
+    "editing a tag opens the same dialog and saves a colour-only change",
+    tagEdit?.prefilled === "弹窗标签" &&
+      tagEdit?.closed === true &&
+      tagEdit?.name === "弹窗标签" &&
+      tagEdit?.color === "teal",
+    tagEdit,
+  );
+
   await openConsolePage(client, "settings");
   await waitFor(client, `Boolean(document.querySelector('[role="tab"]'))`);
   const settingsTabs = await client.evaluate(`(() =>
@@ -521,7 +584,7 @@ try {
 
   // --- Dropdown inside a dialog --------------------------------------------
   await client.evaluate(
-    `(() => { document.querySelector('.id-card .card-actions .edit')?.click(); return true; })()`,
+    `(() => { document.querySelector('[data-edit-identity]')?.click(); return true; })()`,
   );
   const dialogOpened = await waitFor(client, `Boolean(document.querySelector('[role="dialog"]'))`);
   check("the identity dialog opens", dialogOpened === true, dialogOpened);
@@ -734,13 +797,19 @@ try {
   const sizing = await client.evaluate(`(() => {
     const split = document.querySelector('.toolbar .split');
     const icons = [...document.querySelectorAll('.toolbar .icon')];
+    // The address field is two boxes now: the shell draws the border, the input
+    // is the text area inside it. The shell is the control, so it is what has to
+    // match the row — measuring the input made it one border short of every
+    // icon, which is a true measurement of the wrong element.
     const input = document.querySelector('.toolbar .address input');
+    const field = document.querySelector('.toolbar .address-shell');
     const stepper = document.querySelector('.toolbar .zoom-stepper');
     const rect = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
     return {
       split: rect(split),
       icon: rect(icons[0]),
-      input: rect(input),
+      input: rect(field),
+      inputText: rect(input),
       splitMain: rect(split?.querySelector('.split-main')),
       stepper: rect(stepper),
       // Every control in the row must agree on one height; two heights is what
@@ -748,7 +817,7 @@ try {
       controlLg: Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-lg'))),
       heights: [...new Set([
         ...[...document.querySelectorAll('.toolbar .icon')].map(rect),
-        rect(input),
+        rect(field),
         rect(stepper),
         rect(split),
       ].filter((value) => value !== null))],
@@ -2716,58 +2785,71 @@ try {
     flowsFold,
   );
 
-  // --- AI entry in the app menu --------------------------------------------
+  // --- AI entry in the toolbar ---------------------------------------------
   // The endpoint used to be reported by a status bar across the bottom of every
-  // screen, which is the single clearest sign that a window is a console rather
-  // than a browser. It then lived in the toolbar, which had grown into a row of
-  // one-off buttons; it is now a row in the app menu, where an infrequent
-  // destination belongs. The row keeps its label and says whether it is
-  // listening in the same right-aligned slot that otherwise says "off".
+  // screen — the single clearest sign that a window is a console rather than a
+  // browser. It then became a row in the app menu, which hid the one thing that
+  // matters at a glance: whether the assistant is listening. It is a toolbar
+  // control now, because "connected?" is a live state, and the records behind it
+  // are what the menu row was opening settings to look at.
   // Earlier checks leave the app on a console page; without this the browser's
   // toolbar is simply not mounted and every assertion below would read null.
   await backToBrowser(client);
   await waitFor(client, `Boolean(document.querySelector('[data-app-menu]'))`, 5000);
-  const aiRow = await client.evaluate(`(async () => {
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    const row = document.querySelector('[data-menu-item="ai"]');
-    if (!row) return { menuOpen: Boolean(document.querySelector('.app-menu')), row: null };
-    const rect = row.getBoundingClientRect();
+  const aiEntry = await client.evaluate(`(async () => {
+    const button = document.querySelector('[data-ai-panel]');
+    if (!button) return { found: false };
+    const rect = button.getBoundingClientRect();
+    button.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const panel = document.querySelector('[data-ai-panel-body]');
+    const panelRect = panel?.getBoundingClientRect();
+    const status = await window.ensemble.mcpStatus();
     return {
-      menuOpen: true,
-      text: row.textContent.replace(/\\s+/g, ' ').trim(),
-      hasIcon: Boolean(row.querySelector('svg')),
-      hint: row.querySelector('.app-menu-hint')?.textContent?.trim() ?? '',
-      inMenu: Boolean(row.closest('.app-menu')),
+      found: true,
+      inToolbar: Boolean(button.closest('.toolbar')),
+      labelled: (button.getAttribute('aria-label') ?? '').length > 0,
+      // The dot tracks the endpoint, so it is asserted against the endpoint's
+      // own state rather than against a literal: this suite runs with the
+      // endpoint off, and a hard-coded true would demand a state the fixture
+      // never sets.
+      live: Boolean(button.querySelector('.ai-live-dot')),
+      running: status?.running === true,
+      statusText: panel?.querySelector('.ai-head-status')?.textContent?.trim() ?? '',
       width: Math.round(rect.width),
       height: Math.round(rect.height),
+      panel: Boolean(panel),
+      panelInsideWindow:
+        !panelRect || (panelRect.right <= window.innerWidth && panelRect.left >= 0),
     };
   })()`);
+  check("the AI entry is a toolbar control", aiEntry?.found === true && aiEntry?.inToolbar === true, aiEntry);
   check(
-    "the app menu carries the AI entry with an icon",
-    Boolean(aiRow?.menuOpen && aiRow?.hasIcon && aiRow?.inMenu === true),
-    aiRow,
+    "the AI entry is labelled and states the endpoint's state",
+    aiEntry?.labelled === true &&
+      aiEntry?.live === aiEntry?.running &&
+      typeof aiEntry?.statusText === 'string' &&
+      aiEntry.statusText.length > 0,
+    aiEntry,
+  );
+  // An icon button, not a menu row: it has to sit in the same 32px row as the
+  // bell and the app menu without widening it.
+  check(
+    "the AI entry is an icon button, not a full-width row",
+    typeof aiEntry?.width === 'number' &&
+      typeof aiEntry?.height === 'number' &&
+      aiEntry.width <= aiEntry.height * 2,
+    { width: aiEntry?.width, height: aiEntry?.height },
   );
   check(
-    "the AI entry is labelled and states whether it is running",
-    typeof aiRow?.text === 'string' &&
-      aiRow.text.includes('AI') &&
-      typeof aiRow.hint === 'string' &&
-      aiRow.hint.length > 0 &&
-      aiRow.text !== aiRow.hint,
-    { text: aiRow?.text, hint: aiRow?.hint },
+    "the AI panel opens inside the window",
+    aiEntry?.panel === true && aiEntry?.panelInsideWindow === true,
+    aiEntry,
   );
-  // A menu row is a full-width row in the menu panel, not an icon button
-  // standing in the toolbar.
-  check(
-    "the AI entry is a menu row rather than a toolbar control",
-    Boolean(aiRow?.inMenu) && aiRow.width > aiRow.height * 3,
-    { width: aiRow?.width, height: aiRow?.height },
-  );
-  // Leave the menu closed: the probe opened it, and the next step clicks the
-  // trigger again — which would close it and make the click miss.
+  // Leave the panel closed: the probe opened it, and the next step clicks a
+  // control behind it.
   await client.evaluate(`(async () => {
-    document.querySelector('[data-app-menu]')?.click();
+    document.querySelector('[data-ai-panel]')?.click();
     await new Promise((r) => setTimeout(r, 200));
     return true;
   })()`);
@@ -2780,11 +2862,12 @@ try {
   }))()`);
   check("the window has no status bar", noStatusBar?.statusbar === false && noStatusBar?.footer === false, noStatusBar);
 
-  // The menu row is the entry point now: it opens the AI access settings page.
+  // The panel's gear is the door to the full editor: the panel answers "what is
+  // it doing here", settings answers "what may it do anywhere".
   await client.evaluate(`(async () => {
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    document.querySelector('[data-menu-item="ai"]')?.click();
+    document.querySelector('[data-ai-panel]')?.click();
+    await new Promise((r) => setTimeout(r, 350));
+    document.querySelector('[data-ai-open-settings]')?.click();
     await new Promise((r) => setTimeout(r, 600));
     return true;
   })()`);
@@ -2799,7 +2882,7 @@ try {
     hasEndpointBlock: Boolean(document.querySelector('.mcp-endpoint')),
   }))()`);
   check(
-    "clicking the AI entry opens the AI access tab with the endpoint block",
+    "the AI panel's gear opens the AI access tab with the endpoint block",
     landedOnMcp && settingsState?.hasEndpointBlock === true,
     settingsState,
   );
@@ -2868,18 +2951,18 @@ try {
   );
   await wait(400);
   await client.evaluate(`(async () => {
-    // Back to the browser first: the AI entry is a row in the browser's app
-    // menu, and settings has neither a toolbar nor that menu.
+    // Back to the browser first: the AI entry is a toolbar control, and settings
+    // has neither a toolbar nor that control.
     document.querySelector('.settings-head .back')?.click();
     await new Promise((r) => setTimeout(r, 500));
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    document.querySelector('[data-menu-item="ai"]')?.click();
+    document.querySelector('[data-ai-panel]')?.click();
+    await new Promise((r) => setTimeout(r, 350));
+    document.querySelector('[data-ai-open-settings]')?.click();
     await new Promise((r) => setTimeout(r, 600));
     return true;
   })()`);
   const returned = await waitFor(client, `Boolean(document.querySelector('.mcp-endpoint'))`);
-  check("the AI entry retargets the tab after a manual change", returned === true, {
+  check("the AI panel's gear retargets the tab after a manual change", returned === true, {
     returned,
   });
 

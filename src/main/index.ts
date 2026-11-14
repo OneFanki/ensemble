@@ -15,6 +15,8 @@ import {
   warmUpWindowFocus,
 } from "@core/launch/window-focus";
 import { MessageStore } from "@core/messages";
+import { AiActivityStore } from "@core/ai-activity";
+import { APPROVAL_TIMEOUT_MS, ApprovalCoordinator } from "./approval";
 import { WorkspaceService } from "@core/service";
 import { downloadUpdateAsset } from "@core/update/download";
 import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
@@ -40,6 +42,7 @@ import {
 import {
   type AccountsExportOutcome,
   type AccountsImportPickOutcome,
+  type ApprovalRequest,
   type ExportOutcome,
   type FlowRunOutcome,
   type ImportPickOutcome,
@@ -60,6 +63,8 @@ import {
 import { detectBookmarkSources, type BookmarkImportSource as DetectSource } from "@core/bookmarks-import";
 import { parseExportFile } from "@shared/transfer";
 import type {
+  AiActivityRecord,
+  AiApprovalDecision,
   AppSettings,
   AddMessageInput,
   AppMessageView,
@@ -300,6 +305,28 @@ function messageStore(): MessageStore {
 }
 
 /**
+ * The AI activity log.
+ *
+ * Its own file, not the message centre: a busy assistant writes dozens of rows an
+ * hour, and sharing the 500-row message cap meant login captures and expired
+ * accounts were pushed out of the list they were meant to be read in.
+ */
+let aiActivity: AiActivityStore | null = null;
+
+function aiActivityStore(): AiActivityStore {
+  if (!aiActivity) aiActivity = new AiActivityStore(join(userDataDir(), "ai-activity.json"));
+  return aiActivity;
+}
+
+function broadcastAiActivity(): AiActivityRecord[] {
+  const list = aiActivityStore().list();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC.aiActivityChanged, list);
+  }
+  return list;
+}
+
+/**
  * The history as the interface sees it.
  *
  * Staleness is decided here, on every read, because it is a fact about the world
@@ -313,6 +340,11 @@ function messageViews(): AppMessageView[] {
   const identities = new Set((service?.snapshot().identities ?? []).map((item) => item.id));
   return messageStore()
     .list()
+    // Rows written before AI activity moved out of the message centre are still
+    // on disk. They are dropped on the way out rather than migrated: the record
+    // they describe is already in the AI log's own history from that day on, and
+    // a half-migrated row would show up as news a second time.
+    .filter((message) => (message.kind as string) !== "ai")
     .map((message) => {
       if (!message.action) return message;
       const stale =
@@ -348,7 +380,25 @@ let embedded: EmbeddedBrowser | null = null;
  * attached once a guest is mapped to a tab; until then a guest that asks for a
  * window simply does not get one.
  */
-const guestManager = new BrowserGuestManager();
+const guestManager = new BrowserGuestManager({
+  /*
+   * A released session comes back bare, and two things live in it.
+   *
+   * `Page.enable` is restored by the manager itself (dialog and lifecycle events
+   * hang off it). Pre-document scripts are restored here: the registrations live
+   * in the session, so an idle detach wipes them, and a page whose node the
+   * renderer replaced starts on a brand-new guest that never had them. The tab
+   * record holds the source of truth; this replays it.
+   *
+   * Read lazily: this manager is constructed before the browser exists, and the
+   * browser comes and goes with the window.
+   */
+  onSessionOpen: async (guestId, cdp) => {
+    const tabId = guestManager.keyFor(guestId);
+    if (!tabId || !embedded) return;
+    await embedded.replayInitScripts(tabId, cdp).catch(() => undefined);
+  },
+});
 
 /** Correlation for "show this page briefly" requests (screenshot of a hidden tab). */
 let presentSeq = 0;
@@ -1502,6 +1552,212 @@ function syncOverlay(snapshot?: WorkspaceSnapshot): void {
   startActiveWatcher();
 }
 
+// ---- the authorization window ----
+
+/**
+ * Width and height of the authorization card.
+ *
+ * Wider than the switcher strip and fixed: the card carries one sentence, one
+ * line of site context, one note, and four buttons in a row. The height is
+ * measured from the card's own content — a taller window would leave a dead band
+ * under the buttons that no amount of CSS could remove, because the window is the
+ * frame the card is drawn inside.
+ */
+const APPROVAL_WIDTH = 420;
+const APPROVAL_HEIGHT = 176;
+
+let approvalWindow: BrowserWindow | null = null;
+let approvalReady = false;
+/** The request whose content the window should be showing right now. */
+let approvalPayload: ApprovalRequest | null = null;
+
+/**
+ * The queue behind the window.
+ *
+ * Constructed with `onChange` wired to {@link syncApprovalWindow}, which is the
+ * only thing that shows, updates or closes the window — the coordinator itself
+ * has no idea a window exists.
+ */
+const approvals = new ApprovalCoordinator(APPROVAL_TIMEOUT_MS, Date.now, () => {
+  syncApprovalWindow();
+});
+
+/**
+ * Puts the window in the bottom-right corner of the display the main window is
+ * on.
+ *
+ * Recomputed on every show rather than cached: the user may have dragged the app
+ * to another monitor between two requests. `setBounds` rather than
+ * `setPosition` because on Windows a transparent frameless window drifts a pixel
+ * taller on every position-only call (the overlay's drag had the same bug).
+ */
+function placeApprovalWindow(win: BrowserWindow): void {
+  const area = overlayDisplayArea();
+  win.setBounds({
+    x: Math.max(area.x, area.x + area.width - APPROVAL_WIDTH - OVERLAY_MARGIN),
+    y: Math.max(area.y, area.y + area.height - APPROVAL_HEIGHT - OVERLAY_MARGIN),
+    width: APPROVAL_WIDTH,
+    height: APPROVAL_HEIGHT,
+  });
+}
+
+function ensureApprovalWindow(): BrowserWindow {
+  if (approvalWindow && !approvalWindow.isDestroyed()) return approvalWindow;
+  approvalReady = false;
+  const win = new BrowserWindow({
+    width: APPROVAL_WIDTH,
+    height: APPROVAL_HEIGHT,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    resizable: false,
+    // Same reason as the switcher: Windows adds an invisible resize border to
+    // frameless windows, and this one is small enough that the border is most of
+    // it.
+    thickFrame: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    title: appDisplayName,
+    ...(appIconPath() ? { icon: appIconPath() } : {}),
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.mjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      spellcheck: false,
+    },
+  });
+  win.setAlwaysOnTop(true, process.platform === "darwin" ? "floating" : "screen-saver");
+  win.on("show", () => reinforceOverlayTop(win));
+  win.on("closed", () => {
+    if (approvalWindow === win) approvalWindow = null;
+    approvalReady = false;
+  });
+  win.webContents.on("did-finish-load", () => {
+    approvalReady = true;
+    // Whatever was asked while the page was still loading is sent now; only the
+    // newest request matters, since the others are queued in the coordinator.
+    if (approvalPayload) win.webContents.send(IPC.approvalRequest, approvalPayload);
+  });
+  if (isDev && process.env["ELECTRON_RENDERER_URL"]) {
+    void win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}#approval`);
+  } else {
+    void win.loadFile(join(__dirname, "../renderer/index.html"), { hash: "approval" });
+  }
+  approvalWindow = win;
+  return win;
+}
+
+/**
+ * Shows the next question, or closes the window when the queue is empty.
+ *
+ * `showInactive` on purpose: the question is blocking the AI, not the person. A
+ * window that stole focus could pull the caret out of whatever the user was
+ * typing into — including the page the AI is waiting on.
+ */
+function syncApprovalWindow(): void {
+  const current = approvals.current() ?? null;
+  if (!current) {
+    approvalPayload = null;
+    if (approvalWindow && !approvalWindow.isDestroyed() && approvalWindow.isVisible()) {
+      approvalWindow.hide();
+      approvalWindow.webContents.send(IPC.approvalDismiss);
+    }
+    return;
+  }
+  approvalPayload = {
+    id: current.id,
+    tool: current.tool,
+    summary: current.summary,
+    actionKey: current.actionKey,
+    ...(current.actionParams ? { actionParams: current.actionParams } : {}),
+    origin: current.origin,
+    siteName: current.siteName,
+    context: current.context,
+    tabTitle: current.tabTitle,
+    expiresAt: current.expiresAt,
+  };
+  const win = ensureApprovalWindow();
+  if (approvalReady && !win.isDestroyed()) {
+    win.webContents.send(IPC.approvalRequest, approvalPayload);
+  }
+  /*
+   * A headless run has no desktop to appear on, but the window still exists and
+   * the page still runs — that is what lets the e2e suite drive the four buttons
+   * through the debugger.
+   */
+  if (!headless) {
+    placeApprovalWindow(win);
+    if (!win.isVisible()) win.showInactive();
+    reinforceOverlayTop(win);
+  }
+}
+
+/**
+ * Asks the person, for the MCP server.
+ *
+ * Headless runs have nobody to ask, and a write tool that waited the full minute
+ * for an answer nobody could give would make every automated suite crawl. The
+ * safe answer is immediate — unless the run explicitly opts into driving the
+ * window through the debugger, which is how the approval flow gets tested.
+ */
+/**
+ * Asks the person, for the MCP server.
+ *
+ * Whether anyone can be asked is decided where the server is constructed: a
+ * headless run has nobody at the screen, so there is no approver at all and the
+ * gate refuses with its own message instead of pretending a person said no.
+ */
+async function requestApproval(input: {
+  tool: string;
+  summary: string;
+  actionKey: string;
+  actionParams?: Record<string, string>;
+  origin: string;
+  siteName: string;
+  context: string;
+  tabTitle: string;
+}): Promise<AiApprovalDecision> {
+  return approvals.ask(input);
+}
+
+/**
+ * Whether a window can be shown at all.
+ *
+ * A headless run has no desktop, but it still builds the window and drives it
+ * through the debugger when a suite opts in — that is how the four buttons get
+ * tested. Without the opt-in there is no way to answer, so no one is asked.
+ */
+function approvalInteractive(): boolean {
+  return !headless || process.env["ENSEMBLE_APPROVAL_UI"] === "1";
+}
+async function answerApproval(id: string, decision: AiApprovalDecision): Promise<void> {
+  approvals.answer(id, decision);
+}
+
+async function cancelApproval(id: string): Promise<void> {
+  approvals.cancel(id);
+}
+
+/**
+ * Whether an IPC call came from the authorization window.
+ *
+ * The console, the switcher and the authorization card are separate renderer
+ * processes sharing one preload, so any of them can invoke any channel. For a
+ * permission decision that matters: the answer must come from the card the user
+ * was actually shown.
+ */
+function approvalSender(event: Electron.IpcMainInvokeEvent): boolean {
+  const win = approvalWindow;
+  if (!win || win.isDestroyed()) return false;
+  return event.sender.id === win.webContents.id;
+}
+
 // ---- which window is in front ----
 
 /**
@@ -2425,8 +2681,16 @@ async function shutdownAndQuit(): Promise<void> {
     // so a tool call cannot start a launch halfway through shutdown.
     await mcpServer?.stop();
     stopUpdateWatcher();
-    // No dialog can outlive the window it was about to answer for.
+    // No dialog can outlive the window it was about to answer for. An approval
+    // question left open would keep its MCP call waiting past `mcpServer.stop()`,
+    // so both are answered here — with a refusal, which is what a closed window
+    // means.
     httpAuth.abandonAll();
+    approvals.abandonAll();
+    if (approvalWindow && !approvalWindow.isDestroyed()) approvalWindow.destroy();
+    approvalWindow = null;
+    approvalReady = false;
+    approvalPayload = null;
     tray?.destroy();
     tray = null;
     stopActiveWatcher();
@@ -2905,32 +3169,61 @@ function registerIpc(workspace: WorkspaceService): void {
     return changed;
   });
 
-  handle(IPC.instanceLaunch, async (identityId: string, pathOverride?: string) => {
-    const result = await workspace.launchIdentity(String(identityId), pathOverride);
+  handle(IPC.instanceLaunch, async (identityId: string, pathOverride?: string, engineId?: string) => {
+    const result = await workspace.launchIdentity(
+      String(identityId),
+      pathOverride,
+      typeof engineId === "string" && engineId ? engineId : undefined,
+    );
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceLaunchBatch, async (identityIds: string[]) => {
-    const result = await workspace.launchIdentities(identityIds.map(String));
+  handle(IPC.instanceLaunchBatch, async (identityIds: string[], engineId?: string) => {
+    const result = await workspace.launchIdentities(
+      identityIds.map(String),
+      typeof engineId === "string" && engineId ? engineId : undefined,
+    );
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceLaunchView, async (viewId: string) => {
-    const result = await workspace.launchView(String(viewId));
+  handle(IPC.instanceLaunchView, async (viewId: string, engineId?: string) => {
+    const result = await workspace.launchView(
+      String(viewId),
+      typeof engineId === "string" && engineId ? engineId : undefined,
+    );
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceLaunchViewMember, async (viewId: string, identityId: string) => {
-    const result = await workspace.launchViewMember(String(viewId), String(identityId));
+  handle(
+    IPC.instanceLaunchViewMember,
+    async (viewId: string, identityId: string, engineId?: string) => {
+      const result = await workspace.launchViewMember(
+        String(viewId),
+        String(identityId),
+        typeof engineId === "string" && engineId ? engineId : undefined,
+      );
+      broadcastWorkspace();
+      return result;
+    },
+  );
+
+  handle(IPC.instanceLaunchProfile, async (profileId: string, options?: { url?: string; engineId?: string }) => {
+    const result = await workspace.launchProfile(String(profileId), {
+      ...(options?.url ? { url: String(options.url) } : {}),
+      ...(options?.engineId ? { engineId: String(options.engineId) } : {}),
+    });
     broadcastWorkspace();
     return result;
   });
 
-  handle(IPC.instanceClean, async (siteId?: string) => {
-    const result = await workspace.launchCleanSession(siteId ? String(siteId) : undefined);
+  handle(IPC.instanceClean, async (siteId?: string, engineId?: string) => {
+    const result = await workspace.launchCleanSession(
+      siteId ? String(siteId) : undefined,
+      typeof engineId === "string" && engineId ? engineId : undefined,
+    );
     broadcastWorkspace();
     return result;
   });
@@ -3623,6 +3916,36 @@ function registerIpc(workspace: WorkspaceService): void {
     return broadcastMessages();
   });
 
+  handle(IPC.aiActivityList, () => aiActivityStore().list());
+  handle(IPC.aiActivityClear, () => {
+    aiActivityStore().clear();
+    return broadcastAiActivity();
+  });
+  /*
+   * The two answer channels read `event`, so they are registered directly rather
+   * than through `handle()`: every window shares one preload, and a decision in a
+   * window the user is not looking at must not be able to lift a permission. The
+   * check is the only authority question here, and it needs a sender.
+   */
+  ipcMain.handle(IPC.approvalRespond, (event, id: string, decision: AiApprovalDecision) => {
+    if (!approvalSender(event)) return;
+    void answerApproval(String(id), decision);
+  });
+  ipcMain.handle(IPC.approvalCancel, (event, id: string) => {
+    if (!approvalSender(event)) return;
+    void cancelApproval(String(id));
+  });
+  /*
+   * The card asks what to show when it mounts instead of relying on the push
+   * alone. The push is sent on `did-finish-load`, which can land before Vue has
+   * subscribed — the very first question of a run would then be invisible while
+   * the AI sat waiting for an answer nobody could see.
+   */
+  ipcMain.handle(IPC.approvalCurrent, (event) => {
+    if (!approvalSender(event)) return null;
+    return approvalPayload;
+  });
+
   handle(IPC.embeddedClose, (tabId: string) => ensureEmbeddedBrowser().closeTab(String(tabId)));
   /**
    * Activating a page means "show me this page".
@@ -4053,8 +4376,34 @@ if (!gotLock) {
       // A development build gets the next port, so it can run beside the
       // installed app instead of fighting it for one socket.
       ...(isolatedDev ? { defaultPort: DEV_DEFAULT_PORT } : {}),
+      // The refusal that can be lifted: an origin the user never decided about
+      // becomes a question in the bottom-right corner instead of a dead end.
+      // Absent in a headless run, where there is nobody to ask — the gate then
+      // refuses with its own message rather than claiming a person said no.
+      ...(approvalInteractive() ? { approve: requestApproval } : {}),
       // The log is the record; this is the live signal the dock shows.
-      onPageAction: (event) => {
+      onPageAction: (event) => {        /*
+         * Recorded before anything about the window is checked: the AI keeps
+         * working while the app sits in the tray, and a history that only
+         * recorded what happened on screen would be missing exactly the calls
+         * nobody was watching.
+         */
+        aiActivityStore().add({
+          tool: event.tool,
+          origin: event.origin,
+          ...(event.siteId ? { siteId: event.siteId } : {}),
+          ...(event.identityId ? { identityId: event.identityId } : {}),
+          ...(event.profileId ? { profileId: event.profileId } : {}),
+          ...(event.clean ? { clean: true } : {}),
+          tabId: event.tabId,
+          ...(event.tabTitle ? { tabTitle: event.tabTitle } : {}),
+          ...(event.summary ? { summary: event.summary } : {}),
+          ok: event.ok,
+          originAuthorized: event.originAuthorized,
+          ...(event.approval ? { approval: event.approval } : {}),
+          ...(event.error ? { error: event.error } : {}),
+        });
+        broadcastAiActivity();
         if (!mainWindow || mainWindow.isDestroyed()) return;
         aiActionsByTab.set(event.tabId, (aiActionsByTab.get(event.tabId) ?? 0) + 1);
         mainWindow.webContents.send(IPC.aiPageAction, {
@@ -4065,25 +4414,6 @@ if (!gotLock) {
           originAuthorized: event.originAuthorized,
           count: aiActionsByTab.get(event.tabId) ?? 0,
         });
-        /*
-         * History keeps the tool calls, not every page event: one row per call
-         * is what answers "what did the AI do to this page", and the dock's live
-         * counter covers "how much is it doing right now". Failures are kept at
-         * warning tone so they stand out when scrolling back.
-         */
-        messageStore().add(
-          {
-            kind: "ai",
-            tone: event.ok ? "info" : "warning",
-            titleKey: event.ok ? "app.messagesAiAction" : "app.messagesAiActionFailed",
-            titleParams: { tool: event.tool, site: event.origin },
-            action: { type: "tab", tabId: event.tabId },
-          },
-          // Repeated clicks on one element are one intent; five minutes of the
-          // same tool on the same page collapses into the newest row.
-          60_000,
-        );
-        broadcastMessages();
       },
       embedded: {
         state: () => ensureEmbeddedBrowser().state(),
@@ -4132,6 +4462,8 @@ if (!gotLock) {
         // Facts for the per-origin AI gate. Passed as a function so the MCP
         // server never holds a tab reference of its own.
         aiPageContext: (tabId) => ensureEmbeddedBrowser().aiPageContext(tabId),
+        // The log's site/profile context, which the gate must not depend on.
+        actionFacts: (tabId) => ensureEmbeddedBrowser().actionFacts(tabId),
         closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),
@@ -4141,8 +4473,14 @@ if (!gotLock) {
         fillForm: (tabId, fields) => ensureEmbeddedBrowser().fillForm(tabId, fields),
         runFlow: (tabId, steps, options) =>
           ensureEmbeddedBrowser().runFlow(tabId, steps, options),
-        evaluate: (tabId, expression) => ensureEmbeddedBrowser().evaluate(tabId, expression),
+        evaluate: (tabId, expression, options) =>
+          ensureEmbeddedBrowser().evaluate(tabId, expression, options),
         screenshot: (tabId, options) => ensureEmbeddedBrowser().screenshot(tabId, options),
+        addInitScript: (tabId, source) => ensureEmbeddedBrowser().addInitScript(tabId, source),
+        listInitScripts: (tabId) => ensureEmbeddedBrowser().listInitScripts(tabId),
+        removeInitScript: (tabId, scriptId) =>
+          ensureEmbeddedBrowser().removeInitScript(tabId, scriptId),
+        cancelScript: (tabId) => ensureEmbeddedBrowser().cancelScript(tabId),
         visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
         readPageActivity: (tabId) => ensureEmbeddedBrowser().readPageActivity(tabId),
         measurePerformance: (tabId, options) =>

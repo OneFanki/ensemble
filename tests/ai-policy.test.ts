@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
-import { aiNavigationAllowed, aiOriginOf, aiWriteDenial, normalizeAiOrigin } from "@shared/ai-policy";
+import {
+  aiGateState,
+  aiNavigationAllowed,
+  aiOriginOf,
+  aiWriteDenial,
+  normalizeAiOrigin,
+} from "@shared/ai-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EmbeddedSurface } from "../src/main/mcp/server";
 import { McpServer, loadMcpSettings, saveMcpSettings } from "../src/main/mcp/server";
@@ -246,8 +252,7 @@ describe("origin policy", () => {
       .toBeUndefined();
   });
 
-  it("lets the two absolute modes win over the list entirely", () => {
-    const listed = ["https://ops.example.com"];
+  it("lets the two absolute modes win over the list entirely", () => {    const listed = ["https://ops.example.com"];
     // Allow-all: even an address the user explicitly blocked is operable,
     // because that is what "全部允许" says. The list survives for when they
     // switch back — see the update test below.
@@ -283,6 +288,61 @@ describe("origin policy", () => {
     expect(
       aiWriteDenial({ clean: true, origin: "https://admin.example.com" }, policy),
     ).toBeUndefined();
+  });
+});
+
+describe("the three states an interface draws", () => {
+  // The panel and its badge read this instead of re-deriving the decision from
+  // `aiMode` and `aiOrigins`, which is what the old toolbar shield did — and it
+  // was already one edit away from disagreeing with the server.
+  const listed = ["https://ops.example.com"];
+
+  it("reports an allowed page as open", () => {
+    expect(
+      aiGateState(
+        { origin: "https://ops.example.com" },
+        { dailyMode: "allowlist", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBe("open");
+    // Account pages and clean sessions are driveable by design, so they read as
+    // open under every mode.
+    expect(
+      aiGateState(
+        { identityId: "id-1", origin: "https://ops.example.com" },
+        { dailyMode: "deny-all", listedOrigins: [], knownUrls: [] },
+      ),
+    ).toBe("open");
+  });
+
+  it("tells an undecided address apart from a refused one", () => {
+    // This is the distinction the window depends on: only "unlisted" is worth
+    // asking about, because the other two are answers the user already gave.
+    expect(
+      aiGateState(
+        { origin: "https://new.example.com" },
+        { dailyMode: "allowlist", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBe("unlisted");
+    expect(
+      aiGateState(
+        { origin: "https://ops.example.com" },
+        { dailyMode: "denylist", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBe("blocked");
+    expect(
+      aiGateState(
+        { origin: "https://ops.example.com" },
+        { dailyMode: "deny-all", listedOrigins: listed, knownUrls: [] },
+      ),
+    ).toBe("blocked");
+  });
+
+  it("never reports a page it cannot name as open", () => {
+    // A non-http page has no origin to decide about; calling it open would put a
+    // green badge on something the tool gate refuses.
+    expect(
+      aiGateState({ origin: "" }, { dailyMode: "allow-all", listedOrigins: [], knownUrls: [] }),
+    ).toBe("unlisted");
   });
 });
 

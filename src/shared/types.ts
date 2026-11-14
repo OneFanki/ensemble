@@ -321,6 +321,14 @@ export interface RunningInstance {
   slotIndex?: number;
   startedAt: string;
   clean?: boolean;
+  /**
+   * Profile a profile-window was opened in, when there is one.
+   *
+   * Only external launches by profile set this. It exists so the run dock can
+   * say which jar a window belongs to — two profile windows of the same browser
+   * are otherwise indistinguishable rows.
+   */
+  profileId?: string;
 }
 
 /**
@@ -479,6 +487,7 @@ export interface AppSettings {
   lastView:
     | "browser"
     | "messages"
+    | "ai"
     | "sites"
     | "identities"
     | "views"
@@ -544,25 +553,19 @@ export interface AppSettings {
    */
   layoutExplicit: boolean;
   /**
-   * Where "launch" sends a view or identity.
-   *
-   * One switch in the title bar decides it: launching never asks twice, and the
-   * management pages do not each need their own pair of buttons. "embedded" is
-   * the default because that surface is the reason the app exists; "external"
-   * is the fidelity check against the real browser.
-   */
-  launchTarget: "embedded" | "external";
-  /**
-   * Browser used for external launches, by engine id.
+   * Browser used when an external launch does not name one.
    *
    * Global on purpose. It used to live on each site, which meant the same
    * "launch externally" action routed differently depending on which site the
-   * account belonged to — while the title bar showed one browser. A single
-   * setting matches what that switch claims to do; an identity can still
-   * override it when one account genuinely needs another browser.
+   * account belonged to. An identity can still override it when one account
+   * genuinely needs another browser.
    *
    * Unset means "pick one": the first engine that supports CDP, else the first
    * engine found. That keeps a fresh install working with no configuration.
+   *
+   * This is only a *default*. Every launch point offers its own browser list, so
+   * the choice is made at the moment of launching rather than by flipping a mode
+   * first — see `surface` on the launch calls.
    */
   defaultEngineId?: string;
   /** Fill saved credentials as soon as a launched window reaches a login form. */
@@ -874,7 +877,6 @@ export type SettingsPatch = Partial<
     | "focusLabelEnabled"
     | "launchIntervalMs"
     | "layout"
-    | "launchTarget"
     | "defaultEngineId"
     | "autoFillOnLaunch"
     | "autoSubmitLogin"
@@ -947,6 +949,14 @@ export interface McpStatus {
   allowDelete: boolean;
   aiMode: "allowlist" | "denylist" | "allow-all" | "deny-all";
   aiOrigins: string[];
+  /**
+   * Origins the user allowed "for this session" in the authorization window.
+   *
+   * Kept in memory only: the answer was given about this run of the app, and
+   * writing it to disk would silently turn it into the permanent answer the user
+   * did not choose.
+   */
+  aiSessionOrigins: string[];
   toolCount: number;
   /** Last bind error, if the port could not be used. */
   error?: string;
@@ -967,6 +977,17 @@ export interface AiPageAction {
   originAuthorized: boolean;
   /** Actions on this origin since the app started. */
   count: number;
+  /** Workspace ids the page belonged to, so the log can group by site. */
+  siteId?: string;
+  identityId?: string;
+  profileId?: string;
+  clean?: boolean;
+  tabTitle?: string;
+  /** What the call did, in one redacted line; see {@link AiActivityRecord}. */
+  summary?: string;
+  /** How an authorization request ended, when one was shown. */
+  approval?: AiApprovalOutcome;
+  error?: string;
 }
 
 export interface McpPatch {
@@ -1022,8 +1043,12 @@ export type DownloadAction = "cancel" | "open" | "reveal" | "remove" | "clear";
  *
  * Separate from `tone`: tone is how loud the row is, kind is which producer it
  * belongs to and therefore what the row can offer to do about it.
+ *
+ * AI activity used to be a fourth kind. It is not a message — nobody needs to be
+ * told the assistant clicked something — so it has its own store and its own
+ * list; see {@link AiActivityRecord}.
  */
-export type MessageKind = "login-capture" | "account" | "ai" | "app";
+export type MessageKind = "login-capture" | "account" | "app";
 
 /**
  * Something a message row can do.
@@ -1067,4 +1092,92 @@ export interface AddMessageInput {
   titleParams?: Record<string, string>;
   detail?: string;
   action?: MessageAction;
+}
+
+/**
+ * How a page's AI permission came out.
+ *
+ * `unlisted` is not the same as `blocked`: one is an address the user never
+ * decided about (and can be asked about), the other is one they decided against.
+ * The gate treats them differently, so the interface has to be able to tell them
+ * apart rather than showing both as a grey shield.
+ */
+export type AiGateState = "open" | "blocked" | "unlisted";
+
+/** What the user answered in the authorization window. */
+export type AiApprovalDecision = "allow-once" | "allow-session" | "allow-always" | "deny";
+
+/** How an authorization request ended, as the log records it. */
+export type AiApprovalOutcome = AiApprovalDecision | "timeout";
+
+/**
+ * One AI call that touched a page.
+ *
+ * A log entry, not a notification: there is no read flag and no unread count,
+ * because nothing here is waiting to be acknowledged. The structured fields are
+ * what let the list group by site and say which profile or account was involved
+ * — the old message row stored the origin as a display string and redacted the
+ * rest.
+ */
+export interface AiActivityRecord {
+  id: string;
+  /** ISO timestamp; the list is ordered by it, newest first. */
+  at: string;
+  tool: string;
+  /** Origins the permission is granted in. */
+  origin: string;
+  siteId?: string;
+  identityId?: string;
+  profileId?: string;
+  /** True when the page belonged to a throwaway session. */
+  clean?: boolean;
+  tabId: string;
+  tabTitle?: string;
+  /**
+   * One plain-language line naming what the call did ("点击「投放」").
+   *
+   * Stored rather than derived: a tool name alone does not say what was clicked,
+   * and the arguments are not kept — this is the only surviving "what happened",
+   * and it is built by the same redacting formatter the authorization card uses.
+   */
+  summary?: string;
+  ok: boolean;
+  /** False when the call was refused by the page's origin gate. */
+  originAuthorized: boolean;
+  /** Present when a window asked the user, or when the call was refused. */
+  approval?: AiApprovalOutcome;
+  error?: string;
+  /** Calls folded into this row by the merge window. */
+  count: number;
+}
+
+export interface AiActivityInput {
+  tool: string;
+  origin: string;
+  siteId?: string;
+  identityId?: string;
+  profileId?: string;
+  clean?: boolean;
+  tabId: string;
+  tabTitle?: string;
+  summary?: string;
+  ok: boolean;
+  originAuthorized: boolean;
+  approval?: AiApprovalOutcome;
+  error?: string;
+}
+
+/**
+ * The log split by the place it happened.
+ *
+ * `key` is stable across renders and is what collapse state is keyed by; a site
+ * the workspace knows keeps that identity across renames, while a bare origin
+ * falls back to the address.
+ */
+export interface AiActivitySiteGroup {
+  key: string;
+  siteId?: string;
+  origin: string;
+  /** Newest first, like the list they came from. */
+  records: AiActivityRecord[];
 }

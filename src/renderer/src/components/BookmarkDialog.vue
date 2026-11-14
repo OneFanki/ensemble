@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n";
 import FolderTreePicker from "./FolderTreePicker.vue";
 import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * Creates or edits one bookmark.
@@ -60,27 +62,28 @@ function submit(): void {
     @close="emit('close')"
   >
     <div class="form">
-      <label class="field">
-        <span class="label">{{ $t("app.bookmarkNameLabel") }}</span>
-        <input
+      <FormField :label="$t('app.bookmarkNameLabel')">
+        <TextField
           v-model="form.name"
-          class="input"
           :placeholder="$t('app.bookmarkNamePlaceholder')"
           maxlength="120"
         />
-      </label>
-      <label class="field">
-        <span class="label">{{ $t("app.bookmarkUrlLabel") }}</span>
-        <input v-model="form.url" class="input mono" placeholder="https://example.com" spellcheck="false" />
-      </label>
-      <div class="field">
-        <span class="label">{{ $t("app.bookmarkFolderLabel") }}</span>
+      </FormField>
+      <FormField :label="$t('app.bookmarkUrlLabel')">
+        <TextField
+          v-model="form.url"
+          mono
+          placeholder="https://example.com"
+          spellcheck="false"
+        />
+      </FormField>
+      <FormField as="div" :label="$t('app.bookmarkFolderLabel')">
         <FolderTreePicker
           v-model="form.folderId"
           :folders="folders"
           :root-label="$t('app.bookmarkFolderNone')"
         />
-      </div>
+      </FormField>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
     <template #footer>
@@ -98,26 +101,9 @@ function submit(): void {
   gap: 13px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
 .error {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-.spacer {
-  flex: 1;
 }
 </style>

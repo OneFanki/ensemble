@@ -10,6 +10,7 @@ import {
 import { DEFAULT_NEW_TAB_BACKDROP, newTabBackdrop } from "@shared/newtab";
 import type {
   AddMessageInput,
+  AiActivityRecord,
   AppMessageView,
   AppSettings,
   AuthBatchResult,
@@ -82,6 +83,13 @@ export const useWorkspaceStore = defineStore("workspace", () => {
    */
   const messages = ref<AppMessageView[]>([]);
   const unreadMessages = computed(() => messages.value.filter((item) => !item.read).length);
+  /**
+   * What AI clients did, newest first.
+   *
+   * A log rather than a second inbox: there is no unread count, and nothing here
+   * feeds a badge. The toolbar panel and the console page read the same list.
+   */
+  const aiActivity = ref<AiActivityRecord[]>([]);
   /** Most recently used site; only a default for new drafts, not a global scope. */
   const recentSiteId = ref<string | null>(null);
   /**
@@ -145,6 +153,10 @@ export const useWorkspaceStore = defineStore("workspace", () => {
         messages.value = list;
       });
       messages.value = await window.ensemble.listMessages();
+      window.ensemble.onAiActivityChanged((list) => {
+        aiActivity.value = list;
+      });
+      aiActivity.value = await window.ensemble.listAiActivity();
       window.ensemble.onMcpChanged((status) => {
         mcp.value = status;
       });
@@ -189,6 +201,14 @@ export const useWorkspaceStore = defineStore("workspace", () => {
 
   async function addMessage(input: AddMessageInput): Promise<void> {
     messages.value = await window.ensemble.addMessage(input);
+  }
+
+  async function refreshAiActivity(): Promise<void> {
+    aiActivity.value = await window.ensemble.listAiActivity();
+  }
+
+  async function clearAiActivity(): Promise<void> {
+    aiActivity.value = await window.ensemble.clearAiActivity();
   }
 
   /** Forgets a capture without saving it; the secret is dropped in the main process. */
@@ -377,9 +397,15 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     );
   });
 
-  /** Backdrop of the new-tab surface; a stale id falls back, it never throws. */
-  const newTabBackdropStyle = computed(
-    () => newTabBackdrop(settings.value.newTabBackground || DEFAULT_NEW_TAB_BACKDROP).css,
+  /**
+   * Backdrop of the new-tab surface; a stale id falls back, it never throws.
+   *
+   * The id only — the paint is the stylesheet's job. A preset has to look
+   * different on light than on dark, and CSS is the only place that can answer
+   * that without a stale read of `data-theme`.
+   */
+  const newTabBackdropId = computed(
+    () => newTabBackdrop(settings.value.newTabBackground || DEFAULT_NEW_TAB_BACKDROP).id,
   );
 
   /**
@@ -791,61 +817,77 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return run("scan", () => window.ensemble.removeManualEngine(exePath));
   }
 
-  async function launchIdentity(identityId: string, pathOverride?: string) {
-    return run("launch", () => window.ensemble.launchIdentity(identityId, pathOverride));
+  /*
+   * External launches.
+   *
+   * Every one takes the browser the user picked in that launch point's menu;
+   * omitting it means the workspace default. There is no global mode any more:
+   * the choice is made at the moment of launching, which is the only place it
+   * means anything.
+   */
+  async function launchIdentity(identityId: string, pathOverride?: string, engineId?: string) {
+    return run("launch", () => window.ensemble.launchIdentity(identityId, pathOverride, engineId));
   }
 
   /** Opens several identities at once, tiled with the default layout. */
-  async function launchIdentities(identityIds: string[]) {
+  async function launchIdentities(identityIds: string[], engineId?: string) {
     return run("launch", async () => {
-      const result = await window.ensemble.launchIdentities(identityIds);
+      const result = await window.ensemble.launchIdentities(identityIds, engineId);
       notify(tr("app.toastBatchStarted"), "success");
       return result;
     });
   }
 
-  async function launchView(viewId: string) {
-    return run("launch", () => window.ensemble.launchView(viewId), tr("app.toastViewStarted"));
+  async function launchView(viewId: string, engineId?: string) {
+    return run(
+      "launch",
+      () => window.ensemble.launchView(viewId, engineId),
+      tr("app.toastViewStarted"),
+    );
   }
 
-  async function launchViewMember(viewId: string, identityId: string) {
-    return run("launch", () => window.ensemble.launchViewMember(viewId, identityId));
+  async function launchViewMember(viewId: string, identityId: string, engineId?: string) {
+    return run("launch", () => window.ensemble.launchViewMember(viewId, identityId, engineId));
+  }
+
+  /**
+   * Opens an external browser window in a named profile.
+   *
+   * The external counterpart of the built-in surface's profile tab: same jar by
+   * name, its own directory on this surface. The two surfaces have never shared
+   * cookie storage (different Chromium builds, different roots), so "work
+   * profile" means one jar on each side — never a silently empty one.
+   */
+  async function launchProfile(profileId: string, options?: { url?: string; engineId?: string }) {
+    return run("launch", () => window.ensemble.launchProfile(profileId, options));
   }
 
   /**
    * Pass an site id for a clean window on that login page; omit it for a
    * blank tab that belongs to no site.
    *
-   * Always the external surface: this is the service's throwaway browser window.
-   * Callers that should follow the title bar's launch target use
-   * `openCleanSession` instead.
+   * Always an external browser window. `openCleanSession` is the built-in equivalent.
    */
-  async function launchCleanSession(siteId?: string) {
+  async function launchCleanSession(siteId?: string, engineId?: string) {
     return run("launch", async () => {
-      const result = await window.ensemble.launchCleanSession(siteId);
+      const result = await window.ensemble.launchCleanSession(siteId, engineId);
       notify(tr("app.toastCleanOpened"), "success");
       return result;
     });
   }
 
   /**
-   * Opens a clean session on whichever surface the title bar points at.
+   * Opens a clean session on the built-in surface.
    *
-   * A clean session is a session, not a window type: "throwaway, signed out"
-   * applies equally to a built-in page and to a separate browser window. Routing
-   * it through the global switch is the point — the old per-page buttons always
-   * launched the external browser, even with the switch set to the built-in
-   * surface, so clicking "blank clean session" opened Edge out of nowhere.
+   * A throwaway page, not a window: the app-menu entry is the one place that
+   * answers "give me somewhere to poke at a site without touching my logins",
+   * and the built-in surface is where that happens silently.
    */
   async function openCleanSession(): Promise<void> {
-    if (settings.value.launchTarget === "embedded") {
-      // A loose tab, so it does not silently join whatever view is on stage:
-      // a throwaway page is not part of the comparison being arranged there.
-      await window.ensemble.openEmbeddedTab({ viewId: null, clean: true });
-      notify(tr("app.toastCleanOpened"), "success");
-      return;
-    }
-    await launchCleanSession();
+    // A loose tab, so it does not silently join whatever view is on stage: a
+    // throwaway page is not part of the comparison being arranged there.
+    await window.ensemble.openEmbeddedTab({ viewId: null, clean: true });
+    notify(tr("app.toastCleanOpened"), "success");
   }
 
   /** Opens a clean session on the most recently used site's login page. */
@@ -989,31 +1031,41 @@ export const useWorkspaceStore = defineStore("workspace", () => {
    * All four return the settings object, and the caller patches `snapshot` from
    * it rather than waiting for the broadcast: the profile page renders the new
    * row immediately, and a broadcast that arrives a frame later would otherwise
-   * make the list flicker back to its old contents.
+   * make the list flicker back to its old contents. That return value is also
+   * how a caller tells success from failure — `run` answers `undefined` when the
+   * write threw — so the callback has to hand the settings back.
    */
   async function createProfile(name: string) {
     return run("profile", async () => {
-      applySettings(await window.ensemble.createProfile(name));
+      const next = await window.ensemble.createProfile(name);
+      applySettings(next);
       notify(tr("app.toastProfileCreated"));
+      return next;
     });
   }
 
   async function renameProfile(id: string, name: string) {
     return run("profile", async () => {
-      applySettings(await window.ensemble.renameProfile(id, name));
+      const next = await window.ensemble.renameProfile(id, name);
+      applySettings(next);
+      return next;
     });
   }
 
   async function deleteProfile(id: string) {
     return run("profile", async () => {
-      applySettings(await window.ensemble.deleteProfile(id));
+      const next = await window.ensemble.deleteProfile(id);
+      applySettings(next);
       notify(tr("app.toastProfileDeleted"));
+      return next;
     });
   }
 
   async function setDefaultProfile(id: string) {
     return run("profile", async () => {
-      applySettings(await window.ensemble.setDefaultProfile(id));
+      const next = await window.ensemble.setDefaultProfile(id);
+      applySettings(next);
+      return next;
     });
   }
 
@@ -1072,6 +1124,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     removeMessage,
     clearMessages,
     addMessage,
+    aiActivity,
+    refreshAiActivity,
+    clearAiActivity,
     dismissLoginCapture,
     clearLoginCapture,
     mcp,
@@ -1097,7 +1152,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     layoutPresets,
     searchEngines,
     searchEngine,
-    newTabBackdropStyle,
+    newTabBackdropId,
     api,
     init,
     notify,
@@ -1153,6 +1208,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     launchView,
     launchViewMember,
     launchCleanSession,
+    launchProfile,
     openCleanSession,
     stopInstance,
     stopAll,

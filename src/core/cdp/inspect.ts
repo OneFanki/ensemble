@@ -107,6 +107,21 @@ export interface WaitResult {
   ok: boolean;
   waitedMs: number;
   timedOut?: boolean;
+  /**
+   * Which deadline ran out, when one did.
+   *
+   * `"page"` means the in-page poll loop reached its own deadline and reports
+   * the real reason in `reason` (`url-mismatch`, `text-absent`, …) — the
+   * condition genuinely did not hold. `"bridge"` means the page never answered
+   * at all before this side gave up, which is a different diagnosis: the page is
+   * throttled, frozen or stuck, and retrying with the same condition will
+   * probably behave the same way.
+   *
+   * The two were indistinguishable before — both arrived as `evaluate-timeout`,
+   * and a caller could not tell "the toast never appeared" from "the tab stopped
+   * responding".
+   */
+  timedOutAt?: "page" | "bridge";
   reason?: string;
   /** What was matched, for the caller's log. */
   matched?: string;
@@ -711,7 +726,7 @@ export function buildWaitExpression(input: {
       }
       await wait(${interval});
     }
-    return { ok: false, waitedMs: Date.now() - started, timedOut: true, reason: lastReason };
+    return { ok: false, waitedMs: Date.now() - started, timedOut: true, timedOutAt: "page", reason: lastReason };
   })()`;
 }
 

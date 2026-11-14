@@ -103,6 +103,7 @@ import { resolveLoginFields } from "./login-fields";
 import {
   CLEAN_PROFILE_PREFIX,
   CLEAN_SESSION_SEGMENT,
+  PROFILES_SESSION_SEGMENT,
   isCleanProfileDir,
   removeCleanProfiles,
 } from "./processes/clean-profiles";
@@ -2041,11 +2042,20 @@ export class WorkspaceService {
     return this.settingsSnapshot();
   }
 
+  /**
+   * Renames a profile.
+   *
+   * The built-ins are refused: "默认档案" is the name every other piece of the
+   * interface refers to that jar by, and a renamed built-in would leave the
+   * chooser's own wording disagreeing with the list. The clean session is not a
+   * profile anyone manages either — it is the fixed throwaway.
+   */
   renameProfile(id: string, name: string): AppSettings {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("档案名称不能为空");
     const target = this.settings.profiles.find((profile) => profile.id === id);
     if (!target) throw new Error("档案不存在");
+    if (target.builtin) throw new Error("内置档案不能改名");
     this.settings = {
       ...this.settings,
       profiles: this.settings.profiles.map((profile) =>
@@ -2253,13 +2263,21 @@ export class WorkspaceService {
 
   // ---------- launching ----------
 
-  private resolveEngine(identity: Identity): Engine {
-    // An identity can still name its own browser — that is the escape hatch for
-    // one account that genuinely needs a different version. Otherwise the single
-    // global default decides, which is what the title bar's switch promises.
-    const engineId = identity.engineId ?? this.settings.defaultEngineId;
+  /**
+   * The browser a launch uses.
+   *
+   * Precedence, widest to narrowest: the browser the caller picked at the
+   * launch point, the account's own override (the escape hatch for one account
+   * that genuinely needs another version), then the workspace default.
+   *
+   * The explicit choice comes first because it is the most specific statement of
+   * intent — a user who just picked "Firefox" in a launch menu means it, even if
+   * the account has Edge pinned to it.
+   */
+  private resolveEngine(identity: Identity | undefined, engineId?: string): Engine {
+    const wanted = engineId ?? identity?.engineId ?? this.settings.defaultEngineId;
     const engine =
-      this.engines.find((item) => item.id === engineId) ?? this.defaultEngine();
+      this.engines.find((item) => item.id === wanted) ?? this.defaultEngine();
     if (!engine) throw new Error(t("error.noEngine"));
     if (engine.status === "blocked")
       throw new Error(engine.blockReason ?? t("error.engineBlocked"));
@@ -2415,13 +2433,24 @@ export class WorkspaceService {
     return true;
   }
 
-  async launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult> {
+  /**
+   * Opens an account in a real browser window.
+   *
+   * `engineId` is the browser the user picked at the launch point. Omitting it
+   * means "the workspace default", which is what every caller that predates the
+   * launch menus wants.
+   */
+  async launchIdentity(
+    identityId: string,
+    pathOverride?: string,
+    engineId?: string,
+  ): Promise<LaunchResult> {
     // A second click while the first window is still connecting must not start a
     // second browser: Chromium would forward its URL into the first window as an
     // extra tab. Both callers share the one launch and get the same instance.
     const pending = this.pendingIdentityLaunches.get(identityId);
     if (pending) return pending;
-    const job = this.launchIdentityNow(identityId, pathOverride);
+    const job = this.launchIdentityNow(identityId, pathOverride, engineId);
     this.pendingIdentityLaunches.set(identityId, job);
     try {
       return await job;
@@ -2435,12 +2464,13 @@ export class WorkspaceService {
   private async launchIdentityNow(
     identityId: string,
     pathOverride?: string,
+    engineId?: string,
   ): Promise<LaunchResult> {
     const identity = this.data.identities.find((item) => item.id === identityId);
     if (!identity) throw new Error(t("error.identityMissing"));
     const site = this.data.sites.find((item) => item.id === identity.siteId);
     if (!site) throw new Error(t("error.siteMissing"));
-    const engine = this.resolveEngine(identity);
+    const engine = this.resolveEngine(identity, engineId);
 
     const running = [...this.liveInstances.values()].find(
       (instance) => instance.identityId === identityId,
@@ -2490,7 +2520,7 @@ export class WorkspaceService {
     return { instance: outcome.instance, identities: [identity] };
   }
 
-  async launchView(viewId: string): Promise<LaunchResult> {
+  async launchView(viewId: string, engineId?: string): Promise<LaunchResult> {
     const view = this.data.views.find((item) => item.id === viewId);
     if (!view) throw new Error(t("error.viewMissing"));
 
@@ -2518,6 +2548,7 @@ export class WorkspaceService {
       this.presetFor(view.layoutId),
       view.slotAssignments,
       (identity) => view.paths[identity.id],
+      engineId,
     );
     // Remember the view for "restore on next start". Written only after every
     // window opened, so a half-failed launch never becomes the restore target.
@@ -2548,7 +2579,7 @@ export class WorkspaceService {
    * view, and nothing is remembered for restore-on-start. Starting them one by
    * one instead means every new window covers the cards you are still clicking.
    */
-  async launchIdentities(identityIds: string[]): Promise<LaunchResult> {
+  async launchIdentities(identityIds: string[], engineId?: string): Promise<LaunchResult> {
     const wanted = new Set(identityIds.map(String));
     const members = this.data.identities.filter((identity) => wanted.has(identity.id));
     if (members.length === 0) throw new Error(t("error.viewMembers"));
@@ -2566,6 +2597,7 @@ export class WorkspaceService {
       this.presetFor(this.settings.layout),
       {},
       (identity) => identity.startPath,
+      engineId,
     );
   }
 
@@ -2582,6 +2614,7 @@ export class WorkspaceService {
     preset: LayoutPreset,
     assignments: Record<string, number>,
     pathFor: (identity: Identity) => string | undefined,
+    engineId?: string,
   ): Promise<LaunchResult> {
     const area = this.workArea();
     const launched: RunningInstance[] = [];
@@ -2607,7 +2640,7 @@ export class WorkspaceService {
         // Each member opens against its own site, so a cross-site view gets the
         // right engine, base URL and default password per window.
         const site = siteFor(identity);
-        const engine = this.resolveEngine(identity);
+        const engine = this.resolveEngine(identity, engineId);
         const startUrl = joinUrl(
           site.baseUrl,
           pathFor(identity) ?? identity.startPath ?? site.loginPath ?? "/",
@@ -2700,7 +2733,11 @@ export class WorkspaceService {
    * recovery was relaunching the whole view, which also restarted windows that
    * were still alive.
    */
-  async launchViewMember(viewId: string, identityId: string): Promise<LaunchResult> {
+  async launchViewMember(
+    viewId: string,
+    identityId: string,
+    engineId?: string,
+  ): Promise<LaunchResult> {
     const view = this.data.views.find((item) => item.id === viewId);
     if (!view) throw new Error(t("error.viewMissing"));
     const identity = this.data.identities.find(
@@ -2734,7 +2771,7 @@ export class WorkspaceService {
       fallback,
     );
 
-    const engine = this.resolveEngine(identity);
+    const engine = this.resolveEngine(identity, engineId);
     const startUrl = joinUrl(
       site.baseUrl,
       view.paths[identity.id] ?? identity.startPath ?? site.loginPath ?? "/",
@@ -2767,13 +2804,12 @@ export class WorkspaceService {
    * login page; without one it opens a blank tab, for the cases where all the
    * user wants is a throwaway browser that belongs to no site at all.
    */
-  async launchCleanSession(siteId?: string): Promise<LaunchResult> {
+  async launchCleanSession(siteId?: string, engineId?: string): Promise<LaunchResult> {
     // Reuse of a directory the startup sweep is about to delete must not happen.
     await this.maintenanceDone;
     const site = siteId ? this.data.sites.find((item) => item.id === siteId) : undefined;
     if (siteId && !site) throw new Error(t("error.siteMissing"));
-    const engine = this.defaultEngine();
-    if (!engine) throw new Error(t("error.noEngine"));
+    const engine = this.resolveEngine(undefined, engineId);
 
     const area = this.workArea();
     const preset = this.presetFor(this.settings.layout);
@@ -2802,6 +2838,69 @@ export class WorkspaceService {
     });
     outcome.instance.layoutId = preset.id;
     outcome.instance.slotIndex = slotIndex;
+
+    this.liveInstances.set(outcome.instance.id, outcome.instance);
+    this.watchInstance(outcome.instance, outcome.exited);
+    this.persist();
+    await this.learnFrameInset(outcome.instance);
+    this.placedBounds.set(outcome.instance.id, slot);
+    if (canRetile) await this.tileInstances(preset, [...this.liveInstances.values()]);
+    return { instance: outcome.instance, identities: [] };
+  }
+
+  /**
+   * Opens a real browser window in one profile.
+   *
+   * The profile is a cookie jar the user named, and the external surface keeps it
+   * as a directory of its own: `<root>/profiles/<profileId>`. That is
+   * deliberately not the same storage the built-in surface uses for the same
+   * profile — the two surfaces are different Chromium builds writing to
+   * different places — but it is the same idea, so "work profile" means one
+   * jar on each side rather than one jar shared between them.
+   *
+   * An ephemeral profile gets a throwaway directory (`clean-<uuid>`) that is
+   * removed when the window closes, which is what makes a clean session on the
+   * external surface actually clean.
+   */
+  async launchProfile(
+    profileId: string,
+    options?: { url?: string; engineId?: string },
+  ): Promise<LaunchResult> {
+    await this.maintenanceDone;
+    const profile = this.settings.profiles.find((item) => item.id === profileId);
+    if (!profile) throw new Error("档案不存在");
+    const engine = this.resolveEngine(undefined, options?.engineId);
+    const ephemeral = profile.retention === "ephemeral";
+
+    const area = this.workArea();
+    const preset = this.presetFor(this.settings.layout);
+    const slotIndex = this.liveInstances.size === 0 ? 0 : this.firstFreeSlotIndex(preset);
+    const slot =
+      this.liveInstances.size === 0
+        ? singleWindowRect(area)
+        : this.slotBounds(preset, area, slotIndex);
+    const canRetile = await this.windowsUntouched(preset);
+    const instanceId = randomUUID();
+
+    const outcome = await launchBrowser({
+      // A profile is not a site, so it lives in its own root segment. Keeping
+      // it out of a site directory means deleting a site can never stop or
+      // adopt a profile window.
+      siteId: PROFILES_SESSION_SEGMENT,
+      profileRoot: this.options.profileRoot,
+      engine,
+      profileKey: ephemeral ? `${CLEAN_PROFILE_PREFIX}${instanceId}` : profile.id,
+      startUrl: options?.url ?? "about:blank",
+      windowBounds: slot,
+      label: profile.name,
+      instanceId,
+      ...(ephemeral ? { clean: true } : {}),
+    });
+    outcome.instance.layoutId = preset.id;
+    outcome.instance.slotIndex = slotIndex;
+    // The row in the run dock has to say which jar this window is, or two
+    // profile windows of the same browser are indistinguishable there.
+    outcome.instance.profileId = profile.id;
 
     this.liveInstances.set(outcome.instance.id, outcome.instance);
     this.watchInstance(outcome.instance, outcome.exited);

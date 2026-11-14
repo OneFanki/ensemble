@@ -951,6 +951,30 @@ export function perfSummarize(
   };
 }
 
+/** Options for {@link perfSparkPoints}. */
+export interface PerfSparkOptions {
+  /**
+   * The `t` that should sit at the plot's right edge, on the same clock as
+   * `sample.t`.
+   *
+   * Supplying it turns the axis into a **camera**: x is built once, relative to
+   * a fixed origin, and the caller slides the whole path under a transform. That
+   * is what lets the chart move every frame instead of only when a sample lands.
+   * Omitted, the axis is derived from the last sample and clamped — the static
+   * plot this function produced before.
+   */
+  origin?: number;
+  /**
+   * Append a flat point one full window past the right edge.
+   *
+   * Only meaningful with `origin`: a camera at the plot's right edge would
+   * otherwise reveal a gap as wide as the time since the last sample. The extra
+   * point is always off-screen to the right and clipped, so it costs one path
+   * segment and removes the last visible seam.
+   */
+  extendRight?: boolean;
+}
+
 /**
  * The points of one metric's line inside `width × height`.
  *
@@ -958,16 +982,11 @@ export function perfSummarize(
  * delays the timer), and spacing samples evenly would silently compress the
  * gaps and misreport when a spike happened.
  *
- * The horizontal scale is **fixed at one window, ending now**, and never fitted
- * to the data. Fitting meant the axis was re-derived from "oldest sample to
- * newest" on every tick, so a freshly opened panel drew one second of data
- * across the whole chart and then squeezed it as more arrived — the curve
- * appeared to zoom out on its own, and a 200ms stutter looked like a long slow
- * wave. With a fixed scale the newest sample is always at the right edge; a
- * young series occupies only its own slice at that edge, and once a full window
- * is on screen the oldest samples fall off the left while new ones arrive on the
- * right. The window therefore slides from the first frame, not only after it
- * fills.
+ * The horizontal scale is **fixed at one window**, and never fitted to the
+ * data. Fitting meant the axis was re-derived from "oldest sample to newest" on
+ * every tick, so a freshly opened panel drew one second of data across the
+ * whole chart and then squeezed it as more arrived — the curve appeared to zoom
+ * out on its own, and a 200ms stutter looked like a long slow wave.
  *
  * `axisMax` is passed in rather than derived so every lane can share one when
  * that is the honest comparison — CPU in percent, for instance — while the
@@ -985,6 +1004,7 @@ export function perfSparkPoints(
   height: number,
   axisMax: number,
   windowMs = PERF_WINDOW_DEFAULT_MS,
+  options: PerfSparkOptions = {},
 ): Array<{ x: number; y: number }> {
   // Warmup readings are dropped when the metric is a rate: their zero means "no
   // previous counter", and drawing it puts a visible drop to the baseline at the
@@ -995,26 +1015,117 @@ export function perfSparkPoints(
     : history;
   if (series.length < 2) return [];
   const span = Math.max(1, windowMs);
-  // The right edge is "now"; the left edge is one window earlier. Not anchored
-  // to the first sample: that would move the axis every tick, which is the
-  // rescaling this fixed window exists to stop.
-  const origin = series[series.length - 1]!.t - span;
+  /*
+   * Two modes, and the difference is who owns the right edge.
+   *
+   * Without `origin` the newest sample *is* the right edge, which is what the
+   * panel used to do: every path is anchored to `last.t`, so between samples
+   * the whole curve stands still and then jumps one step left when the next
+   * one lands. That is the stutter, and no sampling rate fixes it — a faster
+   * sampler just makes for smaller, more frequent jumps.
+   *
+   * With `origin` the axis is pinned to a fixed point and the caller slides the
+   * path under a transform, so the chart moves every frame regardless of when
+   * samples arrive.
+   */
+  const origin = options.origin ?? series[series.length - 1]!.t - span;
+  // Clamping is right for the static plot (a clipped sample would vanish without
+  // explanation) and wrong for the camera (a curve that stops at the plot edge
+  // pops back into view on the next frame instead of sliding in from outside).
+  const clamp = options.origin === undefined;
   const top = Math.max(1, axisMax);
-  return series.map((sample) => ({
-    // Clamped: a sample older than the window would otherwise draw to the left
-    // of the plot, into the tick gutter.
-    x: Math.min(width, Math.max(0, ((sample.t - origin) / span) * width)),
+  const points = series.map((sample) => ({
+    x: clamp
+      ? Math.min(width, Math.max(0, ((sample.t - origin) / span) * width))
+      : ((sample.t - origin) / span) * width,
     // One pixel of inset top and bottom: a sample sitting exactly at the
     // maximum would otherwise draw its stroke half outside the viewBox.
     y: height - 1 - Math.min(1, Math.max(0, sample[metric] / top)) * (height - 2),
   }));
+  if (options.extendRight && points.length > 0) {
+    // One window past the right edge: far enough that the camera can never slide
+    // past it within a frame, and clipped away entirely until it is needed.
+    const last = points[points.length - 1]!;
+    points.push({ x: last.x + width, y: last.y });
+  }
+  return points;
 }
 
-/** Those points as an SVG polyline path. */
-export function perfPolyline(points: Array<{ x: number; y: number }>): string {
-  return points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
-    .join(" ");
+/**
+ * Those points as an SVG path.
+ *
+ * `step` draws a staircase — hold each reading until the next one arrives —
+ * instead of connecting the dots with a slope. It is the honest shape for the
+ * metrics that are *counts sampled at intervals* rather than continuous
+ * quantities: there was no gradual climb from 3 nodes to 4, there was one
+ * addition. Chrome's own monitor draws them this way for the same reason. CPU
+ * stays a plain polyline: it is the share of an interval, so a slope between two
+ * readings is a real thing that happened.
+ */
+export function perfPolyline(
+  points: Array<{ x: number; y: number }>,
+  options: { step?: boolean } = {},
+): string {
+  if (points.length === 0) return "";
+  if (!options.step) {
+    return points
+      .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+      .join(" ");
+  }
+  // H then V per step: the value changes at the sample's own moment, not
+  // halfway between it and the previous one.
+  const first = points[0]!;
+  const parts = [`M${first.x.toFixed(1)},${first.y.toFixed(1)}`];
+  for (let index = 1; index < points.length; index += 1) {
+    const point = points[index]!;
+    parts.push(`H${point.x.toFixed(1)}`, `V${point.y.toFixed(1)}`);
+  }
+  return parts.join(" ");
+}
+
+/**
+ * How far the chart should slide, in viewBox units.
+ *
+ * The camera is the whole reason the panel can move smoothly: the samples are
+ * laid out against `baseT` once per poll, and this value is recomputed every
+ * animation frame from the wall clock. `clock` is the current moment expressed
+ * on the sample clock (see {@link perfClock}); `baseT` is the axis origin the
+ * paths were built against — the **left edge** of the drawn window, i.e. one
+ * window before the newest sample.
+ *
+ * With that origin the newest sample sits exactly at the right edge when the
+ * paths are built, and every millisecond since then slides the whole plot left
+ * by its share of a window. Before the series has filled a window there is
+ * nothing to slide past, so the result stays at zero and the chart grows
+ * leftwards from the right edge — which is where it should be.
+ */
+export function perfCamera(
+  clock: number,
+  baseT: number,
+  windowMs: number,
+  width: number,
+): number {
+  const span = Math.max(1, windowMs);
+  const overflow = clock - baseT - span;
+  if (overflow <= 0) return 0;
+  return (overflow / span) * width;
+}
+
+/**
+ * The current moment on the samples' own clock.
+ *
+ * Samples carry `t` relative to when sampling started, not a wall clock, so the
+ * renderer needs a bridge to draw "now": take the newest sample's `t` and add
+ * the real time since it was taken. A missing sample (a fresh panel) reports 0
+ * rather than a huge number, so callers can treat it as "nothing to draw yet".
+ */
+export function perfClock(latest: PerfSample | undefined, nowMs: number): number {
+  if (!latest) return 0;
+  const takenAt = Date.parse(latest.at);
+  if (!Number.isFinite(takenAt)) return latest.t;
+  // Clamped at zero: clock skew or a sample read a moment in the future must not
+  // rewind the camera.
+  return latest.t + Math.max(0, nowMs - takenAt);
 }
 
 /**
@@ -1024,13 +1135,20 @@ export function perfPolyline(points: Array<{ x: number; y: number }>): string {
  * of a 30px lane is nearly invisible, while the shaded region below it shows
  * the shape and the proportion at once. The fill is drawn with low opacity by
  * the caller, so two rows can never obscure each other.
+ *
+ * The closing edges use the *first and last* points, so the fill follows a
+ * staircase exactly as the line does rather than cutting corners under it.
  */
-export function perfArea(points: Array<{ x: number; y: number }>, height: number): string {
+export function perfArea(
+  points: Array<{ x: number; y: number }>,
+  height: number,
+  options: { step?: boolean } = {},
+): string {
   if (points.length === 0) return "";
   const last = points[points.length - 1]!;
   const first = points[0]!;
   const baseline = height - 1;
-  return `${perfPolyline(points)} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`;
+  return `${perfPolyline(points, options)} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`;
 }
 
 /** A metric's line as a path string; a thin wrapper over the two helpers above. */
@@ -1041,8 +1159,12 @@ export function perfSparkPath(
   height: number,
   axisMax: number,
   windowMs = PERF_WINDOW_DEFAULT_MS,
+  options: PerfSparkOptions & { step?: boolean } = {},
 ): string {
-  return perfPolyline(perfSparkPoints(history, metric, width, height, axisMax, windowMs));
+  return perfPolyline(
+    perfSparkPoints(history, metric, width, height, axisMax, windowMs, options),
+    options,
+  );
 }
 
 /**

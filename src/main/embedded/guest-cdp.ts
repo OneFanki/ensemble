@@ -1,4 +1,5 @@
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
+import { withDeadline } from "@shared/async";
 import { KEY_TABLE, type CdpExecutor } from "./cdp";
 
 /**
@@ -19,11 +20,24 @@ import { KEY_TABLE, type CdpExecutor } from "./cdp";
 export interface GuestCdpTarget {
   /** Current guest id for this page, or `undefined` while it is not attached. */
   guestId(): string | undefined;
-  send<T = unknown>(guestId: string, method: string, params?: Record<string, unknown>): Promise<T>;
+  /**
+   * Runs one command.
+   *
+   * `timeoutMs` reaches the shared executor, which owns the only deadline in the
+   * chain. Re-wrapping here would report a timeout while the guest manager still
+   * counts the command as in flight — and a session released with a command
+   * pending takes the native target out from under the reply.
+   */
+  send<T = unknown>(
+    guestId: string,
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
   evaluate<T>(
     guestId: string,
     expression: string,
-    options?: { awaitPromise?: boolean },
+    options?: { awaitPromise?: boolean; timeoutMs?: number },
   ): Promise<T>;
   has(guestId: string): boolean;
   /** Resolves once the page's node has a real box (or the wait times out). */
@@ -92,8 +106,12 @@ export class GuestCdp implements CdpExecutor {
     // scripts. `teardown` is the explicit way to close it.
   }
 
-  send<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    return this.target.send<T>(this.guest(), method, params);
+  send<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    return this.target.send<T>(this.guest(), method, params, options);
   }
 
   lifecycle(state: "frozen" | "active"): Promise<void> {
@@ -136,7 +154,10 @@ export class GuestCdp implements CdpExecutor {
   /** Nesting depth of {@link presented}; see the note there. */
   private presentDepth = 0;
 
-  evaluate<T>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {
+  evaluate<T>(
+    expression: string,
+    options: { awaitPromise?: boolean; timeoutMs?: number } = {},
+  ): Promise<T> {
     return this.presented(() => this.target.evaluate<T>(this.guest(), expression, options));
   }
 
@@ -183,9 +204,15 @@ export class GuestCdp implements CdpExecutor {
    * never returns.
    */
   async screenshot(
-    options: { format?: "png" | "jpeg"; quality?: number; preferRenderer?: boolean } = {},
+    options: {
+      format?: "png" | "jpeg";
+      quality?: number;
+      preferRenderer?: boolean;
+      timeoutMs?: number;
+    } = {},
   ): Promise<Buffer> {
     const format = options.format ?? "png";
+    const budget = Math.max(500, options.timeoutMs ?? 8_000);
     const params = {
       format,
       ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
@@ -193,7 +220,10 @@ export class GuestCdp implements CdpExecutor {
     const fromRenderer = async (): Promise<Buffer> => {
       const contents = this.guestContents();
       if (!contents) throw new Error("页面已关闭");
-      const image = await contents.capturePage();
+      // Bounded like every other path: a capture that never returns is
+      // indistinguishable from a page that is busy, so it reports as a deadline
+      // instead of waiting out the caller's transport timeout.
+      const image = await withDeadline(contents.capturePage(), budget, "页面画面采集没有返回");
       if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
       return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
     };
@@ -211,9 +241,13 @@ export class GuestCdp implements CdpExecutor {
     try {
       return await this.presented(async () => {
         const result = await Promise.race([
-          this.send<{ data: string }>("Page.captureScreenshot", params),
+          this.send<{ data: string }>(
+            "Page.captureScreenshot",
+            params,
+            { timeoutMs: Math.min(4_000, budget) },
+          ),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("截图超时")), 4_000),
+            setTimeout(() => reject(new Error("截图超时")), Math.min(4_000, budget)),
           ),
         ]);
         return Buffer.from(result.data, "base64");

@@ -29,6 +29,7 @@ import SiteDialog from "./components/SiteDialog.vue";
 import SitesPage from "./components/SitesPage.vue";
 import BookmarksPage from "./components/BookmarksPage.vue";
 import MessagesPage from "./components/MessagesPage.vue";
+import AiActivityPage from "./components/AiActivityPage.vue";
 import ProfilesPage from "./components/ProfilesPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
@@ -319,7 +320,9 @@ function switchView(next: View) {
  * The menu names a destination; without one it lands on Settings, because the
  * menu's other rows are already there to be clicked instead.
  */
-function openConsole(target: "sites" | "bookmarks" | "profiles" | "settings" | "messages" = "settings") {
+function openConsole(
+  target: "sites" | "bookmarks" | "profiles" | "settings" | "messages" | "ai" = "settings",
+) {
   if (target === "settings") {
     openSettings("general");
     return;
@@ -922,6 +925,7 @@ async function handleLocale(locale: LocaleSetting) {
         <FlowsPage v-else-if="view === 'flows'" />
         <TagsPage v-else-if="view === 'tags'" />
         <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
+        <AiActivityPage v-else-if="view === 'ai'" />
         <ProfilesPage v-else-if="view === 'profiles'" />
         <BookmarksPage v-else />
       </main>

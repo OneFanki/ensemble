@@ -8,7 +8,9 @@ import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
-import HintIcon from "./ui/HintIcon.vue";
+import Checkbox from "./ui/Checkbox.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 const props = defineProps<{
   draft: SiteDraft;
@@ -143,82 +145,68 @@ function normalizePath(event: Event) {
     @close="emit('close')"
   >
     <div class="form">
-      <label class="field">
-        <span class="label">{{ $t("app.envNameLabel") }}</span>
-        <input v-model="form.name" class="input" :placeholder="namePlaceholder" />
-      </label>
+      <FormField :label="$t('app.envNameLabel')">
+        <TextField v-model="form.name" :placeholder="namePlaceholder" />
+      </FormField>
 
-      <div class="field">
-        <span class="label">{{ $t("app.tags") }}</span>
+      <FormField as="div" :label="$t('app.tags')">
         <TagPicker v-model="form.tagIds" :tags="tags" />
-      </div>
+      </FormField>
 
-      <label class="field">
-        <span class="label">{{ $t("app.envUrlLabel") }}</span>
-        <input v-model="form.baseUrl" class="input mono" placeholder="http://localhost:5173" />
-      </label>
+      <FormField :label="$t('app.envUrlLabel')">
+        <TextField v-model="form.baseUrl" mono placeholder="http://localhost:5173" />
+      </FormField>
 
       <div class="row">
-        <label class="field grow">
-          <span class="label">{{ $t("app.loginEntry") }}</span>
-          <input
+        <FormField grow :label="$t('app.loginEntry')">
+          <TextField
             v-model="form.loginPath"
-            class="input mono"
+            mono
             data-field="loginPath"
             placeholder="/login"
             @blur="normalizePath"
           />
-        </label>
-        <label class="field grow">
-          <span class="label">{{ $t("app.loginCheckOptional") }}</span>
-          <input
+        </FormField>
+        <FormField grow :label="$t('app.loginCheckOptional')">
+          <TextField
             v-model="form.authCheckPath"
-            class="input mono"
+            mono
             data-field="authCheckPath"
             :placeholder="$t('app.authCheckPlaceholder')"
             @blur="normalizePath"
           />
-        </label>
+        </FormField>
       </div>
 
-      <label class="field">
-        <span class="label">
-          {{ $t("app.loginMarkerOptional") }}
-          <HintIcon :text="$t('app.loginMarkerHintRestored')" />
-        </span>
-        <input
+      <FormField :label="$t('app.loginMarkerOptional')" :hint="$t('app.loginMarkerHintRestored')">
+        <TextField
           v-model="form.authCheckSignedOut"
-          class="input mono"
+          mono
           data-field="authCheckSignedOut"
           :placeholder="$t('app.loginMarkerPlaceholder')"
         />
-      </label>
+      </FormField>
 
       <!-- Header-token sites: the session lives in localStorage and rides a
            private header, so a cookie-only probe reads every session as signed
            out. The token is read from the page at check time. -->
       <div class="row">
-        <label class="field grow">
-          <span class="label">
-            {{ $t("app.loginTokenKeyOptional") }}
-            <HintIcon :text="$t('app.loginTokenKeyHintRestored')" />
-          </span>
-          <input
+        <FormField grow :label="$t('app.loginTokenKeyOptional')" :hint="$t('app.loginTokenKeyHintRestored')">
+          <TextField
             v-model="form.authTokenKey"
-            class="input mono"
+            mono
             data-field="authTokenKey"
             :placeholder="$t('app.loginTokenKeyPlaceholder')"
           />
-        </label>
-        <label class="field">
-          <span class="label">{{ $t("app.loginTokenHeaderOptional") }}</span>
-          <input
+        </FormField>
+        <FormField :label="$t('app.loginTokenHeaderOptional')">
+          <TextField
             v-model="form.authTokenHeader"
-            class="input mono"
+            mono
             data-field="authTokenHeader"
             placeholder="token"
           />
-        </label>
+        </FormField>
       </div>
 
       <section class="group">
@@ -236,8 +224,7 @@ function normalizePath(event: Event) {
           "follow global" is the answer for most sites, and an option hint is only
           visible while the list is open — i.e. exactly when the question is moot.
         -->
-        <label class="field">
-          <span class="label">{{ $t("app.autoSubmitLabel") }}</span>
+        <FormField :label="$t('app.autoSubmitLabel')">
           <SelectField
             :model-value="submitMode"
             :options="submitModeOptions"
@@ -252,7 +239,7 @@ function normalizePath(event: Event) {
               })
             }}
           </span>
-        </label>
+        </FormField>
       </section>
 
       <!--
@@ -273,24 +260,23 @@ function normalizePath(event: Event) {
           <span class="group-title">{{ $t("app.siteDefaultPassword") }}</span>
         </div>
 
-        <label class="field">
-          <input
+        <FormField>
+          <TextField
             v-model="passwordDraft"
             type="password"
-            class="input mono"
+            mono
             autocomplete="new-password"
             :placeholder="
               hasSitePassword ? $t('app.siteDefaultPasswordReplace') : $t('app.siteDefaultPasswordEmpty')
             "
           />
-        </label>
+        </FormField>
 
         <!-- Removing a password is a separate, deliberate act: an emptied input
              must not silently delete a secret the user did not mean to touch. -->
-        <label v-if="hasSitePassword && !clearPassword" class="check-row">
-          <input v-model="clearPassword" type="checkbox" />
-          <span>{{ $t("app.siteDefaultPasswordClear") }}</span>
-        </label>
+        <Checkbox v-if="hasSitePassword && !clearPassword" v-model="clearPassword">
+          {{ $t("app.siteDefaultPasswordClear") }}
+        </Checkbox>
         <p v-if="clearPassword" class="hint warn">{{ $t("app.siteDefaultPasswordClearNote") }}</p>
       </section>
 
@@ -321,24 +307,6 @@ function normalizePath(event: Event) {
   gap: 12px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.grow {
-  flex: 1 1 0;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
 .hint {
   font-size: 10.5px;
   color: var(--faint);
@@ -347,30 +315,6 @@ function normalizePath(event: Event) {
 /* Removing a saved password is a deliberate act, so its note is not faint. */
 .hint.warn {
   color: var(--amber);
-}
-
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .group {
@@ -396,35 +340,9 @@ function normalizePath(event: Event) {
   color: var(--text-secondary);
 }
 
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.check input {
-  margin-top: 2px;
-}
-
 .error {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-/* `.btn:hover` matches primary buttons too; restate the fill so the button does
-   not turn gray while the cursor is over it. The shared sheet already does this —
-   the local copy exists only because a scoped block outranks it. */
-.btn.primary:hover:not(:disabled) {
-  background: var(--action-hover);
-  border-color: transparent;
-  color: var(--action-foreground);
-}
-
-.spacer {
-  flex: 1;
 }
 </style>

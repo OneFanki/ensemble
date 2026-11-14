@@ -29,7 +29,6 @@ import type {
 } from "@shared/types";
 import {
   Activity,
-  AppWindow,
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -56,7 +55,6 @@ import {
   RotateCw,
   Search,
   Settings,
-  ShieldCheck,
   ShieldOff,
   Smartphone,
   Sparkles,
@@ -76,12 +74,15 @@ import { useNavigationStore } from "../stores/navigation";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
 import DevicePanel from "./DevicePanel.vue";
+import AiPanel from "./AiPanel.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
 import PerformancePanel from "./PerformancePanel.vue";
 import TabIcon from "./TabIcon.vue";
+import AppButton from "./ui/AppButton.vue";
+import InputShell from "./ui/InputShell.vue";
 
 const store = useEmbeddedStore();
 const workspace = useWorkspaceStore();
@@ -103,7 +104,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** Open a management page; `null` means "settings", the menu's default. */
-  openConsole: [view?: "sites" | "bookmarks" | "profiles" | "settings" | "messages"];
+  openConsole: [view?: "sites" | "bookmarks" | "profiles" | "settings" | "messages" | "ai"];
   /** Single cell ↔ workbench. */
   switchMode: [mode: "browse" | "bench"];
   /** The app menu's "open the workbench" — same action as the layout button. */
@@ -152,12 +153,6 @@ function toggleDevtoolsFromMenu(): void {
   else openDevTools(page.id);
 }
 
-/** The AI entry lives in the app menu now; its status dot moved with it. */
-function openMcpSettings(): void {
-  appMenuOpen.value = false;
-  navigation.navigate("settings", "mcp");
-}
-
 /**
  * The app menu, at the toolbar's right end.
  *
@@ -168,8 +163,7 @@ function openMcpSettings(): void {
  * the first tab that a newcomer has no reason to try.
  *
  * The frequent things stay outside the menu: password fill, the AI entry,
- * downloads and the bookmark star all remain visible in the toolbar. Zoom moved
- * in: it is the one control most people drive from the keyboard or the wheel,
+ * downloads and the bookmark star all remain visible in the toolbar. Zoom moved * in: it is the one control most people drive from the keyboard or the wheel,
  * and a permanent readout for a number that is 100% on almost every page cost a
  * tenth of the row. It appears in two places instead — the viewport menu and
  * here — and a gesture raises a transient overlay with the new percentage.
@@ -191,6 +185,15 @@ function onAppMenuOutside(event: PointerEvent): void {
   const target = event.target;
   if (target instanceof Element && target.closest(".app-menu-anchor")) return;
   appMenuOpen.value = false;
+}
+
+/** The three popovers share the toolbar's right end; opening one closes the rest. */
+function toggleAppMenu(): void {
+  appMenuOpen.value = !appMenuOpen.value;
+  if (appMenuOpen.value) {
+    aiPanelOpen.value = false;
+    bellOpen.value = false;
+  }
 }
 
 /** How the window was asked to quit; the main process owns what that means. */
@@ -225,23 +228,15 @@ async function quitApp(): Promise<void> {
 }
 
 /**
- * Which surface every launch goes to.
+ * The app menu's one session action.
  *
- * It lives in this menu because the switch is one decision that applies to every
- * entry — a per-page button made the same action look like several features. It
- * used to sit in the window's title bar; that row is gone, and with it the only
- * way to change the setting, which left the app permanently on whatever it was
- * last set to. The clean session below reads the same value, so the hint names
- * the surface it will actually use.
+ * Where a launch goes used to be a pair of radio rows here. It is gone: a global
+ * mode meant every "启动" button in the app silently inherited a decision made in
+ * another menu, and the choice only ever means something at the moment of
+ * launching. Each launch point now carries its own browser list, and this entry
+ * is the built-in throwaway — the surface where poking at a site without
+ * touching the saved logins is the normal thing to do.
  */
-const launchTarget = computed(() => workspace.settings.launchTarget ?? "embedded");
-
-function chooseLaunchTarget(target: "embedded" | "external"): void {
-  appMenuOpen.value = false;
-  if (target === launchTarget.value) return;
-  void workspace.saveSettings({ launchTarget: target });
-}
-
 async function openCleanFromMenu(): Promise<void> {
   appMenuOpen.value = false;
   await workspace.openCleanSession();
@@ -465,13 +460,22 @@ function samePage(a: string, b: string): boolean {
 }
 
 /**
- * The origin of the active page, when it is one the AI gate actually covers.
+ * Whether the AI panel is open.
  *
- * Undefined for an account page, a clean session, or a non-web page: in all
- * three cases a permission switch here would be meaningless, and showing one
- * would teach the user that the control is decorative.
+ * Its own state rather than shared with the app menu or the bell: all three hang
+ * off the toolbar's right end and opening one closes the others, which the click
+ * handlers do explicitly — a shared enum would have to name every pair anyway.
  */
-const aiGateOrigin = computed<string | undefined>(() => {
+const aiPanelOpen = ref(false);
+
+/**
+ * The origin the panel may offer to authorize.
+ *
+ * Undefined for an account page, a clean session, and a non-web page: the first
+ * two are driveable already and the third is not a place to operate on, so a
+ * permission control there would teach the user it is decorative.
+ */
+const aiPanelOrigin = computed<string | undefined>(() => {
   const tab = activeTab.value;
   if (!tab || tab.identityId || tab.clean) return undefined;
   try {
@@ -483,61 +487,34 @@ const aiGateOrigin = computed<string | undefined>(() => {
   }
 });
 
-const aiGateVisible = computed(() => Boolean(aiGateOrigin.value));
+function toggleAiPanel(): void {
+  aiPanelOpen.value = !aiPanelOpen.value;
+  if (aiPanelOpen.value) {
+    // The other two panels occupy the same corner.
+    bellOpen.value = false;
+    appMenuOpen.value = false;
+    void workspace.refreshAiActivity();
+  }
+}
 
 /**
- * How the AI may act on the page that is open right now.
+ * Leaves the panel for the AI activity page.
  *
- * The shield used to be a bare toggle whose on state meant "authorized", which
- * could only tell half the story once a denylist and two absolute modes existed:
- * the same icon would have to mean four different things. It now reports the
- * decision for this one origin, worked out by the same function the MCP server
- * uses — so the icon cannot claim a permission the tool gate would refuse.
+ * Through the shell's `openConsole` like every other page switch: this component
+ * does not own the pane, and calling the navigation store directly bypassed the
+ * shell's own bookkeeping (the sidebar's selection and the saved last view).
  */
-const aiGateState = computed<"open" | "blocked" | "unlisted">(() => {
-  const mode = workspace.mcp?.aiMode ?? "allowlist";
-  const origin = aiGateOrigin.value;
-  if (!origin) return "unlisted";
-  const listed = (workspace.mcp?.aiOrigins ?? []).includes(origin);
-  if (mode === "allow-all") return "open";
-  if (mode === "deny-all") return "blocked";
-  if (mode === "denylist") return listed ? "blocked" : "open";
-  return listed ? "open" : "unlisted";
-});
+function openAiConsole(): void {
+  aiPanelOpen.value = false;
+  emit("openConsole", "ai");
+}
 
-/** True when the AI may type and click on this page. */
-const aiOriginAuthorized = computed(() => aiGateState.value === "open");
-
-const aiGateHint = computed(() => {
-  switch (aiGateState.value) {
-    case "open":
-      return t("app.aiOriginOpenHint");
-    case "blocked":
-      return t("app.aiOriginBlockedHint");
-    case "unlisted":
-      return t("app.aiOriginUnlistedHint");
-  }
-});
-
-/**
- * Adds or removes this page's origin from the stored list.
- *
- * One click, because this is where the user notices the gate: an address that
- * needs granting should not cost a trip to Settings. Which way the click goes is
- * decided by whether the address is already in the list — not by whether the AI
- * may act right now, since under "allow all" the answer is yes without the
- * address being listed at all.
- */
-async function toggleAiOrigin(): Promise<void> {
-  const origin = aiGateOrigin.value;
-  if (!origin) {
-    workspace.notify(t("app.aiOriginNoOrigin"), "error");
-    return;
-  }
-  const next = !(workspace.mcp?.aiOrigins ?? []).includes(origin);
-  const status = await workspace.updateMcp({ aiOrigin: { origin, allowed: next } });
-  if (!status) return;
-  workspace.notify(t(next ? "app.aiOriginGranted" : "app.aiOriginRevoked", { origin }), "success");
+/** The panel's gear: the same door the old app-menu row was. */
+function openAiSettings(): void {
+  aiPanelOpen.value = false;
+  // The navigation store carries both the destination and the section, the same
+  // way the app menu's AI row did; the shell reacts to it as it always has.
+  navigation.navigate("settings", "mcp");
 }
 
 /**
@@ -1496,6 +1473,9 @@ function toggleBell(): void {
     closeBellDetail();
     return;
   }
+  // The AI panel and the app menu share this corner.
+  aiPanelOpen.value = false;
+  appMenuOpen.value = false;
   // Opening is the moment to re-read: `stale` is decided by the main process
   // when the history is fetched, and this popover lives on a page that never
   // unmounts — without this it would keep offering actions that no longer work
@@ -2156,29 +2136,42 @@ function fillMessage(reason?: string): string {
         <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
       </button>
 
-      <form class="address" @submit.prevent="navigate">
-        <input
-          v-model="address"
-          type="text"
-          spellcheck="false"
-          :placeholder="t('app.browserAddress')"
-          @focus="suggestionsOpen = true"
-          @input="suggestionsOpen = true"
-          @blur="suggestionsOpen = false"
-          @keydown.esc="suggestionsOpen = false"
-        />
-        <!-- An explicit go button: Enter is invisible to a mouse user. It only
-             appears once there is something to go to, so the field is quiet at
-             rest instead of carrying a permanently greyed-out arrow. -->
-        <button
-          v-if="address.trim()"
-          type="submit"
-          class="go"
-          :aria-label="t('app.browserGo')"
-          v-tooltip="t('app.browserGo')"
-        >
-          <CornerDownLeft :size="13" />
-        </button>
+      <!--
+        The omnibox is an `InputShell`, the same control the new-tab page uses.
+        The shell owns the border, the fill and the one-shot focus sweep; this
+        input is only the text area inside it, which is what keeps the two search
+        boxes from growing separate focus treatments — they had one, and the
+        address bar's ended up a dirty olive line on the light theme.
+
+        `.address` is a plain positioning box, not a form: the list of site
+        suggestions hangs off it (absolute, full width of the field) and a form
+        cannot wrap the shell without nesting two of them.
+      -->
+      <div class="address">
+        <InputShell as="form" size="toolbar" class="address-shell" @submit.prevent="navigate">
+          <input
+            v-model="address"
+            type="text"
+            spellcheck="false"
+            :placeholder="t('app.browserAddress')"
+            @focus="suggestionsOpen = true"
+            @input="suggestionsOpen = true"
+            @blur="suggestionsOpen = false"
+            @keydown.esc="suggestionsOpen = false"
+          />
+          <!-- An explicit go button: Enter is invisible to a mouse user. It only
+               appears once there is something to go to, so the field is quiet at
+               rest instead of carrying a permanently greyed-out arrow. -->
+          <button
+            v-if="address.trim()"
+            type="submit"
+            class="go"
+            :aria-label="t('app.browserGo')"
+            v-tooltip="t('app.browserGo')"
+          >
+            <CornerDownLeft :size="13" />
+          </button>
+        </InputShell>
 
         <!-- Sites are the bookmarks: typing a name resolves to its login URL. -->
         <div v-if="suggestionsOpen && siteSuggestions.length" class="site-suggestions">
@@ -2193,7 +2186,7 @@ function fillMessage(reason?: string): string {
             <span class="sugg-url mono">{{ item.url }}</span>
           </button>
         </div>
-      </form>
+      </div>
 
       <button
         v-if="activeTab && !isBlankTab(activeTab)"
@@ -2218,24 +2211,40 @@ function fillMessage(reason?: string): string {
         <KeyRound :size="15" />
       </button>
       <!--
-        Shown only where the answer can differ: a daily-profile page. An account
-        page and a clean session are driveable already, so a control that is
-        always "on" there would just add noise — and imply the switch guards
-        something it does not.
+        AI: one entry for the whole feature.
+        
+        It replaced two controls — a shield that only said whether this page was
+        allowed, and a row in the app menu that said whether the endpoint was
+        listening. Neither answered the question on its own ("is the assistant
+        connected, and what may it do here"), and the shield had its own copy of
+        the permission rules that could drift from the server's. The panel behind
+        this button shows both, plus the newest activity.
       -->
-      <button
-        v-if="aiGateVisible"
-        type="button"
-        class="icon"
-        data-ai-origin-switch
-        :class="{ active: aiOriginAuthorized }"
-        v-tooltip="aiGateHint"
-        :aria-label="t('app.aiOriginTitle')"
-        :aria-pressed="aiOriginAuthorized"
-        @click="toggleAiOrigin"
-      >
-        <ShieldCheck :size="15" />
-      </button>
+      <div class="ai-anchor">
+        <button
+          type="button"
+          class="icon ai-entry"
+          :class="{ active: aiPanelOpen, live: aiRunning }"
+          :aria-label="t('app.mcpAiAccess')"
+          :aria-expanded="aiPanelOpen"
+          v-tooltip="aiRunning ? t('app.aiEndpointRunning') : t('app.aiEndpointOff')"
+          data-ai-panel
+          @click="toggleAiPanel"
+        >
+          <Sparkles :size="15" />
+          <!-- A dot, not a colour change: "connected" has to read at a glance
+               without the icon looking like a toggle that was switched on. -->
+          <span v-if="aiRunning" class="ai-live-dot"></span>
+        </button>
+        <AiPanel
+          v-if="aiPanelOpen"
+          :open="aiPanelOpen"
+          :origin="aiPanelOrigin"
+          @close="aiPanelOpen = false"
+          @open-console="openAiConsole"
+          @open-settings="openAiSettings"
+        />
+      </div>
       <button
         type="button"
         class="icon"
@@ -2611,7 +2620,7 @@ function fillMessage(reason?: string): string {
           :aria-expanded="appMenuOpen"
           v-tooltip="t('app.appMenu')"
           data-app-menu
-          @click="appMenuOpen = !appMenuOpen"
+          @click="toggleAppMenu"
         >
           <MoreHorizontal :size="16" />
         </button>
@@ -2633,34 +2642,8 @@ function fillMessage(reason?: string): string {
             <span>{{ t("app.layoutOpenWorkbench") }}</span>
           </button>
           <div class="app-menu-rule" role="separator"></div>
-          <!--
-            Where launches go, and the throwaway session beside it: both are
-            "how this browser behaves", not a page to visit.
-          -->
-          <button
-            type="button"
-            role="menuitemradio"
-            class="app-menu-item"
-            :aria-checked="launchTarget === 'embedded'"
-            data-menu-item="launch-embedded"
-            @click="chooseLaunchTarget('embedded')"
-          >
-            <Monitor :size="14" />
-            <span>{{ t("app.launchTargetEmbedded") }}</span>
-            <Check v-if="launchTarget === 'embedded'" :size="13" class="app-menu-check" />
-          </button>
-          <button
-            type="button"
-            role="menuitemradio"
-            class="app-menu-item"
-            :aria-checked="launchTarget === 'external'"
-            data-menu-item="launch-external"
-            @click="chooseLaunchTarget('external')"
-          >
-            <AppWindow :size="14" />
-            <span>{{ t("app.launchTargetExternal") }}</span>
-            <Check v-if="launchTarget === 'external'" :size="13" class="app-menu-check" />
-          </button>
+          <!-- The built-in throwaway. Where launches go is decided at each
+               launch point now, so this menu carries only the session action. -->
           <button
             type="button"
             role="menuitem"
@@ -2710,21 +2693,6 @@ function fillMessage(reason?: string): string {
             <Bug :size="14" />
             <span>{{ t("app.browserDevTools") }}</span>
             <Check v-if="activeTab?.devtoolsOpen" :size="13" class="app-menu-check" />
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="ai"
-            @click="openMcpSettings"
-          >
-            <Sparkles :size="14" />
-            <span>{{ t("app.mcpAiAccess") }}</span>
-            <!-- Status reads as a word in the same slot as "off", not as a dot
-                 carrying a native tooltip: the menu row already has a place for
-                 it, and a title here would be the one hint the app cannot draw. -->
-            <span v-if="aiRunning" class="app-menu-hint">{{ t("app.aiEndpointRunning") }}</span>
-            <span v-else class="app-menu-hint">{{ t("app.aiEndpointOff") }}</span>
           </button>
           <!--
             Zoom, also reachable from the menu.
@@ -2838,16 +2806,18 @@ function fillMessage(reason?: string): string {
         where it was.
       -->
       <div v-if="findOpen" class="findbar" data-find-bar>
-        <input
-          ref="findInput"
-          v-model="findText"
-          type="text"
-          :placeholder="t('app.browserFindPlaceholder')"
-          @input="runFind('reset')"
-          @keydown.enter.prevent="runFind('next')"
-          @keydown.shift.enter.prevent="runFind('prev')"
-          @keydown.esc.prevent="closeFindBar"
-        />
+        <InputShell size="toolbar" class="find-shell">
+          <input
+            ref="findInput"
+            v-model="findText"
+            type="text"
+            :placeholder="t('app.browserFindPlaceholder')"
+            @input="runFind('reset')"
+            @keydown.enter.prevent="runFind('next')"
+            @keydown.shift.enter.prevent="runFind('prev')"
+            @keydown.esc.prevent="closeFindBar"
+          />
+        </InputShell>
         <span class="count">
           {{ findResult ? `${findResult.activeMatch} / ${findResult.matches}` : "—" }}
         </span>
@@ -3182,15 +3152,15 @@ function fillMessage(reason?: string): string {
         The prompt is for a genuinely blank stage — no pages anywhere and no
         cells to invite one.
       -->
-      <div v-if="!store.tabs.length && !emptySlots.length" class="empty">
+      <div v-if="!store.tabs.length && !emptySlots.length" class="stage-empty">
         <p>{{ t("app.browserEmptyTitle") }}</p>
         <p class="sub">{{ t("app.browserEmptyHint") }}</p>
         <!-- One button, not a wall of site chips: the address bar is right above
              and the split new-tab button already lists every site as a bookmark,
              so repeating them here made the empty state look like a menu. -->
-        <button type="button" class="empty-action" @click="store.openTab()">
+        <AppButton class="stage-empty-action" @click="store.openTab()">
           {{ t("app.browserNewTab") }}
-        </button>
+        </AppButton>
       </div>
     </div>
 
@@ -3793,6 +3763,61 @@ function fillMessage(reason?: string): string {
   display: flex;
 }
 
+/*
+ * The AI entry and its panel.
+ *
+ * The panel is absolutely positioned inside the anchor rather than teleported:
+ * the toolbar is not a scrolling container, so the fixed-coordinate workaround
+ * the dialogs need would only add a second measurement that could disagree with
+ * the button it hangs off. The width is capped so a narrow window does not push
+ * it past the frame.
+ */
+.ai-anchor {
+  position: relative;
+  display: flex;
+}
+
+.ai-entry {
+  position: relative;
+}
+
+/* A dot on the icon's shoulder, like the bell's: "connected" is the one thing
+   that has to be readable without opening anything. */
+.ai-live-dot {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.ai-anchor :deep(.ai-panel) {
+  position: absolute;
+  z-index: 71;
+  top: calc(100% + 6px);
+  right: 0;
+  /*
+   * A fixed width, not `min(380px, 100vw - 32px)`: the panel hangs off a button
+   * near the right edge, so the viewport is never the binding constraint — the
+   * toolbar's remaining width is. Capping it against the viewport instead shrank
+   * the panel to the width of the window minus 32px whenever the window was
+   * narrow, which turned the permission row into three wrapped lines while the
+   * space to its left was empty. `max-width` keeps it on screen in the one case
+   * that matters: a window narrower than the panel.
+   */
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+  transform-origin: top right;
+}
+
 .messages-bell {
   position: relative;
 }
@@ -4260,6 +4285,12 @@ function fillMessage(reason?: string): string {
   position: relative;
   flex: 1;
   min-width: 0;
+  /* The shell fills the box so the suggestion list, which is positioned against
+     this element, lines up with the drawn field rather than with the row. */
+}
+
+.address-shell {
+  width: 100%;
 }
 
 /* Site suggestions hang under the field. They are plain HTML, so they paint
@@ -4464,28 +4495,11 @@ function fillMessage(reason?: string): string {
   min-width: 0;
 }
 
-.address input,
-.findbar input {
-  width: 100%;
-  height: var(--control-lg);
-  padding: 0 10px;
-  border-radius: var(--radius);
-  border: 1px solid transparent;
-  background: var(--field);
-  color: var(--text);
-  font-size: var(--fs-base);
-  outline: none;
-}
-
+/* The address input carries one thing the shared shell cannot know about: the
+   go button sits over its trailing edge, so the text needs room not to run
+   underneath it. */
 .address input {
-  padding-right: 30px;
-}
-
-.address input:focus,
-.findbar input:focus {
-  background: var(--chrome);
-  border-color: var(--accent-text);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  padding-right: 26px;
 }
 
 /* The go affordance lives inside the field so the toolbar stays one row, and
@@ -4565,22 +4579,14 @@ function fillMessage(reason?: string): string {
   box-shadow: var(--shadow-menu);
 }
 
-.findbar input {
-  flex: 1;
+/* The find bar is the same control with the same focus treatment as the
+   omnibox, so it uses the same shell at the panel's smaller height. */
+.findbar .input-shell {
+  flex: 1 1 auto;
   min-width: 0;
   height: 24px;
   padding: 0 6px;
-  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--field);
-  color: var(--text);
-  font-size: var(--fs-base);
-  outline: none;
-}
-
-.findbar input:focus {
-  border-color: var(--accent-text);
-  background: var(--chrome);
 }
 
 .findbar .icon {
@@ -5032,7 +5038,14 @@ function fillMessage(reason?: string): string {
   border-top-color: var(--accent-text);
 }
 
-.empty {
+/*
+ * The stage's own empty state.
+ *
+ * Not `EmptyState`: that one is a block in a scrolling page and centres itself
+ * with `margin: auto`. This one covers the stage exactly, because there is no
+ * page under it — the whole surface is blank.
+ */
+.stage-empty {
   position: absolute;
   inset: 0;
   display: grid;
@@ -5044,27 +5057,15 @@ function fillMessage(reason?: string): string {
   font-size: 12px;
 }
 
-.empty .sub {
+.stage-empty .sub {
   max-width: 340px;
   color: var(--faint);
   font-size: 11px;
   line-height: 1.6;
 }
 
-.empty-action {
+.stage-empty-action {
   margin-top: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  cursor: pointer;
-}
-
-.empty-action:hover {
-  background: var(--surface-2);
-  color: var(--text);
 }
 
 /* Page context menu ------------------------------------------------------- */

@@ -5,6 +5,8 @@ import { Grid2x2, Plus, Trash2 } from "lucide-vue-next";
 import Modal from "./Modal.vue";
 import LayoutPreview from "./LayoutPreview.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 import { clampSlot, snapSlotMove, snapSlotResize, type SnapGuides } from "@shared/layouts";
 import type { LayoutPreset, SlotRect } from "@shared/types";
 
@@ -184,10 +186,9 @@ function submit() {
     @close="emit('close')"
   >
     <div class="form">
-      <label class="field">
-        <span class="label">{{ $t("app.layoutName") }}</span>
-        <input v-model="form.name" class="input" :placeholder="$t('app.layoutNameExample')" />
-      </label>
+      <FormField :label="$t('app.layoutName')">
+        <TextField v-model="form.name" :placeholder="$t('app.layoutNameExample')" />
+      </FormField>
 
       <div class="template-row">
         <span class="template-label">{{ $t("app.startFrom") }}</span>
@@ -283,34 +284,6 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 13px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .template-row {

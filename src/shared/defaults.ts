@@ -60,9 +60,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layout: "free",
   // Nothing has been chosen yet, so the factory value above stays authoritative.
   layoutExplicit: false,
-  // The built-in surface is the default: it keeps every account in one window,
-  // which is the whole point. Switching to external is one click in the title bar.
-  launchTarget: "embedded",
   autoFillOnLaunch: true,
   // Submitting is what turns a filled form into a signed-in session; leaving it
   // off parks every launch one click short of useful.

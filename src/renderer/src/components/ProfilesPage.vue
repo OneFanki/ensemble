@@ -3,96 +3,93 @@
  * Browser profile management.
  *
  * A profile is a cookie jar with a name: the everyday one the user signs into
- * sites with, a second one to check what a colleague sees, and the throwaway
- * that forgets everything on quit. They sit in the browser half of the sidebar
- * next to bookmarks because that is where they are used — a profile is not a
- * setting about the app, it is one of the places browsing happens.
+ * sites with, a second one to check what a colleague sees. They sit in the
+ * browser half of the sidebar next to bookmarks because that is where they are
+ * used — a profile is not a setting about the app, it is one of the places
+ * browsing happens.
  *
- * The list is never empty: the two built-ins are re-inserted by the service if a
- * settings file loses them, so this page only ever manages additions.
+ * Every row launches, and launching is what this page is for: a jar nobody opens
+ * is a list entry with no purpose. The launch control offers the built-in surface
+ * and every external browser the app found, because "open this jar in Chrome" is the
+ * same question as "open it here" — only the surface differs.
+ *
+ * The clean session is listed last, drawn differently, and offers no rename or
+ * delete. It is the one fixed throwaway rather than a jar anyone keeps, so it
+ * belongs here as an opening, not as a managed row.
  */
 import type { BrowserProfile } from "@shared/types";
-import { Layers, Pencil, Plus, Trash2 } from "lucide-vue-next";
-import { computed, nextTick, ref } from "vue";
+import { Layers, Pencil, Plus, ShieldOff, Trash2 } from "lucide-vue-next";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
+import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 import IconButton from "./ui/IconButton.vue";
+import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
 const store = useWorkspaceStore();
+const embedded = useEmbeddedStore();
 const confirm = useConfirmStore();
 const { t } = useI18n();
 
-const profiles = computed(() => store.settings.profiles ?? []);
+/** The profiles this page manages; the clean session is listed apart. */
+const persistent = computed(() =>
+  (store.settings.profiles ?? []).filter((profile) => profile.retention !== "ephemeral"),
+);
+const cleanProfile = computed(() =>
+  (store.settings.profiles ?? []).find((profile) => profile.retention === "ephemeral"),
+);
+/** Everything the page lists, in order: the jars, then the throwaway. */
+const profiles = computed(() => [
+  ...persistent.value,
+  ...(cleanProfile.value ? [cleanProfile.value] : []),
+]);
 const defaultId = computed(() => store.settings.defaultProfileId);
 
 /**
- * New profile being named.
+ * The one dialog, doing double duty.
  *
- * Created from the header rather than a row at the bottom of the list: the list
- * grows downward, and a form under it would drift out of view exactly when there
- * are enough profiles to need one.
+ * A name is the only field a profile has, so creating and renaming are the same
+ * form: `profile` absent means "create", present means "rename that row". Both
+ * used to happen in the page body, which pushed the list down and — for create —
+ * stayed open after a successful write, so the row appeared under a form that
+ * still looked pending.
  */
-const draftName = ref("");
-const creating = ref(false);
+const dialog = ref<{ profile?: BrowserProfile; name: string } | null>(null);
 const error = ref("");
 
-/** Row being renamed in place; `null` means the list is in its normal state. */
-const editingId = ref<string | null>(null);
-const editName = ref("");
-const editInput = ref<HTMLInputElement[] | null>(null);
-
 function openCreate(): void {
-  creating.value = true;
   error.value = "";
+  dialog.value = { name: "" };
 }
 
-function cancelCreate(): void {
-  creating.value = false;
-  draftName.value = "";
+/** Built-ins have nothing to rename: the row carries no affordance for it. */
+function openRename(profile: BrowserProfile): void {
   error.value = "";
+  dialog.value = { profile, name: profile.name };
 }
 
-async function createProfile(): Promise<void> {
-  const name = draftName.value.trim();
+async function submit(): Promise<void> {
+  const draft = dialog.value;
+  if (!draft) return;
+  const name = draft.name.trim();
   if (!name) {
     error.value = t("app.profileNeedsName");
     return;
   }
   // `run` in the store turns a rejection into a toast and answers `undefined`,
-  // so the form only closes when the profile was actually written.
-  const saved = await store.createProfile(name);
+  // so the dialog only closes when the write actually landed.
+  const saved = draft.profile
+    ? await store.renameProfile(draft.profile.id, name)
+    : await store.createProfile(name);
   if (saved === undefined) return;
-  cancelCreate();
-}
-
-/**
- * Renaming happens in the row.
- *
- * A native prompt would be unstyled and would sit over the whole window for a
- * one-word edit; the row already has exactly one thing to change, so it becomes
- * an input for as long as that change takes.
- */
-function startRename(profile: BrowserProfile): void {
-  editingId.value = profile.id;
-  editName.value = profile.name;
-  void nextTick(() => editInput.value?.[0]?.select());
-}
-
-async function commitRename(profile: BrowserProfile): Promise<void> {
-  // Enter unmounts the input, which also fires `blur`; the guard keeps the
-  // second call from saving twice.
-  if (editingId.value !== profile.id) return;
-  const name = editName.value.trim();
-  editingId.value = null;
-  if (!name || name === profile.name) return;
-  await store.renameProfile(profile.id, name);
-}
-
-function cancelRename(): void {
-  editingId.value = null;
+  dialog.value = null;
+  error.value = "";
 }
 
 async function removeProfile(profile: BrowserProfile): Promise<void> {
@@ -107,22 +104,26 @@ async function removeProfile(profile: BrowserProfile): Promise<void> {
 }
 
 /**
- * The two lifetimes, as words a user can act on.
+ * Opens a blank browser in this jar, on the surface the user picked.
  *
- * Not "persist"/"ephemeral": those describe the mechanism. What matters when
- * choosing a row is whether the sign-in is still there tomorrow.
+ * The built-in half goes through the embedded store, which reads the row's own
+ * retention — an ephemeral profile gets a throwaway in-memory session, which is
+ * what makes the clean row actually clean.
  */
-function retentionNote(profile: BrowserProfile): string {
-  return profile.retention === "ephemeral"
-    ? t("app.profileEphemeralNote")
-    : t("app.profilePersistNote");
+async function launchProfile(profile: BrowserProfile): Promise<void> {
+  await embedded.openProfileTab(profile.id);
+}
+
+/** The same jar in one external browser. */
+async function launchProfileExternal(profile: BrowserProfile, engineId: string): Promise<void> {
+  await store.launchProfile(profile.id, { engineId });
 }
 </script>
 
 <template>
   <section class="page profiles">
     <PageHeader :title="t('app.profiles')">
-      <template #note>{{ t("app.profilesNote", { count: profiles.length }) }}</template>
+      <template #note>{{ t("app.profilesNote", { count: persistent.length }) }}</template>
       <template #actions>
         <AppButton variant="primary" data-profile-new @click="openCreate">
           <Plus :size="13" />
@@ -132,59 +133,32 @@ function retentionNote(profile: BrowserProfile): string {
     </PageHeader>
 
     <div class="page-body">
-      <form v-if="creating" class="create" @submit.prevent="createProfile">
-        <input
-          v-model="draftName"
-          class="create-input"
-          type="text"
-          :placeholder="t('app.profileNamePlaceholder')"
-          data-profile-name
-          @keydown.esc.prevent="cancelCreate"
-        />
-        <AppButton type="submit" variant="primary" data-profile-create>
-          {{ t("app.profileCreate") }}
-        </AppButton>
-        <AppButton type="button" @click="cancelCreate">{{ t("app.cancel") }}</AppButton>
-      </form>
-      <p v-if="error" class="error">{{ error }}</p>
-
       <div class="list">
         <div
-          v-for="profile in profiles"
+          v-for="profile in persistent"
           :key="profile.id"
           class="row"
-          :class="{ editing: editingId === profile.id }"
           :data-profile-id="profile.id"
-          v-tooltip="{ text: retentionNote(profile) }"
         >
           <span class="row-icon"><Layers :size="13" /></span>
-          <input
-            v-if="editingId === profile.id"
-            ref="editInput"
-            v-model="editName"
-            class="rename"
-            :data-profile-rename-input="profile.id"
-            @keydown.enter.prevent="commitRename(profile)"
-            @keydown.esc.prevent="cancelRename"
-            @blur="commitRename(profile)"
-          />
-          <span v-else class="row-name">{{ profile.name }}</span>
+          <span class="row-name">{{ profile.name }}</span>
           <span v-if="profile.id === defaultId" class="badge">{{ t("app.profileDefaultBadge") }}</span>
           <span class="row-spacer"></span>
           <AppButton
-            v-if="profile.retention !== 'ephemeral' && profile.id !== defaultId"
+            v-if="profile.id !== defaultId"
             class="row-default"
+            size="sm"
             :data-profile-default="profile.id"
             @click="store.setDefaultProfile(profile.id)"
           >
             {{ t("app.profileSetDefault") }}
           </AppButton>
-          <span class="row-reserve">
+          <span v-if="!profile.builtin" class="row-reserve">
             <IconButton
               :ariaLabel="t('app.profileRename')"
               :title="t('app.profileRename')"
               :data-profile-rename="profile.id"
-              @click="startRename(profile)"
+              @click="openRename(profile)"
             >
               <Pencil :size="12" />
             </IconButton>
@@ -200,48 +174,94 @@ function retentionNote(profile: BrowserProfile): string {
               <Trash2 :size="12" />
             </IconButton>
           </span>
-          <!-- A built-in row reserves the delete slot and leaves it empty: a
-               greyed icon would read as "deletable but broken" rather than as
-               "not an option", and an empty box still keeps the notes aligned. -->
-          <span v-else class="row-reserve"></span>
+          <!-- A built-in row reserves both slots and leaves them empty: a greyed
+               icon would read as "available but broken" rather than as "not an
+               option", and the empty boxes keep the buttons aligned. -->
+          <template v-else>
+            <span class="row-reserve"></span>
+            <span class="row-reserve"></span>
+          </template>
+          <LaunchSplitButton
+            compact
+            :aria-label="t('app.profileOpen')"
+            :data-hook="`profile-${profile.id}`"
+            @launch="launchProfile(profile)"
+            @launch-external="launchProfileExternal(profile, $event)"
+          />
+        </div>
+
+        <!-- The throwaway, last and dashed.
+             It offers the same launch control as a profile — opening a clean jar in
+             an external browser is a legitimate reason to be here — but no rename, no
+             delete and no "make default": it is one fixed empty jar, not a row
+             anyone manages. -->
+        <div
+          v-if="cleanProfile"
+          class="row dashed"
+          :data-profile-id="cleanProfile.id"
+          :data-profile-clean="cleanProfile.id"
+        >
+          <span class="row-icon"><ShieldOff :size="13" /></span>
+          <span class="row-name">{{ cleanProfile.name }}</span>
+          <span class="row-spacer"></span>
+          <span class="row-reserve"></span>
+          <span class="row-reserve"></span>
+          <LaunchSplitButton
+            compact
+            :aria-label="t('app.profileOpen')"
+            :data-hook="`profile-${cleanProfile.id}`"
+            @launch="launchProfile(cleanProfile)"
+            @launch-external="launchProfileExternal(cleanProfile, $event)"
+          />
         </div>
       </div>
     </div>
+
+    <Modal
+      v-if="dialog"
+      :open="true"
+      :title="dialog.profile ? t('app.profileRename') : t('app.profileNew')"
+      width="420px"
+      @close="dialog = null"
+    >
+      <form class="form" @submit.prevent="submit">
+        <FormField :label="t('app.profileNameLabel')">
+          <TextField
+            v-model="dialog.name"
+            type="text"
+            maxlength="60"
+            :placeholder="t('app.profileNamePlaceholder')"
+            data-profile-name
+          />
+        </FormField>
+        <p v-if="error" class="error" role="alert">{{ error }}</p>
+      </form>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="dialog = null">{{ t("app.cancel") }}</AppButton>
+        <AppButton variant="primary" data-profile-create @click="submit">
+          {{ dialog.profile ? t("app.save") : t("app.profileCreate") }}
+        </AppButton>
+      </template>
+    </Modal>
   </section>
 </template>
 
 <style scoped>
-.create {
+.form {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-}
-
-.create-input {
-  flex: 0 1 320px;
-  min-width: 0;
-  height: var(--control-md);
-  padding: 0 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: var(--fs-base);
-  outline: 0;
-}
-
-.create-input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+  flex-direction: column;
+  gap: 13px;
 }
 
 .error {
   margin: 0;
   font-size: 11px;
   color: var(--red);
+}
+
+.spacer {
+  flex: 1;
 }
 
 .list {
@@ -295,9 +315,7 @@ function retentionNote(profile: BrowserProfile): string {
   letter-spacing: 0.02em;
 }
 
-/* A spacer where the note used to be. The lifetime is now on hover (it is
-   something you learn once), but the row still needs the flexible column so the
-   actions stay pinned to the right edge instead of following the name. */
+/* Keeps the actions pinned to the right edge instead of following the name. */
 .row-spacer {
   flex: 1 1 auto;
   min-width: 0;
@@ -315,23 +333,22 @@ function retentionNote(profile: BrowserProfile): string {
   opacity: 1;
 }
 
-.rename {
-  min-width: 120px;
-  flex: 0 1 220px;
-  border: none;
-  border-bottom: 1px solid var(--accent);
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  padding: 0 0 1px;
-  outline: none;
-}
-
 /* One icon button's box, empty on a built-in row: reserving the same width is
-   what keeps every row's note ending at the same x. */
+   what keeps every row's actions ending at the same x. */
 .row-reserve {
   flex: 0 0 auto;
   display: inline-flex;
   width: 24px;
+}
+
+/* The clean session: the same row, drawn as the throwaway it is. A dashed edge
+   and no action buttons say "an opening, not a jar you keep" without a caption
+   repeating it. */
+.row.dashed {
+  border-top: 1px dashed var(--line);
+}
+
+.row.dashed .row-name {
+  color: var(--muted);
 }
 </style>

@@ -7,6 +7,8 @@ import {
   perfArea,
   perfAxisLabel,
   perfAxisMax,
+  perfCamera,
+  perfClock,
   perfPeak,
   perfPolyline,
   perfSparkPoints,
@@ -40,6 +42,15 @@ import SelectField from "./SelectField.vue";
  * (see `showDevtoolsTab`). This component polls the history rather than waiting
  * for a state broadcast: pushing a full workspace state five times a second
  * would make the panel itself the load being measured.
+ *
+ * **The chart moves on two clocks.** Samples arrive every 200ms; the viewport
+ * moves every frame. That split is what Edge and Chrome do, and it is the only
+ * way to get smooth scrolling: a chart whose axis is defined by "the last
+ * sample is the right edge" is *frozen* between samples and jumps one step when
+ * the next one lands. So the paths are laid out once per poll against a fixed
+ * origin, and a `requestAnimationFrame` loop slides them under an SVG
+ * transform. Nothing about the data changes between frames — only where it is
+ * being looked at from.
  *
  * The window and the interval are configured here, not in Settings. Both are
  * questions about the chart in front of you — "this stutter is too short to see"
@@ -103,25 +114,109 @@ const intervalMs = computed(
 const history = ref<PerfSample[]>([]);
 const hidden = ref<Set<PerfMetric>>(new Set());
 
-let timer: ReturnType<typeof setInterval> | undefined;
 let alive = true;
+/** Set while a read is outstanding, so a slow read cannot stack up behind itself. */
+let reading = false;
+
+/**
+ * The `t` the paths were laid out against: the plot's left edge.
+ *
+ * Always one window before the newest sample, recomputed on every poll. That
+ * makes the newest sample land exactly on the right edge, and it makes the
+ * camera offset exactly "time since that sample" — which is the quantity the
+ * animation frame advances. When a new sample arrives, the paths shift left by
+ * one interval and the camera resets by the same amount, so the two cancel:
+ * the curve does not jump.
+ */
+const baseT = ref(0);
+/** The camera offset in viewBox units; see {@link perfCamera}. */
+const camera = ref(0);
+
+/**
+ * Whether two reads describe the same series.
+ *
+ * The IPC returns a fresh array every poll and Vue's `computed` compares by
+ * reference, so assigning an unchanged series would rebuild all sixteen paths
+ * five times a second for nothing. Length plus both endpoints is enough: the
+ * sampler only ever appends and trims from the left.
+ */
+function sameSeries(a: PerfSample[], b: PerfSample[]): boolean {
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  return a[0]!.t === b[0]!.t && a[a.length - 1]!.t === b[b.length - 1]!.t;
+}
 
 async function poll(): Promise<void> {
+  if (reading) return;
+  reading = true;
   try {
     const next = await window.ensemble.readEmbeddedPerf(props.tabId);
-    if (alive) history.value = next;
+    if (!alive) return;
+    if (sameSeries(next, history.value)) return;
+    const newest = next[next.length - 1];
+    baseT.value = newest ? newest.t - windowMs.value : 0;
+    history.value = next;
+    refreshAxes();
   } catch {
     // The page went away; the next poll either recovers or the panel closes.
+  } finally {
+    reading = false;
   }
+}
+
+let frame: number | undefined;
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Advances the camera once per frame.
+ *
+ * Runs continuously while the panel is mounted rather than only on new samples:
+ * the whole point is that the chart moves *between* them. Writing one ref is
+ * cheap — Vue touches only the transform attribute on the group, not the paths.
+ */
+function stepCamera(): void {
+  if (!alive) return;
+  const latest = history.value[history.value.length - 1];
+  camera.value = perfCamera(
+    perfClock(latest, Date.now()),
+    baseT.value,
+    windowMs.value,
+    CHART_WIDTH,
+  );
+  frame = requestAnimationFrame(stepCamera);
+}
+
+/**
+ * Polls at the sampling interval, re-reading it every turn.
+ *
+ * A self-rescheduling timeout rather than `setInterval`: the interval is a
+ * setting, and this way a change takes effect on the next turn without tearing
+ * down and rebuilding the timer.
+ *
+ * 250ms against 200ms sampling was a 4:5 beat — most polls saw one new sample,
+ * every fifth saw two — which on its own produced a cadence of three small steps
+ * and one double step per second. Polling at the sampling rate means each call
+ * usually finds exactly one new sample, and the camera hides the jitter that is
+ * left.
+ */
+function schedulePoll(): void {
+  if (!alive) return;
+  pollTimer = setTimeout(() => {
+    void poll();
+    schedulePoll();
+  }, intervalMs.value);
 }
 
 onMounted(() => {
   void poll();
-  timer = setInterval(() => void poll(), 250);
+  schedulePoll();
+  frame = requestAnimationFrame(stepCamera);
 });
+
 onBeforeUnmount(() => {
   alive = false;
-  if (timer) clearInterval(timer);
+  if (pollTimer) clearTimeout(pollTimer);
+  if (frame !== undefined) cancelAnimationFrame(frame);
 });
 
 /** Latest sample, which is what each row's number reads. */
@@ -205,10 +300,51 @@ function formatBytes(bytes: number): string {
  * pinned to 100 instead of to the local peak. A page idling at 2% otherwise
  * draws a "full height" line and reads as saturated — the same misreading the
  * missing scale caused, just in the other direction.
+ *
+ * The other metrics use a **sticky** top, advanced by {@link refreshAxes} rather
+ * than recomputed here: doing it in this getter would be a write inside a
+ * computed. A top that followed the exact window peak rescaled all eight lanes
+ * whenever a spike entered or left the window, which read as the chart twitching
+ * on its own.
  */
+const axisState = ref<Record<string, number>>({});
+
 function axisFor(metric: PerfMetric): number {
   if (metric === "cpu") return 100;
-  return perfAxisMax(perfPeak(history.value, metric));
+  return axisState.value[metric] ?? perfAxisMax(perfPeak(history.value, metric));
+}
+
+/**
+ * Moves each lane's top towards what the data needs, asymmetrically.
+ *
+ * Up immediately: a peak above the current top would be clipped, and clipped
+ * data is worse than a rescale. Down at most once every {@link AXIS_DROP_MS},
+ * and all the way in one step — `perfAxisMax` returns a stepped value, so this
+ * is a clean gear change rather than a slow drift. A chart that shrinks on every
+ * quiet sample looks unstable even though nothing about the page changed.
+ */
+const AXIS_DROP_MS = 2_000;
+const lastAxisDrop = new Map<string, number>();
+
+function refreshAxes(): void {
+  const now = Date.now();
+  const next = { ...axisState.value };
+  let changed = false;
+  for (const metric of PERF_METRICS) {
+    if (metric === "cpu") continue;
+    const needed = perfAxisMax(perfPeak(history.value, metric));
+    const current = next[metric];
+    if (current === undefined || needed > current) {
+      next[metric] = needed;
+      lastAxisDrop.set(metric, now);
+      changed = changed || current !== needed;
+    } else if (needed < current && now - (lastAxisDrop.get(metric) ?? 0) >= AXIS_DROP_MS) {
+      next[metric] = needed;
+      lastAxisDrop.set(metric, now);
+      changed = true;
+    }
+  }
+  if (changed) axisState.value = next;
 }
 
 const CHART_WIDTH = 100;
@@ -229,10 +365,11 @@ const CHART_HEIGHT = 40;
  * times per frame, at 4 frames a second, inside the panel that is supposed to be
  * measuring load.
  *
- * `perfSparkPoints` is given the fixed window, so a lane's x axis does not move
- * as samples accumulate: the newest sample is at the right edge and a young
- * series draws only the sliver of the window it has filled. Without that the
- * axis was derived from the data on every poll and the curve appeared to zoom.
+ * **Paths are absolute, not relative to "now".** They are laid out against
+ * `baseT` — the left edge of the drawn window — and then slid under a transform
+ * by the camera. Building them around the newest sample instead would make the
+ * whole path change shape on every poll, and no amount of interpolation hides
+ * a cliff that a transform never has to produce.
  */
 interface Lane {
   /** Top of the scale, the halfway point, then zero. All three label a
@@ -242,10 +379,29 @@ interface Lane {
   area: string;
 }
 
+/**
+ * Metrics drawn as a staircase.
+ *
+ * A DOM count is a number sampled at intervals: it went 3 → 4 because something
+ * was added, not because it climbed. A slope between two readings invents a
+ * value that was never measured. CPU is the exception — it is the share of an
+ * interval, so the slope between two readings is the shape of the interval.
+ */
+const STEP_METRICS = new Set<PerfMetric>([
+  "nodes",
+  "listeners",
+  "documents",
+  "frames",
+  "heap",
+  "layouts",
+  "styleRecalcs",
+]);
+
 const lanes = computed<Record<PerfMetric, Lane>>(() => {
   const result = {} as Record<PerfMetric, Lane>;
   for (const metric of PERF_METRICS) {
     const top = axisFor(metric);
+    const step = STEP_METRICS.has(metric);
     const points = perfSparkPoints(
       history.value,
       metric,
@@ -253,6 +409,7 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
       CHART_HEIGHT,
       top,
       windowMs.value,
+      { origin: baseT.value, extendRight: true },
     );
     result[metric] = {
       ticks: [
@@ -260,8 +417,8 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
         perfAxisLabel(metric, top / 2),
         perfAxisLabel(metric, 0),
       ],
-      line: perfPolyline(points),
-      area: perfArea(points, CHART_HEIGHT),
+      line: perfPolyline(points, { step }),
+      area: perfArea(points, CHART_HEIGHT, { step }),
     };
   }
   return result;
@@ -354,8 +511,15 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
               preserveAspectRatio="none"
               aria-hidden="true"
             >
-              <!-- Three reference levels, matching the three ticks: the top of
-                   the scale, the halfway line, and zero. -->
+              <!--
+                Gridlines stay outside the sliding group: they are the fixed
+                reference the curve is read against, so they must not move with
+                it. Only the data slides.
+
+                The camera is one transform on one group per lane. Rebuilding
+                the paths per frame instead would mean sixteen path strings at
+                60fps inside the panel that is measuring the page's load.
+              -->
               <line x1="0" y1="1" :x2="CHART_WIDTH" y2="1" class="spark-grid" />
               <line
                 x1="0"
@@ -371,8 +535,10 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
                 :y2="CHART_HEIGHT - 1"
                 class="spark-base"
               />
-              <path :d="lanes[metric].area" class="spark-area" />
-              <path :d="lanes[metric].line" class="spark-line" />
+              <g class="spark-scroll" :transform="`translate(${-camera} 0)`">
+                <path :d="lanes[metric].area" class="spark-area" />
+                <path :d="lanes[metric].line" class="spark-line" />
+              </g>
             </svg>
             <span
               v-for="(tick, index) in lanes[metric].ticks"
@@ -546,11 +712,18 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   padding-left: 34px;
 }
 
+/*
+ * Clipped, not `visible`.
+ *
+ * The curve now slides: it is drawn wider than the plot and translated under
+ * this element. `overflow: visible` let the off-screen part paint into the tick
+ * gutter and over the neighbouring rows.
+ */
 .metric-spark {
   display: block;
   width: 100%;
   height: 40px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 /* The scale, in the gutter.

@@ -11,7 +11,6 @@ import {
   Plus,
   Search,
   Star,
-  X,
 } from "lucide-vue-next";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -19,7 +18,11 @@ import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkBar from "./BookmarkBar.vue";
 import Logo from "./Logo.vue";
+import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import InputShell from "./ui/InputShell.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * What a blank page shows instead of an empty white rectangle.
@@ -55,7 +58,8 @@ const engineOpen = ref(false);
 const adding = ref(false);
 const draftName = ref("");
 const draftTemplate = ref("");
-const nameInput = ref<HTMLInputElement | null>(null);
+/** The exposed `focus()` of the shared field. */
+const nameInput = ref<{ focus: () => void } | null>(null);
 /** The backdrop picker is a temporary overlay state, never persisted. */
 const picking = ref(false);
 
@@ -169,11 +173,19 @@ async function pickBackdrop(id: string): Promise<void> {
   await workspace.saveSettings({ newTabBackground: id });
 }
 
+/**
+ * Opens the new-engine dialog.
+ *
+ * The dialog rather than a form unfolding under the search box: a blank page is
+ * one centred column, and a panel appearing in it pushed the box off centre —
+ * the one thing on this surface that must stay where the eye expects it.
+ */
 async function startAdding(): Promise<void> {
   engineOpen.value = false;
   adding.value = true;
   draftName.value = "";
   draftTemplate.value = "";
+  error.value = "";
   await nextTick();
   nameInput.value?.focus();
 }
@@ -187,7 +199,11 @@ async function saveEngine(): Promise<void> {
   }
   const id = `custom-${Date.now().toString(36)}`;
   const next = [...workspace.settings.customSearchEngines, { id, name, urlTemplate: template }];
-  await workspace.saveSettings({ customSearchEngines: next, searchEngineId: id });
+  // Only close on a real save: `saveSettings` answers `undefined` when the write
+  // failed and the toast already explained why.
+  if ((await workspace.saveSettings({ customSearchEngines: next, searchEngineId: id })) === undefined) {
+    return;
+  }
   adding.value = false;
   error.value = "";
 }
@@ -206,7 +222,7 @@ function openBookmark(bookmark: Bookmark): void {
 
 <template>
   <div class="new-tab">
-    <div class="nt-bg" :style="{ background: workspace.newTabBackdropStyle }"></div>
+    <div class="nt-bg" :data-backdrop="workspace.newTabBackdropId"></div>
     <!--
       The bookmark strip belongs to the blank page, not to the browser chrome:
       it sits at the top of this surface and exists only while a blank page is
@@ -231,7 +247,7 @@ function openBookmark(bookmark: Bookmark): void {
         <span class="nt-wordmark">Ensemble</span>
       </div>
 
-      <form class="nt-box" @submit.prevent="submit">
+      <InputShell as="form" size="hero" class="nt-box" @submit.prevent="submit">
         <Search :size="15" class="nt-magnifier" aria-hidden="true" />
         <input
           v-model="query"
@@ -313,47 +329,57 @@ function openBookmark(bookmark: Bookmark): void {
           type="submit"
           class="nt-go"
           :aria-label="t('app.newTabGo')"
-          :title="t('app.newTabGo')"
+          v-tooltip="t('app.newTabGo')"
         >
           <CornerDownLeft :size="14" />
         </button>
-      </form>
+      </InputShell>
 
-      <form v-if="adding" class="nt-custom" @submit.prevent="saveEngine">
-        <div class="nt-custom-head">
-          <span>{{ t("app.newTabEngineAdd") }}</span>
-          <button type="button" class="nt-close" :aria-label="t('app.cancel')" @click="adding = false">
-            <X :size="12" />
-          </button>
-        </div>
-        <div class="nt-custom-row">
-          <input
+      <p v-if="error && !adding" class="nt-error">{{ error }}</p>
+    </div>
+
+    <!--
+      The engine form is a dialog, not a block in the column: this surface is one
+      centred search box, and anything that unfolds under it moves the box while
+      the user is looking at it.
+    -->
+    <Modal
+      v-if="adding"
+      :open="true"
+      :title="t('app.newTabEngineAdd')"
+      width="460px"
+      @close="adding = false"
+    >
+      <form class="engine-form" @submit.prevent="saveEngine">
+        <FormField :label="t('app.newTabEngineName')">
+          <TextField
             ref="nameInput"
             v-model="draftName"
             type="text"
-            :placeholder="t('app.newTabEngineName')"
-            :aria-label="t('app.newTabEngineName')"
+            maxlength="40"
           />
-          <input
+        </FormField>
+        <FormField :label="t('app.newTabEngineTemplate')">
+          <TextField
             v-model="draftTemplate"
+            mono
             type="text"
-            class="mono"
             spellcheck="false"
             placeholder="https://example.com/search?q=%s"
-            :aria-label="t('app.newTabEngineTemplate')"
           />
-        </div>
-        <p class="nt-custom-note">
-          {{ t("app.newTabEngineTemplateHint") }}
-          <span v-if="preview" class="mono preview">{{ preview }}</span>
-        </p>
-        <AppButton size="sm" variant="primary" @click="saveEngine">
-          {{ t("app.save") }}
-        </AppButton>
+          <p class="hint">
+            {{ t("app.newTabEngineTemplateHint") }}
+            <span v-if="preview" class="mono preview">{{ preview }}</span>
+          </p>
+        </FormField>
+        <p v-if="error" class="error" role="alert">{{ error }}</p>
       </form>
-
-      <p v-if="error" class="nt-error">{{ error }}</p>
-    </div>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="adding = false">{{ t("app.cancel") }}</AppButton>
+        <AppButton variant="primary" @click="saveEngine">{{ t("app.save") }}</AppButton>
+      </template>
+    </Modal>
 
     <!--
       Backdrop picker. A corner control rather than a settings row: the choice
@@ -372,7 +398,7 @@ function openBookmark(bookmark: Bookmark): void {
           :aria-checked="item.id === backdrop.id"
           :title="t(item.labelKey)"
           :aria-label="t(item.labelKey)"
-          :style="{ background: item.swatch }"
+          :data-backdrop="item.id"
           @click="pickBackdrop(item.id)"
         ></button>
       </div>
@@ -415,6 +441,89 @@ function openBookmark(bookmark: Bookmark): void {
 }
 
 /*
+ * The backdrops, one picture per theme.
+ *
+ * Both the surface and the picker's swatch read `--nt-paint`, and there is
+ * exactly one declaration of it per preset per theme. That is the whole point of
+ * moving these out of `shared/newtab.ts`: as strings in that file the paint and
+ * the swatch were two independent literals, and they had already drifted —
+ * `plain` painted `--bg` and offered a swatch of `--bg-elevated`.
+ *
+ * The light values are not the dark ones brightened. A 5.5% teal wash that tints
+ * a near-black corner disappears on near-white, so light needs about twice the
+ * alpha to read as the same mood; `grid` needs a darker line than `--line-soft`,
+ * which is nearly the frame colour on light. Every preset also has to stay quiet
+ * enough that a search box on top of it is still the thing you look at.
+ *
+ * An unknown id matches no rule, so `--nt-paint` stays undefined and both layers
+ * paint `--bg` — the same fallback the lookup function used to provide.
+ */
+.nt-bg,
+.nt-swatch {
+  background: var(--nt-paint, var(--bg));
+}
+
+.nt-bg[data-backdrop="aurora"],
+.nt-swatch[data-backdrop="aurora"] {
+  --nt-paint: radial-gradient(70% 55% at 14% 6%, rgb(45 212 191 / 5.5%), transparent 70%),
+    radial-gradient(65% 55% at 88% 94%, rgb(139 92 246 / 6%), transparent 70%), var(--bg);
+}
+
+:root[data-theme="light"] .nt-bg[data-backdrop="aurora"],
+:root[data-theme="light"] .nt-swatch[data-backdrop="aurora"] {
+  --nt-paint: radial-gradient(70% 55% at 14% 6%, rgb(13 148 136 / 12%), transparent 70%),
+    radial-gradient(65% 55% at 88% 94%, rgb(109 40 217 / 10%), transparent 70%), var(--bg);
+}
+
+.nt-bg[data-backdrop="dusk"],
+.nt-swatch[data-backdrop="dusk"] {
+  --nt-paint: radial-gradient(70% 55% at 82% 4%, rgb(251 146 60 / 5.5%), transparent 70%),
+    radial-gradient(70% 60% at 10% 96%, rgb(244 63 94 / 5%), transparent 70%), var(--bg);
+}
+
+:root[data-theme="light"] .nt-bg[data-backdrop="dusk"],
+:root[data-theme="light"] .nt-swatch[data-backdrop="dusk"] {
+  --nt-paint: radial-gradient(70% 55% at 82% 4%, rgb(234 88 12 / 13%), transparent 70%),
+    radial-gradient(70% 60% at 10% 96%, rgb(225 29 72 / 10%), transparent 70%), var(--bg);
+}
+
+.nt-bg[data-backdrop="night"],
+.nt-swatch[data-backdrop="night"] {
+  --nt-paint: radial-gradient(80% 65% at 50% -8%, rgb(59 130 246 / 7%), transparent 70%),
+    radial-gradient(60% 50% at 50% 108%, rgb(30 64 175 / 7%), transparent 70%), var(--bg);
+}
+
+:root[data-theme="light"] .nt-bg[data-backdrop="night"],
+:root[data-theme="light"] .nt-swatch[data-backdrop="night"] {
+  --nt-paint: radial-gradient(80% 65% at 50% -8%, rgb(37 99 235 / 13%), transparent 70%),
+    radial-gradient(60% 50% at 50% 108%, rgb(30 64 175 / 11%), transparent 70%), var(--bg);
+}
+
+/*
+ * 24px graph paper. The dark theme draws it in `--line-soft`, which is one step
+ * off the frame there; on light that token is nearly the frame colour too, so the
+ * grid vanished. The lines get their own colour below rather than borrowing a
+ * surface step that means something else.
+ */
+.nt-bg[data-backdrop="grid"],
+.nt-swatch[data-backdrop="grid"] {
+  --nt-paint: linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 24px 24px, var(--bg);
+}
+
+:root[data-theme="light"] .nt-bg[data-backdrop="grid"],
+:root[data-theme="light"] .nt-swatch[data-backdrop="grid"] {
+  --nt-paint: linear-gradient(rgb(100 116 139 / 22%) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, rgb(100 116 139 / 22%) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--bg);
+}
+
+.nt-bg[data-backdrop="plain"],
+.nt-swatch[data-backdrop="plain"] {
+  --nt-paint: var(--bg);
+}
+
+/*
  * The block, centred. Not a scroll container.
  *
  * It used to carry `max-height: 100%; overflow-y: auto` so a short window could
@@ -436,13 +545,17 @@ function openBookmark(bookmark: Bookmark): void {
 }
 
 /* The mark and the wordmark, centred over the field: the one line on this
-   surface that names what the empty page is. */
+   surface that names what the empty page is.
+
+   The gap is 6px, not 9px. The mark's ink now sits in the middle of its box, so
+   the distance the eye reads is the distance actually set — the old 9px plus a
+   built-up 2px bottom padding was three numbers compensating for one offset
+   inside the SVG. */
 .nt-brand {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  padding-bottom: 2px;
+  gap: 6px;
 }
 
 .nt-wordmark {
@@ -453,26 +566,13 @@ function openBookmark(bookmark: Bookmark): void {
   color: var(--text-secondary);
 }
 
+/* The search box is the shared `InputShell` at its hero size: the shell owns the
+   border, the fill and the one-shot focus sweep, so this surface and the
+   omnibox cannot drift into two different focus treatments again. Only the
+   layout of its contents lives here. */
 .nt-box {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 46px;
-  padding: 0 6px 0 14px;
-  border: 1px solid var(--line);
-  /* A rounded rectangle, not a pill. Height/2 radius on a 46px box is the
-     search pill of a phone home screen; on a desktop window it was the only
-     fully-round shape in the product. */
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  /* No elevation: the border already separates the field from the backdrop, and
-     a drop shadow under a search box made this surface read as a floating
-     widget instead of part of the page. */
-}
-
-.nt-box:focus-within {
-  border-color: color-mix(in srgb, var(--line) 45%, var(--accent));
+  width: 100%;
 }
 
 /* The magnifier leads the field, as it does in every browser's omnibox; the
@@ -583,6 +683,8 @@ function openBookmark(bookmark: Bookmark): void {
   color: var(--faint);
 }
 
+/* The hero field is taller and larger than the toolbar's, so it overrides the
+   shell's default field text. The stroke and the fill belong to the shell. */
 .nt-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -684,67 +786,15 @@ function openBookmark(bookmark: Bookmark): void {
   background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
-.nt-custom {
+/* The engine dialog's body: the same field/input shape every other dialog uses,
+   so this page's one form does not invent a second style. */
+.engine-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  background: var(--surface);
-  align-items: flex-start;
+  gap: 13px;
 }
 
-.nt-custom-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.nt-close {
-  margin-left: auto;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  color: var(--faint);
-}
-
-.nt-close:hover {
-  background: var(--surface-3);
-  color: var(--text-secondary);
-}
-
-.nt-custom-row {
-  display: flex;
-  gap: 6px;
-  width: 100%;
-}
-
-.nt-custom-row input {
-  flex: 1 1 0;
-  min-width: 0;
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 11.5px;
-  outline: none;
-}
-
-.nt-custom-row input:focus {
-  border-color: color-mix(in srgb, var(--line) 50%, var(--accent));
-}
-
-.nt-custom-note {
+.hint {
   margin: 0;
   font-size: 10.5px;
   color: var(--faint);
@@ -755,11 +805,21 @@ function openBookmark(bookmark: Bookmark): void {
   min-width: 0;
 }
 
-.nt-custom-note .preview {
+.hint .preview {
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--red);
+}
+
+.spacer {
+  flex: 1;
 }
 
 .nt-error {

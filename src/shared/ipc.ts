@@ -12,6 +12,8 @@ import type { ConnectivityProbeResult } from "./proxy";
 import type { ExportCounts, ImportPreview, ImportResult } from "./transfer";
 import type {
   AddMessageInput,
+  AiActivityRecord,
+  AiApprovalDecision,
   AiPageAction,
   AppMessageView,
   AppSettings,
@@ -173,6 +175,22 @@ export const IPC = {
   appOpenSettings: "app:open-settings",
   /** Main → renderer: an AI client acted on a page, with its origin. */
   aiPageAction: "ai:page-action",
+  /** Renderer → main: the AI activity log, newest first. */
+  aiActivityList: "ai:activity-list",
+  /** Renderer → main: empty the AI activity log. */
+  aiActivityClear: "ai:activity-clear",
+  /** Main → renderer: the AI activity log changed. */
+  aiActivityChanged: "ai:activity-changed",
+  /** Main → the authorization window: show this request. */
+  approvalRequest: "approval:request",
+  /** Main → the authorization window: nothing left to answer. */
+  approvalDismiss: "approval:dismiss",
+  /** The authorization window → main: the user's answer. */
+  approvalRespond: "approval:respond",
+  /** The authorization window → main: closed without answering. */
+  approvalCancel: "approval:cancel",
+  /** The authorization window → main: what should I show right now? */
+  approvalCurrent: "approval:current",
   credentialsSet: "credentials:set",
   credentialsClear: "credentials:clear",
   credentialsCopy: "credentials:copy",
@@ -185,6 +203,7 @@ export const IPC = {
   instanceLaunchBatch: "instance:launch-batch",
   instanceLaunchView: "instance:launch-view",
   instanceLaunchViewMember: "instance:launch-view-member",
+  instanceLaunchProfile: "instance:launch-profile",
   instanceClean: "instance:clean",
   instanceStop: "instance:stop",
   instanceStopAll: "instance:stop-all",
@@ -385,6 +404,39 @@ export interface HttpAuthChallenge {
   isProxy: boolean;
 }
 
+/**
+ * One AI request that needs the user's answer before it can reach a page.
+ *
+ * Everything here is a fact the window has to show so the user can decide:
+ * which site, which tool, what it is about to do, and which profile or account
+ * the page belongs to. `expiresAt` is computed in the main process so the
+ * countdown the window draws cannot disagree with the timer that actually ends
+ * the request.
+ */
+export interface ApprovalRequest {
+  id: string;
+  /** The tool the AI is calling, e.g. `click_browser_element`. */
+  tool: string;
+  /** Plain-language summary, already redacted. Used for logs and as a fallback. */
+  summary: string;
+  /**
+   * i18n key describing the action, and its parameters.
+   *
+   * Separate from `summary` because the card is a renderer with a language
+   * setting: a stored Chinese sentence would show Chinese to an English user.
+   */
+  actionKey: string;
+  actionParams?: Record<string, string>;
+  origin: string;
+  /** Site name when the workspace knows one, else empty. */
+  siteName: string;
+  /** Context line: profile name, account name, or "clean session". */
+  context: string;
+  tabTitle: string;
+  /** Epoch ms; when this passes unanswered, the request is refused. */
+  expiresAt: number;
+}
+
 export interface EnsembleApi {
   getWorkspace(): Promise<WorkspaceSnapshot>;
   onWorkspaceChanged(listener: (snapshot: WorkspaceSnapshot) => void): () => void;
@@ -551,16 +603,34 @@ export interface EnsembleApi {
   removeMasterPassword(): Promise<WorkspaceSnapshot>;
   changeMasterPassword(current: string, next: string): Promise<boolean>;
 
-  launchIdentity(identityId: string, pathOverride?: string): Promise<LaunchResult>;
+  /*
+   * External launches.
+   *
+   * Every one of these takes an optional `engineId` — the browser the user
+   * picked in that launch point's own menu. Omitting it means the workspace
+   * default. These always open real browser windows; the built-in surface has
+   * its own channels (`openEmbedded*`), so there is no mode to get wrong.
+   */
+  launchIdentity(identityId: string, pathOverride?: string, engineId?: string): Promise<LaunchResult>;
   /**
    * Opens several identities at once, tiled with the default layout. This is the
    * identities page's "launch selected" action.
    */
-  launchIdentities(identityIds: string[]): Promise<LaunchResult>;
-  launchView(viewId: string): Promise<LaunchResult>;
-  launchViewMember(viewId: string, identityId: string): Promise<LaunchResult>;
+  launchIdentities(identityIds: string[], engineId?: string): Promise<LaunchResult>;
+  launchView(viewId: string, engineId?: string): Promise<LaunchResult>;
+  launchViewMember(viewId: string, identityId: string, engineId?: string): Promise<LaunchResult>;
   /** Without an siteId this opens a blank tab outside any site. */
-  launchCleanSession(siteId?: string): Promise<LaunchResult>;
+  launchCleanSession(siteId?: string, engineId?: string): Promise<LaunchResult>;
+  /**
+   * Opens a real browser window in a named profile.
+   *
+   * The external counterpart of opening a browser in a profile: same jar by name,
+   * its own directory on this surface.
+   */
+  launchProfile(
+    profileId: string,
+    options?: { url?: string; engineId?: string },
+  ): Promise<LaunchResult>;
   stopInstance(id: string): Promise<void>;
   stopAll(): Promise<void>;
   /** Stops only the windows belonging to one view. */
@@ -715,6 +785,18 @@ export interface EnsembleApi {
   clearMessages(): Promise<AppMessageView[]>;
   /** Fires whenever the history or the unread count changes. */
   onMessagesChanged(listener: (list: AppMessageView[]) => void): () => void;
+  /** What AI clients did, newest first. A log, not a notification list. */
+  listAiActivity(): Promise<AiActivityRecord[]>;
+  clearAiActivity(): Promise<AiActivityRecord[]>;
+  onAiActivityChanged(listener: (list: AiActivityRecord[]) => void): () => void;
+  /** Fires when an AI request is waiting for the user's answer. */
+  onApprovalRequest(listener: (request: ApprovalRequest) => void): () => void;
+  /** Fires when the last pending request is gone, so the window can close. */
+  onApprovalDismiss(listener: () => void): () => void;
+  respondApproval(id: string, decision: AiApprovalDecision): Promise<void>;
+  cancelApproval(id: string): Promise<void>;
+  /** What the card should show right now; null when nothing is waiting. */
+  currentApproval(): Promise<ApprovalRequest | null>;
   closeEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   activateEmbeddedTab(tabId: string): Promise<EmbeddedState>;
   navigateEmbeddedTab(tabId: string, url: string): Promise<EmbeddedTab>;

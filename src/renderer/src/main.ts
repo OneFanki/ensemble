@@ -3,21 +3,25 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import OverlayApp from "./overlay/OverlayApp.vue";
 import FocusLabelApp from "./overlay/FocusLabelApp.vue";
+import ApprovalApp from "./overlay/ApprovalApp.vue";
 import { vTooltip } from "./directives/tooltip";
 import { i18n } from "./i18n";
 import "./styles/tokens.css";
 import "./styles/base.css";
 
-// The control panel, the always-on-top switcher and the transient identity label
-// share one built bundle and one preload; the hash decides which root to mount.
-// All roots are imported statically so the packaged build never has to fetch a
-// second chunk over file://, where module requests are not guaranteed to resolve.
+// The control panel, the always-on-top switcher, the transient identity label and
+// the authorization card share one built bundle and one preload; the hash decides
+// which root to mount. All roots are imported statically so the packaged build
+// never has to fetch a second chunk over file://, where module requests are not
+// guaranteed to resolve.
 const hash = window.location.hash;
 const root = hash.includes("focus-label")
   ? { name: "focus-label", component: FocusLabelApp }
-  : hash.includes("overlay")
-    ? { name: "overlay", component: OverlayApp }
-    : { name: "app", component: App };
+  : hash.includes("approval")
+    ? { name: "approval", component: ApprovalApp }
+    : hash.includes("overlay")
+      ? { name: "overlay", component: OverlayApp }
+      : { name: "app", component: App };
 if (root.name !== "app") document.documentElement.dataset["mode"] = root.name;
 
 createApp(root.component)

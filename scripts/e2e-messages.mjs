@@ -412,8 +412,16 @@ try {
       rendered?.rowRemoves === 0 &&
       String(rendered?.titles?.[0]).includes("message@example.test") &&
       !String(rendered?.titles?.[0]).startsWith("app.") &&
-      rendered?.filters?.length === 5,
+      rendered?.filters?.length === 4,
     rendered,
+  );
+  // AI activity is a log of its own now, so the centre has one chip fewer and no
+  // AI rows. Read from the same probe: a `kind: "ai"` row reappearing here is the
+  // regression, not the chip count by itself.
+  check(
+    "the message centre carries no AI activity rows",
+    Array.isArray(rendered?.kinds) && !rendered.kinds.includes("ai"),
+    rendered?.kinds,
   );
 
   // Opening a row is a layer again, and the list must not move under it.
@@ -451,7 +459,7 @@ try {
     `document.querySelector('[data-message-detail-close]')?.click()`,
   );
   await wait(250);
-  await client.evaluate(`document.querySelector('[data-message-filter="ai"]')?.click()`);
+  await client.evaluate(`document.querySelector('[data-message-filter="account"]')?.click()`);
   await wait(300);
   const filtered = await client.evaluate(`document.querySelectorAll('[data-message-kind]').length`);
   await client.evaluate(`document.querySelector('[data-message-filter="all"]')?.click()`);

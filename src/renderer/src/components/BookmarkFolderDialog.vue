@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n";
 import FolderTreePicker from "./FolderTreePicker.vue";
 import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * Creates a folder, or renames and moves an existing one.
@@ -78,19 +80,17 @@ function submit(): void {
     @close="emit('close')"
   >
     <div class="form">
-      <label class="field">
-        <span class="label">{{ $t("app.bookmarkFolderNameLabel") }}</span>
-        <input v-model="form.name" class="input" maxlength="60" />
-      </label>
-      <div class="field">
-        <span class="label">{{ $t("app.bookmarkFolderParentLabel") }}</span>
+      <FormField :label="$t('app.bookmarkFolderNameLabel')">
+        <TextField v-model="form.name" maxlength="60" />
+      </FormField>
+      <FormField as="div" :label="$t('app.bookmarkFolderParentLabel')">
         <FolderTreePicker
           v-model="form.parentId"
           :folders="pickableFolders"
           :root-label="$t('app.bookmarkFolderRoot')"
         />
         <p class="hint">{{ $t("app.bookmarkFolderParentHint") }}</p>
-      </div>
+      </FormField>
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
     <template #footer>
@@ -108,33 +108,9 @@ function submit(): void {
   gap: 13px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.hint {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--faint);
-}
-
 .error {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-.spacer {
-  flex: 1;
 }
 </style>

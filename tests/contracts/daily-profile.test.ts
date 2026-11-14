@@ -117,11 +117,26 @@ describe("AI origin gate contract", () => {
 
   it("gates before the tool runs, not after", () => {
     // The refusal must happen above `tool.run`, otherwise a denied click would
-    // already have been delivered and the error text would be a lie.
-    const gateCall = server.indexOf("this.originDenial(");
-    const runCall = server.indexOf("await tool.run(", gateCall);
-    expect(gateCall).toBeGreaterThan(0);
-    expect(runCall).toBeGreaterThan(gateCall);
+    // already have been delivered and the error text would be a lie. The
+    // authorization question sits between the two: asking the user after the
+    // tool had already acted would be an announcement, not a gate.
+    const readCall = server.indexOf("this.originGate(");
+    const askCall = server.indexOf("await this.resolveOriginGate(", readCall);
+    const runCall = server.indexOf("await tool.run(", askCall);
+    expect(readCall).toBeGreaterThan(0);
+    expect(askCall).toBeGreaterThan(readCall);
+    expect(runCall).toBeGreaterThan(askCall);
+    // And the refusal branch must return before `tool.run` is reached at all.
+    const refusal = server.indexOf("if (verdict.refusal)", readCall);
+    expect(refusal).toBeGreaterThan(askCall);
+    expect(refusal).toBeLessThan(runCall);
+  });
+
+  it("asks about an unlisted origin, and only about that", () => {
+    // Three of the four denials are decisions the user already made; re-asking
+    // would nag, and "deny all" would be answered by the same click every time.
+    // The one that was never decided is the one worth a window.
+    expect(server).toContain('if (denial !== "daily-origin-unauthorized" || !this.options.approve)');
   });
 
   it("keeps the daily profile read-only by default", () => {

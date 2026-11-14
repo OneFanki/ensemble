@@ -1,6 +1,7 @@
 import type { EmbeddedState } from "@shared/embedded";
-import { type EnsembleApi, type HttpAuthChallenge, IPC } from "@shared/ipc";
+import { type ApprovalRequest, type EnsembleApi, type HttpAuthChallenge, IPC } from "@shared/ipc";
 import type {
+  AiActivityRecord,
   AiPageAction,
   AppMessageView,
   AutoFillReport,
@@ -113,13 +114,18 @@ const api: EnsembleApi = {
   changeMasterPassword: (current, next) =>
     ipcRenderer.invoke(IPC.credentialsChangeMaster, current, next),
 
-  launchIdentity: (identityId, pathOverride) =>
-    ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride),
-  launchIdentities: (identityIds) => ipcRenderer.invoke(IPC.instanceLaunchBatch, identityIds),
-  launchView: (viewId) => ipcRenderer.invoke(IPC.instanceLaunchView, viewId),
-  launchViewMember: (viewId, identityId) =>
-    ipcRenderer.invoke(IPC.instanceLaunchViewMember, viewId, identityId),
-  launchCleanSession: (siteId) => ipcRenderer.invoke(IPC.instanceClean, siteId),
+  launchIdentity: (identityId, pathOverride, engineId) =>
+    ipcRenderer.invoke(IPC.instanceLaunch, identityId, pathOverride, engineId),
+  launchIdentities: (identityIds, engineId) =>
+    ipcRenderer.invoke(IPC.instanceLaunchBatch, identityIds, engineId),
+  launchView: (viewId, engineId) =>
+    ipcRenderer.invoke(IPC.instanceLaunchView, viewId, engineId),
+  launchViewMember: (viewId, identityId, engineId) =>
+    ipcRenderer.invoke(IPC.instanceLaunchViewMember, viewId, identityId, engineId),
+  launchCleanSession: (siteId, engineId) =>
+    ipcRenderer.invoke(IPC.instanceClean, siteId, engineId),
+  launchProfile: (profileId, options) =>
+    ipcRenderer.invoke(IPC.instanceLaunchProfile, profileId, options),
   stopInstance: (id) => ipcRenderer.invoke(IPC.instanceStop, id),
   stopAll: () => ipcRenderer.invoke(IPC.instanceStopAll),
   stopView: (viewId) => ipcRenderer.invoke(IPC.instanceStopView, viewId),
@@ -212,6 +218,26 @@ const api: EnsembleApi = {
     ipcRenderer.on(IPC.messagesChanged, handler);
     return () => ipcRenderer.removeListener(IPC.messagesChanged, handler);
   },
+  listAiActivity: () => ipcRenderer.invoke(IPC.aiActivityList),
+  clearAiActivity: () => ipcRenderer.invoke(IPC.aiActivityClear),
+  onAiActivityChanged: (listener: (list: AiActivityRecord[]) => void) => {
+    const handler = (_event: unknown, list: AiActivityRecord[]) => listener(list);
+    ipcRenderer.on(IPC.aiActivityChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.aiActivityChanged, handler);
+  },
+  onApprovalRequest: (listener: (request: ApprovalRequest) => void) => {
+    const handler = (_event: unknown, request: ApprovalRequest) => listener(request);
+    ipcRenderer.on(IPC.approvalRequest, handler);
+    return () => ipcRenderer.removeListener(IPC.approvalRequest, handler);
+  },
+  onApprovalDismiss: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on(IPC.approvalDismiss, handler);
+    return () => ipcRenderer.removeListener(IPC.approvalDismiss, handler);
+  },
+  respondApproval: (id, decision) => ipcRenderer.invoke(IPC.approvalRespond, id, decision),
+  cancelApproval: (id) => ipcRenderer.invoke(IPC.approvalCancel, id),
+  currentApproval: () => ipcRenderer.invoke(IPC.approvalCurrent),
   closeEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedClose, tabId),
   activateEmbeddedTab: (tabId) => ipcRenderer.invoke(IPC.embeddedActivate, tabId),
   navigateEmbeddedTab: (tabId, url) => ipcRenderer.invoke(IPC.embeddedNavigate, tabId, url),

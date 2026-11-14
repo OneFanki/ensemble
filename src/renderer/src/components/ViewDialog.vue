@@ -8,7 +8,8 @@ import LayoutPreview from "./LayoutPreview.vue";
 import Modal from "./Modal.vue";
 import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
-import HintIcon from "./ui/HintIcon.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 const props = defineProps<{
   draft: ViewDraft;
@@ -201,16 +202,11 @@ function submit() {
     @close="emit('close')"
   >
     <div class="form">
-      <label class="field">
-        <span class="label">{{ $t("app.viewNameLabel") }}</span>
-        <input v-model="form.name" class="input" :placeholder="$t('app.viewNameExample')" />
-      </label>
+      <FormField :label="$t('app.viewNameLabel')">
+        <TextField v-model="form.name" :placeholder="$t('app.viewNameExample')" />
+      </FormField>
 
-      <div class="field">
-        <span class="label">
-          {{ $t("app.viewMembersLabel") }}
-          <HintIcon :text="$t('app.viewMemberDragHintRestored')" />
-        </span>
+      <FormField as="div" :label="$t('app.viewMembersLabel')" :hint="$t('app.viewMemberDragHintRestored')">
         <!-- Grouped by site: a view may span deployments, and the group header is
              the only place that provenance is visible before saving. -->
         <div v-for="group in groupedIdentities" :key="group.siteId" class="member-group">
@@ -250,15 +246,13 @@ function submit() {
         </div>
         <p v-if="!identities.length" class="note">{{ $t("app.viewNoIdentities") }}</p>
         <p v-if="crossSite" class="note">{{ $t("app.viewCrossSiteNote") }}</p>
-      </div>
+      </FormField>
 
-      <div class="field">
-        <span class="label">{{ $t("app.tags") }}</span>
+      <FormField as="div" :label="$t('app.tags')">
         <TagPicker v-model="form.tagIds" :tags="tags ?? []" />
-      </div>
+      </FormField>
 
-      <div class="field">
-        <span class="label">{{ $t("app.windowLayout") }}</span>
+      <FormField as="div" :label="$t('app.windowLayout')">
         <div class="layouts">
           <button
             v-for="preset in presets"
@@ -294,7 +288,7 @@ function submit() {
           </template>
         </LayoutPreview>
         <p class="note">{{ $t("app.viewLayoutNote", { count: presetSlots }) }}</p>
-      </div>
+      </FormField>
 
       <p class="note">{{ $t("app.viewOrderNote") }}</p>
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
@@ -317,34 +311,6 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.label {
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .members {
@@ -545,9 +511,5 @@ function submit() {
   margin: 0;
   font-size: 11px;
   color: var(--red);
-}
-
-.spacer {
-  flex: 1;
 }
 </style>

@@ -118,7 +118,7 @@ function statusText(identity: Identity): string {
         <span class="state mono">{{ label(healthOf(identity)) }}</span>
       </button>
 
-      <p v-if="!ordered.length" class="empty">{{ $t('app.empty') }}</p>
+      <p v-if="!ordered.length" class="empty-line">{{ $t('app.empty') }}</p>
     </div>
 
     <p class="note">{{ $t('app.healthNote') }}</p>
@@ -274,7 +274,7 @@ function statusText(identity: Identity): string {
   color: var(--amber);
 }
 
-.empty {
+.empty-line {
   padding: 16px 0;
   text-align: center;
   font-size: 11px;

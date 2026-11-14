@@ -11,6 +11,7 @@ import {
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
+import EmptyState from "./ui/EmptyState.vue";
 import IconButton from "./ui/IconButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
@@ -174,7 +175,7 @@ async function clearAll(): Promise<void> {
       </button>
     </div>
 
-    <p v-if="rows.length === 0" class="empty">{{ $t("app.messagesEmpty") }}</p>
+    <EmptyState v-if="rows.length === 0" :text="$t('app.messagesEmpty')" />
 
     <ul v-else class="rows">
       <li
@@ -303,10 +304,9 @@ async function clearAll(): Promise<void> {
   color: var(--text-secondary);
 }
 
-/* The shared `.empty` frame owns the margin and the centring. This page used to
-   override the margin to `40px 0 0`, which cancelled the horizontal auto margin:
-   the sentence stayed 560px wide in the top-left corner with its own
-   `text-align: center` only centring it inside that box. */
+/* Centring belongs to `EmptyState` now: this page used to override the shared
+   frame's margin to `40px 0 0`, which cancelled the horizontal auto margin and
+   left the sentence 560px wide in the top-left corner. */
 
 .rows {
   list-style: none;

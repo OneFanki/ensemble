@@ -30,10 +30,12 @@ import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
 import AiPolicyEditor from "./AiPolicyEditor.vue";
 import AppButton from "./ui/AppButton.vue";
+import Checkbox from "./ui/Checkbox.vue";
 import HintIcon from "./ui/HintIcon.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SettingGroup from "./ui/SettingGroup.vue";
 import SettingRow from "./ui/SettingRow.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * The settings section on screen.
@@ -624,13 +626,14 @@ async function submitMaster() {
               </SettingRow>
               <SettingRow :label="$t('app.browserZoomSetting')" :hint="$t('app.browserZoomNote')">
               <div class="interval">
-                <input
-                  class="input mono interval-input"
+                <TextField
+                  class="interval-input"
+                  mono
                   type="number"
                   min="50"
                   max="200"
                   step="5"
-                  :value="store.settings.browserZoom"
+                  :model-value="store.settings.browserZoom"
                   @change="
                     store.saveSettings({
                       browserZoom: Math.min(
@@ -686,13 +689,14 @@ async function submitMaster() {
             <SettingGroup :title="$t('app.launchTitle')">
               <SettingRow :label="$t('app.launchInterval')" :hint="$t('app.launchIntervalNote')">
               <div class="interval">
-                <input
-                  class="input mono interval-input"
+                <TextField
+                  class="interval-input"
+                  mono
                   type="number"
                   min="0"
                   max="5000"
                   step="50"
-                  :value="store.settings.launchIntervalMs"
+                  :model-value="store.settings.launchIntervalMs"
                   @change="
                     store.saveSettings({
                       launchIntervalMs: Math.min(
@@ -833,10 +837,11 @@ async function submitMaster() {
                 v-if="store.settings.proxyMode === 'manual'"
                 :label="$t('app.proxyUrlLabel')"
               >
-              <input
+              <TextField
                 id="proxy-url"
-                class="input mono proxy-input"
-                :value="store.settings.proxyUrl ?? ''"
+                class="proxy-input"
+                mono
+                :model-value="store.settings.proxyUrl ?? ''"
                 :placeholder="'http://127.0.0.1:7890'"
                 spellcheck="false"
                 @change="saveProxyUrl(($event.target as HTMLInputElement).value)"
@@ -849,10 +854,11 @@ async function submitMaster() {
                 v-if="store.settings.proxyMode !== 'system'"
                 :label="$t('app.proxyBypassLabel')"
               >
-              <input
+              <TextField
                 id="proxy-bypass"
-                class="input mono proxy-input"
-                :value="store.settings.proxyBypass ?? ''"
+                class="proxy-input"
+                mono
+                :model-value="store.settings.proxyBypass ?? ''"
                 :placeholder="$t('app.proxyBypassHint')"
                 spellcheck="false"
                 @change="saveProxyBypass(($event.target as HTMLInputElement).value)"
@@ -964,10 +970,10 @@ async function submitMaster() {
             </div>
 
             <div v-if="store.credentials?.locked" class="vault-unlock">
-              <input
+              <TextField
                 v-model="unlockPassword"
                 type="password"
-                class="input mono"
+                mono
                 :placeholder="$t('app.vaultUnlockPlaceholder')"
                 autocomplete="current-password"
                 @keyup.enter="submitUnlock"
@@ -991,25 +997,25 @@ async function submitMaster() {
             </div>
 
             <div v-if="masterForm" class="master-form">
-              <input
+              <TextField
                 v-if="masterForm === 'change'"
                 v-model="currentPassword"
                 type="password"
-                class="input mono"
+                mono
                 :placeholder="$t('app.currentMaster')"
                 autocomplete="current-password"
               />
-              <input
+              <TextField
                 v-model="nextPassword"
                 type="password"
-                class="input mono"
+                mono
                 :placeholder="masterForm === 'set' ? $t('app.setMasterPlaceholder') : $t('app.newMaster')"
                 autocomplete="new-password"
               />
-              <input
+              <TextField
                 v-model="confirmPassword"
                 type="password"
-                class="input mono"
+                mono
                 :placeholder="$t('app.repeatPassword')"
                 autocomplete="new-password"
               />
@@ -1051,15 +1057,14 @@ async function submitMaster() {
             <div class="transfer">
               <div class="transfer-col">
                 <h3>{{ $t("app.exportTitle") }}</h3>
-                <label class="check">
-                  <input v-model="includeSecrets" type="checkbox" />
-                  <span>{{ $t("app.exportIncludeSecrets") }}</span>
-                </label>
-                <input
+                <Checkbox v-model="includeSecrets">
+                  {{ $t("app.exportIncludeSecrets") }}
+                </Checkbox>
+                <TextField
                   v-if="includeSecrets"
                   v-model="exportPassphrase"
                   type="password"
-                  class="input mono"
+                  mono
                   :placeholder="$t('app.exportPassphrasePlaceholder')"
                   autocomplete="new-password"
                 />
@@ -1080,11 +1085,11 @@ async function submitMaster() {
                     <div><dt>{{ $t("app.views") }}</dt><dd class="mono">{{ importPreview.preview.views }}</dd></div>
                     <div><dt>{{ $t("app.layoutPresets") }}</dt><dd class="mono">{{ importPreview.preview.layoutPresets }}</dd></div>
                   </dl>
-                  <input
+                  <TextField
                     v-if="importPreview.preview.hasSecrets"
                     v-model="importPassphrase"
                     type="password"
-                    class="input mono"
+                    mono
                     :placeholder="$t('app.importPassphrasePlaceholder')"
                     autocomplete="current-password"
                   />
@@ -1131,11 +1136,11 @@ async function submitMaster() {
                   <p v-if="accountsPreview.preview.matchingSites.length" class="fineprint">
                     {{ $t("app.accountsImportMatching", { names: accountsPreview.preview.matchingSites.join("、") }) }}
                   </p>
-                  <input
+                  <TextField
                     v-if="accountsPreview.preview.hasSecrets"
                     v-model="accountsPassphrase"
                     type="password"
-                    class="input mono"
+                    mono
                     :placeholder="$t('app.importPassphrasePlaceholder')"
                     autocomplete="current-password"
                   />
@@ -1202,36 +1207,31 @@ async function submitMaster() {
             </SettingRow>
 
             <SettingRow :label="$t('app.mcpPort')">
-              <input v-model="portDraft" class="input mono port-input" inputmode="numeric" />
+              <TextField v-model="portDraft" class="port-input" mono inputmode="numeric" />
               <AppButton @click="updatePort">{{ $t("app.mcpApplyPort") }}</AppButton>
             </SettingRow>
 
             <SettingRow :label="$t('app.mcpPermissions')">
               <div class="perm-row">
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    :checked="mcp?.allowWrite"
-                    @change="refreshMcp({ allowWrite: ($event.target as HTMLInputElement).checked })"
-                  />
-                  <span>{{ $t("app.mcpAllowWrite") }}</span>
-                </label>
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    :checked="mcp?.allowRun"
-                    @change="refreshMcp({ allowRun: ($event.target as HTMLInputElement).checked })"
-                  />
-                  <span>{{ $t("app.mcpAllowRun") }}</span>
-                </label>
-                <label class="check danger">
-                  <input
-                    type="checkbox"
-                    :checked="mcp?.allowDelete"
-                    @change="refreshMcp({ allowDelete: ($event.target as HTMLInputElement).checked })"
-                  />
-                  <span>{{ $t("app.mcpAllowDelete") }}</span>
-                </label>
+                <Checkbox
+                  :model-value="Boolean(mcp?.allowWrite)"
+                  @update:model-value="refreshMcp({ allowWrite: $event })"
+                >
+                  {{ $t("app.mcpAllowWrite") }}
+                </Checkbox>
+                <Checkbox
+                  :model-value="Boolean(mcp?.allowRun)"
+                  @update:model-value="refreshMcp({ allowRun: $event })"
+                >
+                  {{ $t("app.mcpAllowRun") }}
+                </Checkbox>
+                <Checkbox
+                  class="danger"
+                  :model-value="Boolean(mcp?.allowDelete)"
+                  @update:model-value="refreshMcp({ allowDelete: $event })"
+                >
+                  {{ $t("app.mcpAllowDelete") }}
+                </Checkbox>
               </div>
             </SettingRow>
             <!-- The one hint on this page that stays on screen: it is the only
@@ -1239,9 +1239,9 @@ async function submitMaster() {
             <p class="fineprint">{{ $t("app.mcpPermissionNote") }}</p>
 
             <!--
-              The AI gate for profile pages. One shared editor with the toolbar
-              shield: this page is where the policy is thought about, the shield is
-              where it is noticed, and both must offer the same four modes.
+              The AI gate for profile pages. This is where the policy is thought
+              about — all four modes and the whole address list; the toolbar's AI
+              panel offers only the decision about the page in front.
             -->
             <div v-if="mcp" class="ai-policy-block">
               <div class="ai-policy-head">
@@ -1850,7 +1850,7 @@ async function submitMaster() {
   flex-wrap: wrap;
 }
 
-.vault-unlock .input {
+.vault-unlock :deep(.input) {
   flex: 1 1 220px;
 }
 
@@ -1865,19 +1865,12 @@ async function submitMaster() {
   padding: 10px 12px;
 }
 
-.master-form .input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+/* These sit on the boxed panel, not on the page, so their fill follows it. */
+.master-form :deep(.input),
+.transfer-col :deep(.input) {
   background: var(--surface);
   padding: 6px 9px;
   font-size: 11px;
-  color: var(--text);
-  outline: 0;
-}
-
-.master-form .input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 .error {
@@ -1915,35 +1908,8 @@ async function submitMaster() {
   color: var(--text-secondary);
 }
 
-.transfer-col .input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 6px 9px;
-  font-size: 11px;
-  color: var(--text);
-  outline: 0;
-}
-
-.transfer-col .input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
-}
-
-.check {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.5;
-  cursor: pointer;
-}
-
-.check input {
-  margin-top: 2px;
-}
-
+/* The delete permission is the one that can destroy data, so its wording is
+   tinted — the box itself stays the shared control. */
 .check.danger {
   color: color-mix(in srgb, var(--red) 80%, var(--text));
 }

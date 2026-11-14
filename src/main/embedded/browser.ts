@@ -220,6 +220,19 @@ interface TabRecord {
   };
   /** Guards a stale sampling closure from writing after a restart. */
   perfGeneration?: number;
+  /**
+   * Scripts that run before any document loads, keyed by CDP's own id.
+   *
+   * Kept on the record rather than only in the CDP session for two reasons: the
+   * session is released after 1.5s idle (which wipes the registrations), and the
+   * renderer can replace a page's node at any moment, which gives a brand-new
+   * guest with none of them. This map is the source of truth that both a session
+   * reopen and a node replacement replay from.
+   *
+   * Holds page script, never credentials — a caller can already run anything it
+   * likes through `evaluate`, so this grants no capability it did not have.
+   */
+  initScripts?: Map<string, { source: string; createdAt: string }>;
   /** Zoom factor the current viewport fit resolved to; drives `applyZoom`. */
   viewportScale?: number;
   /**
@@ -3327,6 +3340,36 @@ export class EmbeddedBrowser {
     };
   }
 
+  /**
+   * The page facts an activity record needs, which the gate does not.
+   *
+   * Kept apart from {@link aiPageContext} on purpose: the policy answers "may
+   * this happen" from three facts, and widening that shape every time the log
+   * wants one more field would blur which fields the decision is allowed to
+   * depend on. The site and the profile are context for a reader afterwards —
+   * `site` and `clean` live on different levels (the tab and the instance), so
+   * this is also the one place that knows how to join them.
+   */
+  actionFacts(tabId: string): {
+    origin: string;
+    title: string;
+    identityId?: string;
+    siteId?: string;
+    clean?: boolean;
+    profileId?: string;
+  } {
+    const tab = this.requireTab(tabId);
+    const profileId = this.profileOfInstance(tab.instanceId);
+    return {
+      origin: aiOriginOf(tab.url),
+      title: tab.title,
+      ...(tab.identityId ? { identityId: tab.identityId } : {}),
+      ...(tab.siteId ? { siteId: tab.siteId } : {}),
+      ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
+      ...(profileId ? { profileId } : {}),
+    };
+  }
+
   async snapshotDom(tabId: string, options: { maxNodes?: number } = {}): Promise<DomSnapshot> {
     const tab = this.requireTab(tabId);
     return tab.cdp.snapshotDom(buildDomSnapshotExpression(options));
@@ -3479,13 +3522,31 @@ export class EmbeddedBrowser {
                   ok: false,
                   waitedMs: remaining,
                   timedOut: true,
-                  reason: "evaluate-timeout",
+                  /*
+                   * `bridge-timeout`, not `evaluate-timeout`.
+                   *
+                   * This timer is the *transport's* deadline: it fires when the
+                   * page has not answered the poll loop at all. The page's own
+                   * loop has its own deadline and reports a concrete reason
+                   * (`url-mismatch`, `text-absent`), so the two outcomes are
+                   * different facts and used to arrive under one name. A guest
+                   * that is backgrounded has its timers throttled to roughly a
+                   * second, which is enough to make this side win regularly —
+                   * reporting that as "the condition was not met" was actively
+                   * misleading.
+                   */
+                  timedOutAt: "bridge" as const,
+                  reason: "bridge-timeout",
                 }),
               remaining + 400,
             ),
           ),
         ]);
-        if (result.ok || !result.timedOut || result.reason !== "evaluate-timeout") return result;
+        // A bridge timeout is retried with whatever time is left: the page may
+        // simply have been slow to answer once, and a navigation may have
+        // replaced its execution context in the meantime. The "reason" that
+        // comes back from a successful retry is the page's own.
+        if (result.ok || !result.timedOut || result.reason !== "bridge-timeout") return result;
         last = result;
       } catch (error) {
         // Context destroyed by a navigation, or the tab went away mid-poll.
@@ -3493,6 +3554,7 @@ export class EmbeddedBrowser {
           ok: false,
           waitedMs: Date.now() - started,
           timedOut: true,
+          timedOutAt: "bridge",
           reason: String((error as Error)?.message ?? error).slice(0, 200),
         };
       }
@@ -3502,6 +3564,7 @@ export class EmbeddedBrowser {
         ok: false,
         waitedMs: Date.now() - started,
         timedOut: true,
+        timedOutAt: "page",
         reason: "timeout",
       }
     );
@@ -3751,14 +3814,151 @@ export class EmbeddedBrowser {
     }
   }
 
-  async evaluate<T>(tabId: string, expression: string): Promise<T> {
+  /**
+   * Runs an expression in the page and returns its value.
+   *
+   * `timeoutMs` is the caller's own budget for their script, not a ceiling on
+   * the transport. A long scrape and a hung page look identical from here, so
+   * the deadline is whichever the caller asked for and the error says which —
+   * `DeadlineError` means "we stopped waiting", not "the page failed".
+   */
+  async evaluate<T>(
+    tabId: string,
+    expression: string,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const tab = this.requireTab(tabId);
-    return tab.cdp.evaluate<T>(expression, { awaitPromise: true });
+    return tab.cdp.evaluate<T>(expression, {
+      awaitPromise: true,
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    });
+  }
+
+  /**
+   * Registers a script that runs before every document from now on.
+   *
+   * `Page.addScriptToEvaluateOnNewDocument` is the only way to get code in ahead
+   * of the page's own: by the time `evaluate` runs, the site's bundle has already
+   * installed whatever the caller wanted to wrap. Patching `VideoDecoder`, a
+   * `window` property a framework reads at module scope, or a timer a script
+   * starts on load all need to be there first.
+   *
+   * **Not applied to the current document.** A registration affects the next
+   * navigation, and saying so in the result is the difference between a caller
+   * that reloads and one that concludes the feature is broken.
+   *
+   * Sessions do not survive: the guest manager detaches after 1.5s idle, which
+   * wipes every session-level registration. So the map on the tab is the source
+   * of truth and the session is (re)populated from it — see {@link syncSessionHold}
+   * for the pin that stops the detach from happening in the first place.
+   */
+  async addInitScript(tabId: string, source: string): Promise<{ scriptId: string }> {
+    const tab = this.requireTab(tabId);
+    const text = source.trim();
+    if (!text) throw new Error("script 不能为空");
+    const response = await tab.cdp.send<{ identifier: string }>(
+      "Page.addScriptToEvaluateOnNewDocument",
+      { source: text },
+    );
+    const scriptId = response?.identifier;
+    if (!scriptId) throw new Error("页面没有返回脚本 id");
+    if (!tab.initScripts) tab.initScripts = new Map();
+    tab.initScripts.set(scriptId, { source: text, createdAt: new Date().toISOString() });
+    this.syncSessionHold(tab);
+    return { scriptId };
+  }
+
+  /**
+   * The scripts registered on one page.
+   *
+   * Ordered by registration, which is also the order they run in — the page sees
+   * them in the order they were added, and a caller that adds a wrapper and then
+   * a config value depends on that.
+   */
+  listInitScripts(
+    tabId: string,
+  ): Array<{ scriptId: string; createdAt: string; preview: string }> {
+    const tab = this.findTab(tabId);
+    if (!tab?.initScripts) return [];
+    return [...tab.initScripts.entries()].map(([scriptId, entry]) => ({
+      scriptId,
+      createdAt: entry.createdAt,
+      // Enough to recognise the script in a list, not enough to hide a long one
+      // behind an unreadable wall of text.
+      preview: entry.source.replace(/\s+/g, " ").slice(0, 120),
+    }));
+  }
+
+  /** Drops a registration; the next navigation stops running it. */
+  async removeInitScript(tabId: string, scriptId: string): Promise<void> {
+    const tab = this.requireTab(tabId);
+    if (!tab.initScripts?.has(scriptId)) throw new Error(`没有这个脚本：${scriptId}`);
+    tab.initScripts.delete(scriptId);
+    // Best effort: the id belongs to the current session, and a session that was
+    // already released has forgotten it. The map is what a replay reads, so the
+    // script stays gone either way.
+    await tab.cdp
+      .send("Page.removeScriptToEvaluateOnNewDocument", { identifier: scriptId })
+      .catch(() => undefined);
+    this.syncSessionHold(tab);
+  }
+
+  /**
+   * Re-installs this tab's init scripts into a freshly opened CDP session.
+   *
+   * Called from the guest manager's session-open hook. Returns the number of
+   * scripts replayed so the caller can log a real value rather than a guess.
+   *
+   * The new session issues fresh identifiers, so the caller-visible ids from
+   * before the replay no longer refer to anything. The map is therefore rebuilt
+   * keyed by the new ids, keeping each script's original `createdAt` so a list
+   * read after a replay does not look like everything was just added.
+   */
+  async replayInitScripts(tabId: string, cdp: CdpExecutor): Promise<number> {
+    const tab = this.findTab(tabId);
+    if (!tab?.initScripts?.size) return 0;
+    const previous = [...tab.initScripts.values()];
+    const rebuilt = new Map<string, { source: string; createdAt: string }>();
+    for (const entry of previous) {
+      try {
+        const response = await cdp.send<{ identifier: string }>(
+          "Page.addScriptToEvaluateOnNewDocument",
+          { source: entry.source },
+        );
+        if (response?.identifier) {
+          rebuilt.set(response.identifier, { source: entry.source, createdAt: entry.createdAt });
+        }
+      } catch {
+        // A session that cannot take the registration loses that script; the
+        // others still go in, and the caller sees the count.
+      }
+    }
+    tab.initScripts = rebuilt;
+    return rebuilt.size;
+  }
+
+  /**
+   * Stops whatever the page is executing right now.
+   *
+   * `Runtime.terminateExecution` unwinds the running stack, which is the only
+   * thing that can rescue a caller whose script is in a busy loop. It is honest
+   * about its limit: a script parked on a Promise is not executing, so it
+   * resumes when the Promise settles. That is why the tool description offers it
+   * as a brake rather than a guarantee.
+   */
+  async cancelScript(tabId: string): Promise<void> {
+    const tab = this.requireTab(tabId);
+    await tab.cdp.send("Runtime.terminateExecution", {});
   }
 
   async screenshot(
     tabId: string,
-    options: { format?: "png" | "jpeg"; quality?: number; inline?: boolean } = {},
+    options: {
+      format?: "png" | "jpeg";
+      quality?: number;
+      inline?: boolean;
+      timeoutMs?: number;
+    } = {},
   ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }> {
     const tab = this.requireTab(tabId);
     // A page the user switched away from, or one in a minimised window, has no
@@ -3771,7 +3971,11 @@ export class EmbeddedBrowser {
       // The embedder has to have painted before its guest can.
       await this.options.guests?.primeForCapture?.();
     }
-    const buffer = await tab.cdp.screenshot({ ...options, preferRenderer });
+    const buffer = await tab.cdp.screenshot({
+      ...options,
+      preferRenderer,
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    });
     mkdirSync(this.options.shotDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const extension = options.format === "jpeg" ? "jpg" : "png";
@@ -4167,7 +4371,25 @@ export class EmbeddedBrowser {
     }
     // Pinned while wearing a device: idle release would silently drop all three
     // overrides, and the page would quietly become a desktop browser again.
-    this.options.guests?.holdSession?.(tab.id, Boolean(device));
+    this.syncSessionHold(tab);
+  }
+
+  /**
+   * Whether this page's CDP session has to stay attached, and why.
+   *
+   * Three features live in session state rather than in the target — device
+   * emulation overrides, the performance counters, and pre-document scripts —
+   * and all three are wiped by the idle detach. They are also independent: a
+   * page can be wearing a phone while a script registration is added and removed
+   * around it, and unpinning on the last removal used to be the kind of bug that
+   * silently turns the emulated phone back into a desktop mid-run.
+   *
+   * One predicate, one call site, so "nothing needs the session" is decided in
+   * exactly one place.
+   */
+  private syncSessionHold(tab: TabRecord): void {
+    const needed = Boolean(tab.device || tab.perf || (tab.initScripts?.size ?? 0) > 0);
+    this.options.guests?.holdSession?.(tab.id, needed);
   }
 
   /**
@@ -4268,7 +4490,7 @@ export class EmbeddedBrowser {
     tab.perf.timer.unref?.();
     // Same reason as the device overrides: the counters reset with a new
     // document, so the series has to restart rather than draw a cliff.
-    this.options.guests?.holdSession?.(tab.id, true);
+    this.syncSessionHold(tab);
   }
 
   private stopPerfSampling(tab: TabRecord): void {
@@ -4276,8 +4498,9 @@ export class EmbeddedBrowser {
     if (tab.perf?.aiIdleTimer) clearTimeout(tab.perf.aiIdleTimer);
     delete tab.perf;
     tab.perfGeneration = (tab.perfGeneration ?? 0) + 1;
-    // Unpin only if nothing else still needs the session. A device keeps it too.
-    if (!tab.device) this.options.guests?.holdSession?.(tab.id, false);
+    // A device or a script registration still needs the session; the predicate
+    // knows about all of them.
+    this.syncSessionHold(tab);
   }
 
   /** The samples taken so far, for the panel to draw. */

@@ -269,7 +269,11 @@
   --logo-back: #aeb8c3;
   --logo-mid: #8a939e;
   --logo-card: #edb33c;
-  --logo-glyph: #fffaf0;
+  /* Dark glyph on the gold card, same as the dark theme and the app icon.
+     It used to be #fffaf0 here, which is 1.5:1 against #edb33c: the slot and the
+     dot dissolved and the front card read as a plain gold rectangle, so the mark
+     lost the very shape that makes it a stack of windows. */
+  --logo-glyph: #1a1206;
 
   --text: #14181d;
   --text-secondary: #4d5661;

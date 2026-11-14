@@ -7,6 +7,7 @@ import {
   HeartPulse,
   LayoutGrid,
   Link2,
+  Pencil,
   Play,
   Plus,
   Search,
@@ -22,6 +23,11 @@ import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import EmptyState from "./ui/EmptyState.vue";
+import FormField from "./ui/FormField.vue";
+import IconButton from "./ui/IconButton.vue";
+import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
+import TextField from "./ui/TextField.vue";
 import GroupHeader from "./ui/GroupHeader.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
@@ -106,13 +112,23 @@ function endSelecting() {
 async function launchSelected() {
   const ids = notRunningSelected.value.map((identity) => identity.id);
   if (ids.length === 0) return;
-  if (store.settings.launchTarget === "embedded") {
-    // A batch is the one launch that is about a layout, so it gets its own
-    // container instead of scattering pages into the tab strip.
-    await embedded.openIdentitiesInNewView(ids);
-  } else {
-    await store.launchIdentities(ids);
-  }
+  // A batch is the one launch that is about a layout, so it gets its own
+  // container instead of scattering pages into the tab strip.
+  await embedded.openIdentitiesInNewView(ids);
+  endSelecting();
+}
+
+/**
+ * The same selection, tiled across real windows.
+ *
+ * A batch external launch is a fidelity check of an arrangement, so it uses the
+ * workspace layout and the same tiling a saved view would — otherwise "compare
+ * these six in an external browser" would open six stacked windows.
+ */
+async function launchSelectedExternal(engineId: string) {
+  const ids = notRunningSelected.value.map((identity) => identity.id);
+  if (ids.length === 0) return;
+  await store.launchIdentities(ids, engineId);
   endSelecting();
 }
 
@@ -323,49 +339,66 @@ async function launch(identity: Identity) {
 }
 
 /**
- * Launch through whichever surface the title bar selected.
+ * What a click on the card body does.
  *
- * The page must not offer a second "built-in browser" action beside launch: that
- * made one decision look like two unrelated features, and the choice belongs in
- * one place for every page.
+ * Three different meanings in one surface, in the order the page grew them:
+ * selecting (the card is a checkbox), already running (raise that window), and
+ * otherwise open the account form. Launching has its own control, so a click no
+ * longer has to guess between "open" and "edit".
+ */
+function onCardClick(identity: Identity): void {
+  if (selecting.value) {
+    toggleSelected(identity.id);
+  } else if (store.instanceFor(identity.id)) {
+    launch(identity);
+  } else {
+    emit("editIdentity", identity.id);
+  }
+}
+
+/**
+ * The plain click: a page in the built-in surface.
  *
  * Built-in means "a new tab in the default tab strip", always — even when a view
  * is on stage or the account is already running somewhere. Clicking a card is a
  * request for that page, not an instruction to rearrange the stage; moving into
  * a view is the drag gesture or the view's own "add tab".
+ *
+ * The split control's arrow is the other half: it opens the browser list, so the
+ * fidelity check is one click away instead of being a mode set somewhere else.
  */
 async function launchHere(identity: Identity): Promise<void> {
-  if (store.settings.launchTarget === "external") {
-    // External windows exist once per identity, so re-launching means raising
-    // the running one; there is no tab strip to add a second page to.
-    const instance = store.instanceFor(identity.id);
-    if (instance) {
-      await store.focusInstance(instance.id);
-      return;
-    }
-    await store.launchIdentity(identity.id);
+  await embedded.openIdentity(identity.id);
+}
+
+/**
+ * The same account in an external browser.
+ *
+ * External windows exist once per identity, so launching again raises the
+ * running one rather than opening a second window that would fight it for the
+ * same profile directory.
+ */
+async function launchExternal(identity: Identity, engineId: string): Promise<void> {
+  if (selecting.value) return;
+  const instance = store.instanceFor(identity.id);
+  if (instance) {
+    await store.focusInstance(instance.id);
     return;
   }
-  await embedded.openIdentity(identity.id);
+  await store.launchIdentity(identity.id, undefined, engineId);
 }
 
 async function relogin(identity: Identity) {
   const instance = store.instanceFor(identity.id);
   if (instance) {
+    // Raising the window is not relogin: the fill has to be asked for.
     await store.fillLogin(identity.id);
     return;
   }
-  if (store.settings.launchTarget === "embedded") {
-    // The embedded surface has no login page to submit; opening the identity's
-    // start page and filling it is the equivalent action.
-    await embedded.openIdentity(identity.id);
-    return;
-  }
-  const site = store.sites.find((item) => item.id === identity.siteId);
-  const launched = await store.launchIdentity(identity.id, site?.loginPath);
-  // A launch already fills on its own when the setting is on; filling again here
-  // would type the same credentials twice and submit the form twice.
-  if (launched && !store.settings.autoFillOnLaunch) await store.fillLogin(identity.id);
+  // The embedded surface has no login page to submit; opening the identity's
+  // start page and filling it is the equivalent action, and it is the surface
+  // the card's own click opens, so "重新登录" follows it.
+  await embedded.openIdentity(identity.id);
 }
 
 async function checkAuth(identity: Identity) {
@@ -545,11 +578,14 @@ function extraFacts(identity: Identity): string[] {
         {{ $t("app.accountsExport") }}
       </AppButton>
       <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
-      <AppButton variant="primary" :disabled="!notRunningSelected.length || store.busy === 'launch'"
-        @click="launchSelected">
-        <Play :size="12" />
-        {{ $t("app.batchLaunch", { count: notRunningSelected.length }) }}
-      </AppButton>
+      <LaunchSplitButton
+        variant="primary"
+        :label="$t('app.batchLaunch', { count: notRunningSelected.length })"
+        :disabled="!notRunningSelected.length || store.busy === 'launch'"
+        data-hook="batch"
+        @launch="launchSelected"
+        @launch-external="launchSelectedExternal"
+      />
     </div>
 
     <!-- Choosing the target site is a dialog, not a dropdown in the bar: the
@@ -584,30 +620,33 @@ function extraFacts(identity: Identity): string[] {
       </template>
     </Modal>
 
-    <div v-if="exportOpen" class="export-bar">
-      <div class="export-copy">
-        <p class="export-title">{{ $t("app.accountsExportTitle") }}</p>
-        <p class="export-note">{{ $t("app.accountsExportNote", { count: selected.size }) }}</p>
-      </div>
-      <label class="export-pass">
-        <span>{{ $t("app.accountsExportPassphrase") }}</span>
-        <input
+    <!-- Sharing a selection has one extra input — a passphrase — and that is
+         enough to make it a dialog: an inline strip pushed the card grid down
+         while it was open and lost the context of what was being shared. -->
+    <Modal
+      :open="exportOpen"
+      :title="$t('app.accountsExportTitle')"
+      :description="$t('app.accountsExportNote', { count: selected.size })"
+      width="460px"
+      @close="exportOpen = false"
+    >
+      <FormField :label="$t('app.accountsExportPassphrase')">
+        <TextField
           v-model="exportPassphrase"
           type="password"
           autocomplete="new-password"
           :placeholder="$t('app.accountsExportPassphraseHint')"
         />
-      </label>
-      <p v-if="exportError" class="error">{{ exportError }}</p>
-      <div class="export-actions">
-        <AppButton @click="exportOpen = false">
-          {{ $t("app.cancel") }}
-        </AppButton>
+      </FormField>
+      <p v-if="exportError" class="error" role="alert">{{ exportError }}</p>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="exportOpen = false">{{ $t("app.cancel") }}</AppButton>
         <AppButton variant="primary" :disabled="exporting" @click="doExport">
           {{ exportPassphrase ? $t("app.accountsExportWithPassword") : $t("app.accountsExportPlain") }}
         </AppButton>
-      </div>
-    </div>
+      </template>
+    </Modal>
 
     <div class="page-body">
       <div class="cards">
@@ -641,10 +680,19 @@ function extraFacts(identity: Identity): string[] {
           </template>
         </GroupHeader>
         <template v-if="!groupCollapse.isCollapsed(group.siteId)">
-          <button
+          <!--
+            A `div` with a button role, not a `<button>`.
+
+            The card now carries a real launch control, and a `<button>` cannot
+            contain one — the parser would close the card at the inner button's
+            tag and the actions would fall outside it. The role and the key
+            handlers keep everything a button gave us: a tab stop, Enter and
+            Space activating the card itself, and `aria-pressed` in selection
+            mode.
+          -->
+          <div
             v-for="identity in group.people"
             :key="identity.id"
-            type="button"
             class="id-card"
             :class="{
               running: Boolean(store.instanceFor(identity.id)),
@@ -652,14 +700,12 @@ function extraFacts(identity: Identity): string[] {
               picked: selected.has(identity.id),
             }"
             :style="{ '--role': roleVar(identity.color) }"
+            role="button"
+            tabindex="0"
             :aria-pressed="selecting ? selected.has(identity.id) : undefined"
-            @click="
-              selecting
-                ? toggleSelected(identity.id)
-                : store.instanceFor(identity.id)
-                  ? launch(identity)
-                  : emit('editIdentity', identity.id)
-            "
+            @click="onCardClick(identity)"
+            @keydown.enter.prevent="onCardClick(identity)"
+            @keydown.space.prevent="onCardClick(identity)"
           >
             <!-- Selection mode hides the per-card actions: in that mode the card is a
                  checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
@@ -711,44 +757,79 @@ function extraFacts(identity: Identity): string[] {
               </span>
             </div>
 
+            <!--
+              The card's actions, in two groups.
+
+              Left: what you do to this account's session — launch (or raise, then
+              stop), relogin, check. Right: the management actions, as icon
+              buttons, because "编辑" as a text link sat at the same visual weight
+              as "重新登录" while doing something of a different kind. Icons on the
+              right edge also make every card's action row end at the same place,
+              which is what lets the grid be scanned vertically.
+            -->
             <div v-if="!selecting" class="card-actions">
-              <template v-if="store.instanceFor(identity.id)">
-                <span class="launch" @click.stop="launch(identity)">
-                  <Play :size="10" />
-                  {{ $t("app.switchTo") }}
-                </span>
-                <span @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)">
-                  <Square :size="9" />
-                  {{ $t("app.stop") }}
-                </span>
-              </template>
-              <span v-else class="launch" @click.stop="launch(identity)">
-                <Play :size="10" />
-                {{ $t("app.launch") }}
+              <span class="card-session">
+                <template v-if="store.instanceFor(identity.id)">
+                  <button type="button" class="card-link launch" @click.stop="launch(identity)">
+                    <Play :size="10" />
+                    {{ $t("app.switchTo") }}
+                  </button>
+                  <button
+                    type="button"
+                    class="card-link"
+                    @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)"
+                  >
+                    <Square :size="9" />
+                    {{ $t("app.stop") }}
+                  </button>
+                </template>
+                <!-- The plain click is the built-in surface; the arrow lists every
+                     browser the app found, so the fidelity check is a decision made
+                     here instead of a mode flipped in the app menu. -->
+                <LaunchSplitButton
+                  v-else
+                  compact
+                  :aria-label="$t('app.launch')"
+                  :data-hook="`launch-${identity.id}`"
+                  @launch="launch(identity)"
+                  @launch-external="launchExternal(identity, $event)"
+                />
+                <button type="button" class="card-link" @click.stop="relogin(identity)">
+                  {{ $t("app.relaunch") }}
+                </button>
+                <button type="button" class="card-link" @click.stop="checkAuth(identity)">
+                  {{ $t("app.checkAuth") }}
+                </button>
               </span>
-              <span @click.stop="relogin(identity)">{{ $t("app.relaunch") }}</span>
-              <span @click.stop="checkAuth(identity)">{{ $t("app.checkAuth") }}</span>
-              <span class="edit" @click.stop="emit('editIdentity', identity.id)">{{ $t("app.edit") }}</span>
+              <span class="card-manage">
+                <IconButton
+                  :ariaLabel="$t('app.edit')"
+                  :data-edit-identity="identity.id"
+                  @click.stop="emit('editIdentity', identity.id)"
+                >
+                  <Pencil :size="12" />
+                </IconButton>
+              </span>
             </div>
             <div v-else class="card-pick-note mono">
               {{
                 store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
               }}
             </div>
-          </button>
+          </div>
         </template>
       </template>
 
-      <div v-if="!visibleIdentities.length" class="empty">
-        <Users :size="22" />
-        <p>{{ store.identities.length ? $t("app.noMatchingIdentities") : $t("app.empty") }}</p>
-        <div class="empty-actions">
-          <AppButton variant="primary" @click="emit('newIdentity')">
-            <Plus :size="13" />
-            {{ $t("app.newIdentity") }}
-          </AppButton>
-        </div>
-      </div>
+      <EmptyState
+        v-if="!visibleIdentities.length"
+        :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
+      >
+        <template #icon><Users :size="22" /></template>
+        <AppButton variant="primary" @click="emit('newIdentity')">
+          <Plus :size="13" />
+          {{ $t("app.newIdentity") }}
+        </AppButton>
+      </EmptyState>
       </div>
     </div>
   </section>
@@ -852,71 +933,6 @@ function extraFacts(identity: Identity): string[] {
   font-size: 11.5px;
   color: var(--accent-text);
   text-decoration: underline;
-}
-
-/*
- * Export panel. Sits under the selection bar and pushes the cards down only
- * while it is open — this is a deliberate step, not a prompt that appears on its
- * own, so it may take space.
- */
-.export-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-  margin: -4px 0 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  flex: 0 0 auto;
-}
-
-.export-copy {
-  flex: 1 1 240px;
-  min-width: 0;
-}
-
-.export-title {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text);
-}
-
-.export-note {
-  margin: 3px 0 0;
-  font-size: 10.5px;
-  color: var(--faint);
-  line-height: 1.5;
-}
-
-.export-pass {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.export-pass input {
-  width: 190px;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 11.5px;
-  outline: 0;
-}
-
-.export-pass input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
-}
-
-.export-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
 }
 
 .sel-count {
@@ -1065,6 +1081,11 @@ function extraFacts(identity: Identity): string[] {
   --role: var(--role-slate);
   position: relative;
   text-align: left;
+  /* A `div` with a button role: the native button's own chrome has to be
+     neutralised by hand now that a real launch control lives inside it. */
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
   /* Same reasoning as the sites card: the page and the card share a surface, so
      the edge has to be the stronger hairline or the card disappears into the
      background in the light theme. */
@@ -1315,36 +1336,62 @@ function extraFacts(identity: Identity): string[] {
  *
  * The row does not wrap, for the same reason the facts row does not: one
  * account with an extra action ("stop" instead of "switch") must not make its
- * card one line taller than the rest. "Edit" is pinned to the right edge so the
- * destructive-looking actions never share a line with it.
+ * card one line taller than the rest. Session actions sit left, management
+ * actions are pinned to the right edge as icon buttons.
  */
 .card-actions {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 3px 10px;
+  gap: 8px;
   overflow: hidden;
   font-size: 11px;
   color: var(--muted);
 }
 
-.card-actions > span {
+.card-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.card-manage {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+/*
+ * A text action inside the card.
+ *
+ * A plain `<button>` rather than a `<span>`: the card is a `role="button"` div
+ * now, so anything clickable inside it must be a real control — a span with a
+ * click handler is unreachable by keyboard and invisible to a screen reader.
+ * The button is stripped back to look like the link it replaced.
+ */
+.card-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  color: inherit;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.card-actions > span.edit {
-  margin-left: auto;
-}
-
-.card-actions > span:hover {
+.card-link:hover {
   color: var(--text);
 }
 
-.launch {
+.card-link.launch {
   color: color-mix(in srgb, var(--role) 76%, var(--text));
 }
 
@@ -1365,6 +1412,21 @@ function extraFacts(identity: Identity): string[] {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--faint);
+}
+
+/* The export dialog's two bits of furniture. Its body is one labelled field, so
+   it borrows the link dialog's caption treatment rather than a second style. */
+.field .label {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--red);
 }
 
 /* The frame comes from the shared `.empty` rule; only the placement is this

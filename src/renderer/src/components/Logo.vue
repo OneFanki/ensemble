@@ -22,6 +22,15 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
     The frames are drawn in greys that invert with the theme, so the stack keeps
     receding on either surface. Only the front card stays gold in both: that is
     the mark.
+
+    The stack is offset as a group so its ink is centred in the box.
+
+    The three frames are drawn toward the top-left of a 32-unit box: their ink
+    spans x 3.65–25.5 and y 2.65–21.7, which leaves a third of the height empty
+    under the mark. Laid out beside a wordmark, `align-items: center` centres
+    the *box*, so the visible mark sat 2–3px above the text and the gap after it
+    read wider than the gap before. Nudging the text with padding was the old
+    workaround; moving the ink to the middle fixes it for every caller.
   -->
   <svg
     class="logo"
@@ -31,36 +40,38 @@ withDefaults(defineProps<{ size?: number; label?: string }>(), {
     role="img"
     :aria-label="label"
   >
-    <rect
-      x="4.5"
-      y="3.5"
-      width="15"
-      height="11"
-      rx="2.2"
-      fill="none"
-      stroke="var(--logo-back, #c9d1d9)"
-      stroke-width="1.7"
-    />
-    <rect
-      x="7.5"
-      y="6.8"
-      width="15"
-      height="11"
-      rx="2.2"
-      fill="none"
-      stroke="var(--logo-mid, #8a939e)"
-      stroke-width="1.7"
-    />
-    <rect x="10.5" y="10.2" width="15" height="11.5" rx="2.2" fill="var(--logo-card, #e0a44e)" />
-    <rect
-      x="13.2"
-      y="13.2"
-      width="6"
-      height="2"
-      rx="1"
-      fill="var(--logo-glyph, #1a1206)"
-    />
-    <circle cx="21" cy="16.6" r="1.5" fill="var(--logo-glyph, #1a1206)" />
+    <g transform="translate(1.425 3.825)">
+      <rect
+        x="4.5"
+        y="3.5"
+        width="15"
+        height="11"
+        rx="2.2"
+        fill="none"
+        stroke="var(--logo-back, #c9d1d9)"
+        stroke-width="1.7"
+      />
+      <rect
+        x="7.5"
+        y="6.8"
+        width="15"
+        height="11"
+        rx="2.2"
+        fill="none"
+        stroke="var(--logo-mid, #8a939e)"
+        stroke-width="1.7"
+      />
+      <rect x="10.5" y="10.2" width="15" height="11.5" rx="2.2" fill="var(--logo-card, #e0a44e)" />
+      <rect
+        x="13.2"
+        y="13.2"
+        width="6"
+        height="2"
+        rx="1"
+        fill="var(--logo-glyph, #1a1206)"
+      />
+      <circle cx="21" cy="16.6" r="1.5" fill="var(--logo-glyph, #1a1206)" />
+    </g>
   </svg>
 </template>
 

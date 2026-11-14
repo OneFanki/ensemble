@@ -412,6 +412,12 @@ const DEMO = {
       ["生产环境", "amber"],
       ["只读账号", "violet"],
     ],
+    // Neutral names, like every other piece of demo data: a jar is named after
+    // the kind of session it holds, never after a customer.
+    defaultProfile: "默认档案",
+    cleanProfile: "干净会话",
+    workProfile: "工作档案",
+    clientProfile: "对照档案",
     people: [
       ["管理员 · 主账号", "admin@example.test", "管理员", "amber"],
       ["成员 · 子账号", "member@example.test", "成员", "teal"],
@@ -446,6 +452,10 @@ const DEMO = {
       ["Production", "amber"],
       ["Read-only", "violet"],
     ],
+    defaultProfile: "Default profile",
+    cleanProfile: "Clean session",
+    workProfile: "Work profile",
+    clientProfile: "Comparison profile",
     people: [
       ["Admin · primary", "admin@example.test", "Admin", "amber"],
       ["Member", "member@example.test", "Member", "teal"],
@@ -662,13 +672,13 @@ const SHOTS = [
     name: "identity-dialog",
     locale: "zh",
     view: "identities",
-    clicks: [".id-card .card-actions .edit"],
+    clicks: ["[data-edit-identity]"],
   },
   {
     name: "identity-reference",
     locale: "zh",
     view: "identities",
-    clicks: [".id-card .card-actions .edit"],
+    clicks: ["[data-edit-identity]"],
     script: `(() => { const seg = [...document.querySelectorAll('.seg')].find((el) => el.textContent.includes('引用')); seg?.click(); return Boolean(seg); })()`,
   },
   {
@@ -895,6 +905,23 @@ async function seed(userData, locale, theme = "dark") {
         // open by itself and every screenshot becomes a picture of the dialog.
         guideVersion: 99,
         autoCheckUpdates: false,
+        /*
+         * Two profiles beyond the built-in default, so the profiles page and the
+         * chooser's profile tab show what they are for rather than a single row.
+         * Written here rather than through the UI because the screenshot run has
+         * no user to click a dialog.
+         *
+         * The clean session is part of the stored list but is deliberately not
+         * shown on the profiles page — it is one fixed throwaway, not a jar
+         * anyone manages — so it is here for the chooser only.
+         */
+        profiles: [
+          { id: "default", name: demo.defaultProfile, retention: "persist", builtin: true },
+          { id: "clean", name: demo.cleanProfile, retention: "ephemeral", builtin: true },
+          { id: "pwork", name: demo.workProfile, retention: "persist" },
+          { id: "pclient", name: demo.clientProfile, retention: "persist" },
+        ],
+        defaultProfileId: "default",
       },
       null,
       2,
@@ -935,15 +962,56 @@ async function seed(userData, locale, theme = "dark") {
             action: { type: "identity", identityId: uuid(4), siteId },
             read: false,
           },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  // AI activity is its own log, so the screenshots get their rows from its own
+  // file. Two sites on purpose: the page groups by site, and a fixture with one
+  // group would show a list that happens to look grouped without proving it.
+  await writeFile(
+    join(userData, "ai-activity.json"),
+    JSON.stringify(
+      {
+        records: [
           {
             id: uuid(33),
             at: at(93),
-            kind: "ai",
-            tone: "info",
-            titleKey: "app.messagesAiAction",
-            titleParams: { tool: "click_browser_element", site: demo.site },
-            action: { type: "tab", tabId: "screenshot-tab" },
-            read: true,
+            tool: "click_browser_element",
+            origin: `http://127.0.0.1:${PAGE_PORT}`,
+            siteId,
+            tabId: "screenshot-tab",
+            tabTitle: demo.site,
+            ok: true,
+            originAuthorized: true,
+            count: 3,
+          },
+          {
+            id: uuid(34),
+            at: at(96),
+            tool: "type_browser_text",
+            origin: `http://127.0.0.1:${PAGE_PORT}`,
+            siteId,
+            tabId: "screenshot-tab",
+            tabTitle: demo.site,
+            ok: true,
+            originAuthorized: true,
+            count: 1,
+          },
+          {
+            id: uuid(35),
+            at: at(104),
+            tool: "evaluate_browser_page",
+            origin: "https://docs.example.test",
+            tabId: "screenshot-tab-2",
+            tabTitle: "Docs",
+            ok: false,
+            originAuthorized: false,
+            approval: "timeout",
+            count: 1,
           },
         ],
       },

@@ -174,7 +174,24 @@ export const settingsPatchSchema = z.object({
   theme: z.enum(["dark", "light", "system"]).optional(),
   locale: z.enum(LOCALE_SETTINGS).optional(),
   lastSiteId: z.string().optional(),
-  lastView: z.enum(["browser", "messages", "sites", "identities", "views", "flows", "tags"]).optional(),
+  // Every value `AppSettings["lastView"]` allows. The list had drifted: `bookmarks`
+  // and `profiles` were in the type but not here, so saving either as the view to
+  // restore failed validation and the interface reported a schema error; adding
+  // `ai` without this would have broken it a third time.
+  lastView: z
+    .enum([
+      "browser",
+      "messages",
+      "ai",
+      "sites",
+      "identities",
+      "views",
+      "flows",
+      "tags",
+      "bookmarks",
+      "profiles",
+    ])
+    .optional(),
   shellMode: z.enum(["browse", "bench"]).optional(),
   lastViewId: z.string().optional(),
   restoreLastView: z.boolean().optional(),
@@ -184,7 +201,6 @@ export const settingsPatchSchema = z.object({
   launchIntervalMs: z.number().int().min(0).max(5000).optional(),
   layout: z.string().min(1).max(64).optional(),
   layoutExplicit: z.boolean().optional(),
-  launchTarget: z.enum(["embedded", "external"]).optional(),
   defaultEngineId: z.string().optional(),
   autoFillOnLaunch: z.boolean().optional(),
   autoSubmitLogin: z.boolean().optional(),

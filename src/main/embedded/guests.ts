@@ -336,6 +336,21 @@ export class BrowserGuestManager {
   }
 
   /**
+   * The correlation token (a tab id) a guest was registered under.
+   *
+   * The reverse of {@link guestIdFor}, needed by the session-open hook: a fresh
+   * CDP session arrives knowing only the guest, while everything the caller
+   * wants to replay — pre-document scripts, device emulation — is keyed by tab.
+   */
+  keyFor(guestId: string): string | undefined {
+    if (!this.guests.has(guestId)) return undefined;
+    for (const [key, id] of this.keyToGuest) {
+      if (id === guestId) return key;
+    }
+    return undefined;
+  }
+
+  /**
    * Forgets a correlation token without touching the guest.
    *
    * Closing the session is a separate, explicit step ({@link teardown}): the
@@ -391,15 +406,16 @@ export class BrowserGuestManager {
     guestId: string,
     method: string,
     params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
   ): Promise<T> {
-    return this.withGuest(guestId, (cdp) => cdp.send<T>(method, params));
+    return this.withGuest(guestId, (cdp) => cdp.send<T>(method, params, options));
   }
 
   /** Evaluates an expression in the guest and returns its value. */
   async evaluate<T = unknown>(
     guestId: string,
     expression: string,
-    options: { awaitPromise?: boolean } = {},
+    options: { awaitPromise?: boolean; timeoutMs?: number } = {},
   ): Promise<T> {
     return this.withGuest(guestId, (cdp) => cdp.evaluate<T>(expression, options));
   }
@@ -434,7 +450,7 @@ export class BrowserGuestManager {
   targetFor(tabId: string): GuestCdpTarget {
     return {
       guestId: () => this.guestIdFor(tabId),
-      send: (guestId, method, params) => this.send(guestId, method, params),
+      send: (guestId, method, params, options) => this.send(guestId, method, params, options),
       evaluate: (guestId, expression, options) =>
         this.evaluate(guestId, expression, options ?? {}),
       has: (guestId) => this.has(guestId),

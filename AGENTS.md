@@ -79,6 +79,7 @@ pnpm dist             # 打包三平台产物到 release/
 | 任何代码改动 | 本文件 + `docs/architecture.md` |
 | 改动浏览器启动、CDP、窗口定位 | `docs/engineering/cdp-playbook.md` |
 | 改动凭据、自动填充、启动与 MCP 权限 | `docs/architecture.md` 的安全边界一节 |
+| 增删 MCP 工具、改动 AI 调用的时限或返回形状 | `docs/engineering/ai-tools.md`（契约测试会检查工具集合一致） |
 | 遇到报错或反常行为 | `docs/engineering/踩坑库.md` |
 | 做架构取舍 | `docs/architecture/adr/` 现有决策，先看是否已被否 |
 | 打包、发布、升级 Electron | `docs/engineering/release.md` |
@@ -92,6 +93,7 @@ pnpm dist             # 打包三平台产物到 release/
 | 当前架构与数据模型 | `docs/architecture.md` |
 | 架构决策记录 | `docs/architecture/adr/` |
 | 工程规范与操作手册 | `docs/engineering/` |
+| AI 工具能力矩阵（档位 / 闸门 / 时限 / 返回形状） | `docs/engineering/ai-tools.md` |
 | 经验型踩坑 | `docs/engineering/踩坑库.md` |
 | 用户可见说明 | `README.md` |
 | 安全策略 | `SECURITY.md` |

@@ -14,7 +14,6 @@
  */
 import type { AppMessageView, LoginCaptureNotice, MessageKind } from "@shared/types";
 import {
-  Bot,
   CircleAlert,
   CircleCheck,
   Globe,
@@ -26,7 +25,7 @@ import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
 
-export const MESSAGE_KINDS: MessageKind[] = ["login-capture", "account", "ai", "app"];
+export const MESSAGE_KINDS: MessageKind[] = ["login-capture", "account", "app"];
 
 /** Filter labels, named explicitly rather than built from the kind id.
  *  Deriving them from the string ("login-capture" → "logincapture") produced
@@ -34,14 +33,12 @@ export const MESSAGE_KINDS: MessageKind[] = ["login-capture", "account", "ai", "
 export const MESSAGE_KIND_LABELS: Record<MessageKind, string> = {
   "login-capture": "app.messageKindLoginCapture",
   account: "app.messageKindAccount",
-  ai: "app.messageKindAi",
   app: "app.messageKindApp",
 };
 
 const KIND_ICONS = {
   "login-capture": KeyRound,
   account: Globe,
-  ai: Bot,
   app: Info,
 } as const;
 
@@ -80,7 +77,6 @@ export function useMessageRows(saveCapture: (notice: LoginCaptureNotice) => void
 
   function actionLabelOf(message: AppMessageView): string {
     if (message.kind === "login-capture") return t("app.loginCaptureSave");
-    if (message.kind === "ai") return t("app.messageGotoTab");
     return t("app.messageRelogin");
   }
 
@@ -88,9 +84,8 @@ export function useMessageRows(saveCapture: (notice: LoginCaptureNotice) => void
    * Runs a row's action.
    *
    * Each kind means a different "show me": a capture opens the account form, an
-   * account reopens its login page, an AI row switches to the page it touched.
-   * The row is marked read on the way, because using it is the strongest
-   * possible statement that it was seen.
+   * account reopens its login page. The row is marked read on the way, because
+   * using it is the strongest possible statement that it was seen.
    */
   async function act(message: AppMessageView): Promise<void> {
     if (message.stale || !message.action) return;

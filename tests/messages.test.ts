@@ -28,7 +28,7 @@ afterEach(() => {
 describe("message store", () => {
   it("records a message as unread, newest first", () => {
     store.add({ kind: "app", tone: "info", titleKey: "messages.first" });
-    store.add({ kind: "ai", tone: "warning", titleKey: "messages.second" });
+    store.add({ kind: "account", tone: "warning", titleKey: "messages.second" });
     const list = store.list();
     expect(list.map((item) => item.titleKey)).toEqual(["messages.second", "messages.first"]);
     expect(list.every((item) => !item.read)).toBe(true);
@@ -92,9 +92,9 @@ describe("message store", () => {
 
   it("records the same headline again once the window has passed", () => {
     vi.useFakeTimers();
-    store.add({ kind: "ai", tone: "info", titleKey: "app.messagesAiAction" });
+    store.add({ kind: "app", tone: "info", titleKey: "app.messagesDedupeProbe" });
     vi.advanceTimersByTime(10 * 60_000);
-    store.add({ kind: "ai", tone: "info", titleKey: "app.messagesAiAction" });
+    store.add({ kind: "app", tone: "info", titleKey: "app.messagesDedupeProbe" });
     expect(store.list()).toHaveLength(2);
   });
 

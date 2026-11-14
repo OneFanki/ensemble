@@ -13,6 +13,8 @@
 | [0007](./0007-site-and-view-model.md) | 站点与视图模型：环境改名站点、场景改名视图、站点标签 | 已采纳（部分被 0008 修订） |
 | [0008](./0008-sites-as-login-recipes.md) | 站点降级为登录配方、删全局当前站点、标签升为全局 | 已采纳（部分被 0009 修订） |
 | [0009](./0009-daily-profile-and-bookmarks.md) | 日常档案 + 内存级干净会话；书签独立于站点 | 已采纳 |
+| [0010](./0010-webview-pivot-deferred.md) | 内置浏览器迁移到 `<webview>` 暂缓，并列出三条重启条件 | 已被 0011 取代 |
+| [0011](./0011-webview-cdp-on-guest-pivot.md) | 内置浏览器宿主改为 renderer `<webview>` + CDP-on-guest | 已采纳 |
 
 新决策模板：
 

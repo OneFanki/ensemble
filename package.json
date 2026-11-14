@@ -64,6 +64,8 @@
     "e2e:bookmark-flyout": "node scripts/e2e-bookmark-flyout.mjs",
     "e2e:http-auth": "node scripts/e2e-http-auth.mjs",
     "e2e:ai-policy": "node scripts/e2e-ai-policy.mjs",
+    "e2e:ai-approval": "node scripts/e2e-ai-approval.mjs",
+    "e2e:mcp-timeouts": "node scripts/e2e-mcp-timeouts.mjs",
     "e2e:zoom-devtools": "node scripts/e2e-zoom-devtools.mjs",
     "e2e:dom-resolver": "node scripts/e2e-dom-resolver.mjs",
     "e2e:flows": "node scripts/e2e-flows.mjs",
@@ -81,7 +83,8 @@
     "e2e:all": "node scripts/run-all-e2e.mjs",
     "smoke:packaged": "node scripts/smoke-packaged-mcp.mjs",
     "e2e:devtools-panels": "node scripts/e2e-devtools-panels.mjs",
-    "e2e:profiles": "node scripts/e2e-profiles.mjs"
+    "e2e:profiles": "node scripts/e2e-profiles.mjs",
+    "e2e:external-launch": "node scripts/e2e-external-launch.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

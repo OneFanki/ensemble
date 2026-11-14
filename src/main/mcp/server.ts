@@ -11,7 +11,10 @@ import {
   aiWriteDenial,
   aiWriteDenialMessage,
   type AiDailyMode,
+  type AiPageContext,
+  type AiWriteDenial,
 } from "@shared/ai-policy";
+import { isDeadlineError } from "@shared/async";
 import {
   embeddedSlotCount,
   isEmbeddedLayout,
@@ -32,6 +35,8 @@ import {
   viewDraftSchema,
 } from "@shared/schemas";
 import type {
+  AiApprovalDecision,
+  AiApprovalOutcome,
   Identity,
   IdentityDraft,
   McpSettings,
@@ -195,13 +200,21 @@ export interface EmbeddedSurface {
    */
   aiPageContext?(tabId: string): { identityId?: string; clean?: boolean; origin: string };
   /**
-   * Facts the origin gate needs about one page.
+   * Context for the activity log and the authorization window.
    *
-   * Optional so the MCP server still works with a surface that predates the
-   * gate — such a surface simply reports no context, and the tools refuse input
-   * rather than assuming permission.
+   * Separate from {@link aiPageContext} because the decision may only depend on
+   * three facts, while a record wants to say which site and which profile it
+   * happened in. Optional for the same reason: a surface that cannot say simply
+   * logs less.
    */
-  aiPageContext?(tabId: string): { identityId?: string; clean?: boolean; origin: string };
+  actionFacts?(tabId: string): {
+    origin: string;
+    title: string;
+    identityId?: string;
+    siteId?: string;
+    clean?: boolean;
+    profileId?: string;
+  };
   createTab(input: {
     url?: string;
     identityId?: string;
@@ -236,10 +249,20 @@ export interface EmbeddedSurface {
     steps: FlowStep[],
     options: { baseUrl: string; vars: Record<string, string>; timeoutMs: number },
   ): Promise<FlowRunResult>;
-  evaluate(tabId: string, expression: string): Promise<unknown>;
+  /** Runs an expression in the page, bounded by the caller's own deadline. */
+  evaluate(
+    tabId: string,
+    expression: string,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
   screenshot(
     tabId: string,
-    options?: { format?: "png" | "jpeg"; quality?: number; inline?: boolean },
+    options?: {
+      format?: "png" | "jpeg";
+      quality?: number;
+      inline?: boolean;
+      timeoutMs?: number;
+    },
   ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }>;
   visibility(tabId: string, target: ElementTarget | string): Promise<unknown>;
   /** Polls a page condition; see `buildWaitExpression` for the conditions. */
@@ -309,6 +332,33 @@ export interface EmbeddedSurface {
    * definition — the originals would stay loose next to fresh duplicates.
    */
   openViewContainer?(viewId: string): string | Promise<string>;
+  /**
+   * Registers a script to run before any document loads, from now on.
+   *
+   * Returns the registration id, which is what removes it again. The script does
+   * not run in the current document — that is the whole difference between this
+   * and `evaluate`, and the one thing a caller must not be left guessing about.
+   *
+   * Optional like the rest of the capability surface: a host that cannot inject
+   * reports the capability as absent instead of pretending to have registered
+   * something that will never run.
+   */
+  addInitScript?(
+    tabId: string,
+    source: string,
+  ): Promise<{ scriptId: string }>;
+  /** The scripts currently registered on a page, in the order they will run. */
+  listInitScripts?(tabId: string): Array<{ scriptId: string; createdAt: string; preview: string }>;
+  /** Removes a registration; a later navigation stops running it. */
+  removeInitScript?(tabId: string, scriptId: string): Promise<void>;
+  /**
+   * Stops whatever script is currently executing in the page.
+   *
+   * `Runtime.terminateExecution`, which unwinds the running stack. Best effort
+   * by nature: a script parked on an unresolved Promise is not executing at
+   * that moment, so it resumes unaffected.
+   */
+  cancelScript?(tabId: string): Promise<void>;
 }
 
 const string = (description: string) => ({ type: "string", description });
@@ -403,7 +453,6 @@ const WRITABLE_SETTINGS = [
   "theme",
   "locale",
   "layout",
-  "launchTarget",
   "defaultEngineId",
   "autoFillOnLaunch",
   "autoSubmitLogin",
@@ -435,11 +484,6 @@ const writableSettingsProps = (): Record<string, unknown> => ({
   theme: { type: "string", enum: ["dark", "light", "system"], description: "界面主题" },
   locale: { type: "string", enum: [...LOCALE_SETTINGS], description: "界面语言" },
   layout: string("单独启动身份时使用的窗口布局 id，例如 2x2 / free"),
-  launchTarget: {
-    type: "string",
-    enum: ["embedded", "external"],
-    description: "启动视图或身份时用内置浏览器还是系统浏览器",
-  },
   defaultEngineId: string("外部启动时默认使用的浏览器引擎 id"),
   autoFillOnLaunch: { type: "boolean", description: "启动后自动填充已保存的账号密码" },
   autoSubmitLogin: { type: "boolean", description: "填充后自动提交登录表单（站点可覆盖）" },
@@ -602,11 +646,63 @@ export function redactMcpArgs(args: unknown): unknown {
   return result;
 }
 
+/**
+ * A one-line description of what a tool is about to do, for logs and audit rows.
+ *
+ * The window has its own translated sentence built from the same arguments; this
+ * is the plain string that ends up in a log file, where the reader is a person
+ * scrolling a history and there is no i18n table to look a key up in.
+ *
+ * Arguments that might be a secret are never included. A `text` argument on
+ * `type_browser_text` is the string being typed, which may be a password the AI
+ * was handed — naming the field it is going into is enough to recognise the call.
+ */
+function describeToolAction(tool: string, args: Record<string, unknown>): string {
+  const named = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value.trim().slice(0, 80) : undefined;
+  const target =
+    named(args["label"]) ?? named(args["text"]) ?? named(args["selector"]) ?? named(args["role"]);
+  switch (tool) {
+    case "click_browser_element":
+      return target ? `点击「${target}」` : "点击页面元素";
+    case "type_browser_text":
+      return target ? `在「${target}」输入` : "在页面上输入";
+    case "fill_browser_form":
+      return "填写表单";
+    case "fill_browser_login":
+      return "填充登录信息";
+    case "evaluate_browser_page":
+      return "在页面里执行脚本";
+    case "run_flow":
+      return named(args["flowName"]) ? `运行流程「${named(args["flowName"])}」` : "运行流程";
+    default:
+      return tool;
+  }
+}
+
 function timingSafeToken(actual: string, expected: string): boolean {
   const left = Buffer.from(actual, "utf8");
   const right = Buffer.from(expected, "utf8");
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
+}
+
+/**
+ * The origins the policy should read, given the mode and the session's grants.
+ *
+ * A session grant is an allow, so it only means something where the list means
+ * "these are allowed". In a denylist a grant would have to *remove* an entry to
+ * have any effect, which would be a strange thing for a button labelled
+ * "allow this time" to do — so the two absolute modes and the denylist ignore
+ * grants and the policy stays exactly what the user configured.
+ */
+export function aiEffectiveOrigins(
+  mode: McpSettings["aiMode"],
+  listed: readonly string[],
+  granted: ReadonlySet<string>,
+): string[] {
+  if (mode !== "allowlist") return [...listed];
+  return [...new Set([...listed, ...granted])];
 }
 
 /**
@@ -628,6 +724,13 @@ export class McpServer {
   private settings: McpSettings;
   /** Port the current socket is on, kept after close so status() stays readable. */
   private cachedPort = 0;
+  /**
+   * Origins the user allowed "for this session" in the authorization window.
+   *
+   * In memory only, and cleared when the endpoint stops: the answer was given
+   * about this run, so it should not survive a restart as if it were permanent.
+   */
+  private sessionGrants = new Set<string>();
 
   constructor(
     private readonly options: {
@@ -680,6 +783,26 @@ export class McpServer {
       updateSettings?: (patch: SettingsPatch) => SettingsPatch | Promise<SettingsPatch>;
       onChange?: () => void;
       /**
+       * Asks the person before an AI call reaches a signed-in page.
+       *
+       * Injected rather than owned: the question is a window, and the MCP server
+       * is deliberately constructible without Electron. The resolver returns the
+       * user's answer, or `deny` when nobody answered in time. Absent means there
+       * is no way to ask (a plain-Node test, headless automation), so a refusal
+       * stays a refusal.
+       */
+      approve?: (input: {
+        tool: string;
+        summary: string;
+        origin: string;
+        siteName: string;
+        context: string;
+        tabTitle: string;
+        /** i18n key naming what the call is about to do. */
+        actionKey: string;
+        actionParams?: Record<string, string>;
+      }) => Promise<AiApprovalDecision>;
+      /**
        * One AI action was aimed at a page, whether it succeeded or was refused.
        *
        * The audit log already records every call; this is the live signal the
@@ -692,6 +815,14 @@ export class McpServer {
         origin: string;
         ok: boolean;
         originAuthorized: boolean;
+        siteId?: string;
+        identityId?: string;
+        profileId?: string;
+        clean?: boolean;
+        tabTitle?: string;
+        summary?: string;
+        approval?: AiApprovalOutcome;
+        error?: string;
       }) => void;
     },
   ) {
@@ -729,6 +860,7 @@ export class McpServer {
       allowDelete: this.settings.allowDelete,
       aiMode: this.settings.aiMode,
       aiOrigins: [...this.settings.aiOrigins],
+      aiSessionOrigins: [...this.sessionGrants],
       toolCount: this.toolList().length,
       ...(this.lastError ? { error: this.lastError } : {}),
     };
@@ -765,6 +897,10 @@ export class McpServer {
       next.aiOrigins = allowed
         ? [...new Set([...next.aiOrigins, origin])]
         : next.aiOrigins.filter((item) => item !== origin);
+      // An explicit revoke also cancels a session grant: otherwise "撤销" in the
+      // panel would appear to do nothing until the app restarted, because the
+      // grant kept the origin open.
+      if (!allowed) this.sessionGrants.delete(origin);
     }
     if (patch.aiOriginsAdd) {
       // Malformed entries are dropped rather than thrown on: this arrives from a
@@ -860,6 +996,10 @@ export class McpServer {
     const server = this.server;
     this.server = null;
     this.running = false;
+    // Session grants belong to a running endpoint: "for this session" was said
+    // about the connection the AI is using, so stopping it ends them. Anything
+    // the user wants permanent went into the stored list instead.
+    this.sessionGrants.clear();
     if (!server) return;
     server.closeAllConnections?.();
     await new Promise<void>((resolve) => {
@@ -1042,20 +1182,36 @@ export class McpServer {
           }
           // The origin gate sits here rather than inside each tool so a new
           // input tool cannot forget it: it only has to declare `inputTarget`.
-          const denied = this.originDenial(tool, params.arguments ?? {});
-          if (denied) {
-            const page = this.notePageAction(tool, params.arguments ?? {}, false, false);
-            this.audit(tool.name, params.arguments, false, denied, page);
+          const origin = this.originGate(tool, params.arguments ?? {});
+          const verdict = origin
+            ? await this.resolveOriginGate(tool, origin, params.arguments ?? {})
+            : {};
+          if (verdict.refusal) {
+            const page = this.notePageAction(
+              tool,
+              params.arguments ?? {},
+              false,
+              false,
+              verdict.approval,
+              verdict.refusal,
+            );
+            this.audit(tool.name, params.arguments, false, verdict.refusal, page);
             send(200, {
               jsonrpc: "2.0",
               id,
-              result: { content: [{ type: "text", text: denied }], isError: true },
+              result: { content: [{ type: "text", text: verdict.refusal }], isError: true },
             });
             return;
           }
           try {
             const output = await tool.run(params.arguments ?? {});
-            const page = this.notePageAction(tool, params.arguments ?? {}, true, true);
+            const page = this.notePageAction(
+              tool,
+              params.arguments ?? {},
+              true,
+              true,
+              verdict.approval,
+            );
             this.audit(
               tool.name,
               this.auditArgs(params.arguments, output),
@@ -1138,11 +1294,19 @@ export class McpServer {
   /**
    * The per-origin check for tools that send input to a page.
    *
-   * Returns the message to refuse with, or undefined to proceed. A tool that
-   * declares `inputTarget` but whose surface cannot report the page's context
-   * is refused: the safe direction when the gate cannot see what it guards.
+   * Returns the page the tool names and the gate's verdict on it. Separated from
+   * the refusal message because an unlisted origin is not a dead end any more:
+   * the caller may ask the user about it, and that decision has to be made with
+   * the same page facts the policy used.
+   *
+   * A tool that declares `inputTarget` but whose surface cannot report the
+   * page's context is refused by the caller — the safe direction when the gate
+   * cannot see what it guards.
    */
-  private originDenial(tool: ToolDefinition, args: Record<string, unknown>): string | undefined {
+  private originGate(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+  ): { tabId: string; page: AiPageContext; denial?: AiWriteDenial } | undefined {
     if (!tool.inputTarget) return undefined;
     const surface = this.options.embedded;
     if (!surface) return undefined;
@@ -1155,12 +1319,142 @@ export class McpServer {
     }
     if (!tabId) return undefined;
     if (!surface.aiPageContext) {
-      return "这个版本的内置浏览器不支持来源权限检查，AI 无法向页面发送输入。";
+      return { tabId, page: { origin: "" }, denial: "unknown-origin" };
     }
     const page = surface.aiPageContext(tabId);
     const denial = aiWriteDenial(page, this.aiPolicyArgs());
-    if (!denial) return undefined;
-    return aiWriteDenialMessage(denial, page.origin);
+    return { tabId, page, ...(denial ? { denial } : {}) };
+  }
+
+  /**
+   * Turns a gate verdict into either "go ahead" or the text to refuse with.
+   *
+   * Only one denial is worth asking about: an origin the user never decided on.
+   * A blocklist entry and a whole-profile "deny all" are decisions the user
+   * already made — re-asking them on every call would be nagging, and the answer
+   * would have nowhere to go that the policy does not already say. A page with
+   * no usable origin is not a place to operate on at all.
+   */
+  private async resolveOriginGate(
+    tool: ToolDefinition,
+    gate: { tabId: string; page: AiPageContext; denial?: AiWriteDenial },
+    args: Record<string, unknown>,
+  ): Promise<{ refusal?: string; approval?: AiApprovalOutcome }> {
+    const denial = gate.denial;
+    if (!denial) return {};
+    const message = aiWriteDenialMessage(denial, gate.page.origin);
+    if (denial !== "daily-origin-unauthorized" || !this.options.approve) {
+      return { refusal: message };
+    }
+    const surface = this.options.embedded;
+    const facts = surface?.actionFacts?.(gate.tabId);
+    const action = this.approvalAction(tool, args);
+    const decision = await this.options.approve({
+      tool: tool.name,
+      // The window translates `actionKey`; this plain-language fallback is only
+      // what the log and the audit file keep, where the reader is the user
+      // scanning a history rather than a renderer with an i18n table.
+      summary: describeToolAction(tool.name, args),
+      origin: gate.page.origin,
+      siteName: this.siteNameOf(gate.page.origin),
+      context: this.contextOf(facts),
+      tabTitle: facts?.title ?? "",
+      actionKey: action.actionKey,
+      ...(action.actionParams ? { actionParams: action.actionParams } : {}),
+    });
+    switch (decision) {
+      case "allow-once":
+        return { approval: decision };
+      case "allow-session":
+        // Memory only. The user said "this session"; writing it to disk would
+        // silently upgrade the answer to one they did not give.
+        this.sessionGrants.add(gate.page.origin);
+        this.options.onChange?.();
+        return { approval: decision };
+      case "allow-always": {
+        // The stored list is what the settings page edits, so "always" goes
+        // there — one place to change your mind, and it survives a restart.
+        const origins = [...new Set([...this.settings.aiOrigins, gate.page.origin])];
+        this.settings = { ...this.settings, aiOrigins: origins };
+        saveMcpSettings(this.options.settingsPath, this.settings);
+        this.options.onChange?.();
+        return { approval: decision };
+      }
+      case "deny":
+        return {
+          refusal: `用户拒绝了这次操作，来源 ${gate.page.origin} 仍为只读。请停下来把情况告诉用户，不要重试，也不要换一个工具绕过。`,
+          approval: decision,
+        };
+    }
+  }
+
+  /** One line naming what the call is about to do, for the authorization window. */
+  private approvalAction(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+  ): { actionKey: string; actionParams?: Record<string, string> } {
+    const named = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim() ? value.trim() : undefined;
+    const target =
+      named(args["label"]) ?? named(args["text"]) ?? named(args["selector"]) ?? named(args["role"]);
+    switch (tool.name) {
+      case "click_browser_element":
+        return target
+          ? { actionKey: "app.aiApprovalActionClick", actionParams: { target } }
+          : { actionKey: "app.aiApprovalActionClickPage" };
+      case "type_browser_text":
+        // The text itself is never carried: it may be a password the AI is about
+        // to type, and the window is a renderer. Naming the field is enough for
+        // the person to decide.
+        return target
+          ? { actionKey: "app.aiApprovalActionType", actionParams: { target } }
+          : { actionKey: "app.aiApprovalActionTypePage" };
+      case "fill_browser_form":
+        return { actionKey: "app.aiApprovalActionFillForm" };
+      case "fill_browser_login":
+        return { actionKey: "app.aiApprovalActionFillLogin" };
+      case "evaluate_browser_page":
+        return { actionKey: "app.aiApprovalActionEvaluate" };
+      case "run_flow":
+        return {
+          actionKey: "app.aiApprovalActionFlow",
+          ...(named(args["flowName"]) ? { actionParams: { target: named(args["flowName"])! } } : {}),
+        };
+      default:
+        return { actionKey: "app.aiApprovalActionGeneric" };
+    }
+  }
+
+  /** Site name for an origin, or "" when the workspace has no site there. */
+  private siteNameOf(origin: string): string {
+    try {
+      return this.options.service.findSiteByOrigin(origin)?.name ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Which profile or account the page belongs to, in words.
+   *
+   * The window shows this so a decision about "this site" is made knowing what
+   * is signed in there — an origin alone does not say whether it is the everyday
+   * profile or a test account's session.
+   */
+  private contextOf(facts: { identityId?: string; profileId?: string; clean?: boolean } | undefined): string {
+    if (!facts) return "";
+    try {
+      if (facts.identityId) {
+        const identity = this.options.service.findIdentity(facts.identityId);
+        return identity ? `账号 · ${identity.name}` : "账号";
+      }
+      if (facts.clean) return "干净会话";
+      const snapshot = this.options.service.snapshot();
+      const profile = (snapshot.settings.profiles ?? []).find((item) => item.id === facts.profileId);
+      return profile ? `档案 · ${profile.name}` : "默认档案";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -1183,7 +1477,11 @@ export class McpServer {
     }
     return {
       dailyMode: this.settings.aiMode,
-      listedOrigins: this.settings.aiOrigins,
+      listedOrigins: aiEffectiveOrigins(
+        this.settings.aiMode,
+        this.settings.aiOrigins,
+        this.sessionGrants,
+      ),
       knownUrls,
     };
   }
@@ -1267,14 +1565,20 @@ export class McpServer {
     args: Record<string, unknown>,
     ok: boolean,
     originAuthorized: boolean,
+    approval?: AiApprovalOutcome,
+    error?: string,
   ): { origin: string; tabId: string } | undefined {
     if (!tool.inputTarget || !this.options.embedded?.aiPageContext) return undefined;
     let tabId: string | undefined;
     let origin = "";
+    let facts: ReturnType<NonNullable<EmbeddedSurface["actionFacts"]>> | undefined;
     try {
       tabId = tool.inputTarget(args);
       if (!tabId) return undefined;
       origin = this.options.embedded.aiPageContext(tabId).origin;
+      // The richer facts are optional on the surface, so a caller that cannot
+      // provide them logs the call with just the origin rather than failing.
+      facts = this.options.embedded.actionFacts?.(tabId);
     } catch {
       return undefined;
     }
@@ -1286,6 +1590,16 @@ export class McpServer {
         origin,
         ok,
         originAuthorized,
+        ...(facts?.siteId ? { siteId: facts.siteId } : {}),
+        ...(facts?.identityId ? { identityId: facts.identityId } : {}),
+        ...(facts?.profileId ? { profileId: facts.profileId } : {}),
+        ...(facts?.clean ? { clean: true } : {}),
+        ...(facts?.title ? { tabTitle: facts.title } : {}),
+        // Built here, from the same formatter the authorization card uses, so
+        // "what the AI asked to do" and "what it did" are the same sentence.
+        summary: describeToolAction(tool.name, args),
+        ...(approval ? { approval } : {}),
+        ...(error ? { error } : {}),
       });
     } catch {
       // A listener that throws must not turn a successful action into a failure.
@@ -2329,12 +2643,18 @@ export class McpServer {
       },
       {
         name: "launch_view",
-        description: "启动视图：按布局打开成员窗口并自动填充。",
+        description:
+          "启动视图：用外部浏览器按布局打开成员窗口并自动填充（每个成员一个独立窗口）。这是保真校验路径；同屏对比请用 open_browser_view 走内置浏览器。",
         kind: "run",
-        inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
+        inputSchema: object(
+          { viewId: string("视图 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
+          ["viewId"],
+        ),
         run: async (args) => {
           const view = findView(args["viewId"]);
-          const result = await service.launchView(view.id);
+          const engineId =
+            typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
+          const result = await service.launchView(view.id, engineId);
           return {
             instances: result.identities.map((identity) => ({
               identityId: identity.id,
@@ -2345,27 +2665,36 @@ export class McpServer {
       },
       {
         name: "launch_identity",
-        description: "单独启动一个身份。",
+        description:
+          "用外部浏览器单独启动一个身份（保真校验路径）。同屏对比请用 open_browser_tab 走内置浏览器。",
         kind: "run",
-        inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
+        inputSchema: object(
+          { identityId: string("身份 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
+          ["identityId"],
+        ),
         run: async (args) => {
           const identity = findIdentity(args["identityId"]);
-          const result = await service.launchIdentity(identity.id);
+          const engineId =
+            typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
+          const result = await service.launchIdentity(identity.id, undefined, engineId);
           return { instanceId: result.instance.id, label: result.instance.label };
         },
       },
       {
         name: "launch_clean_session",
         description:
-          "打开一个干净会话窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
+          "用外部浏览器打开一个干净会话窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
         kind: "run",
         inputSchema: object({
           siteId: string("站点 id；省略则打开空白页"),
+          engineId: string("浏览器引擎 id；省略则用默认浏览器"),
         }),
         run: async (args) => {
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
-          const result = await service.launchCleanSession(siteId);
+          const engineId =
+            typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
+          const result = await service.launchCleanSession(siteId, engineId);
           return { instanceId: result.instance.id, siteId: result.instance.siteId };
         },
       },
@@ -2748,7 +3077,7 @@ export class McpServer {
       {
         name: "wait_browser",
         description:
-          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。",
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
         kind: "read",
         inputSchema: object(
           {
@@ -2819,23 +3148,78 @@ export class McpServer {
       {
         name: "screenshot_browser_tab",
         description:
-          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。窗口最小化时也能拿到画面；完全隐藏的窗口不行。",
+          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。窗口最小化时也能拿到画面；完全隐藏的窗口不行。timeoutMs 是等画面的上限（默认 15000）：超时会返回 page-busy 而不是报错——页面可能正忙、被节流或完全不显示。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           format: { type: "string", enum: ["png", "jpeg"], description: "默认 png" },
           inline: boolean("是否把图像随结果返回，默认否；远程客户端需要它才能看到画面"),
+          timeoutMs: integer("等画面的上限，默认 15000，最大 60000。超时返回 page-busy"),
         }),
-        run: (args) =>
-          surface().screenshot(tabId(args), {
-            format: args["format"] === "jpeg" ? "jpeg" : "png",
-            // Only when asked: the argument's absence is what keeps the default
-            // result small, and an explicit `false` would still read as a request
-            // in a log.
-            ...(args["inline"] === true ? { inline: true } : {}),
-          }),
+        run: async (args) => {
+          const timeout = Number(args["timeoutMs"]);
+          const timeoutMs =
+            Number.isFinite(timeout) && timeout > 0
+              ? Math.min(Math.max(Math.trunc(timeout), 1_000), 60_000)
+              : undefined;
+          try {
+            return await surface().screenshot(tabId(args), {
+              format: args["format"] === "jpeg" ? "jpeg" : "png",
+              // Only when asked: the argument's absence is what keeps the default
+              // result small, and an explicit `false` would still read as a request
+              // in a log.
+              ...(args["inline"] === true ? { inline: true } : {}),
+              ...(timeoutMs === undefined ? {} : { timeoutMs }),
+            });
+          } catch (error) {
+            /*
+             * "No pixels in time" is not "the tool broke".
+             *
+             * A guest whose window is minimised, a compositor that stopped
+             * producing frames and a page in a busy loop all look the same from
+             * here — the capture simply does not answer. Naming that as
+             * `page-busy` tells the caller to wait or try another route instead
+             * of concluding screenshots are unavailable.
+             */
+            if (!isDeadlineError(error)) throw error;
+            return {
+              ok: false,
+              timedOut: true,
+              reason: "page-busy",
+              waitedMs: (error as { ms?: number }).ms ?? timeoutMs ?? 15_000,
+              hint: "页面没有在时限内产出画面：可能正在忙、被节流或窗口完全隐藏。可以稍后重试，或先用 wait_browser 等页面安静下来。",
+            };
+          }
+        },
         content: (output) => {
-          const shot = output as { path?: unknown; bytes?: unknown; data?: unknown; mimeType?: unknown };
+          const shot = output as {
+            path?: unknown;
+            bytes?: unknown;
+            data?: unknown;
+            mimeType?: unknown;
+            timedOut?: unknown;
+            reason?: unknown;
+            hint?: unknown;
+          };
+          // A timed-out capture has no path and no bytes. Formatting it as
+          // though it did printed `"path": undefined` and read as a bug.
+          if (shot?.timedOut === true) {
+            return [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ok: false,
+                    timedOut: true,
+                    reason: shot.reason,
+                    hint: shot.hint,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ];
+          }
           // The metadata stays text as well as the image: a person reading the
           // transcript still wants the file path, and a client that renders only
           // text should not see an empty result.
@@ -2865,19 +3249,118 @@ export class McpServer {
       {
         name: "evaluate_browser_page",
         description:
-          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。",
+          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。timeoutMs 是你给这段脚本的预算（默认 30000，最大 300000）：到点后调用会返回 timedOut 而不是报错，页里的脚本可能仍在运行——可以继续用 wait_browser 观察结果，或用 cancel_browser_script 尝试中止。",
         kind: "run",
         inputSchema: object(
           {
             tabId: tabIdProp(),
             expression: string("要执行的表达式"),
+            timeoutMs: integer("等这段脚本多久，默认 30000，最大 300000。到点返回 timedOut 而不是报错"),
           },
           ["expression"],
         ),
         // Arbitrary script in the page is the widest input there is — it can
         // submit a form the page never showed — so it is gated like a click.
         inputTarget: (args) => tabId(args),
-        run: (args) => surface().evaluate(tabId(args), String(args["expression"] ?? "")),
+        run: async (args) => {
+          const timeout = Number(args["timeoutMs"]);
+          const timeoutMs =
+            Number.isFinite(timeout) && timeout > 0
+              ? Math.min(Math.max(Math.trunc(timeout), 1_000), 300_000)
+              : undefined;
+          const started = Date.now();
+          try {
+            return await surface().evaluate(
+              tabId(args),
+              String(args["expression"] ?? ""),
+              timeoutMs === undefined ? {} : { timeoutMs },
+            );
+          } catch (error) {
+            /*
+             * A deadline is not a failure, and reporting it as one is what made
+             * a client retry a scrape that was still running. The work may still
+             * be in flight, so this is a normal result that says so — the caller
+             * decides whether to wait, look, or stop it.
+             */
+            if (!isDeadlineError(error)) throw error;
+            return {
+              ok: false,
+              timedOut: true,
+              stillRunning: true,
+              waitedMs: Date.now() - started,
+              hint: "已停止等待，页面里的脚本可能仍在运行。可以再用 wait_browser 等它的结果出现，或用 cancel_browser_script 尝试中止。",
+            };
+          }
+        },
+      },
+      {
+        name: "cancel_browser_script",
+        description:
+          "中止页面里当前正在执行的脚本（Runtime.terminateExecution）。用在你已经不等结果、而页面还在忙的时候，比如 evaluate_browser_page 超时之后。边界：它只能打断正在跑的代码；脚本如果正停在一个 Promise 上，那一刻并没有执行，之后仍会继续。所以这是尽力而为的刹车，不保证页面立刻空闲。",
+        kind: "run",
+        inputSchema: object({ tabId: tabIdProp() }, []),
+        // Stopping a script is a write to the page's state, so it passes the
+        // same origin gate as running one.
+        inputTarget: (args) => tabId(args),
+        run: async (args) => {
+          const cancel = surface().cancelScript;
+          if (!cancel) throw new Error("这个宿不支持中止页面脚本");
+          await cancel(tabId(args));
+          return { ok: true, note: "已请求中止当前脚本；停在 Promise 上的代码不会被它打断。" };
+        },
+      },
+      {
+        name: "add_browser_init_script",
+        description:
+          "注册一段在「每个新文档加载前」执行的脚本，用来在页面自己的 JS 之前安装钩子——例如包装 VideoDecoder、改写某个 window 属性，或装一个立刻启动的定时器。关键：它对当前文档不生效，从下一次导航开始才生效；调用后需要刷新或重新导航才能看到效果。脚本随标签页存在，标签页关闭即失效。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            script: string("要在新文档加载前执行的脚本源码"),
+          },
+          ["script"],
+        ),
+        // Arbitrary code in every future document of this page: the same weight
+        // as evaluate, so the same gate.
+        inputTarget: (args) => tabId(args),
+        run: async (args) => {
+          const add = surface().addInitScript;
+          if (!add) throw new Error("这个宿不支持文档级脚本注入");
+          const result = await add(tabId(args), String(args["script"] ?? ""));
+          return {
+            ok: true,
+            scriptId: result.scriptId,
+            affects: "next-navigation",
+            note: "当前文档不受影响。刷新或重新导航后，这段脚本会在页面自己的代码之前执行。",
+          };
+        },
+      },
+      {
+        name: "list_browser_init_scripts",
+        description:
+          "列出这个标签页上注册的文档级脚本，按执行顺序排列。只返回 id、注册时间与开头一小段预览，不返回完整源码。",
+        kind: "read",
+        inputSchema: object({ tabId: tabIdProp() }, []),
+        run: (args) => {
+          const list = surface().listInitScripts;
+          if (!list) return { scripts: [], note: "这个宿不支持文档级脚本注入" };
+          return { scripts: list(tabId(args)) };
+        },
+      },
+      {
+        name: "remove_browser_init_script",
+        description:
+          "移除一个文档级脚本（用 add_browser_init_script 或 list_browser_init_scripts 拿到的 scriptId）。下一次导航起不再执行；当前文档里已经跑过的那次不受影响。",
+        kind: "run",
+        inputSchema: object({ tabId: tabIdProp(), scriptId: string("脚本 id") }, ["scriptId"]),
+        inputTarget: (args) => tabId(args),
+        run: async (args) => {
+          const remove = surface().removeInitScript;
+          if (!remove) throw new Error("这个宿不支持文档级脚本注入");
+          await remove(tabId(args), String(args["scriptId"] ?? ""));
+          return { ok: true };
+        },
       },
       {
         name: "set_browser_layout",

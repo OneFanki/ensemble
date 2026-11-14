@@ -16,6 +16,7 @@
  * - a **profile** page is the user's own browsing, signed in for real. Governed by
  *   the address list and the mode below.
  */
+import type { AiGateState } from "./types";
 
 /** The origin of a URL, or "" for anything that is not an http(s) page. */
 export function aiOriginOf(url: string): string {
@@ -148,7 +149,34 @@ export function aiWriteDenialMessage(denial: AiWriteDenial, origin: string): str
     case "daily-origin-blocked":
       return `来源 ${origin} 已被列入禁止名单，AI 不能在这里操作。`;
     case "daily-origin-unauthorized":
-      return `来源 ${origin} 不在允许名单里，AI 默认只读。要让 AI 在这里操作，请在浏览器工具栏的 AI 权限里允许这个来源。`;
+      return `来源 ${origin} 不在允许名单里，AI 默认只读。要让 AI 在这里操作，请在浏览器工具栏的 AI 面板里允许这个来源，或等它请求授权后同意。`;
+  }
+}
+
+/**
+ * The same decision as {@link aiWriteDenial}, grouped into the three states an
+ * interface can draw.
+ *
+ * The panel and its badge need "can it act here", "this was refused", or "this
+ * has not been decided" — not the four internal reasons. Deriving those from the
+ * denial function rather than re-reading the mode is what keeps the interface
+ * from claiming a permission the tool gate would refuse; the toolbar used to
+ * carry its own copy of that switch, which was one refactor away from
+ * disagreeing with the server.
+ */
+export function aiGateState(page: AiPageContext, policy: AiPolicy): AiGateState {
+  switch (aiWriteDenial(page, policy)) {
+    case undefined:
+      return "open";
+    case "daily-origin-blocked":
+    case "daily-denied-by-policy":
+      return "blocked";
+    case "daily-origin-unauthorized":
+      return "unlisted";
+    case "unknown-origin":
+      // Not a page the user could decide about, so it is reported as "not
+      // covered" rather than as a refusal they could lift.
+      return "unlisted";
   }
 }
 

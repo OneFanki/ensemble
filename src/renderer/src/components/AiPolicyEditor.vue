@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * The AI access policy for profile pages, as one reusable block.
+ * The AI access policy for profile pages.
  *
- * Two callers, one editor: the settings tab is where a user thinks about what
- * the AI may do, and the toolbar shield is where they notice it needs changing
- * while looking at a page. Two hand-maintained copies of the mode picker and the
- * address list would drift the first time either changed.
+ * This is the settings page's full editor: every mode with the sentence that
+ * explains it, and the whole address list with per-entry removal and a bulk add
+ * from bookmarks. The toolbar's AI panel carries only the decision about the page
+ * in front of the user, because that is the question they have there — mixing
+ * the four modes into a toolbar popover made the panel a settings page in a
+ * 380px box.
  *
  * The mode and the list are edited separately on purpose. Switching to "allow
  * all" and back must not lose the addresses someone typed — a policy switch is a
@@ -22,8 +24,6 @@ import AppButton from "./ui/AppButton.vue";
 const props = defineProps<{
   /** Live endpoint status; absent while the server has not answered yet. */
   status?: McpStatus;
-  /** Compact form for the toolbar popover: same controls, tighter spacing. */
-  compact?: boolean;
 }>();
 
 const store = useWorkspaceStore();
@@ -106,7 +106,7 @@ const bookmarkCount = computed(() => bookmarkOrigins().length);
 </script>
 
 <template>
-  <div class="ai-policy" :class="{ compact }">
+  <div class="ai-policy">
     <!--
       The mode picker, above the list.
 
@@ -376,16 +376,5 @@ const bookmarkCount = computed(() => bookmarkOrigins().length);
   margin: 4px 0 0;
   font-size: var(--fs-2xs);
   color: var(--red);
-}
-
-/* The toolbar popover has ~320px of width; the settings card has 800. Only the
-   type scale and the spacing change — the structure is the same, so there is
-   nothing to learn twice. */
-.compact .mode {
-  padding: 6px 7px;
-}
-
-.compact .mode-note {
-  font-size: 9.5px;
 }
 </style>

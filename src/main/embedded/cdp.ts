@@ -3,13 +3,17 @@ import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspe
 import { withDeadline } from "@shared/async";
 
 /**
- * Ceiling for one CDP command.
+ * Ceiling for one CDP command, when the caller does not name one.
  *
  * Generous against any real command (the slowest ordinary one is a page load,
  * which arrives as several events) and short enough that a client sees an error
  * instead of waiting out its own multi-minute timeout.
+ *
+ * Callers that run *their own* work in the page override it: an `evaluate` of a
+ * five-minute scrape is not a command that hung, and it should get the deadline
+ * the AI asked for rather than this one.
  */
-const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
  * The command surface every displayed page is driven through.
@@ -24,9 +28,16 @@ export interface CdpExecutor {
   isAttached(): boolean;
   prepare(): Promise<void>;
   detach(): void;
-  send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
+  send<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
   lifecycle(state: "frozen" | "active"): Promise<void>;
-  evaluate<T>(expression: string, options?: { awaitPromise?: boolean }): Promise<T>;
+  evaluate<T>(
+    expression: string,
+    options?: { awaitPromise?: boolean; timeoutMs?: number },
+  ): Promise<T>;
   snapshotDom(expression: string): Promise<DomSnapshot>;
   elementPoint(expression: string): Promise<ElementPoint>;
   visibility(expression: string): Promise<VisibilityProbe>;
@@ -34,6 +45,8 @@ export interface CdpExecutor {
     format?: "png" | "jpeg";
     quality?: number;
     preferRenderer?: boolean;
+    /** How long to wait for pixels before reporting the page as busy. */
+    timeoutMs?: number;
   }): Promise<Buffer>;
   clickAt(x: number, y: number): Promise<void>;
   insertText(text: string): Promise<void>;
@@ -174,15 +187,22 @@ export class EmbeddedCdp implements CdpExecutor {
     );
   }
 
-  async evaluate<T>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {
+  async evaluate<T>(
+    expression: string,
+    options: { awaitPromise?: boolean; timeoutMs?: number } = {},
+  ): Promise<T> {
     const response = await this.send<{
       result: { value?: T };
       exceptionDetails?: { text?: string; exception?: { description?: string } };
-    }>("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: options.awaitPromise ?? false,
-    });
+    }>(
+      "Runtime.evaluate",
+      {
+        expression,
+        returnByValue: true,
+        awaitPromise: options.awaitPromise ?? false,
+      },
+      options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs },
+    );
     if (response.exceptionDetails) {
       throw new Error(
         response.exceptionDetails.exception?.description ??
@@ -227,26 +247,49 @@ export class EmbeddedCdp implements CdpExecutor {
    * `preferRenderer` lets the caller say "this view is not on screen", so the
    * compositor path is skipped entirely instead of being timed out on. The
    * fallback stays for the states this cannot predict.
+   *
+   * **Both paths are bounded.** `capturePage` used to be the one unguarded call
+   * in this class: it goes through the renderer's paint pipeline, which stalls
+   * in the same situations the compositor does, and a caller then waited out its
+   * own transport timeout with no idea what had happened. A stalled capture is
+   * reported as a deadline like any other — the page is busy, not broken — and
+   * the MCP layer turns that into a `page-busy` result rather than a hard error.
    */
   async screenshot(
-    options: { format?: "png" | "jpeg"; quality?: number; preferRenderer?: boolean } = {},
+    options: {
+      format?: "png" | "jpeg";
+      quality?: number;
+      preferRenderer?: boolean;
+      timeoutMs?: number;
+    } = {},
   ): Promise<Buffer> {
     const format = options.format ?? "png";
+    const budget = Math.max(500, options.timeoutMs ?? 8_000);
     const fromRenderer = async (): Promise<Buffer> => {
       if (this.contents.isDestroyed()) throw new Error("页面已关闭");
-      const image = await this.contents.capturePage();
+      const image = await withDeadline(
+        this.contents.capturePage(),
+        budget,
+        "页面画面采集没有返回",
+      );
       if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
       return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
     };
     if (options.preferRenderer) return fromRenderer();
     try {
       const result = await Promise.race([
-        this.send<{ data: string }>("Page.captureScreenshot", {
-          format,
-          ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
-        }),
+        this.send<{ data: string }>(
+          "Page.captureScreenshot",
+          {
+            format,
+            ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
+          },
+          // The compositor path answers in tens of milliseconds or never. Four
+          // seconds is the window in which a real answer could still arrive.
+          { timeoutMs: Math.min(4_000, budget) },
+        ),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("截图超时")), 4_000),
+          setTimeout(() => reject(new Error("截图超时")), Math.min(4_000, budget)),
         ),
       ]);
       return Buffer.from(result.data, "base64");

@@ -32,6 +32,7 @@ import {
   Layers,
   LayoutGrid,
   Settings,
+  Sparkles,
   Tag,
   Users,
   Workflow,
@@ -47,6 +48,7 @@ import RunDock from "./RunDock.vue";
 export type AppView =
   | "browser"
   | "messages"
+  | "ai"
   | "sites"
   | "identities"
   | "views"
@@ -94,6 +96,10 @@ const browserEntries = computed<Array<{ view: AppView; label: string; icon: Comp
       // counter of nothing.
       count: workspace.unreadMessages,
     },
+    // No badge, deliberately: AI activity is a log, and a number that grew with
+    // every tool call would be the notification noise this list was moved out of
+    // the message centre to avoid.
+    { view: "ai", label: t("app.aiActivityTitle"), icon: Sparkles, count: 0 },
     {
       view: "bookmarks",
       label: t("app.bookmarks"),
@@ -104,7 +110,9 @@ const browserEntries = computed<Array<{ view: AppView; label: string; icon: Comp
       view: "profiles",
       label: t("app.profiles"),
       icon: Layers,
-      count: workspace.settings.profiles?.length ?? 0,
+      // Persistent profiles only: the clean session is not managed here, so
+      // counting it would make the rail disagree with the page it opens.
+      count: (workspace.settings.profiles ?? []).filter((profile) => profile.retention !== "ephemeral").length,
     },
   ],
 );

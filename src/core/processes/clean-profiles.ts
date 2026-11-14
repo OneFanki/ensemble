@@ -11,6 +11,16 @@ export const CLEAN_PROFILE_PREFIX = "clean-";
  */
 export const CLEAN_SESSION_SEGMENT = "clean";
 
+/**
+ * Profile-root segment for browser-profile windows.
+ *
+ * A profile is a cookie jar, not a site, so its directories go under their own
+ * segment: `<root>/profiles/<profileId>`. Keeping them out of a site directory
+ * means deleting a site can never stop or adopt a profile window, and the
+ * startup sweep still finds a leftover throwaway under it.
+ */
+export const PROFILES_SESSION_SEGMENT = "profiles";
+
 /** Chromium releases its files slightly after the process exits. */
 const REMOVE_OPTIONS = { recursive: true, force: true, maxRetries: 8, retryDelay: 150 } as const;
 

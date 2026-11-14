@@ -321,37 +321,64 @@ try {
     menu,
   );
 
-  // --- 4a. Where launches go is switchable from the menu --------------------
+  // --- 4a. Every launch point carries its own browser list ------------------
   //
-  // The switch used to live in the window's title bar. Deleting that row took
-  // the switch with it, and nothing failed: every page kept reading the setting,
-  // so the app simply stayed on whatever surface it was last set to and the
-  // regression had no symptom until someone wanted the other one. Assert both
-  // halves — the rows exist, and choosing one actually writes the setting.
-  const launch = await client.evaluate(`(async () => {
-    const was = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
-    const pick = document.querySelector('[data-menu-item="' + (was === 'embedded' ? 'launch-external' : 'launch-embedded') + '"]');
-    if (!pick) return { error: 'no launch rows', rows: [...document.querySelectorAll('.app-menu [data-menu-item]')].map((el) => el.dataset.menuItem) };
-    pick.click();
-    await new Promise((r) => setTimeout(r, 600));
-    const after = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
-    // Put it back: later suites read the same setting.
+  // There used to be one global "launch target" switch in this menu, and its
+  // regression story is why it is gone: deleting the row from the title bar left
+  // every page still reading the stored value, so the app stayed on whatever
+  // surface it was last set to and nothing looked broken. A launch now names its
+  // surface at the moment of launching, so what has to hold is different — the
+  // menu must no longer carry the mode, and the launch control must list the
+  // built-in surface plus every real browser the scan found.
+  const menuAfterMode = await client.evaluate(`(() => {
     document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    document.querySelector('[data-menu-item="' + (was === 'embedded' ? 'launch-embedded' : 'launch-external') + '"]')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const restored = (await window.ensemble.getWorkspace()).settings.launchTarget ?? 'embedded';
-    return { was, after, restored, rows: [...document.querySelectorAll('.app-menu [data-menu-item]')].length };
+    return new Promise((resolve) => setTimeout(() => resolve({
+      rows: [...document.querySelectorAll('.app-menu [data-menu-item]')].map((el) => el.dataset.menuItem),
+    }), 400));
   })()`);
   check(
-    "the menu carries both launch surfaces",
-    launch?.after !== undefined && launch.after !== launch.was,
-    launch,
+    "the app menu no longer offers a launch mode",
+    Array.isArray(menuAfterMode?.rows) &&
+      !menuAfterMode.rows.includes("launch-embedded") &&
+      !menuAfterMode.rows.includes("launch-external"),
+    menuAfterMode,
   );
+
+  const chooser = await client.evaluate(`(async () => {
+    const api = window.ensemble;
+    // Close whatever the menu check left open, then go where the control lives.
+    document.querySelector('[data-app-menu]')?.click();
+    await new Promise((r) => setTimeout(r, 250));
+    document.querySelector('[data-nav="identities"]')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const workspace = await api.getWorkspace();
+    const trigger = document.querySelector('[data-launch-menu]');
+    if (!trigger) return { error: 'no launch control on the accounts page' };
+    trigger.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const panel = document.querySelector('[data-launch-panel]');
+    const rows = panel
+      ? [...panel.querySelectorAll('[data-engine]')].map((el) => ({
+          id: el.dataset.engine,
+          label: el.textContent.replace(/\\\\s+/g, ' ').trim(),
+          disabled: el.disabled,
+        }))
+      : [];
+    trigger.click();
+    // Back to the browser page: the rest of this suite measures the stage, and
+    // leaving the account list up would turn every later check into a failure
+    // about a page it did not expect.
+    document.querySelector('[data-nav="browser"]')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    return { rows, engines: workspace.engines.map((engine) => ({ id: engine.id, status: engine.status })) };
+  })()`);
+  const embeddedRow = chooser?.rows?.find((row) => row.id === "embedded");
   check(
-    "choosing a launch surface writes it back",
-    launch?.restored === launch?.was,
-    launch,
+    "the launch control lists the built-in surface first and every scanned browser after it",
+    Boolean(embeddedRow) &&
+      chooser.rows[0].id === "embedded" &&
+      chooser.rows.length === (chooser?.engines?.length ?? 0) + 1,
+    chooser,
   );
 
   // --- 4b. A drawn tooltip, not the OS one ---------------------------------

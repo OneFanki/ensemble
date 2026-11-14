@@ -19,7 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
@@ -368,43 +368,53 @@ try {
     scratchClick.isError ? scratchClick.text.slice(0, 160) : undefined,
   );
 
-  // --- The toolbar switch grants and revokes ---
-  // Navigate the existing daily tab to the origin, then drive the real button.
+  // --- The toolbar panel grants and revokes ---
+  // Navigate the existing daily tab to the origin, then drive the real controls.
+  // The permission question now lives inside the AI panel, so opening the panel
+  // is part of the gesture a user performs.
   await client.evaluate(
     `window.ensemble.activateEmbeddedTab(${JSON.stringify(dailyTabId)})`,
   );
-  const switchVisible = await client.evaluate(`(async () => {
+  const panelOpen = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      // The data attribute, not "any pressed icon": the bookmark star is also a
-      // pressed toggle and would be clicked instead.
-      const button = document.querySelector('[data-ai-origin-switch]');
-      if (button) return { found: true, pressed: button.getAttribute('aria-pressed') };
+      const button = document.querySelector('[data-ai-panel]');
+      if (button) {
+        button.click();
+        await wait(500);
+        const gate = document.querySelector('[data-ai-gate]');
+        return {
+          found: true,
+          panel: Boolean(document.querySelector('[data-ai-panel-body]')),
+          gate: gate?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
+          allow: Boolean(document.querySelector('[data-ai-allow-origin]')),
+        };
+      }
       await wait(300);
     }
     return { found: false };
   })()`);
   check(
-    "the AI permission switch appears for a daily-profile page",
-    switchVisible?.found === true && switchVisible?.pressed === "false",
-    switchVisible,
+    "the AI panel appears in the toolbar and names the page's origin",
+    panelOpen?.found === true &&
+      panelOpen?.panel === true &&
+      panelOpen?.allow === true &&
+      String(panelOpen?.gate ?? "").includes(ORIGIN),
+    panelOpen,
   );
 
   const granted = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    document.querySelector('[data-ai-origin-switch]')?.click();
+    document.querySelector('[data-ai-allow-origin]')?.click();
     await wait(900);
     const status = await window.ensemble.mcpStatus();
-    return {
-      pressed: document.querySelector('[data-ai-origin-switch]')?.getAttribute('aria-pressed'),
-      origins: status.aiOrigins,
-    };
+    return { origins: status.aiOrigins };
   })()`);
-  check(
-    "the switch grants the page's origin",
-    granted?.origins?.includes(ORIGIN) && granted?.pressed === "true",
-    granted,
-  );
+  check("the panel grants the page's origin", granted?.origins?.includes(ORIGIN), granted);
+
+  // Close the panel: it hangs over the toolbar's right end, where the next
+  // assertions read the bell and the app menu.
+  await client.evaluate(`(document.querySelector('[data-ai-panel]')?.click(), true)`);
 
   const afterGrant = await call("click_browser_element", { tabId: dailyTabId, text: "投放" });
   check(
@@ -422,8 +432,11 @@ try {
 
   await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    document.querySelector('[data-ai-origin-switch]')?.click();
+    document.querySelector('[data-ai-panel]')?.click();
+    await wait(400);
+    document.querySelector('[data-ai-allow-origin]')?.click();
     await wait(900);
+    document.querySelector('[data-ai-panel]')?.click();
     return true;
   })()`);
   const revoked = await call("click_browser_element", { tabId: dailyTabId, text: "投放" });
@@ -456,6 +469,35 @@ try {
     clickLines.some((line) => line.ok === false && String(line.error ?? "").includes("只读")),
     clickLines.map((line) => line.ok),
   );
+
+  // --- AI activity is a log of its own, not news in the message centre ---
+  //
+  // The two lists used to be one: every call wrote a `kind: "ai"` row beside
+  // login captures, through the same 500-row cap, so a run of tool calls could
+  // push real notifications out of the list they were meant to be read in.
+  const activityFile = join(userData, "ai-activity.json");
+  const activity = existsSync(activityFile)
+    ? JSON.parse(readFileSync(activityFile, "utf8")).records ?? []
+    : [];
+  check(
+    "AI calls are recorded in their own log",
+    activity.length > 0 && activity.some((row) => row.tool === "click_browser_element"),
+    { records: activity.length },
+  );
+  check(
+    "the log names the site the call touched",
+    activity.every((row) => typeof row.origin === "string" && row.origin === ORIGIN),
+    activity.map((row) => row.origin),
+  );
+  check(
+    "no AI row reached the message centre",
+    // The file may not exist at all — nothing in this run produces a message,
+    // and "zero AI rows" is what that means. Reading it unconditionally turned
+    // the best possible outcome into an ENOENT.
+    !existsSync(join(userData, "messages.json")) ||
+      !readFileSync(join(userData, "messages.json"), "utf8").includes('"kind": "ai"'),
+  );
+
 
   // --- The dock reports the count, so the user sees it without the log ---
   //

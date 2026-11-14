@@ -119,6 +119,28 @@ a {
 }
 
 /*
+ * Layout utilities.
+ *
+ * What is left in this sheet is what has no structure and no state: a spacer
+ * takes a slot, a hint is a quieter paragraph, `mono` is a font. There is
+ * nothing to own, so a component would only add a level of indirection.
+ *
+ * Everything with a shape — a button, a field, a checkbox, an empty list — is a
+ * component now. Those were class names spread across twenty scoped blocks,
+ * each with its own idea of a field's height; see `docs/architecture.md`.
+ */
+.spacer {
+  flex: 1;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--faint);
+}
+
+/*
  * The console page frame.
  *
  * Seven pages each wrote their own version of this: two scrolled as a whole
@@ -151,256 +173,6 @@ a {
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-}
-
-/*
- * An empty list, as one shape.
- *
- * Four console pages drew their own: sites and flows centred a few lines of
- * text, tags drew a full-width dashed table, bookmarks drew a single sentence.
- * All four said the same thing — "there is nothing here yet, do this" — and
- * three of them left the action in the page header, far from the message that
- * explains it.
- *
- * The wrapper is `.empty`; `.empty-actions` holds the buttons. Being a global
- * class rather than one component is deliberate: the slots differ (a list of
- * sites has a button, a folder list does not), the frame does not.
- *
- * No frame at all: this began as a dashed rounded box, which turned "you have
- * not made one yet" into a drawn container — an outline around content that does
- * not exist. Centred icon, sentence and action say the same thing without
- * drawing a box on an otherwise empty page.
- */
-.empty {
-  margin: auto;
-  padding: var(--space-8) var(--space-6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-4);
-  color: var(--muted);
-  font-size: var(--fs-base);
-  text-align: center;
-  width: min(560px, 100%);
-}
-
-/*
- * Balanced, not greedy. Chinese has no word breaks, so the default line breaker
- * packs the first line to the last possible character and drops whatever is
- * left onto the second — "…不必先 / 来这里。" and "…收藏当前 / 页。". The message
- * reads as a sentence, so it should break like one.
- */
-.empty > p {
-  margin: 0;
-  max-width: 340px;
-  line-height: 1.6;
-  text-wrap: balance;
-}
-
-.empty > svg {
-  color: var(--faint);
-}
-
-.empty-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  margin-top: var(--space-1);
-}
-
-/*
- * The button and field vocabulary, in one place.
- *
- * Every component used to declare its own `.btn` inside a `scoped` block, so a
- * new page that used `class="btn primary"` without copying the styles got bare
- * text where a button should be — which is exactly how the flows page and its
- * dialog shipped. Shared controls belong to the shared sheet.
- */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 11px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  font-size: 12px;
-  white-space: nowrap;
-  transition:
-    background var(--motion-base) var(--ease-out),
-    border-color var(--motion-base) var(--ease-out);
-}
-
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  border-color: color-mix(in srgb, var(--line) 70%, var(--accent));
-  color: var(--text);
-}
-
-/*
- * The primary button is one flat colour.
- *
- * It used to be a two-stop vertical gradient with a darkened bottom border and a
- * brightness filter on hover — a bevel, in other words. On a window that is
- * otherwise made of flat panels and hairlines, that one raised pill was the most
- * three-dimensional thing on screen, and it read as a leftover from a toolbar
- * aesthetic the rest of the shell had already dropped. Emphasis comes from the
- * colour being the only filled thing on the row, not from pretending it has
- * thickness.
- *
- * `--action` is the fill, `--action-hover` the hover step, and neither carries a
- * border: repeating the accent-text gold around a gold fill drew a dark ring
- * around every primary button. The fill separates itself from the page already.
- */
-.btn.primary {
-  background: var(--action);
-  border: 0;
-  color: var(--action-foreground);
-  font-weight: 500;
-}
-
-.btn.primary:hover:not(:disabled) {
-  background: var(--action-hover);
-  border: 0;
-  color: var(--action-foreground);
-}
-
-.btn.ghost {
-  background: transparent;
-}
-
-.btn.danger {
-  color: var(--red);
-  border-color: color-mix(in srgb, var(--red) 34%, var(--line));
-}
-
-.btn.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
-}
-
-.btn.small {
-  padding: 5px 9px;
-  font-size: 11.5px;
-}
-
-/* Inline action that reads as a link (add a row, open a detail). */
-.link-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0;
-  color: var(--accent-text);
-  font-size: 11.5px;
-}
-
-.link-btn:hover:not(:disabled) {
-  color: var(--accent-strong);
-  text-decoration: underline;
-}
-
-.icon-btn {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  color: var(--faint);
-  flex: 0 0 24px;
-}
-
-.icon-btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  color: var(--text-secondary);
-}
-
-.icon-btn.danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
-  color: var(--red);
-}
-
-/* One labelled form control: caption above, input below. */
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.field > .field-label {
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  color: var(--faint);
-}
-
-.field input,
-.field select,
-.field textarea {
-  height: 30px;
-  padding: 0 9px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.field textarea {
-  height: auto;
-  padding: 7px 9px;
-  resize: vertical;
-}
-
-.field input:focus,
-.field select:focus,
-.field textarea:focus {
-  border-color: color-mix(in srgb, var(--line) 50%, var(--accent));
-}
-
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.hint {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--faint);
-}
-
-/*
- * The canonical single-line text input. Components extend rather than redefine
- * it: a scoped `.input` used to exist per dialog, and the one component that
- * used the class without copying the block (bookmarks page) shipped native
- * inputs — the divergence this global exists to prevent.
- */
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
 }
 
 /*

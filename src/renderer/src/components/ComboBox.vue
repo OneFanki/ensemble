@@ -3,6 +3,7 @@ import { ChevronDown } from "lucide-vue-next";
 import { onClickOutside } from "@vueuse/core";
 import { computed, ref } from "vue";
 import { useAnchoredPanel } from "../composables/anchoredPanel";
+import TextField from "./ui/TextField.vue";
 
 /**
  * Free-text input with suggestions.
@@ -25,7 +26,8 @@ const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
 const panelStyle = ref<Record<string, string>>({});
-const input = ref<HTMLInputElement | null>(null);
+/** The exposed `focus()` of the shared field; the chevron uses it. */
+const input = ref<{ focus: () => void } | null>(null);
 
 // One handler for both parts; two would cancel each other out (see SelectField).
 // The panel marks itself so a dialog does not read the press as "outside".
@@ -61,8 +63,8 @@ function choose(value: string) {
   input.value?.focus();
 }
 
-function onInput(event: Event) {
-  emit("update:modelValue", (event.target as HTMLInputElement).value);
+function onInput(value: string) {
+  emit("update:modelValue", value);
   open.value = true;
 }
 
@@ -89,16 +91,16 @@ function onKeydown(event: KeyboardEvent) {
 <template>
   <div ref="root" class="combo">
     <div class="combo-input">
-      <input
+      <TextField
         ref="input"
-        class="input"
-        :value="modelValue"
+        class="combo-field"
+        :model-value="modelValue"
         :placeholder="placeholder"
         :disabled="disabled"
         autocomplete="off"
         role="combobox"
         :aria-expanded="open"
-        @input="onInput"
+        @update:model-value="onInput"
         @focus="!disabled && (open = true)"
         @keydown="onKeydown"
       />
@@ -140,19 +142,9 @@ function onKeydown(event: KeyboardEvent) {
   position: relative;
 }
 
-.input {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 7px 26px 7px 9px;
-  font-size: 11.5px;
-  color: var(--text);
-  outline: 0;
-}
-
-.input:focus {
-  border-color: color-mix(in srgb, var(--line) 55%, var(--accent));
+/* Room for the chevron that sits over the field's trailing edge. */
+.combo-field {
+  padding-right: 26px;
 }
 
 .chevron-btn {

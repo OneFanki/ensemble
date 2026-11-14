@@ -4,6 +4,8 @@ import { useI18n } from "vue-i18n";
 import type { HttpAuthChallenge } from "@shared/ipc";
 import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * The sign-in form for an HTTP authentication challenge (a server — or a
@@ -64,29 +66,22 @@ async function dismiss(): Promise<void> {
       <p class="auth-meta mono">
         {{ challenge?.scheme }} · {{ challenge?.host }}<template v-if="challenge?.port">:{{ challenge.port }}</template>
       </p>
-      <label class="field">
-        <span>{{ t("app.username") }}</span>
-        <input
+      <FormField plain :label="t('app.username')">
+        <TextField
           ref="userField"
           v-model="username"
-          class="input"
           type="text"
           autocomplete="off"
         />
-      </label>
-      <label class="field">
-        <span>{{ t("app.password") }}</span>
-        <input
-          v-model="password"
-          class="input"
-          type="password"
-          autocomplete="off"
-        />
-      </label>
+      </FormField>
+      <FormField plain :label="t('app.password')">
+        <TextField v-model="password" type="password" autocomplete="off" />
+      </FormField>
       <div class="actions">
         <AppButton variant="ghost" @click="dismiss">{{ t("app.cancel") }}</AppButton>
-        <!-- Click, not type=submit: AppButton pins its own type, so the form's
-             submit handler is reached through the Enter key only. -->
+        <!-- Click rather than type=submit: Enter in either field submits the
+             form, which is the whole keyboard story this prompt needs, and a
+             click target is what a mouse user reaches for anyway. -->
         <AppButton variant="primary" :disabled="!username.trim()" @click="submit">
           {{ t("app.actionLogin") }}
         </AppButton>
@@ -108,14 +103,6 @@ async function dismiss(): Promise<void> {
   font-size: 11px;
   color: var(--faint);
   word-break: break-all;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
 }
 
 .actions {

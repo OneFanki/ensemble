@@ -20,6 +20,8 @@ import BookmarkFolderDialog from "./BookmarkFolderDialog.vue";
 import BookmarkImportDialog from "./BookmarkImportDialog.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import EmptyState from "./ui/EmptyState.vue";
+import IconButton from "./ui/IconButton.vue";
 import PageHeader from "./ui/PageHeader.vue";
 import SplitPane from "./ui/SplitPane.vue";
 
@@ -587,17 +589,14 @@ function onDropOnNothing(): void {
       and far to the right, so the sentence named a star button that was not on
       screen.
     -->
-    <div v-if="!bookmarks.length && !folders.length" class="empty">
-      <BookmarkIcon :size="22" />
-      <p>{{ t("app.bookmarksEmpty") }}</p>
-      <div class="empty-actions">
-        <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
-        <AppButton variant="primary" @click="openNewBookmark">
-          <Plus :size="13" />
-          {{ t("app.bookmarksPageNew") }}
-        </AppButton>
-      </div>
-    </div>
+    <EmptyState v-if="!bookmarks.length && !folders.length" :text="t('app.bookmarksEmpty')">
+      <template #icon><BookmarkIcon :size="22" /></template>
+      <AppButton @click="openImport">{{ t("app.bookmarksPageImport") }}</AppButton>
+      <AppButton variant="primary" @click="openNewBookmark">
+        <Plus :size="13" />
+        {{ t("app.bookmarksPageNew") }}
+      </AppButton>
+    </EmptyState>
 
     <SplitPane v-else dense>
       <template #list>
@@ -653,30 +652,28 @@ function onDropOnNothing(): void {
           <span class="tree-name">{{ folder.name }}</span>
           <span v-if="countOf(folder.id) > 0" class="tree-count mono">{{ countOf(folder.id) }}</span>
           <span class="tree-actions" @click.stop @keydown.stop>
-            <button
-              type="button"
-              class="icon-btn"
-              :title="t('app.bookmarksPageNewFolder')"
+            <IconButton
+              reveal-on-row
+              :ariaLabel="t('app.bookmarksPageNewFolder')"
               @click="openNewFolder(folder.id)"
             >
               <Plus :size="11" />
-            </button>
-            <button
-              type="button"
-              class="icon-btn"
-              :title="t('app.bookmarkEdit')"
+            </IconButton>
+            <IconButton
+              reveal-on-row
+              :ariaLabel="t('app.bookmarkEdit')"
               @click="openEditFolder(folder)"
             >
               <Pencil :size="11" />
-            </button>
-            <button
-              type="button"
-              class="icon-btn danger"
-              :title="t('app.bookmarkFolderDeleteTitle')"
+            </IconButton>
+            <IconButton
+              reveal-on-row
+              variant="danger"
+              :ariaLabel="t('app.bookmarkFolderDeleteTitle')"
               @click="removeFolder(folder)"
             >
               <Trash2 :size="11" />
-            </button>
+            </IconButton>
           </span>
         </div>
       </aside>
@@ -698,7 +695,7 @@ function onDropOnNothing(): void {
           </template>
         </nav>
 
-        <p v-if="!view.folders.length && !view.bookmarks.length" class="empty in-folder">
+        <p v-if="!view.folders.length && !view.bookmarks.length" class="empty-line in-folder">
           {{ selected.kind === "all" ? t("app.bookmarksEmpty") : t("app.bookmarkFolderEmpty") }}
         </p>
 
@@ -732,30 +729,28 @@ function onDropOnNothing(): void {
             <span class="row-name">{{ folder.name }}</span>
             <span class="row-url mono">{{ t("app.bookmarkFolderRowHint", { count: countOf(folder.id) }) }}</span>
             <span v-if="!picking" class="tree-actions" @click.stop @keydown.stop>
-              <button
-                type="button"
-                class="icon-btn"
-                :title="t('app.bookmarksPageNewFolder')"
+              <IconButton
+                reveal-on-row
+                :ariaLabel="t('app.bookmarksPageNewFolder')"
                 @click="openNewFolder(folder.id)"
               >
                 <Plus :size="11" />
-              </button>
-              <button
-                type="button"
-                class="icon-btn"
-                :title="t('app.bookmarkEdit')"
+              </IconButton>
+              <IconButton
+                reveal-on-row
+                :ariaLabel="t('app.bookmarkEdit')"
                 @click="openEditFolder(folder)"
               >
                 <Pencil :size="11" />
-              </button>
-              <button
-                type="button"
-                class="icon-btn danger"
-                :title="t('app.bookmarkFolderDeleteTitle')"
+              </IconButton>
+              <IconButton
+                reveal-on-row
+                variant="danger"
+                :ariaLabel="t('app.bookmarkFolderDeleteTitle')"
                 @click="removeFolder(folder)"
               >
                 <Trash2 :size="11" />
-              </button>
+              </IconButton>
             </span>
           </div>
 
@@ -800,18 +795,23 @@ function onDropOnNothing(): void {
               @update:model-value="moveTo(bookmark, $event ?? '')"
               @click.stop
             />
-            <button v-if="!picking" type="button" class="icon-btn" :title="t('app.bookmarkEdit')" @click="openEditBookmark(bookmark)">
-              <Pencil :size="11" />
-            </button>
-            <button
+            <IconButton
               v-if="!picking"
-              type="button"
-              class="icon-btn danger"
-              :title="t('app.bookmarkRemove')"
+              reveal-on-row
+              :ariaLabel="t('app.bookmarkEdit')"
+              @click="openEditBookmark(bookmark)"
+            >
+              <Pencil :size="11" />
+            </IconButton>
+            <IconButton
+              v-if="!picking"
+              reveal-on-row
+              variant="danger"
+              :ariaLabel="t('app.bookmarkRemove')"
               @click="remove(bookmark)"
             >
               <Trash2 :size="11" />
-            </button>
+            </IconButton>
           </div>
         </div>
         </div>
@@ -1167,34 +1167,6 @@ div.tree-row {
   width: 150px;
 }
 
-.icon-btn {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  flex: none;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--faint);
-  cursor: pointer;
-  opacity: 0;
-}
-
-.row:hover .icon-btn,
-.tree-row:hover .icon-btn {
-  opacity: 1;
-}
-
-.icon-btn:hover {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.icon-btn.danger:hover {
-  color: var(--red);
-}
-
 /*
  * Picking mode: a checkbox column and a raised row.
  *
@@ -1235,14 +1207,13 @@ div.tree-row {
 /* The page-level frame comes from the shared `.empty` rule; the in-folder
    variant is this page's own, because there it is one row inside a list rather
    than a page waiting to be filled. */
-.empty.in-folder {
-  border: none;
+/* Inside a folder the message is a line in a list, not the page's own empty
+   frame: no centring, no width, left-aligned under the folder header. */
+.empty-line.in-folder {
   padding: 18px 2px;
-  align-items: flex-start;
   text-align: left;
   font-size: var(--fs-sm);
   color: var(--faint);
-  width: auto;
   margin: 0;
 }
 </style>

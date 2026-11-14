@@ -12,6 +12,10 @@ import {
 import { Monitor, Smartphone, Tablet } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import AppButton from "./ui/AppButton.vue";
+import Checkbox from "./ui/Checkbox.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * Device emulation, docked where DevTools would be.
@@ -175,37 +179,34 @@ function iconFor(preset: EmbeddedDevice) {
 
         <div class="device-fields">
           <div class="field-row">
-            <label class="field">
-              <span>{{ t("app.deviceWidth") }}</span>
-              <input
-                class="input mono"
+            <FormField plain :label="t('app.deviceWidth')">
+              <TextField
+                mono
                 type="number"
                 :min="VIEWPORT_MIN"
                 :max="VIEWPORT_MAX_WIDTH"
-                :value="width"
+                :model-value="width"
                 data-device-width
                 @change="width = clampSize(($event.target as HTMLInputElement).value, VIEWPORT_MAX_WIDTH)"
               />
-            </label>
-            <label class="field">
-              <span>{{ t("app.deviceHeight") }}</span>
-              <input
-                class="input mono"
+            </FormField>
+            <FormField plain :label="t('app.deviceHeight')">
+              <TextField
+                mono
                 type="number"
                 :min="VIEWPORT_MIN"
                 :max="VIEWPORT_MAX_HEIGHT"
-                :value="height"
+                :model-value="height"
                 data-device-height
                 @change="height = clampSize(($event.target as HTMLInputElement).value, VIEWPORT_MAX_HEIGHT)"
               />
-            </label>
+            </FormField>
           </div>
 
           <div class="field-row">
-            <label class="field">
-              <span>{{ t("app.deviceDpr") }}</span>
-              <input
-                class="input mono"
+            <FormField plain :label="t('app.deviceDpr')">
+              <TextField
+                mono
                 type="number"
                 :min="DEVICE_DPR_MIN"
                 :max="DEVICE_DPR_MAX"
@@ -213,34 +214,24 @@ function iconFor(preset: EmbeddedDevice) {
                 v-model.number="dpr"
                 data-device-dpr
               />
-            </label>
-            <label class="check">
-              <input v-model="touch" type="checkbox" data-device-touch />
-              <span>{{ t("app.deviceTouch") }}</span>
-            </label>
+            </FormField>
+            <Checkbox v-model="touch" data-device-touch>{{ t("app.deviceTouch") }}</Checkbox>
           </div>
 
-          <label class="field field-wide">
-            <span>{{ t("app.deviceUa") }}</span>
-            <input class="input mono" v-model="userAgent" data-device-ua />
-          </label>
+          <FormField plain :label="t('app.deviceUa')">
+            <TextField v-model="userAgent" mono data-device-ua />
+          </FormField>
 
           <div class="actions">
-            <button type="button" class="btn primary" data-device-apply @click="applyDevice">
+            <AppButton variant="primary" data-device-apply @click="applyDevice">
               {{ t("app.deviceApply") }}
-            </button>
-            <button type="button" class="btn" data-device-size-only @click="applyViewport">
+            </AppButton>
+            <AppButton data-device-size-only @click="applyViewport">
               {{ t("app.deviceSizeOnly") }}
-            </button>
-            <button
-              v-if="device"
-              type="button"
-              class="btn ghost"
-              data-device-clear
-              @click="emit('device', null)"
-            >
+            </AppButton>
+            <AppButton v-if="device" variant="ghost" data-device-clear @click="emit('device', null)">
               {{ t("app.deviceClear") }}
-            </button>
+            </AppButton>
           </div>
         </div>
       </div>
@@ -399,65 +390,39 @@ function iconFor(preset: EmbeddedDevice) {
   gap: 8px;
 }
 
-.field {
-  display: flex;
+/* This panel is 210px wide, so its fields are a size smaller than a dialog's.
+   The overrides are sizes only — the look is the shared field's. */
+.device-fields :deep(.field) {
   flex: 1 1 0;
-  flex-direction: column;
   gap: 3px;
-  min-width: 0;
-  font-size: 10px;
-  color: var(--faint);
 }
 
-.field-wide {
-  flex: 1 1 auto;
-}
-
-.input {
+.device-fields :deep(.input) {
   height: 26px;
   padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
   background: var(--surface-2);
-  color: var(--text);
   font-size: 11px;
 }
 
-.check {
-  display: flex;
+/* The touch box sits on the same baseline as the number input beside it, which
+   has no caption of its own to line up against. */
+.device-fields :deep(.check) {
   align-items: flex-end;
-  gap: 5px;
   padding-bottom: 5px;
   font-size: 10.5px;
   color: var(--text-secondary);
-  white-space: nowrap;
+}
+
+.device-fields :deep(.btn) {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 .actions {
   display: flex;
   gap: 6px;
   margin-top: auto;
-}
-
-.btn {
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.btn.primary {
-  border: 0;
-  background: var(--action);
-  color: var(--action-foreground);
-}
-
-.btn.ghost {
-  background: transparent;
 }
 
 .device-lists {

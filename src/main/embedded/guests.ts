@@ -42,13 +42,6 @@ export interface BrowserGuestManagerOptions {
    */
   onPopup?: (guestId: string, url: string) => boolean | void;
   /**
-   * Called before every CDP command.
-   *
-   * The built-in surface uses it to wake a page that was put to sleep while
-   * parked: the first command of a burst must not land on a frozen page.
-   */
-  onActivity?: (guestId: string) => Promise<void> | void;
-  /**
    * Restores state that lives in the CDP session rather than the target.
    *
    * A session that was released and reopened comes back bare: `Page.enable` is
@@ -253,7 +246,7 @@ export class BrowserGuestManager {
     const existing = this.guests.get(guestId);
     if (existing) return existing.handle;
 
-    const cdp = new EmbeddedCdp(contents, () => this.options.onActivity?.(guestId));
+    const cdp = new EmbeddedCdp(contents);
     const record: GuestRecord = {
       handle: this.sessions.attach(guestId, this.createPort(guestId, contents, cdp)),
       contents,
@@ -286,6 +279,11 @@ export class BrowserGuestManager {
   /** The CDP executor for a guest, or `undefined` once it is gone. */
   cdpFor(guestId: string): EmbeddedCdp | undefined {
     return this.guests.get(guestId)?.cdp;
+  }
+
+  /** True while a command against this guest is waiting for its reply. */
+  busy(guestId: string): boolean {
+    return this.sessions.busy(guestId);
   }
 
   /**
@@ -454,6 +452,7 @@ export class BrowserGuestManager {
       evaluate: (guestId, expression, options) =>
         this.evaluate(guestId, expression, options ?? {}),
       has: (guestId) => this.has(guestId),
+      busy: (guestId) => this.busy(guestId),
       waitLaidOut: (timeoutMs) => this.waitLaidOut(tabId, timeoutMs),
       contents: (guestId) => {
         const record = this.guests.get(guestId);

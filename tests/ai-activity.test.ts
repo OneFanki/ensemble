@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AI_ACTIVITY_LIMIT, AiActivityStore } from "../src/core/ai-activity";
+import {
+  AI_ACTIVITY_DETAILS_MAX,
+  AI_ACTIVITY_LIMIT,
+  AiActivityStore,
+} from "../src/core/ai-activity";
 import { groupAiActivity } from "../src/shared/ai-activity";
 
 /**
@@ -66,6 +70,41 @@ describe("ai activity store", () => {
     expect(list).toHaveLength(1);
     expect(list[0]?.count).toBe(2);
     expect(list[0]?.at).toBe("2026-01-01T00:00:02.000Z");
+  });
+
+  it("keeps the newest details of a folded call, capped", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    for (let index = 0; index < AI_ACTIVITY_DETAILS_MAX + 2; index += 1) {
+      store.add(
+        call({
+          tool: "evaluate_browser_page",
+          summary: `执行脚本：${index}`,
+          details: [
+            {
+              at: new Date().toISOString(),
+              args: { expression: `document.title = "${index}"` },
+              result: `result-${index}`,
+            },
+          ],
+        }),
+      );
+    }
+    const [record] = store.list();
+    expect(record?.count).toBe(AI_ACTIVITY_DETAILS_MAX + 2);
+    // The row describes the most recent call, not the first one.
+    expect(record?.summary).toBe(`执行脚本：${AI_ACTIVITY_DETAILS_MAX + 1}`);
+    expect(record?.details).toHaveLength(AI_ACTIVITY_DETAILS_MAX);
+    expect(record?.details?.[0]?.result).toBe(`result-${AI_ACTIVITY_DETAILS_MAX + 1}`);
+    expect(record?.details?.at(-1)?.result).toBe("result-2");
+  });
+
+  it("does not fold calls made on different origins in one tab", () => {
+    store.add(call({ origin: "https://a.test" }));
+    store.add(call({ origin: "https://b.test" }));
+    const list = store.list();
+    expect(list).toHaveLength(2);
+    expect(list.map((item) => item.origin)).toEqual(["https://b.test", "https://a.test"]);
   });
 
   it("stops folding once the merge window has passed", () => {

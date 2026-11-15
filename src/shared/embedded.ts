@@ -11,6 +11,14 @@ import type { LayoutId, RoleColor, SlotRect } from "./types";
  */
 
 /**
+ * Per-page override of the background-sleep policy.
+ *
+ * The default (absent) is "sleep when off stage and idle". `"never"` is the
+ * exception a dashboard or a music player needs.
+ */
+export type TabSleepPolicy = "never";
+
+/**
  * A page hosted inside the app's own browser surface.
  *
  * The embedded surface exists so AI-driven work does not open a system window per
@@ -79,6 +87,32 @@ export interface EmbeddedTab {
   partition: string;
   /** True for the page currently shown by its instance. */
   active: boolean;
+  /**
+   * True when Ensemble is not playing this page's sound.
+   *
+   * Set by the tab's speaker control or by the AI, and kept per page so a
+   * reload does not quietly unmute it. It only silences the output path; the
+   * page's own media and Web Audio keep running.
+   */
+  muted?: boolean;
+  /** True while the page is actually producing audio. */
+  audible?: boolean;
+  /**
+   * True while the page's JavaScript is suspended by the background sleep.
+   *
+   * A sleeping page keeps its DOM, scroll position and login state; only its
+   * execution stops. The chrome swaps the favicon for a snowflake while this is
+   * set, so a quiet page does not look like a broken one.
+   */
+  sleeping?: boolean;
+  /**
+   * Per-page override of the background-sleep policy.
+   *
+   * Absent means "follow the default": a page that is off stage sleeps after an
+   * idle period. `"never"` keeps this page running in the background for as
+   * long as it exists — the exception for a dashboard or a music player.
+   */
+  sleepPolicy?: TabSleepPolicy;
   /** Effective zoom in percent; `100` means the page renders at its natural size. */
   zoom: number;
   /**
@@ -137,6 +171,15 @@ export interface EmbeddedTab {
    * instead of placing it at 0×0.
    */
   bounds?: StageRect;
+  /**
+   * The box the page's fixed viewport is fitted into, in stage-relative pixels.
+   *
+   * One cell in a plain stage, a slot in a grid, or the half beside a docked
+   * panel. The resize frame uses it as the ceiling for a drag: a page wider than
+   * its cell would be scaled down, so the edge under the pointer would stop
+   * following and the page would shrink in the other axis.
+   */
+  cell?: StageRect;
 }
 
 /**
@@ -260,6 +303,18 @@ export const EMBEDDED_DIVIDER = 8;
  * handle on top of the gap it drags.
  */
 export const EMBEDDED_DEVTOOLS_GRIP = 7;
+
+/**
+ * Stage margin kept around a page with a fixed viewport.
+ *
+ * The page is a native surface: a resize handle that overlaps it loses the
+ * pointer to the page, and while mouse-to-touch conversion is running over the
+ * page its touch cursor wins over the frame — the edge that is supposed to say
+ * "drag me" shows a finger instead. Fitting the page inside this margin leaves
+ * the handles in host space, where their cursor and hover line work and the
+ * touch cursor stops at the website's own edge.
+ */
+export const EMBEDDED_PAGE_FRAME_GUTTER = 10;
 
 /**
  * Height of the app-owned title band above a docked DevTools panel.
@@ -629,6 +684,21 @@ export const VIEWPORT_PRESETS: Array<EmbeddedViewport & { name: string }> = [
   { name: "1024 × 768", width: 1024, height: 768 },
   { name: "1280 × 720", width: 1280, height: 720 },
   { name: "1366 × 768", width: 1366, height: 768 },
+  { name: "1920 × 1080", width: 1920, height: 1080 },
+];
+
+/**
+ * Desktop sizes worth one click in the device panel's desktop mode.
+ *
+ * They are plain viewports: no touch, no UA. The list is short because a desktop
+ * test is almost always "does this layout hold at the width we ship", and the
+ * custom row covers everything else.
+ */
+export const DESKTOP_RESOLUTIONS: Array<EmbeddedViewport & { name: string }> = [
+  { name: "1024 × 768", width: 1024, height: 768 },
+  { name: "1280 × 720", width: 1280, height: 720 },
+  { name: "1366 × 768", width: 1366, height: 768 },
+  { name: "1440 × 900", width: 1440, height: 900 },
   { name: "1920 × 1080", width: 1920, height: 1080 },
 ];
 
@@ -1054,33 +1124,19 @@ export function perfSparkPoints(
 /**
  * Those points as an SVG path.
  *
- * `step` draws a staircase — hold each reading until the next one arrives —
- * instead of connecting the dots with a slope. It is the honest shape for the
- * metrics that are *counts sampled at intervals* rather than continuous
- * quantities: there was no gradual climb from 3 nodes to 4, there was one
- * addition. Chrome's own monitor draws them this way for the same reason. CPU
- * stays a plain polyline: it is the share of an interval, so a slope between two
- * readings is a real thing that happened.
+ * One treatment for every metric: the samples are connected with straight
+ * segments. Counts were drawn as staircases for a while — a DOM node count did
+ * not climb from 3 to 4, it was 3 and then 4 — but mixing staircases and slopes
+ * made the panel look like two different charts, and the vertical jumps were
+ * the loudest marks in a surface whose job is comparing eight series at a
+ * glance. The sampled values are still the only facts on the line; the segment
+ * between two readings is a reading aid, not a claim about the interval.
  */
-export function perfPolyline(
-  points: Array<{ x: number; y: number }>,
-  options: { step?: boolean } = {},
-): string {
+export function perfPolyline(points: Array<{ x: number; y: number }>): string {
   if (points.length === 0) return "";
-  if (!options.step) {
-    return points
-      .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
-      .join(" ");
-  }
-  // H then V per step: the value changes at the sample's own moment, not
-  // halfway between it and the previous one.
-  const first = points[0]!;
-  const parts = [`M${first.x.toFixed(1)},${first.y.toFixed(1)}`];
-  for (let index = 1; index < points.length; index += 1) {
-    const point = points[index]!;
-    parts.push(`H${point.x.toFixed(1)}`, `V${point.y.toFixed(1)}`);
-  }
-  return parts.join(" ");
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+    .join(" ");
 }
 
 /**
@@ -1136,19 +1192,15 @@ export function perfClock(latest: PerfSample | undefined, nowMs: number): number
  * the shape and the proportion at once. The fill is drawn with low opacity by
  * the caller, so two rows can never obscure each other.
  *
- * The closing edges use the *first and last* points, so the fill follows a
- * staircase exactly as the line does rather than cutting corners under it.
+ * The closing edges use the *first and last* points, so the fill follows the
+ * line exactly rather than cutting corners under it.
  */
-export function perfArea(
-  points: Array<{ x: number; y: number }>,
-  height: number,
-  options: { step?: boolean } = {},
-): string {
+export function perfArea(points: Array<{ x: number; y: number }>, height: number): string {
   if (points.length === 0) return "";
   const last = points[points.length - 1]!;
   const first = points[0]!;
   const baseline = height - 1;
-  return `${perfPolyline(points, options)} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`;
+  return `${perfPolyline(points)} L${last.x.toFixed(1)},${baseline} L${first.x.toFixed(1)},${baseline} Z`;
 }
 
 /** A metric's line as a path string; a thin wrapper over the two helpers above. */
@@ -1159,11 +1211,10 @@ export function perfSparkPath(
   height: number,
   axisMax: number,
   windowMs = PERF_WINDOW_DEFAULT_MS,
-  options: PerfSparkOptions & { step?: boolean } = {},
+  options: PerfSparkOptions = {},
 ): string {
   return perfPolyline(
     perfSparkPoints(history, metric, width, height, axisMax, windowMs, options),
-    options,
   );
 }
 
@@ -1229,6 +1280,7 @@ export function normalizeDevice(input: {
   dpr: unknown;
   touch: unknown;
   userAgent?: unknown;
+  name?: unknown;
 }): EmbeddedDevice | undefined {
   const size = normalizeViewportSize(input.width, input.height);
   if (!size) return undefined;
@@ -1238,11 +1290,16 @@ export function normalizeDevice(input: {
     typeof input.userAgent === "string" && input.userAgent.trim()
       ? input.userAgent.trim().slice(0, 400)
       : undefined;
+  const name =
+    typeof input.name === "string" && input.name.trim()
+      ? input.name.trim().slice(0, 80)
+      : undefined;
   return {
     ...size,
     dpr: Math.round(dpr * 1000) / 1000,
     touch: input.touch === true,
     ...(userAgent ? { userAgent } : {}),
+    ...(name ? { name } : {}),
   };
 }
 
@@ -1286,6 +1343,133 @@ export function viewportFitRect(
     },
     scale,
   };
+}
+
+/** Which edge of the page frame a drag started on. */
+export type PageResizeEdge = "e" | "s" | "se";
+
+export interface PageResizeStep {
+  /** The size the page should be set to. */
+  width: number;
+  height: number;
+  /** The scale the page will actually be fitted at in that size. */
+  scale: number;
+  /** Where the page will be drawn, centred on the box it started in. */
+  rect: StageRect;
+}
+
+/**
+ * Converts a pointer drag on a page's edge into a new fixed viewport size.
+ *
+ * Two things make this more than a subtraction:
+ *
+ * - **The page is centred.** Moving the right edge 10px right makes the page
+ *   20px wider because both edges move; the edge under the pointer is what must
+ *   stay put, not the page's origin.
+ * - **A page larger than its cell is fitted down.** That is why the size is
+ *   capped at what still fits at the scale the gesture started with: past that
+ *   point the fit would shrink the page while the pointer keeps moving, so the
+ *   edge would slide out from under the pointer and the page would visibly get
+ *   smaller in the axis that was not dragged. The frame would then outline a
+ *   rectangle the page does not occupy.
+ *
+ * Shrinking is not capped the same way. Once the page fits entirely, the scale
+ * rises back towards 1 and the page grows into the freed space; using the new
+ * scale for the returned rect keeps the frame on the page instead of leaving it
+ * wherever the old scale would have put it.
+ */
+export function resizePageToPointer(
+  gesture: {
+    size: EmbeddedViewport;
+    /** The fitted page rect when the drag started. */
+    rect: StageRect;
+    /** The box the page is fitted into. */
+    cell: StageRect;
+    /** Pointer position when the drag started, in the same space as `rect`. */
+    pointer: { x: number; y: number };
+  },
+  edge: PageResizeEdge,
+  pointer: { x: number; y: number },
+): PageResizeStep {
+  const { size, rect, cell } = gesture;
+  const startScale = Math.min(1, cell.width / size.width, cell.height / size.height);
+  const scale = startScale > 0 && Number.isFinite(startScale) ? startScale : 1;
+  const centreX = rect.x + rect.width / 2;
+  const centreY = rect.y + rect.height / 2;
+  const edgeX = rect.x + rect.width;
+  const edgeY = rect.y + rect.height;
+  const deltaX = pointer.x - gesture.pointer.x;
+  const deltaY = pointer.y - gesture.pointer.y;
+
+  // The largest size that still fits at the starting scale. Rounding down is
+  // deliberate: one extra CSS pixel can push the fit over the cell and change
+  // the scale, which is the jump this function exists to prevent. The epsilon
+  // keeps `cell.height / (cell.height / size.height)` from flooring to one less
+  // than the size already on screen.
+  const limitWidth = Math.max(
+    VIEWPORT_MIN,
+    Math.min(VIEWPORT_MAX_WIDTH, Math.floor(cell.width / scale + 1e-6)),
+  );
+  const limitHeight = Math.max(
+    VIEWPORT_MIN,
+    Math.min(VIEWPORT_MAX_HEIGHT, Math.floor(cell.height / scale + 1e-6)),
+  );
+
+  let width = size.width;
+  let height = size.height;
+  if (edge === "e" || edge === "se") {
+    const wanted = ((edgeX + deltaX - centreX) * 2) / scale;
+    width = Math.min(limitWidth, Math.max(VIEWPORT_MIN, Math.round(wanted)));
+  }
+  if (edge === "s" || edge === "se") {
+    const wanted = ((edgeY + deltaY - centreY) * 2) / scale;
+    height = Math.min(limitHeight, Math.max(VIEWPORT_MIN, Math.round(wanted)));
+  }
+
+  const fitted = Math.min(1, cell.width / width, cell.height / height);
+  const nextScale = fitted > 0 && Number.isFinite(fitted) ? fitted : scale;
+  const displayWidth = Math.max(1, Math.round(width * nextScale));
+  const displayHeight = Math.max(1, Math.round(height * nextScale));
+  return {
+    width,
+    height,
+    scale: nextScale,
+    rect: {
+      x: Math.round(centreX - displayWidth / 2),
+      y: Math.round(centreY - displayHeight / 2),
+      width: displayWidth,
+      height: displayHeight,
+    },
+  };
+}
+
+/**
+ * Whether the system pointer is over one page's visible rectangle.
+ *
+ * This decides when Chromium's mouse-to-touch conversion may run. That
+ * conversion installs a window-level touch cursor, so "inside" has to be exact:
+ * a page's rect is stage-relative while the pointer and the window are in screen
+ * space, and the stage's own origin has to be added before comparing them.
+ *
+ * The far edges are half-open so two adjacent pages cannot both claim a pointer
+ * sitting exactly on their shared boundary.
+ */
+export function pointerInsidePage(
+  pointer: { x: number; y: number },
+  contentOrigin: { x: number; y: number },
+  stage: StageRect,
+  page: StageRect,
+): boolean {
+  const windowX = pointer.x - contentOrigin.x;
+  const windowY = pointer.y - contentOrigin.y;
+  const left = stage.x + page.x;
+  const top = stage.y + page.y;
+  return (
+    windowX >= left &&
+    windowX < left + page.width &&
+    windowY >= top &&
+    windowY < top + page.height
+  );
 }
 
 /**

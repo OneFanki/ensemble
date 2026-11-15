@@ -1,37 +1,35 @@
+import { deriveSample, peakOf, pushSample, seriesOf } from "@core/cdp/performance";
 import type { PerfSample } from "@shared/embedded";
 import {
+  DESKTOP_RESOLUTIONS,
   DEVICE_DPR_MAX,
   DEVICE_DPR_MIN,
   DEVICE_PRESETS,
-  PERF_METRICS,
+  normalizeDevice,
+  normalizePerfSampleInterval,
+  normalizePerfWindow,
+  normalizeViewportSize,
   PERF_HISTORY_MAX,
+  PERF_METRICS,
   PERF_SAMPLE_INTERVAL_DEFAULT_MS,
   PERF_SAMPLE_INTERVAL_MAX_MS,
   PERF_SAMPLE_INTERVAL_MIN_MS,
   PERF_WINDOW_DEFAULT_MS,
   PERF_WINDOW_MAX_MS,
   PERF_WINDOW_MIN_MS,
-  normalizeDevice,
-  normalizePerfSampleInterval,
-  normalizePerfWindow,
-  perfHistoryLimit,
-  normalizeViewportSize,
   perfArea,
   perfAxisLabel,
   perfAxisMax,
   perfCamera,
   perfClock,
+  perfHistoryLimit,
   perfPolyline,
   perfSparkPath,
   perfSparkPoints,
   perfSummarize,
+  VIEWPORT_MAX_WIDTH,
+  VIEWPORT_MIN,
 } from "@shared/embedded";
-import {
-  deriveSample,
-  peakOf,
-  pushSample,
-  seriesOf,
-} from "@core/cdp/performance";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -49,6 +47,7 @@ describe("device emulation", () => {
       dpr: 3,
       touch: true,
       userAgent: "Mozilla/5.0 (iPhone)",
+      name: "iPhone 15",
     });
     expect(device).toEqual({
       width: 390,
@@ -56,6 +55,7 @@ describe("device emulation", () => {
       dpr: 3,
       touch: true,
       userAgent: "Mozilla/5.0 (iPhone)",
+      name: "iPhone 15",
     });
   });
 
@@ -96,6 +96,33 @@ describe("device emulation", () => {
       // filed under the wrong heading.
       expect(preset.touch).toBe(true);
       expect(preset.userAgent).toBeTruthy();
+    }
+  });
+});
+
+describe("device and desktop resolution lists", () => {
+  it("keeps every named device a complete mobile identity", () => {
+    for (const preset of DEVICE_PRESETS) {
+      expect(normalizeDevice(preset)).toMatchObject({
+        width: preset.width,
+        height: preset.height,
+        dpr: preset.dpr,
+        touch: true,
+      });
+      expect(preset.userAgent).toContain("Mozilla/5.0");
+    }
+  });
+
+  it("keeps desktop sizes valid, unique, plain viewports", () => {
+    const keys = DESKTOP_RESOLUTIONS.map((row) => `${row.width}x${row.height}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const row of DESKTOP_RESOLUTIONS) {
+      expect(normalizeViewportSize(row.width, row.height)).toMatchObject({
+        width: row.width,
+        height: row.height,
+      });
+      expect(row.width).toBeGreaterThanOrEqual(VIEWPORT_MIN);
+      expect(row.width).toBeLessThanOrEqual(VIEWPORT_MAX_WIDTH);
     }
   });
 });
@@ -442,20 +469,19 @@ describe("performance sampler", () => {
     expect(extended.at(-1)).toEqual({ x: 200, y: plain.at(-1)!.y });
   });
 
-  it("draws counts as a staircase and cpu as a slope", () => {
-    // A DOM count did not climb from 3 to 4; it was 3 and then it was 4. A
-    // slope invents a value nobody measured. CPU is a share of an interval, so
-    // its slope is real.
+  it("draws every series with one line treatment", () => {
+    // Counts used to be staircases while CPU was a slope. Two chart types in
+    // one panel made the vertical jumps the loudest marks on screen, so all
+    // eight series connect their samples the same way. The fill follows the
+    // same path; it cannot cut corners under the line.
     const points = [
       { x: 0, y: 10 },
       { x: 50, y: 4 },
       { x: 100, y: 7 },
     ];
     expect(perfPolyline(points)).toBe("M0.0,10.0 L50.0,4.0 L100.0,7.0");
-    // Hold the old value until the new sample's own moment, then step.
-    expect(perfPolyline(points, { step: true })).toBe("M0.0,10.0 H50.0 V4.0 H100.0 V7.0");
-    // The fill follows the same shape, or it cuts corners under the line.
-    expect(perfArea(points, 20, { step: true })).toContain("H50.0 V4.0");
+    expect(perfPolyline(points)).not.toMatch(/[HV]/);
+    expect(perfArea(points, 20)).toContain("M0.0,10.0 L50.0,4.0 L100.0,7.0");
   });
 
   it("advances the camera only once the window is full", () => {

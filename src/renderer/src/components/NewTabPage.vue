@@ -443,60 +443,81 @@ function openBookmark(bookmark: Bookmark): void {
 /*
  * The backdrops, one picture per theme.
  *
- * Both the surface and the picker's swatch read `--nt-paint`, and there is
- * exactly one declaration of it per preset per theme. That is the whole point of
- * moving these out of `shared/newtab.ts`: as strings in that file the paint and
- * the swatch were two independent literals, and they had already drifted —
- * `plain` painted `--bg` and offered a swatch of `--bg-elevated`.
+ * Two paints, because the surface and the picker have opposite jobs:
  *
- * The light values are not the dark ones brightened. A 5.5% teal wash that tints
- * a near-black corner disappears on near-white, so light needs about twice the
+ *  - `--nt-paint` is the surface. It is a wash behind the search box, so it has
+ *    to stay quiet. Every preset fades toward the edges as a *linear* gradient:
+ *    an ellipse with its centre inside the viewport reads as a visible circle,
+ *    which is exactly what the old corner radials looked like on a large empty
+ *    page.
+ *  - `--nt-swatch-paint` is the picker thumbnail. A 5% wash in a 20px circle is
+ *    indistinguishable from black — the swatches all looked the same — so the
+ *    same hues are offered at thumbnail strength.
+ *
+ * The light values are not the dark ones brightened. A 5% teal wash that tints a
+ * near-black corner disappears on near-white, so light needs about twice the
  * alpha to read as the same mood; `grid` needs a darker line than `--line-soft`,
  * which is nearly the frame colour on light. Every preset also has to stay quiet
  * enough that a search box on top of it is still the thing you look at.
  *
- * An unknown id matches no rule, so `--nt-paint` stays undefined and both layers
- * paint `--bg` — the same fallback the lookup function used to provide.
+ * An unknown id matches no rule, so the custom properties stay undefined and the
+ * layers fall back to `--bg` — the same fallback the lookup function provides.
  */
-.nt-bg,
-.nt-swatch {
+.nt-bg {
   background: var(--nt-paint, var(--bg));
 }
 
-.nt-bg[data-backdrop="aurora"],
+.nt-swatch {
+  background: var(--nt-swatch-paint, var(--bg));
+}
+
+/*
+ * One gradient per colour preset, not two stacked ones. Two washes that each fade to
+ * transparent leave a straight seam where their ramps meet — at 5% it is still
+ * a visible diagonal across an empty page. A single gradient with a transparent
+ * plateau in the middle crosses the whole surface once, so there is no edge to
+ * find.
+ */
+.nt-bg[data-backdrop="aurora"] {
+  --nt-paint: linear-gradient(135deg, rgb(45 212 191 / 5%) 0%, transparent 42%, transparent 58%, rgb(139 92 246 / 5.5%) 100%),
+    var(--bg);
+}
+
 .nt-swatch[data-backdrop="aurora"] {
-  --nt-paint: radial-gradient(70% 55% at 14% 6%, rgb(45 212 191 / 5.5%), transparent 70%),
-    radial-gradient(65% 55% at 88% 94%, rgb(139 92 246 / 6%), transparent 70%), var(--bg);
+  --nt-swatch-paint: linear-gradient(135deg, rgb(45 212 191 / 90%) 0%, rgb(139 92 246 / 92%) 100%);
 }
 
-:root[data-theme="light"] .nt-bg[data-backdrop="aurora"],
-:root[data-theme="light"] .nt-swatch[data-backdrop="aurora"] {
-  --nt-paint: radial-gradient(70% 55% at 14% 6%, rgb(13 148 136 / 12%), transparent 70%),
-    radial-gradient(65% 55% at 88% 94%, rgb(109 40 217 / 10%), transparent 70%), var(--bg);
+:root[data-theme="light"] .nt-bg[data-backdrop="aurora"] {
+  --nt-paint: linear-gradient(135deg, rgb(13 148 136 / 11%) 0%, transparent 42%, transparent 58%, rgb(109 40 217 / 9%) 100%),
+    var(--bg);
 }
 
-.nt-bg[data-backdrop="dusk"],
+.nt-bg[data-backdrop="dusk"] {
+  --nt-paint: linear-gradient(225deg, rgb(251 146 60 / 5%) 0%, transparent 42%, transparent 58%, rgb(244 63 94 / 5%) 100%),
+    var(--bg);
+}
+
 .nt-swatch[data-backdrop="dusk"] {
-  --nt-paint: radial-gradient(70% 55% at 82% 4%, rgb(251 146 60 / 5.5%), transparent 70%),
-    radial-gradient(70% 60% at 10% 96%, rgb(244 63 94 / 5%), transparent 70%), var(--bg);
+  --nt-swatch-paint: linear-gradient(225deg, rgb(251 146 60 / 90%) 0%, rgb(244 63 94 / 90%) 100%);
 }
 
-:root[data-theme="light"] .nt-bg[data-backdrop="dusk"],
-:root[data-theme="light"] .nt-swatch[data-backdrop="dusk"] {
-  --nt-paint: radial-gradient(70% 55% at 82% 4%, rgb(234 88 12 / 13%), transparent 70%),
-    radial-gradient(70% 60% at 10% 96%, rgb(225 29 72 / 10%), transparent 70%), var(--bg);
+:root[data-theme="light"] .nt-bg[data-backdrop="dusk"] {
+  --nt-paint: linear-gradient(225deg, rgb(234 88 12 / 11%) 0%, transparent 42%, transparent 58%, rgb(225 29 72 / 9%) 100%),
+    var(--bg);
 }
 
-.nt-bg[data-backdrop="night"],
+.nt-bg[data-backdrop="night"] {
+  --nt-paint: linear-gradient(180deg, rgb(59 130 246 / 5.5%) 0%, transparent 45%, transparent 60%, rgb(30 64 175 / 5%) 100%),
+    var(--bg);
+}
+
 .nt-swatch[data-backdrop="night"] {
-  --nt-paint: radial-gradient(80% 65% at 50% -8%, rgb(59 130 246 / 7%), transparent 70%),
-    radial-gradient(60% 50% at 50% 108%, rgb(30 64 175 / 7%), transparent 70%), var(--bg);
+  --nt-swatch-paint: linear-gradient(180deg, rgb(59 130 246 / 85%) 0%, rgb(30 64 175 / 80%) 100%);
 }
 
-:root[data-theme="light"] .nt-bg[data-backdrop="night"],
-:root[data-theme="light"] .nt-swatch[data-backdrop="night"] {
-  --nt-paint: radial-gradient(80% 65% at 50% -8%, rgb(37 99 235 / 13%), transparent 70%),
-    radial-gradient(60% 50% at 50% 108%, rgb(30 64 175 / 11%), transparent 70%), var(--bg);
+:root[data-theme="light"] .nt-bg[data-backdrop="night"] {
+  --nt-paint: linear-gradient(180deg, rgb(37 99 235 / 12%) 0%, transparent 45%, transparent 60%, rgb(30 64 175 / 10%) 100%),
+    var(--bg);
 }
 
 /*
@@ -504,23 +525,32 @@ function openBookmark(bookmark: Bookmark): void {
  * off the frame there; on light that token is nearly the frame colour too, so the
  * grid vanished. The lines get their own colour below rather than borrowing a
  * surface step that means something else.
+ *
+ * The swatch uses a 6px pitch: a 24px grid in a 20px circle is one line at
+ * best, which is not a preview of anything.
  */
-.nt-bg[data-backdrop="grid"],
-.nt-swatch[data-backdrop="grid"] {
+.nt-bg[data-backdrop="grid"] {
   --nt-paint: linear-gradient(var(--line-soft) 1px, transparent 1px) 0 0 / 24px 24px,
     linear-gradient(90deg, var(--line-soft) 1px, transparent 1px) 0 0 / 24px 24px, var(--bg);
 }
 
-:root[data-theme="light"] .nt-bg[data-backdrop="grid"],
-:root[data-theme="light"] .nt-swatch[data-backdrop="grid"] {
+:root[data-theme="light"] .nt-bg[data-backdrop="grid"] {
   --nt-paint: linear-gradient(rgb(100 116 139 / 22%) 1px, transparent 1px) 0 0 / 24px 24px,
     linear-gradient(90deg, rgb(100 116 139 / 22%) 1px, transparent 1px) 0 0 / 24px 24px,
     var(--bg);
 }
 
-.nt-bg[data-backdrop="plain"],
-.nt-swatch[data-backdrop="plain"] {
+.nt-swatch[data-backdrop="grid"] {
+  --nt-swatch-paint: linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 6px 6px,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 6px 6px, var(--surface-2);
+}
+
+.nt-bg[data-backdrop="plain"] {
   --nt-paint: var(--bg);
+}
+
+.nt-swatch[data-backdrop="plain"] {
+  --nt-swatch-paint: var(--bg);
 }
 
 /*
@@ -683,12 +713,16 @@ function openBookmark(bookmark: Bookmark): void {
   color: var(--faint);
 }
 
-/* The hero field is taller and larger than the toolbar's, so it overrides the
-   shell's default field text. The stroke and the fill belong to the shell. */
+/* The hero field is larger than the toolbar's, so it overrides the shell's
+   default field text. The stroke and the fill belong to the shell.
+ *
+ * No height here: the shell's slotted rule stretches the field to the row, and
+ * an explicit height on a stretched flex item makes it align at the cross-start
+ * instead of centring — which is what put the placeholder five pixels above the
+ * middle of this box. */
 .nt-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 34px;
   padding: 0 2px;
   border: none;
   background: transparent;
@@ -850,8 +884,10 @@ function openBookmark(bookmark: Bookmark): void {
 }
 
 .nt-swatch {
-  width: 18px;
-  height: 18px;
+  /* 20px, not 18: the preview is a gradient and a grid pitch, and both need the
+     few extra pixels to read as a choice rather than as a dark dot. */
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   cursor: pointer;

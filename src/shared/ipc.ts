@@ -325,6 +325,10 @@ export const IPC = {
   embeddedViewport: "embedded:viewport",
   /** Applies or clears a simulated device (size + DPR + touch + UA). */
   embeddedDevice: "embedded:device",
+  /** Per-page background-sleep policy: follow the default, or never sleep. */
+  embeddedSleep: "embedded:sleep",
+  /** Mutes or unmutes one page's output; the page keeps playing internally. */
+  embeddedMuted: "embedded:muted",
   /** Reads the samples taken while the performance tab is open. */
   embeddedPerf: "embedded:perf",
   /** Switches the docked panel between the front-end and our own tabs. */
@@ -896,6 +900,21 @@ export interface EnsembleApi {
    * a phone" is not the same request as "go back to filling the cell".
    */
   setEmbeddedDevice(tabId: string, device: EmbeddedDevice | null): Promise<EmbeddedDevice | null>;
+  /**
+   * Sets a page's background-sleep policy.
+   *
+   * `"auto"` restores the default (sleep when off stage and idle); `"never"`
+   * keeps the page running in the background. Setting `"never"` wakes a page
+   * that is already asleep, so the answer is true immediately.
+   */
+  setEmbeddedSleep(tabId: string, policy: "auto" | "never"): Promise<EmbeddedTab>;
+  /**
+   * Mutes or unmutes this page's output.
+   *
+   * A renderer call is a user action, so it also clears/sets the "the user
+   * wants sound" flag the AI's automatic mute respects.
+   */
+  setEmbeddedMuted(tabId: string, muted: boolean): Promise<EmbeddedTab>;
   /** Samples taken so far while the performance tab was open. */
   readEmbeddedPerf(tabId: string): Promise<PerfSample[]>;
   /** Which tab of the docked panel owns it. */

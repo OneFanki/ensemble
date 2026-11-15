@@ -40,6 +40,8 @@ export interface GuestCdpTarget {
     options?: { awaitPromise?: boolean; timeoutMs?: number },
   ): Promise<T>;
   has(guestId: string): boolean;
+  /** True while a command against this guest is waiting for its reply. */
+  busy(guestId: string): boolean;
   /** Resolves once the page's node has a real box (or the wait times out). */
   waitLaidOut(timeoutMs?: number): Promise<void>;
   /**
@@ -62,6 +64,15 @@ export class GuestCdp implements CdpExecutor {
     private readonly tabId: string,
     /** Asks the renderer to show this page briefly, then put it back. */
     private readonly present?: (tabId: string, visible: boolean) => Promise<void>,
+    /**
+     * Called before every AI-facing command.
+     *
+     * The browser manager uses it to wake a page the sleep sweep froze and to
+     * start the grace clock. `lifecycle()` deliberately does not call it: the
+     * sweep's own freeze must not count as activity, or nothing would ever
+     * sleep.
+     */
+    private readonly onActivity?: () => Promise<void> | void,
   ) {}
 
   /**
@@ -94,6 +105,16 @@ export class GuestCdp implements CdpExecutor {
     return guestId !== undefined && this.target.has(guestId);
   }
 
+  busy(): boolean {
+    const guestId = this.target.guestId();
+    return guestId !== undefined && this.target.busy(guestId);
+  }
+
+  /** Marks this page as the AI's current target; see `onActivity`. */
+  private async touch(): Promise<void> {
+    await this.onActivity?.();
+  }
+
   async prepare(): Promise<void> {
     // Opening happens lazily inside the first command; there is nothing to warm
     // up here without sending one.
@@ -106,15 +127,19 @@ export class GuestCdp implements CdpExecutor {
     // scripts. `teardown` is the explicit way to close it.
   }
 
-  send<T = unknown>(
+  async send<T = unknown>(
     method: string,
     params: Record<string, unknown> = {},
     options: { timeoutMs?: number } = {},
   ): Promise<T> {
+    await this.touch();
     return this.target.send<T>(this.guest(), method, params, options);
   }
 
   lifecycle(state: "frozen" | "active"): Promise<void> {
+    // No `touch()` here on purpose: the sleep sweep calls this to freeze a page,
+    // and marking its own command as AI activity would keep the page awake
+    // forever. Waking is handled by `browser.wakeTab`, which runs before this.
     return this.target.send<void>(this.guest(), "Page.setWebLifecycleState", { state });
   }
 
@@ -154,10 +179,11 @@ export class GuestCdp implements CdpExecutor {
   /** Nesting depth of {@link presented}; see the note there. */
   private presentDepth = 0;
 
-  evaluate<T>(
+  async evaluate<T>(
     expression: string,
     options: { awaitPromise?: boolean; timeoutMs?: number } = {},
   ): Promise<T> {
+    await this.touch();
     return this.presented(() => this.target.evaluate<T>(this.guest(), expression, options));
   }
 
@@ -211,6 +237,9 @@ export class GuestCdp implements CdpExecutor {
       timeoutMs?: number;
     } = {},
   ): Promise<Buffer> {
+    // The renderer capture path never sends a CDP command, so the activity mark
+    // cannot come from `send`: a screenshot of a sleeping page must wake it too.
+    await this.touch();
     const format = options.format ?? "png";
     const budget = Math.max(500, options.timeoutMs ?? 8_000);
     const params = {

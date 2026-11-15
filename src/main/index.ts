@@ -147,6 +147,25 @@ const trustedUpdateFetch = createTrustedUpdateFetch();
  */
 const headless = process.env["ENSEMBLE_HEADLESS"] === "1";
 
+/*
+ * Sleep timings for the tab-sleep check.
+ *
+ * Headless runs normally keep every page unthrottled, which is right for the
+ * other suites (a frozen page would turn a screenshot assertion into a timeout)
+ * but leaves the sleep path untested. This switch turns the sweep back on with
+ * the grace period and interval shrunk to seconds, so one check can observe a
+ * page fall asleep and wake again without waiting a full minute. Production
+ * ignores both variables.
+ */
+const sleepTest = process.env["ENSEMBLE_SLEEP_TEST"] === "1";
+const sleepMsFromEnv = (name: string): number | undefined => {
+  if (!sleepTest) return undefined;
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+};
+const sleepGraceMs = sleepMsFromEnv("ENSEMBLE_SLEEP_GRACE_MS");
+const sleepSweepMs = sleepMsFromEnv("ENSEMBLE_SLEEP_SWEEP_MS");
+
 // Lets an end-to-end check run against a throwaway workspace instead of the
 // user's real one. Must happen before app ready: Electron derives session and
 // partition storage from userData, so a late override would split the two.
@@ -643,7 +662,9 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     ...(headless ? { headless: true } : {}),
     // Headless runs keep every page unthrottled (same reason as the windows
     // themselves); interactive runs freeze parked pages an AI is not using.
-    ...(headless ? {} : { aiIdleFreeze: true }),
+    ...(headless && !sleepTest ? {} : { aiIdleFreeze: true }),
+    ...(sleepGraceMs ? { sleepGraceMs } : {}),
+    ...(sleepSweepMs ? { sleepSweepMs } : {}),
     // Read lazily: pages are opened long after the browser is constructed, and
     // the settings may have changed since. Tabs already open keep the proxy they
     // loaded with until they reload, which is how a browser behaves.
@@ -1072,6 +1093,7 @@ async function openFlowTab(
   flow: Flow,
   requestedIdentityId?: string,
   existingTabId?: string,
+  options: { muted?: boolean } = {},
 ): Promise<{ tabId: string; identityId?: string }> {
   if (existingTabId) {
     return {
@@ -1097,6 +1119,7 @@ async function openFlowTab(
     identityId,
     siteId: site.id,
     label: flow.name,
+    ...(options.muted ? { muted: true } : {}),
   });
   browser.activate(created.id);
   scheduleEmbeddedLogin(created.id, identityId);
@@ -4145,6 +4168,22 @@ function registerIpc(workspace: WorkspaceService): void {
     }
     return ensureEmbeddedBrowser().setDevice(String(tabId), parsed);
   });
+  /*
+   * Per-tab sleep policy. Only "never" is a policy a user can set; returning to
+   * the default is a separate value so a cleared policy is distinguishable from
+   * a tab that simply has none yet.
+   */
+  handle(IPC.embeddedSleep, (tabId: string, policy: "auto" | "never") =>
+    ensureEmbeddedBrowser().setSleepPolicy(
+      String(tabId),
+      policy === "never" ? "never" : "auto",
+    ),
+  );
+  // A renderer mute toggle is a user action: it also records that the user
+  // wants sound, so a later AI operation does not silently re-mute the tab.
+  handle(IPC.embeddedMuted, (tabId: string, muted: boolean) =>
+    ensureEmbeddedBrowser().setMuted(String(tabId), muted === true, { byUser: true }),
+  );
   handle(IPC.embeddedPerf, (tabId: string) => ensureEmbeddedBrowser().perfHistory(String(tabId)));
   handle(
     IPC.embeddedDevtoolsTab,
@@ -4398,6 +4437,7 @@ if (!gotLock) {
           tabId: event.tabId,
           ...(event.tabTitle ? { tabTitle: event.tabTitle } : {}),
           ...(event.summary ? { summary: event.summary } : {}),
+          ...(event.details?.length ? { details: event.details } : {}),
           ok: event.ok,
           originAuthorized: event.originAuthorized,
           ...(event.approval ? { approval: event.approval } : {}),
@@ -4426,6 +4466,7 @@ if (!gotLock) {
             ...(input.siteId ? { siteId: input.siteId } : {}),
             ...(input.label ? { label: input.label } : {}),
             ...(input.color ? { color: input.color as RoleColor } : {}),
+            ...(input.muted ? { muted: true } : {}),
             // AI scratch work goes in a throwaway session, never the daily
             // profile.
             //
@@ -4493,6 +4534,9 @@ if (!gotLock) {
             layoutId,
           ),
         setViewport: (tabId, size) => ensureEmbeddedBrowser().setViewport(tabId, size),
+        setMuted: (tabId, muted, options) =>
+          ensureEmbeddedBrowser().setMuted(tabId, muted, options),
+        muteForAi: (tabId) => ensureEmbeddedBrowser().muteForAi(tabId),
         pinTab: (slotIndex, tabId, viewId) =>
           ensureEmbeddedBrowser().pinTab(
             viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
@@ -4559,7 +4603,9 @@ if (!gotLock) {
         broadcastWorkspace();
         return result;
       },
-      createFlowTab: (flow, identityId) => openFlowTab(flow, identityId),
+      // The MCP path is an AI page operation from the first frame; a flow opened
+      // there must not surprise the user with autoplay either.
+      createFlowTab: (flow, identityId) => openFlowTab(flow, identityId, undefined, { muted: true }),
       // One implementation for both entry points: this is the same path the
       // settings page takes, so an AI changing the theme or proxy gets the live
       // side effects rather than a value that is only written to disk.

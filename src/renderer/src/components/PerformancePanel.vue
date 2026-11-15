@@ -379,29 +379,10 @@ interface Lane {
   area: string;
 }
 
-/**
- * Metrics drawn as a staircase.
- *
- * A DOM count is a number sampled at intervals: it went 3 → 4 because something
- * was added, not because it climbed. A slope between two readings invents a
- * value that was never measured. CPU is the exception — it is the share of an
- * interval, so the slope between two readings is the shape of the interval.
- */
-const STEP_METRICS = new Set<PerfMetric>([
-  "nodes",
-  "listeners",
-  "documents",
-  "frames",
-  "heap",
-  "layouts",
-  "styleRecalcs",
-]);
-
 const lanes = computed<Record<PerfMetric, Lane>>(() => {
   const result = {} as Record<PerfMetric, Lane>;
   for (const metric of PERF_METRICS) {
     const top = axisFor(metric);
-    const step = STEP_METRICS.has(metric);
     const points = perfSparkPoints(
       history.value,
       metric,
@@ -417,8 +398,8 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
         perfAxisLabel(metric, top / 2),
         perfAxisLabel(metric, 0),
       ],
-      line: perfPolyline(points, { step }),
-      area: perfArea(points, CHART_HEIGHT, { step }),
+      line: perfPolyline(points),
+      area: perfArea(points, CHART_HEIGHT),
     };
   }
   return result;
@@ -662,9 +643,10 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   opacity: 0.45;
 }
 
-/* The name line: tick, name, then the two numbers pushed to the right end. It
-   is the row's *label*, so it stays one line at any width — the name ellipsises
-   rather than wrapping, and the numbers never move. */
+/* The name line: tick, name, current value, then the peak at the far right.
+   The value sits next to the name because that is the pair a reader compares —
+   at the far right it was a horizontal scan away from the label. The peak is
+   secondary, so it keeps the right edge and its own caption. */
 .metric-head {
   display: flex;
   align-items: center;
@@ -689,9 +671,11 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
 
 /* `min-width: 0` is load-bearing: a flex item defaults to `min-width: auto`,
    which refuses to shrink below its content and lets a long name wrap instead
-   of ellipsising — "JS 堆大小" broke into two lines and pushed its chart down. */
+   of ellipsising — "JS 堆大小" broke into two lines and pushed its chart down.
+   `0 1 auto` instead of `1 1 auto`: the name takes only what it needs, so the
+   value can follow it instead of being pushed to the row's far edge. */
 .metric-name {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -739,11 +723,11 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   position: absolute;
   left: 0;
   width: 28px;
-  font-size: 9px;
+  font-size: 9.5px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   text-align: right;
-  color: var(--faint);
+  color: var(--muted);
   pointer-events: none;
 }
 
@@ -768,24 +752,28 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   opacity: 0.5;
 }
 
-/* Top edge and midline. Very faint on purpose: they are references, not data,
-   and at this height they would otherwise compete with the line. */
+/* Top edge and midline. The top is the one that has to be readable: on CPU it
+   is 100%, and at the old `--line-soft` at half opacity it was invisible — the
+   line "pinned to the top" told you nothing. It now uses the faint text tone,
+   while the midline stays a quieter dashed reference. */
 .spark-grid {
-  stroke: var(--line-soft);
+  stroke: var(--faint);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
-  opacity: 0.5;
+  opacity: 0.6;
 }
 
 .spark-grid.dashed {
+  stroke: var(--line-soft);
   stroke-dasharray: 2 3;
+  opacity: 0.9;
 }
 
 .spark-base {
   stroke: var(--line);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
-  opacity: 0.6;
+  opacity: 0.9;
 }
 
 /* The fill is the readable part of a low series; the line gives it an edge.
@@ -809,22 +797,24 @@ const lanes = computed<Record<PerfMetric, Lane>>(() => {
   vector-effect: non-scaling-stroke;
 }
 
-/* The two numeric columns size to their content instead of to a guessed width:
-   `14.0 MB` needs more room than `0.0`, and a fixed column either clipped the
-   former or wasted 20px on the latter. They sit at the end of the name line, so
-   their width no longer comes out of the chart's. */
+/* The live value follows the name and takes the series colour, so the number
+   and the line it belongs to are one glance instead of two. It sizes to its
+   content (`14.0 MB` needs more room than `0.0`), and never shrinks away while
+   a long name is ellipsising. */
 .metric-value {
   flex: 0 0 auto;
   font-size: 10.5px;
-  color: var(--text);
+  font-weight: 500;
+  color: var(--spark);
   text-align: right;
 }
 
 /* The peak column is secondary: it answers "how bad did it get", not "what is
-   it now", so it stays quieter than the live value. */
+   it now", so it stays at the far right and quieter than the live value. */
 .metric-peak {
   flex: 0 0 auto;
   min-width: 34px;
+  margin-left: auto;
   font-size: 9.5px;
   color: var(--faint);
   text-align: right;

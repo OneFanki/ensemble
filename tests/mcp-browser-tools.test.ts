@@ -5,7 +5,14 @@ import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EmbeddedSurface } from "../src/main/mcp/server";
-import { loadMcpSettings, McpServer, saveMcpSettings } from "../src/main/mcp/server";
+import {
+  describeToolAction,
+  loadMcpSettings,
+  McpServer,
+  previewActivityResult,
+  saveMcpSettings,
+  withoutPartition,
+} from "../src/main/mcp/server";
 
 const TOKEN = "browser-tools-token-1234567890";
 
@@ -27,6 +34,8 @@ function fakeSurface(): EmbeddedSurface {
     title: string;
     identityId?: string;
     clean?: boolean;
+    partition?: string;
+    profileId?: string;
   }> = [];
   let active: string | undefined;
   const record =
@@ -53,6 +62,7 @@ function fakeSurface(): EmbeddedSurface {
         // Mirrors the real bridge: an identity-less tab opened by the AI is a
         // clean session, never a page in the user's daily profile.
         ...(input.identityId ? {} : { clean: true }),
+        partition: input.identityId ? "persist:embedded-identity" : "embedded-clean-test",
       };
       tabs = [...tabs, tab];
       active = tab.id;
@@ -232,7 +242,10 @@ function toolPayload(json: any): unknown {
   return JSON.parse(json.result.content[0].text);
 }
 
-async function startServer(embedded?: EmbeddedSurface): Promise<void> {
+async function startServer(
+  embedded?: EmbeddedSurface,
+  onPageAction?: (event: Record<string, unknown>) => void,
+): Promise<void> {
   const settingsPath = join(dir, "mcp.json");
   saveMcpSettings(settingsPath, {
     ...loadMcpSettings(settingsPath),
@@ -248,6 +261,7 @@ async function startServer(embedded?: EmbeddedSurface): Promise<void> {
     service,
     appVersion: "test",
     ...(embedded ? { embedded } : {}),
+    ...(onPageAction ? { onPageAction } : {}),
   });
   // Browser tools are `run` in part, so the suite needs the run permission on.
   await server.update({ allowRun: true });
@@ -673,5 +687,70 @@ describe("browser tool calls", () => {
     const entry = JSON.parse(log[log.length - 1]!);
     expect(entry.tool).toBe("list_browser_tabs");
     expect(entry.ok).toBe(true);
+  });
+});
+
+describe("MCP result projection", () => {
+  it("removes storage partitions without touching the semantic fields", () => {
+    const projected = withoutPartition({
+      tabs: [
+        {
+          id: "t1",
+          clean: false,
+          profileId: "default",
+          partition: "persist:embedded-clean",
+        },
+      ],
+    }) as { tabs: Array<Record<string, unknown>> };
+    expect(projected.tabs[0]).toEqual({ id: "t1", clean: false, profileId: "default" });
+  });
+
+  it("keeps a page's partition out of every tab-list result", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "https://example.test/", label: "页面" }));
+    const { json } = await rpc(toolCall("list_browser_tabs", {}));
+    expect(json.result.content[0].text).not.toContain("partition");
+    expect(json.result.content[0].text).not.toContain("embedded-clean-test");
+  });
+
+  it("redacts a typed secret in the activity detail, not just the summary", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    await startServer(fakeSurface(), (event) => events.push(event));
+    await rpc(
+      toolCall("open_browser_tab", {
+        url: "https://example.test/",
+        label: "测试页",
+      }),
+    );
+    await rpc(
+      toolCall("type_browser_text", {
+        tabId: "tab-1",
+        selector: "#password",
+        text: "hunter2",
+      }),
+    );
+    const detail = (
+      events.at(-1)?.details as Array<{ args?: Record<string, unknown> }> | undefined
+    )?.[0];
+    expect(detail?.args?.["text"]).toBe("[redacted]");
+    expect(JSON.stringify(events)).not.toContain("hunter2");
+  });
+
+  it("previews a script and never echoes a typed value", () => {
+    expect(
+      describeToolAction("evaluate_browser_page", { expression: "return document.title" }),
+    ).toBe("执行脚本：return document.title");
+    const typed = describeToolAction("type_browser_text", {
+      selector: "#password",
+      text: "hunter2",
+    });
+    expect(typed).toBe("在「#password」输入");
+    expect(typed).not.toContain("hunter2");
+  });
+
+  it("truncates a large result instead of storing it whole", () => {
+    const preview = previewActivityResult("x".repeat(10_000));
+    expect(preview?.length).toBeLessThanOrEqual(4_001);
+    expect(preview?.endsWith("…")).toBe(true);
   });
 });

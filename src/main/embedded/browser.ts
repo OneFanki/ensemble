@@ -38,8 +38,10 @@ import {
   deriveSample,
   pushSample,
 } from "@core/cdp/performance";
+import { shouldSleepPage } from "@core/cdp/sleep";
 import type { MissingCredentialReason } from "@core/credentials/vault";
 import { t } from "@core/i18n/translate";
+import { primeDevToolsFrontendLanguage } from "./devtools-language";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -49,6 +51,8 @@ import {
   EMBEDDED_DEVTOOLS_HEAD,
   EMBEDDED_DEVTOOLS_MAX,
   EMBEDDED_DEVTOOLS_MIN,
+  EMBEDDED_DEFAULT_PROFILE_ID,
+  EMBEDDED_PAGE_FRAME_GUTTER,
   EMBEDDED_SLOT_HEADER,
   type EmbeddedState,
   type EmbeddedTab,
@@ -71,6 +75,7 @@ import {
   PERF_METRICS,
   perfSummarize,
   planTabClick,
+  pointerInsidePage,
   resolveSlotPages,
   resolveSlotTabs,
   settleSplitPages,
@@ -79,6 +84,7 @@ import {
   type PerfMetric,
   type PerfMetricSummary,
   type StageRect,
+  type TabSleepPolicy,
   viewIsOnScreen,
   viewportFitRect,
   ZOOM_STEPS,
@@ -91,6 +97,7 @@ import {
 } from "@shared/flows";
 import type { AppSettings, LayoutId, RoleColor, SlotRect } from "@shared/types";
 import {
+  app,
   BrowserWindow,
   Menu,
   screen,
@@ -109,14 +116,17 @@ import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
 import { applyProxyToSession } from "../proxy";
 
 /**
- * How long CDP traffic keeps a parked page exempt from the freeze sweep.
+ * Defaults for the background sleep: how long CDP traffic keeps a parked page
+ * awake, and how often the sweep looks.
  *
- * Generous on purpose: a polling wait or a slow flow re-marks the page on every
- * command, so the window only ever lapses on real idleness — an AI session that
- * stopped talking, a page parked while the user reads the accounts page.
+ * The grace is generous on purpose: a polling wait or a slow flow re-marks the
+ * page on every command, so the window only ever lapses on real idleness — an
+ * AI session that stopped talking, a page parked while the user reads the
+ * accounts page. The two are constructor options so an e2e can compress them
+ * without waiting a minute for every transition.
  */
-const AI_ACTIVE_WINDOW_MS = 60_000;
-const FREEZE_SWEEP_INTERVAL_MS = 10_000;
+const SLEEP_GRACE_DEFAULT_MS = 60_000;
+const SLEEP_SWEEP_DEFAULT_MS = 10_000;
 
 /** The sampling knobs in force right now, already range-checked. */
 interface PerfConfig {
@@ -180,6 +190,48 @@ interface TabRecord {
    * session; applying the other is pure geometry.
    */
   device?: EmbeddedDevice;
+  /**
+   * Per-page background-sleep override.
+   *
+   * Absent means "follow the default": a page that is off stage sleeps after an
+   * idle period. `"never"` keeps this page running for as long as it exists.
+   * In-memory like the zoom and viewport overrides — a tab does not survive a
+   * restart, so a persisted policy would only apply to a page that is gone.
+   */
+  sleepPolicy?: TabSleepPolicy;
+  /**
+   * Output is muted for this page.
+   *
+   * A tab record field rather than a WebContents property alone: a reload
+   * rebuilds the document but the record survives, and the user expects the
+   * mute to survive with it.
+   */
+  muted?: boolean;
+  /**
+   * The user explicitly asked to hear this tab.
+   *
+   * Set by the speaker control, never by the AI. `muteForAi` reads it so an
+   * automatic AI mute cannot override a person who just unmuted the page.
+   */
+  userUnmuted?: boolean;
+  /**
+   * Whether mouse input is currently being converted into touch input.
+   *
+   * Chromium's mouse-to-touch emulation also installs a native touch cursor on
+   * the window. Keeping the conversion enabled while the pointer is away is
+   * what made that gray dot follow the pointer over the toolbar and DevTools,
+   * so the poller turns it on only for the page under the pointer. `undefined`
+   * means "not applied yet" and lets a failed command be retried.
+   */
+  mouseTouchEnabled?: boolean;
+  /**
+   * The box this page's fixed viewport is fitted into, in window coordinates.
+   *
+   * Published stage-relative as `cell`. The resize frame needs it to know when
+   * a drag would make the page exceed its box: the fit scale would drop and the
+   * page would visibly shrink while the pointer keeps moving outwards.
+   */
+  fitCell?: StageRect;
   /**
    * Which tab of the docked panel is showing.
    *
@@ -402,13 +454,18 @@ export interface EmbeddedBrowserOptions {
    * scene (both measured). What does is CDP `Page.setWebLifecycleState:
    * "frozen"` — it suspends the page's JavaScript entirely (an evaluate against
    * a frozen page never returns), which stops the scene's timers and render
-   * loop with it. The sweep freezes parked pages after `AI_ACTIVE_WINDOW_MS`
-   * without CDP traffic; the first CDP command of an AI burst wakes the page
-   * before the command runs (the hook in `EmbeddedCdp.send` awaits the wake),
-   * and re-staging or navigation wakes it too. Headless runs keep this off:
-   * their timing assertions assume pages run unthrottled.
+   * loop with it. The sweep freezes a parked page once its grace has lapsed
+   * and no CDP command is in flight; the first CDP command of an AI burst wakes
+   * it before the command runs (`GuestCdp`'s activity hook awaits the wake),
+   * and re-staging or navigation wakes it too. A page can opt out with
+   * `sleepPolicy: "never"`. Headless runs keep this off: their timing
+   * assertions assume pages run unthrottled.
    */
   aiIdleFreeze?: boolean;
+  /** How long AI traffic keeps a parked page awake; defaults to 60 seconds. */
+  sleepGraceMs?: number;
+  /** How often the sleep sweep runs; defaults to 10 seconds. */
+  sleepSweepMs?: number;
   /**
    * Hosts pages as `<webview>` nodes owned by the renderer.
    *
@@ -527,6 +584,8 @@ export function navigationArrived(input: {
  */
 export class EmbeddedBrowser {
   private host: BrowserWindow | null = null;
+  /** Polls the system pointer while a touch page is on stage. */
+  private touchCursorTimer?: ReturnType<typeof setInterval>;
 
   /** The renderer-side page host. Always present; see `EmbeddedBrowserOptions`. */
   private get guests(): GuestHost {
@@ -586,6 +645,13 @@ export class EmbeddedBrowser {
   private stateHeld = false;
   /** True while a stage-covering menu has the docked DevTools panels parked. */
   private devtoolsParked = false;
+  /**
+   * The DevTools front-end language was seeded in this run.
+   *
+   * Priming loads the front-end once before the panel exists; doing that for
+   * every panel would double the first paint of each new DevTools view.
+   */
+  private devtoolsLanguagePrimed = false;
   private viewSeq = 0;
   /**
    * Rebuilds in flight, one per page at most.
@@ -638,6 +704,9 @@ export class EmbeddedBrowser {
   private frozenTabs = new Set<string>();
   private stagedTabs = new Set<string>();
   private freezeSweep: NodeJS.Timeout | undefined;
+  /** The two sleep timings, from options so an e2e can compress them. */
+  private readonly sleepGraceMs: number;
+  private readonly sleepSweepMs: number;
   /** The live split drag, if one is in progress. */
   private devtoolsResize:
     | {
@@ -650,11 +719,13 @@ export class EmbeddedBrowser {
     | undefined;
 
   constructor(private readonly options: EmbeddedBrowserOptions) {
+    this.sleepGraceMs = options.sleepGraceMs ?? SLEEP_GRACE_DEFAULT_MS;
+    this.sleepSweepMs = options.sleepSweepMs ?? SLEEP_SWEEP_DEFAULT_MS;
     // The sweep must exist from construction, not from the first CDP command:
     // it used to be armed lazily inside `markCdpActivity`, so a session with no
     // AI traffic — the common one — never froze anything at all.
     if (options.aiIdleFreeze) {
-      this.freezeSweep = setInterval(() => this.sweepFrozenCandidates(), FREEZE_SWEEP_INTERVAL_MS);
+      this.freezeSweep = setInterval(() => this.sweepFrozenCandidates(), this.sleepSweepMs);
       this.freezeSweep.unref?.();
     }
   }
@@ -778,6 +849,7 @@ export class EmbeddedBrowser {
     // than keeping handles to closed renderers.
     win.once("closed", () => {
       if (this.host !== win) return;
+      this.stopTouchCursorPoller();
       this.host = null;
       this.stage = null;
       this.closeAllTabs();
@@ -792,7 +864,12 @@ export class EmbeddedBrowser {
     win.on("resize", () => {
       if (this.host !== win) return;
       this.applyLayout();
+      this.syncTouchCursorPoller();
     });
+    win.on("focus", () => this.syncTouchCursorPoller());
+    win.on("blur", () => this.stopTouchCursorPoller());
+    win.on("minimize", () => this.stopTouchCursorPoller());
+    win.on("restore", () => this.syncTouchCursorPoller());
     this.sendState();
   }
 
@@ -815,6 +892,19 @@ export class EmbeddedBrowser {
     const contents = tab.view?.webContents;
     const effectiveViewport = this.viewportOf(tab);
     const pending = !contents || contents.isDestroyed();
+    const audible = Boolean(contents && !contents.isDestroyed() && contents.isCurrentlyAudible());
+    const clean = this.cleanInstances.has(tab.instanceId);
+    /*
+     * The default profile is not a missing value.
+     *
+     * Leaving `profileId` absent made readers infer the profile from the
+     * partition string, whose legacy literal contains "clean". A page that is
+     * neither an identity nor a throwaway is the built-in default profile, so
+     * say that explicitly.
+     */
+    const profileId =
+      this.instanceProfiles.get(tab.instanceId) ??
+      (clean || tab.identityId ? undefined : EMBEDDED_DEFAULT_PROFILE_ID);
     return {
       id: tab.id,
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
@@ -831,12 +921,14 @@ export class EmbeddedBrowser {
       origin: tab.origin,
       instanceId: tab.instanceId,
       ...(tab.openerId ? { openerId: tab.openerId } : {}),
-      ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
-      ...(this.instanceProfiles.get(tab.instanceId)
-        ? { profileId: this.instanceProfiles.get(tab.instanceId) }
-        : {}),
+      ...(clean ? { clean: true } : {}),
+      ...(profileId ? { profileId } : {}),
       partition: this.partitionOf(tab),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
+      ...(tab.muted ? { muted: true } : {}),
+      ...(audible ? { audible: true } : {}),
+      ...(this.frozenTabs.has(tab.id) ? { sleeping: true } : {}),
+      ...(tab.sleepPolicy ? { sleepPolicy: tab.sleepPolicy } : {}),
       // In viewport mode the fit scale *is* the effective zoom; reporting the
       // untouched override here would make the chrome claim 100% while the
       // page actually renders at the fit factor. `viewport` is the *effective*
@@ -863,6 +955,23 @@ export class EmbeddedBrowser {
               const rect = tab.view.getBounds();
               return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
             })(),
+            /*
+             * The cell is published for the resize frame, and only while the
+             * page is actually on stage: a parked page keeps the cell it had
+             * before it left, which would describe a box nothing is fitted into.
+             * Converted to the same stage-relative space as `bounds` so the
+             * renderer can compare the two without a second origin.
+             */
+            ...(tab.fitCell && this.stage && this.stagedTabs.has(tab.id)
+              ? {
+                  cell: {
+                    x: tab.fitCell.x - this.stage.x,
+                    y: tab.fitCell.y - this.stage.y,
+                    width: tab.fitCell.width,
+                    height: tab.fitCell.height,
+                  },
+                }
+              : {}),
           }),
     };
   }
@@ -932,6 +1041,8 @@ export class EmbeddedBrowser {
     this.stage = stage;
     if (stage) this.lastStage = stage;
     this.applyLayout();
+    if (stage) this.syncTouchCursorPoller();
+    else this.stopTouchCursorPoller();
     /*
      * The renderer draws a guest from `bounds`, so a layout change only reaches
      * the screen through a state broadcast. Without this the nodes kept the
@@ -1745,6 +1856,8 @@ export class EmbeddedBrowser {
     color?: RoleColor;
     viewId?: string;
     origin?: "view" | "manual" | "ai";
+    /** Start with output muted; AI-created pages pass true. */
+    muted?: boolean;
     /**
      * Open with no shared state at all.
      *
@@ -1833,6 +1946,10 @@ export class EmbeddedBrowser {
       ...(input.viewId && this.findView(input.viewId) ? { viewId: input.viewId } : {}),
       label: input.label?.trim() || t("page.untitled"),
       ...(input.color ? { color: input.color } : {}),
+      // A popup inherits how its opener is being listened to; a fresh tab
+      // starts muted only when its creator asked for it (AI-opened pages).
+      ...((input.muted ?? parent?.muted) ? { muted: true } : {}),
+      ...(parent?.userUnmuted ? { userUnmuted: true } : {}),
       origin: input.origin ?? parent?.origin ?? "manual",
       instanceId,
       ...(input.openerId ? { openerId: input.openerId } : {}),
@@ -1868,6 +1985,9 @@ export class EmbeddedBrowser {
     const carrier = await this.openCarrier({ tabId: id, partition, url: target });
     tab.view = carrier.view;
     tab.cdp = carrier.cdp;
+    // Before the first document can make noise: a tab created muted has to be
+    // muted from its first frame, not after the first state broadcast.
+    tab.view.webContents.setAudioMuted(Boolean(tab.muted));
     this.wireTab(tab);
     // A new page starts at the global default; only a deliberate keystroke
     // creates an override, so the setting keeps applying to everything else.
@@ -1959,8 +2079,13 @@ export class EmbeddedBrowser {
   private guestExecutor(tabId: string): CdpExecutor {
     const guests = this.options.guests;
     if (!guests) throw new Error("没有可用的页面载体");
-    return new GuestCdp(guests.targetFor(tabId), tabId, (id, visible) =>
-      guests.present(id, visible),
+    return new GuestCdp(
+      guests.targetFor(tabId),
+      tabId,
+      (id, visible) => guests.present(id, visible),
+      // Every AI-facing command goes through this executor. Waking here is what
+      // makes a frozen page usable again without the sweep having to poll.
+      () => this.markCdpActivity(tabId),
     );
   }
 
@@ -2197,6 +2322,10 @@ export class EmbeddedBrowser {
       tab.title = title;
       update();
     });
+    // A page that starts or stops making sound changes which icon the strip
+    // should draw; without this event the speaker would wait for an unrelated
+    // title/navigation update.
+    contents.on("audio-state-changed", update);
     contents.on("did-start-loading", () => {
       tab.loading = true;
       update();
@@ -2267,6 +2396,9 @@ export class EmbeddedBrowser {
     });
     contents.on("did-finish-load", () => {
       void this.installLoginCapture(tab);
+      // A reload keeps the tab record, so the mute has to be put back on the
+      // new document; a page the user muted must not come back talking.
+      contents.setAudioMuted(Boolean(tab.muted));
       // Started at load, not only at first read: a caller asking "why did the
       // page break" wants the errors that happened before it thought to look.
       void this.installPageActivity(tab);
@@ -2792,6 +2924,7 @@ export class EmbeddedBrowser {
   }
 
   private closeAllTabs(): void {
+    this.stopTouchCursorPoller();
     for (const tab of [...this.tabs]) this.discardTab(tab);
     this.tabs = [];
     this.views = [];
@@ -2804,6 +2937,7 @@ export class EmbeddedBrowser {
 
   /** Closes the surface entirely; used on app shutdown. */
   dispose(): void {
+    this.stopTouchCursorPoller();
     this.closeAllTabs();
     this.host = null;
     this.stage = null;
@@ -2884,11 +3018,23 @@ export class EmbeddedBrowser {
   private placePageSurface(tab: TabRecord, cell: StageRect): StageRect {
     const viewport = this.viewportOf(tab);
     if (!viewport) {
+      /*
+       * Leaving a fixed viewport hands the zoom factor back.
+       *
+       * The fit scale owns `webContents` zoom while a viewport is active. Every
+       * caller that clears a viewport is supposed to reset it, but layout is the
+       * one place that runs for every path — doing it here means a page cannot
+       * stay shrunk at an old fit factor just because one caller forgot. The
+       * page would otherwise report a desktop viewport while rendering at 36%.
+       */
       delete tab.viewportScale;
+      delete tab.fitCell;
+      this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
       return cell;
     }
     const { rect, scale } = viewportFitRect(cell, viewport);
     tab.viewportScale = scale;
+    tab.fitCell = cell;
     tab.view.webContents.setZoomFactor(scale);
     return rect;
   }
@@ -3052,17 +3198,17 @@ export class EmbeddedBrowser {
   /**
    * Records CDP traffic and wakes the page if the sweep put it to sleep.
    *
-   * Awaited by `EmbeddedCdp.send` before the actual command runs, so the first
-   * command of a burst — a screenshot, a click — never lands on a frozen page:
-   * a frozen page suspends JavaScript entirely, and an evaluate against it
-   * would never return. The wake is awaited (not fired and forgotten) so the
-   * ordering holds without relying on CDP pipelining. Everything AI does flows
-   * through the CDP facade, which makes this the single choke point for "the
-   * AI is using this page right now".
+   * Called by `GuestCdp` before every AI-facing command, so the first command
+   * of a burst — a screenshot, a click — never lands on a frozen page: a frozen
+   * page suspends JavaScript entirely, and an evaluate against it would never
+   * return. The wake is awaited (not fired and forgotten) so the ordering holds
+   * without relying on CDP pipelining. `lifecycle()` deliberately bypasses this
+   * hook, or the freeze sweep would keep every page awake by marking its own
+   * freeze as activity.
    */
   private async markCdpActivity(tabId: string): Promise<void> {
     if (!this.options.aiIdleFreeze) return;
-    this.aiActiveUntil.set(tabId, Date.now() + AI_ACTIVE_WINDOW_MS);
+    this.aiActiveUntil.set(tabId, Date.now() + this.sleepGraceMs);
     await this.wakeTab(tabId);
   }
 
@@ -3076,16 +3222,76 @@ export class EmbeddedBrowser {
     } catch {
       // Best-effort: a failed wake is retried by the next CDP command, and
       // navigation paths below do not depend on the lifecycle state.
+    } finally {
+      // The chrome's snowflake follows this flag, and a wake can happen while
+      // the page is on screen — the user clicked its tab.
+      this.sendState();
     }
   }
 
   /**
-   * Freezes parked pages whose AI activity window has lapsed.
+   * Sets a page's background-sleep policy.
    *
-   * Conservative on purpose: pages on stage, loading, crashed, blank, audible,
-   * or with a DevTools panel attached keep running. A page that refuses the
-   * lifecycle command simply stays awake — the feature degrades to "no
-   * sleeping" instead of breaking automation.
+   * `"auto"` restores the default. `"never"` wakes a page that is already
+   * asleep, so the policy is true from the moment it is chosen rather than from
+   * the next command that happens to reach the page.
+   */
+  async setSleepPolicy(tabId: string, policy: "auto" | TabSleepPolicy): Promise<EmbeddedTab> {
+    const tab = this.requireTab(tabId);
+    if (policy === "never") {
+      tab.sleepPolicy = "never";
+      await this.wakeTab(tab.id);
+    } else {
+      delete tab.sleepPolicy;
+    }
+    this.sendState();
+    return this.describe(tab);
+  }
+
+  /**
+   * Mutes or unmutes one page's output.
+   *
+   * `setAudioMuted` only affects the output path: the page's media element,
+   * Web Audio graph and timers keep running, so an AI testing a sound-related
+   * interface sees exactly the same page state with or without this.
+   *
+   * A user click records their intent (`userUnmuted`), which is what stops a
+   * later AI operation from silently re-muting the tab they just unmuted.
+   */
+  setMuted(tabId: string, muted: boolean, options: { byUser?: boolean } = {}): EmbeddedTab {
+    const tab = this.requireTab(tabId);
+    if (muted) tab.muted = true;
+    else delete tab.muted;
+    if (options.byUser) {
+      if (muted) delete tab.userUnmuted;
+      else tab.userUnmuted = true;
+    }
+    const contents = tab.view?.webContents;
+    if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
+    this.sendState();
+    return this.describe(tab);
+  }
+
+  /**
+   * Mutes before an AI page operation, unless the page is already muted or the
+   * person asked to hear it. Idempotent; called once per tool call.
+   */
+  muteForAi(tabId: string): void {
+    const tab = this.requireTab(tabId);
+    if (tab.userUnmuted || tab.muted) return;
+    this.setMuted(tab.id, true);
+  }
+
+  /**
+   * Freezes parked pages whose sleep grace has lapsed.
+   *
+   * `shouldSleepPage` owns the rules; this method only gathers the facts. A
+   * page with a CDP command in flight is never a candidate, and each pass
+   * refreshes its AI window so the grace starts after the command finishes
+   * rather than when it started — a five-minute evaluate must not hand the
+   * sweep a page that is still executing. A page that refuses the lifecycle
+   * command simply stays awake: the feature degrades to "no sleeping" instead
+   * of breaking automation.
    */
   private sweepFrozenCandidates(): void {
     const now = Date.now();
@@ -3097,17 +3303,36 @@ export class EmbeddedBrowser {
       }
     }
     for (const tab of this.tabs) {
-      if (this.stagedTabs.has(tab.id) || this.frozenTabs.has(tab.id)) continue;
       // A page is published before its carrier exists so the renderer can be
       // asked to host it; the sweep runs on a timer and can land in that window.
       const contents = tab.view?.webContents;
       if (!contents || contents.isDestroyed()) continue;
-      if (contents.isLoading() || tab.crashed) continue;
-      if (isBlankTab(tab) || this.devtoolsOpen(tab)) continue;
-      if (contents.isCurrentlyAudible()) continue;
-      if ((this.aiActiveUntil.get(tab.id) ?? 0) > now) continue;
+      // While a command is in flight the page is not idle, whatever the clock
+      // says. Refresh the window so the full grace follows its completion.
+      const busy = tab.cdp.busy();
+      if (busy) this.aiActiveUntil.set(tab.id, now + this.sleepGraceMs);
+      const candidate = {
+        staged: this.stagedTabs.has(tab.id),
+        frozen: this.frozenTabs.has(tab.id),
+        available: true,
+        loading: contents.isLoading(),
+        crashed: tab.crashed,
+        blank: isBlankTab(tab),
+        devtoolsOpen: this.devtoolsOpen(tab),
+        audible: contents.isCurrentlyAudible(),
+        policy: tab.sleepPolicy,
+        aiActiveUntil: this.aiActiveUntil.get(tab.id),
+        busy,
+      };
+      if (!shouldSleepPage(candidate, now)) continue;
       this.frozenTabs.add(tab.id);
-      void tab.cdp.lifecycle("frozen").catch(() => this.frozenTabs.delete(tab.id));
+      void tab.cdp.lifecycle("frozen").then(
+        () => this.sendState(),
+        () => {
+          this.frozenTabs.delete(tab.id);
+          this.sendState();
+        },
+      );
     }
   }
 
@@ -3359,13 +3584,16 @@ export class EmbeddedBrowser {
     profileId?: string;
   } {
     const tab = this.requireTab(tabId);
-    const profileId = this.profileOfInstance(tab.instanceId);
+    const clean = this.cleanInstances.has(tab.instanceId);
+    const profileId =
+      this.profileOfInstance(tab.instanceId) ??
+      (clean || tab.identityId ? undefined : EMBEDDED_DEFAULT_PROFILE_ID);
     return {
       origin: aiOriginOf(tab.url),
       title: tab.title,
       ...(tab.identityId ? { identityId: tab.identityId } : {}),
       ...(tab.siteId ? { siteId: tab.siteId } : {}),
-      ...(this.cleanInstances.has(tab.instanceId) ? { clean: true } : {}),
+      ...(clean ? { clean: true } : {}),
       ...(profileId ? { profileId } : {}),
     };
   }
@@ -4337,18 +4565,47 @@ export class EmbeddedBrowser {
       !before !== !device ||
       (device && before && JSON.stringify(before) !== JSON.stringify(device));
     if (!changed) return;
+    if (options.reapply) {
+      // A fresh document starts with no mouse-to-touch conversion.
+      delete tab.mouseTouchEnabled;
+    } else {
+      // Do not carry the native touch cursor into the next device state; the
+      // poller turns it back on if the pointer is over this page.
+      this.setMouseTouch(tab, false);
+    }
     try {
       if (device) {
         await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
           width: device.width,
           height: device.height,
           deviceScaleFactor: device.dpr,
-          mobile: device.touch,
+          /*
+           * Mobile viewport behaviour is not the touch switch.
+           *
+           * It used to be `device.touch`. Turning touch off on a phone then
+           * switched the metrics override into desktop mode, where the page's
+           * fit-to-cell zoom is applied a second time: a 393×852 iPhone
+           * reported `innerWidth` 427 and `devicePixelRatio` 2.76. The device
+           * is still a phone without touch, and its DPR/UA say so — only a
+           * plain desktop size (the viewport path) is non-mobile.
+           */
+          mobile: device.touch || device.dpr > 1 || Boolean(device.userAgent),
         });
         await tab.cdp.send("Emulation.setTouchEmulationEnabled", {
           enabled: device.touch,
           maxTouchPoints: device.touch ? 5 : 1,
         });
+        /*
+         * Capability is not behaviour.
+         *
+         * `setTouchEmulationEnabled` only raises `maxTouchPoints`: a real mouse
+         * still produces mouse events, so a drag selects text instead of
+         * scrolling and the page never sees a finger. The second command —
+         * mouse-to-touch conversion — is deliberately not sent here: it also
+         * installs Chromium's native touch cursor on the whole window, so the
+         * pointer poller turns it on only while the pointer is over this page.
+         */
+        if (!device.touch) this.setMouseTouch(tab, false);
         if (device.userAgent) {
           await tab.cdp.send("Emulation.setUserAgentOverride", {
             userAgent: device.userAgent,
@@ -4361,6 +4618,9 @@ export class EmbeddedBrowser {
         await tab.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(
           () => undefined,
         );
+        await tab.cdp
+          .send("Emulation.setEmitTouchEventsForMouse", { enabled: false })
+          .catch(() => undefined);
         await tab.cdp.send("Emulation.setUserAgentOverride", { userAgent: "" }).catch(
           () => undefined,
         );
@@ -4372,6 +4632,102 @@ export class EmbeddedBrowser {
     // Pinned while wearing a device: idle release would silently drop all three
     // overrides, and the page would quietly become a desktop browser again.
     this.syncSessionHold(tab);
+    this.syncTouchCursorPoller();
+  }
+
+  /**
+   * Turns mouse-to-touch conversion on or off for one page.
+   *
+   * Chromium's conversion comes with a native touch cursor image. Leaving it
+   * enabled while the pointer is away is what painted that gray dot over the
+   * toolbar and DevTools. The capability (`setTouchEmulationEnabled`) stays on
+   * for the whole document so `maxTouchPoints` never flickers; only the mouse
+   * conversion follows the pointer.
+   */
+  private setMouseTouch(tab: TabRecord, enabled: boolean): void {
+    if (tab.view?.webContents.isDestroyed()) {
+      delete tab.mouseTouchEnabled;
+      return;
+    }
+    // Disabling after a device was cleared still has to reach the page.
+    if (enabled && !tab.device?.touch) return;
+    if (tab.mouseTouchEnabled === enabled) return;
+    if (!enabled && tab.mouseTouchEnabled === undefined) return;
+    tab.mouseTouchEnabled = enabled;
+    void tab.cdp
+      .send("Emulation.setEmitTouchEventsForMouse", { enabled, configuration: "mobile" })
+      .catch(() => {
+        // A page that navigated mid-call has no state to correct. Mark the
+        // command as outstanding in the direction that makes the next tick
+        // retry: an enable retries as "unknown", a disable as "still on".
+        if (tab.mouseTouchEnabled === enabled) {
+          tab.mouseTouchEnabled = enabled ? undefined : true;
+        }
+      });
+  }
+
+  /**
+   * Starts or stops the pointer feed that scopes mouse-to-touch conversion.
+   *
+   * Chromium's conversion installs a native cursor image on the window, so it
+   * must only run while the pointer is actually over a touch page. Main polls
+   * the system pointer, enables conversion for the page under it, and disables
+   * it everywhere else. The interval runs only while a touch page is on stage
+   * and the window has focus.
+   */
+  private syncTouchCursorPoller(): void {
+    const host = this.host;
+    const active =
+      Boolean(host && !host.isDestroyed() && host.isFocused() && !host.isMinimized()) &&
+      Boolean(this.stage) &&
+      this.tabs.some(
+        (tab) => tab.device?.touch && tab.view && !tab.view.webContents.isDestroyed(),
+      );
+    if (!active) {
+      this.stopTouchCursorPoller();
+      return;
+    }
+    if (this.touchCursorTimer) return;
+    this.touchCursorTimer = setInterval(() => this.tickTouchCursor(), 16);
+    this.tickTouchCursor();
+  }
+
+  private stopTouchCursorPoller(): void {
+    if (this.touchCursorTimer) {
+      clearInterval(this.touchCursorTimer);
+      this.touchCursorTimer = undefined;
+    }
+    for (const tab of this.tabs) {
+      if (tab.mouseTouchEnabled) this.setMouseTouch(tab, false);
+    }
+  }
+
+  private tickTouchCursor(): void {
+    const host = this.host;
+    const stage = this.stage;
+    if (
+      !host ||
+      host.isDestroyed() ||
+      !host.isFocused() ||
+      host.isMinimized() ||
+      !stage ||
+      !this.tabs.some(
+        (tab) => tab.device?.touch && tab.view && !tab.view.webContents.isDestroyed(),
+      )
+    ) {
+      this.stopTouchCursorPoller();
+      return;
+    }
+    const point = screen.getCursorScreenPoint();
+    const content = host.getContentBounds();
+    for (const tab of this.tabs) {
+      const inside = Boolean(
+        tab.device?.touch &&
+          this.stagedTabs.has(tab.id) &&
+          pointerInsidePage(point, content, stage, tab.view.getBounds()),
+      );
+      if (tab.device?.touch) this.setMouseTouch(tab, inside);
+    }
   }
 
   /**
@@ -4683,15 +5039,32 @@ export class EmbeddedBrowser {
    * that already exists only brings it back to the dock — it is never rebuilt,
    * so console history survives toggling.
    */
-  openDevTools(tabId: string): void {
+  async openDevTools(tabId: string): Promise<void> {
     const tab = this.requireTab(tabId);
     const contents = tab.view.webContents;
     if (contents.isDestroyed()) return;
+    // A frozen page must not be inspected before its script is running again:
+    // the first evaluate from the panel would otherwise never return.
+    this.wakeTab(tabId);
     if (tab.devtools) {
       this.placeDevTools(tab);
       this.emitState();
       return;
     }
+    /*
+     * Prime the language before the real front-end exists.
+     *
+     * The preference lives in the `devtools://` session's localStorage, so it
+     * has to be written by some front-end document. Doing that in the view that
+     * will host the tools was the obvious shortcut and it broke the panel: the
+     * front-end initialised once without a host, and `setDevToolsWebContents`
+     * afterwards left it a shell — toolbar and tabs drawn, Elements empty.
+     * A throwaway view writes the same storage without ever initialising the
+     * front-end that is about to be attached.
+     */
+    await this.primeDevToolsLanguage(contents);
+    // The page may have been closed while the priming document loaded.
+    if (!this.tabs.includes(tab) || contents.isDestroyed()) return;
     /*
      * The panel gets its own session and no preload of ours.
      *
@@ -4711,6 +5084,20 @@ export class EmbeddedBrowser {
       },
     });
     view.setBackgroundColor("#101317");
+    /*
+     * DevTools gets an explicit default cursor too.
+     *
+     * A touch page hides the system pointer while it is under it; DevTools is a
+     * separate native surface and its own `auto` subtree can keep the last
+     * cursor Chromium applied when the pointer crosses the split. A concrete
+     * default on its root makes the crossing hand the arrow back. Controls that
+     * name their own cursor (links, resize handles) still win.
+     */
+    view.webContents.on("did-finish-load", () => {
+      void view.webContents
+        .insertCSS("html, body { cursor: default; }", { cssOrigin: "user" })
+        .catch(() => undefined);
+    });
     const generation = (tab.devtoolsGeneration ?? 0) + 1;
     tab.devtoolsGeneration = generation;
     tab.devtools = { view, width: EMBEDDED_DEVTOOLS_DEFAULT, generation };
@@ -4730,6 +5117,22 @@ export class EmbeddedBrowser {
     contents.openDevTools({ mode: "detach" });
     this.watchDevToolsKeys(tab);
     this.emitState();
+  }
+
+  /**
+   * Puts the DevTools language preference in place before the visible panel
+   * opens. The write itself lives in `devtools-language.ts`: it needs a real,
+   * host-bound front-end, so it runs in a throwaway view rather than in the one
+   * that becomes the panel.
+   */
+  private async primeDevToolsLanguage(contents: WebContents): Promise<void> {
+    if (this.devtoolsLanguagePrimed) return;
+    const host = this.host;
+    if (!host || host.isDestroyed()) return;
+    const language = app.getLocale().toLowerCase().startsWith("zh") ? "zh" : "en";
+    if (await primeDevToolsFrontendLanguage({ host, contents, language })) {
+      this.devtoolsLanguagePrimed = true;
+    }
   }
 
   /**
@@ -4838,15 +5241,7 @@ export class EmbeddedBrowser {
      * the fit inside the split area is.
      */
     const left = this.splitWidth(rect, devtools.width);
-    const area = { ...rect, width: left };
-    const placed = this.viewportOf(tab)
-      ? viewportFitRect(area, this.viewportOf(tab)!)
-      : { rect: area, scale: 1 };
-    if (this.viewportOf(tab)) {
-      tab.viewportScale = placed.scale;
-      tab.view.webContents.setZoomFactor(placed.scale);
-    }
-    tab.view.setBounds(placed.rect);
+    this.fitPageBesidePanel(tab, rect, left);
     /*
      * Only the native front-end owns this rectangle, and only while it is the
      * tab showing.
@@ -4896,6 +5291,47 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Fits a page into the width left beside its panel.
+   *
+   * Shared by the docked and the parked states. `parkDevTools` used to write the
+   * raw split rectangle, which ignored a fixed viewport: opening any floating
+   * layer (the address bar's suggestions, a menu) parked the panel and grew the
+   * page to the split width while emulation still laid out at 390px. The page
+   * then sat at the top-left with the rest of its node empty, and the touch
+   * cursor covered that empty area too.
+   */
+  private fitPageBesidePanel(tab: TabRecord, cell: StageRect, left: number): void {
+    const area = { ...cell, width: left };
+    const viewport = this.viewportOf(tab);
+    if (!viewport) {
+      delete tab.viewportScale;
+      delete tab.fitCell;
+      tab.view.setBounds(area);
+      return;
+    }
+    /*
+     * A fixed page keeps a margin of host space around it.
+     *
+     * The frame's resize handles sit just outside the page, but a handle that
+     * overlaps the guest loses the pointer (and its cursor) to the page — and
+     * under touch emulation the page paints a dot there. The margin is what
+     * makes the edge of the viewport draggable, instead of just looking like an
+     * edge. Adaptive pages have no frame, so they still fill their box.
+     */
+    const framed = {
+      x: area.x + EMBEDDED_PAGE_FRAME_GUTTER,
+      y: area.y + EMBEDDED_PAGE_FRAME_GUTTER,
+      width: Math.max(1, area.width - EMBEDDED_PAGE_FRAME_GUTTER * 2),
+      height: Math.max(1, area.height - EMBEDDED_PAGE_FRAME_GUTTER * 2),
+    };
+    const { rect, scale } = viewportFitRect(framed, viewport);
+    tab.viewportScale = scale;
+    tab.fitCell = framed;
+    tab.view.webContents.setZoomFactor(scale);
+    tab.view.setBounds(rect);
+  }
+
+  /**
    * Keeps a panel out of sight without tearing it down.
    *
    * `holdPage` keeps the page at its docked width instead of letting it grow
@@ -4912,7 +5348,7 @@ export class EmbeddedBrowser {
     if (!holdPage) return;
     const rect = this.cellOf(tab);
     if (!rect) return;
-    tab.view.setBounds({ ...rect, width: this.splitWidth(rect, devtools.width) });
+    this.fitPageBesidePanel(tab, rect, this.splitWidth(rect, devtools.width));
   }
 
   /**

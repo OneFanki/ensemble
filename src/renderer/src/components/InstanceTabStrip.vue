@@ -13,7 +13,7 @@
  * vocabulary for it.
  */
 import type { EmbeddedTab } from "@shared/embedded";
-import { Minimize2, Plus, X } from "lucide-vue-next";
+import { Minimize2, Pin, Plus, Snowflake, Volume2, VolumeX, X } from "lucide-vue-next";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -67,6 +67,19 @@ const pages = computed<EmbeddedTab[]>(() => {
   if (!props.split) return allPages.value;
   return allPages.value.filter((page) => page.id === props.currentId);
 });
+
+/** The sleep state a pill should show, if any; see `EmbeddedTab.sleeping`. */
+function sleepStateOf(page: EmbeddedTab): "sleeping" | "never" | undefined {
+  if (page.sleeping) return "sleeping";
+  return page.sleepPolicy === "never" ? "never" : undefined;
+}
+
+/** URL first, then the reason the icon is not the site's favicon. */
+function pageTitle(page: EmbeddedTab): string {
+  const state = sleepStateOf(page);
+  if (!state) return page.url;
+  return `${page.url}\n${state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep")}`;
+}
 
 /**
  * A page can be dragged onto another cell.
@@ -123,7 +136,8 @@ function addPage(): void {
       role="tab"
       :aria-selected="page.id === currentId"
       :data-tab-id="page.id"
-      :title="page.url"
+      :data-sleep="sleepStateOf(page)"
+      :title="pageTitle(page)"
       draggable="true"
       @click.stop="emit('select', page.id)"
       @mousedown.stop="onPillMouseDown"
@@ -132,14 +146,42 @@ function addPage(): void {
       @dragend="onDragEnd"
       @contextmenu.prevent.stop="emit('menu', page, $event)"
     >
+      <!-- The favicon slot becomes the sleep indicator: a frozen page's site
+           icon is not the fact a reader needs there. -->
+      <Snowflake
+        v-if="page.sleeping"
+        :size="11"
+        class="slot-tab-fav slot-tab-sleep"
+        :aria-label="t('app.tabSleeping')"
+      />
       <img
-        v-if="page.favicon"
+        v-else-if="page.favicon"
         class="slot-tab-fav"
         :src="page.favicon"
         alt=""
         draggable="false"
       />
       <span class="slot-tab-label">{{ store.titleOf(page) }}</span>
+      <Pin
+        v-if="!page.sleeping && page.sleepPolicy === 'never'"
+        :size="9"
+        class="slot-tab-keep"
+        :aria-label="t('app.tabNeverSleep')"
+      />
+      <button
+        v-if="page.audible || page.muted"
+        type="button"
+        class="slot-tab-audio"
+        :class="{ muted: page.muted }"
+        :data-audio="page.muted ? 'muted' : 'audible'"
+        :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+        v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+        @click.stop="void store.setMuted(page.id, !page.muted)"
+        @mousedown.stop
+      >
+        <VolumeX v-if="page.muted" :size="9" />
+        <Volume2 v-else :size="9" />
+      </button>
       <button
         type="button"
         class="slot-tab-close"
@@ -258,8 +300,9 @@ function addPage(): void {
   text-overflow: ellipsis;
 }
 
-/* The close affordance appears on hover and on the current tab: always-on
-   crosses in a 20px pill would eat the title. */
+/* Always present, quiet at rest and full strength under the pointer. It used
+   to appear only on hover or on the current pill, so closing several pages
+   meant hovering each one first. */
 .slot-tab-close {
   display: grid;
   place-items: center;
@@ -267,13 +310,43 @@ function addPage(): void {
   height: 14px;
   border-radius: 3px;
   color: var(--faint);
-  opacity: 0;
+  opacity: 0.6;
   flex: 0 0 14px;
 }
 
 .slot-tab:hover .slot-tab-close,
 .slot-tab.current .slot-tab-close {
   opacity: 1;
+}
+
+.slot-tab-sleep {
+  color: var(--blue);
+}
+
+.slot-tab-audio {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--dim);
+  flex: 0 0 14px;
+}
+
+.slot-tab-audio.muted {
+  color: var(--faint);
+}
+
+.slot-tab-audio:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.slot-tab-keep {
+  flex: 0 0 auto;
+  color: var(--accent-text);
 }
 
 .slot-tab-close:hover {

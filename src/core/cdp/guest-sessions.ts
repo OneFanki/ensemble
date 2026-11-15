@@ -136,6 +136,18 @@ export class GuestSessions {
   }
 
   /**
+   * True while at least one command is waiting for its reply.
+   *
+   * The count is the same one the teardown handshake drains, so it covers every
+   * command that reached the session — including a long `evaluate` — rather
+   * than only the last one that started.
+   */
+  busy(guestId: string): boolean {
+    const lease = this.leases.get(guestId);
+    return Boolean(lease && !lease.closed && lease.pending > 0);
+  }
+
+  /**
    * Keeps the session attached until {@link unpin}, overriding idle release.
    *
    * For a page that emits events on its own schedule: with nothing attached,

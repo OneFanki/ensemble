@@ -1,6 +1,8 @@
 import {
   embeddedViewRect,
   normalizeViewportSize,
+  pointerInsidePage,
+  resizePageToPointer,
   viewportFitRect,
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
@@ -109,5 +111,124 @@ describe("viewport fit rect", () => {
     const { rect } = viewportFitRect(pageCell, { width: 1920, height: 1080 });
     expect(rect.y).toBeGreaterThanOrEqual(pageCell.y);
     expect(rect.y + rect.height).toBeLessThanOrEqual(pageCell.y + pageCell.height);
+  });
+});
+
+/**
+ * Touch emulation is only allowed while the pointer is over a touch page, so
+ * this test is the boundary between the page's own cursor and the rest of the
+ * window's. The page rect is stage-relative while the pointer is in screen
+ * space, which is one origin too many to leave untested.
+ */
+describe("pointer inside a page", () => {
+  const stage: StageRect = { x: 100, y: 50, width: 800, height: 600 };
+  const page: StageRect = { x: 200, y: 30, width: 300, height: 500 };
+  const contentOrigin = { x: 10, y: 20 };
+  const at = (windowX: number, windowY: number) => ({
+    x: contentOrigin.x + windowX,
+    y: contentOrigin.y + windowY,
+  });
+
+  it("accepts a pointer in the middle of the page", () => {
+    expect(pointerInsidePage(at(450, 300), contentOrigin, stage, page)).toBe(true);
+  });
+
+  it("includes the near edges and excludes the far ones", () => {
+    expect(pointerInsidePage(at(300, 80), contentOrigin, stage, page)).toBe(true);
+    expect(pointerInsidePage(at(599, 579), contentOrigin, stage, page)).toBe(true);
+    // Half-open on the far edges: a pointer on the boundary belongs to the
+    // next surface, not to this page.
+    expect(pointerInsidePage(at(600, 300), contentOrigin, stage, page)).toBe(false);
+    expect(pointerInsidePage(at(400, 580), contentOrigin, stage, page)).toBe(false);
+    expect(pointerInsidePage(at(299, 80), contentOrigin, stage, page)).toBe(false);
+    expect(pointerInsidePage(at(300, 79), contentOrigin, stage, page)).toBe(false);
+  });
+
+  it("accounts for the window and stage origins", () => {
+    // The same screen point is outside once the content area moves right.
+    const pointer = at(350, 100);
+    expect(pointerInsidePage(pointer, contentOrigin, stage, page)).toBe(true);
+    expect(pointerInsidePage(pointer, { x: 80, y: 20 }, stage, page)).toBe(false);
+  });
+
+  it("adds the stage origin to a page rect that starts at the stage's corner", () => {
+    const corner: StageRect = { x: 0, y: 0, width: 400, height: 300 };
+    expect(pointerInsidePage(at(stage.x + 10, stage.y + 10), contentOrigin, stage, corner)).toBe(true);
+    expect(pointerInsidePage(at(stage.x - 1, stage.y + 10), contentOrigin, stage, corner)).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * Dragging a page's edge must move that edge, not merely change a number.
+ *
+ * The page is centred in its cell and may be fitted down, so a naive
+ * `width + delta` breaks twice: the edge moves at half the pointer's speed, and
+ * once the page outgrows the cell the fit scale drops — the page shrinks while
+ * the pointer keeps moving outwards, and the frame no longer sits on it.
+ */
+describe("page edge resize", () => {
+  const cell: StageRect = { x: 0, y: 0, width: 1320, height: 784 };
+
+  const gestureFor = (size: { width: number; height: number }) => {
+    const fitted = viewportFitRect(cell, size);
+    return {
+      size,
+      rect: fitted.rect,
+      cell,
+      // The handle sits in the gutter, a few pixels outside the visible edge.
+      pointer: { x: fitted.rect.x + fitted.rect.width + 3, y: fitted.rect.y + fitted.rect.height / 2 },
+    };
+  };
+
+  it("keeps the dragged edge under the pointer while the page still fits", () => {
+    const gesture = gestureFor({ width: 900, height: 600 });
+    const step = resizePageToPointer(gesture, "e", { ...gesture.pointer, x: gesture.pointer.x + 60 });
+
+    expect(step.width).toBe(1020);
+    expect(step.height).toBe(600);
+    expect(step.scale).toBe(1);
+    // The pointer moved 60px, so the page's right edge moved 60px with it.
+    expect(step.rect.x + step.rect.width).toBe(1170);
+  });
+
+  it("caps at the cell instead of shrinking the page when the drag outgrows it", () => {
+    // 1300 of 1320px: the next 20px of width would make the fit scale drop.
+    const gesture = gestureFor({ width: 1300, height: 600 });
+    const step = resizePageToPointer(gesture, "e", { ...gesture.pointer, x: gesture.pointer.x + 60 });
+
+    expect(step.width).toBe(1320);
+    // The height that was not dragged stays exactly where it was. Before the
+    // cap it fell to ~558 because the whole page had to be fitted again.
+    expect(step.height).toBe(600);
+    expect(step.scale).toBe(1);
+    expect(step.rect.height).toBe(600);
+  });
+
+  it("does not invent height when a tall page is dragged down", () => {
+    const gesture = gestureFor({ width: 393, height: 852 });
+    const step = resizePageToPointer(gesture, "s", { ...gesture.pointer, y: gesture.pointer.y + 40 });
+
+    expect(step.height).toBe(852);
+    expect(step.width).toBe(393);
+    expect(step.scale).toBeCloseTo(784 / 852, 6);
+    expect(step.rect.height).toBe(784);
+  });
+
+  it("reports the larger scale when shrinking lets the page fill the cell", () => {
+    const gesture = gestureFor({ width: 660, height: 1000 });
+    const start = viewportFitRect(cell, gesture.size);
+    expect(start.scale).toBeCloseTo(0.784, 6);
+
+    const step = resizePageToPointer(gesture, "s", { ...gesture.pointer, y: gesture.pointer.y - 100 });
+
+    expect(step.width).toBe(660);
+    expect(step.height).toBe(745);
+    expect(step.scale).toBe(1);
+    // The frame follows the page all the way to the cell width, rather than
+    // staying at the pre-drag 517px-wide rect.
+    expect(step.rect.width).toBe(660);
+    expect(step.rect.height).toBe(745);
   });
 });

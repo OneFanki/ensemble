@@ -1,454 +1,485 @@
 <script setup lang="ts">
-import type { EmbeddedDevice, EmbeddedViewport } from "@shared/embedded";
 import {
-  DEVICE_DPR_MAX,
-  DEVICE_DPR_MIN,
+  DESKTOP_RESOLUTIONS,
   DEVICE_PRESETS,
+  type EmbeddedDevice,
+  type EmbeddedViewport,
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
   VIEWPORT_MIN,
-  VIEWPORT_PRESETS,
 } from "@shared/embedded";
-import { Monitor, Smartphone, Tablet } from "lucide-vue-next";
+import { ArrowLeftRight, Monitor, Smartphone } from "lucide-vue-next";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import AppButton from "./ui/AppButton.vue";
-import Checkbox from "./ui/Checkbox.vue";
 import FormField from "./ui/FormField.vue";
+import IconButton from "./ui/IconButton.vue";
 import TextField from "./ui/TextField.vue";
 
 /**
- * Device emulation, docked where DevTools would be.
+ * Two kinds of emulation, not a pile of independent switches.
  *
- * Two kinds of choice on one page, and the separation is the point:
- *
- * - **Size only** pins the layout viewport. The page still believes it is on a
- *   desktop: no touch, desktop UA, `pointer: fine`. Useful for checking a 768px
- *   layout without touching the window.
- * - **Device** adds what actually makes a site serve its mobile UI: touch, a
- *   device pixel ratio and a mobile UA.
- *
- * Picking a size while a device is on replaces the device rather than layering
- * under it — "keep the size, stop pretending to be a phone" — because that is
- * the direction people debug in. Clearing a device keeps its size for the same
- * reason; only "自适应" goes back to filling the cell.
+ * Desktop mode is geometry only: a plain viewport at a chosen size. Mobile mode
+ * is an identity: a device preset applies size, DPR, touch and UA in one click,
+ * and a custom size keeps whichever mobile profile was last chosen. Dragging the
+ * page's edge or typing a width/height moves the selection to Custom, so the
+ * list always names what the page is actually wearing.
  */
 const props = defineProps<{
   /** Device currently applied to this page, if any. */
   device?: EmbeddedDevice;
-  /** Effective viewport (from a device, a size choice, or the workspace default). */
+  /** Plain viewport applied to this page, if any. */
   viewport?: EmbeddedViewport | null;
+  /**
+   * The page's own viewport choice.
+   *
+   * Needed to tell "follow the workspace default" from "this page is adaptive":
+   * both report no effective viewport, but only the second one should stay
+   * adaptive when the page returns from mobile mode.
+   */
+  viewportOverride?: EmbeddedViewport | null;
 }>();
 
 const emit = defineEmits<{
-  /** `null` clears; a size-only choice passes an `EmbeddedDevice` without touch. */
   device: [device: EmbeddedDevice | null];
-  /** Size only, with no device semantics. */
-  viewport: [mode: { width: number; height: number } | "adaptive" | "inherit"];
+  viewport: [mode: EmbeddedViewport | "adaptive" | "inherit"];
 }>();
 
 const { t } = useI18n();
 
+type Mode = "desktop" | "mobile";
+
+const FALLBACK = {
+  desktop: { width: 1280, height: 720 },
+  mobile: { width: DEVICE_PRESETS[0]?.width ?? 393, height: DEVICE_PRESETS[0]?.height ?? 852 },
+};
+
+const DEFAULT_MOBILE: EmbeddedDevice = DEVICE_PRESETS[0] ?? {
+  width: 393,
+  height: 852,
+  dpr: 3,
+  touch: true,
+};
+
+const currentSize = computed(() => props.device ?? props.viewport ?? null);
+const mode = computed<Mode>(() => (props.device ? "mobile" : "desktop"));
+
+const width = ref(currentSize.value?.width ?? FALLBACK.desktop.width);
+const height = ref(currentSize.value?.height ?? FALLBACK.desktop.height);
+const widthText = ref(String(width.value));
+const heightText = ref(String(height.value));
+
+/** Set when the user picked Custom or dragged an edge away from a preset. */
+const forceCustom = ref(false);
+
+/** Last mobile profile; a custom size keeps its DPR and UA. */
+const lastMobile = ref<EmbeddedDevice>(mobilePresetOf(props.device) ?? DEFAULT_MOBILE);
+
 /**
- * Which size is in effect, for showing a tick.
+ * What desktop mode was wearing before the page became a phone.
  *
- * A device carries its own size, so a plain viewport choice can never own the
- * size while a device is on. The custom fields edit whichever one is live, which
- * keeps the box showing the number the page is actually using.
+ * A mode is a whole preset, not just a size. Carrying the phone's 393×852 into
+ * desktop mode left the panel claiming a custom desktop viewport of mobile
+ * dimensions; switching back has to restore the desktop answer instead — a
+ * resolution, an explicit adaptive page, or following the workspace default.
  */
-const width = ref(props.viewport?.width ?? 0);
-const height = ref(props.viewport?.height ?? 0);
-const dpr = ref(props.device?.dpr ?? 1);
-const touch = ref(props.device?.touch ?? true);
-const userAgent = ref(props.device?.userAgent ?? "");
+type DesktopChoice = EmbeddedViewport | "adaptive" | "inherit";
+
+function desktopChoice(): DesktopChoice {
+  const override = props.viewportOverride;
+  if (override === undefined) return "inherit";
+  if (override === null) return "adaptive";
+  return { width: override.width, height: override.height };
+}
+
+const lastDesktop = ref<DesktopChoice>(desktopChoice());
 
 watch(
-  () => [props.viewport?.width, props.viewport?.height, props.device] as const,
+  () => [props.device, props.viewportOverride] as const,
   () => {
-    width.value = props.viewport?.width ?? 0;
-    height.value = props.viewport?.height ?? 0;
-    dpr.value = props.device?.dpr ?? 1;
-    touch.value = props.device?.touch ?? true;
-    userAgent.value = props.device?.userAgent ?? "";
+    // Remember only what desktop mode itself is wearing. While a device is
+    // applied the viewport override is stale, and overwriting the memory with
+    // the phone's size would bring the bug straight back.
+    if (!props.device) lastDesktop.value = desktopChoice();
   },
+  { deep: true },
 );
 
-const valid = computed(() => {
-  const ok = (value: number, max: number) =>
-    Number.isInteger(value) && value >= VIEWPORT_MIN && value <= max;
-  return ok(width.value, VIEWPORT_MAX_WIDTH) && ok(height.value, VIEWPORT_MAX_HEIGHT);
+function mobilePresetOf(device?: EmbeddedDevice): EmbeddedDevice | undefined {
+  if (!device?.name) return undefined;
+  return DEVICE_PRESETS.find((preset) => preset.name === device.name);
+}
+
+function setSize(size: { width: number; height: number }): void {
+  width.value = size.width;
+  height.value = size.height;
+  widthText.value = String(size.width);
+  heightText.value = String(size.height);
+}
+
+function syncFromPage(): void {
+  const size = currentSize.value;
+  if (size) setSize(size);
+  const preset = mobilePresetOf(props.device);
+  if (preset) lastMobile.value = { ...preset };
+}
+
+syncFromPage();
+watch(() => [props.device, props.viewport] as const, syncFromPage, { deep: true });
+
+const activeMobileName = computed(() =>
+  forceCustom.value ? null : (mobilePresetOf(props.device)?.name ?? null),
+);
+
+const activeDesktopSize = computed(() => {
+  if (forceCustom.value) return null;
+  const size = props.viewport;
+  if (!size) return null;
+  const row = DESKTOP_RESOLUTIONS.find(
+    (item) => item.width === size.width && item.height === size.height,
+  );
+  return row ? `${row.width}x${row.height}` : null;
 });
 
-function clampSize(value: unknown, max: number): number {
-  const number = Math.round(Number(value));
-  if (!Number.isFinite(number)) return VIEWPORT_MIN;
-  return Math.min(max, Math.max(VIEWPORT_MIN, number));
-}
+const isCustom = computed(() => {
+  if (forceCustom.value) return true;
+  if (!currentSize.value) return false;
+  return mode.value === "mobile" ? !activeMobileName.value : !activeDesktopSize.value;
+});
 
-/** Applies the fields as a size-only viewport. */
-function applyViewport(): void {
-  if (!valid.value) return;
-  emit("viewport", { width: width.value, height: height.value });
-}
-
-/** Applies the fields as a device: same size, plus the phone-shaped identity. */
-function applyDevice(): void {
-  if (!valid.value) return;
+function applyMobile(name?: string): void {
+  const profile = name
+    ? (DEVICE_PRESETS.find((preset) => preset.name === name) ?? lastMobile.value)
+    : lastMobile.value;
   emit("device", {
     width: width.value,
     height: height.value,
-    dpr: Math.min(DEVICE_DPR_MAX, Math.max(DEVICE_DPR_MIN, Number(dpr.value) || 1)),
-    touch: touch.value,
-    ...(userAgent.value.trim() ? { userAgent: userAgent.value.trim() } : {}),
+    dpr: profile.dpr,
+    touch: true,
+    ...(profile.userAgent ? { userAgent: profile.userAgent } : {}),
+    ...(name ? { name } : {}),
   });
 }
 
-/*
- * Drag to resize.
- *
- * The handle lives on a preview box in this panel, not on the page's own edge.
- * On the page it would be indistinguishable from the stage divider that resizes
- * the *cell*, and dragging there would sometimes move a split instead of a
- * viewport. A dedicated box has one meaning.
- *
- * The mapping is "one preview pixel = one CSS pixel", so the number under the
- * handle tracks the pointer rather than some scale factor the user has to guess.
- */
-const dragOrigin = ref<{ x: number; y: number; width: number; height: number } | null>(null);
-
-function startDrag(event: PointerEvent): void {
-  event.preventDefault();
-  dragOrigin.value = {
-    x: event.clientX,
-    y: event.clientY,
-    width: width.value,
-    height: height.value,
-  };
-  (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
+function applyDesktop(): void {
+  emit("viewport", { width: width.value, height: height.value });
 }
 
-function onDrag(event: PointerEvent): void {
-  const origin = dragOrigin.value;
-  if (!origin) return;
-  width.value = clampSize(origin.width + (event.clientX - origin.x), VIEWPORT_MAX_WIDTH);
-  height.value = clampSize(origin.height + (event.clientY - origin.y), VIEWPORT_MAX_HEIGHT);
+function applyCurrent(): void {
+  if (mode.value === "mobile") {
+    applyMobile(isCustom.value ? undefined : (activeMobileName.value ?? undefined));
+  } else {
+    applyDesktop();
+  }
 }
 
-function endDrag(event: PointerEvent): void {
-  if (!dragOrigin.value) return;
-  dragOrigin.value = null;
-  (event.target as HTMLElement).releasePointerCapture?.(event.pointerId);
-  // Commit once at the end: applying on every pointer move would round-trip the
-  // whole layout through the main process dozens of times per second.
-  if (props.device) applyDevice();
-  else applyViewport();
+/* --- Mode ------------------------------------------------------------- */
+
+function setMode(next: Mode): void {
+  if (next === mode.value) return;
+  forceCustom.value = false;
+  if (next === "mobile") {
+    const preset = mobilePresetOf(props.device) ?? lastMobile.value;
+    lastMobile.value = { ...preset };
+    setSize(preset);
+    emit("device", { ...preset });
+    return;
+  }
+  // Desktop mode is restored, not derived from the phone that is on screen.
+  const choice = lastDesktop.value;
+  if (typeof choice === "string") {
+    emit("viewport", choice);
+    return;
+  }
+  setSize(choice);
+  emit("viewport", { width: choice.width, height: choice.height });
 }
+
+/* --- Resolution rows --------------------------------------------------- */
 
 function pickDevice(preset: EmbeddedDevice): void {
+  forceCustom.value = false;
+  lastMobile.value = { ...preset };
+  setSize(preset);
   emit("device", { ...preset });
 }
 
-function pickViewport(preset: EmbeddedViewport): void {
-  emit("viewport", { width: preset.width, height: preset.height });
+function pickDesktop(size: EmbeddedViewport): void {
+  forceCustom.value = false;
+  setSize(size);
+  emit("viewport", { width: size.width, height: size.height });
 }
 
-function iconFor(preset: EmbeddedDevice) {
-  return preset.width >= 700 ? Tablet : Smartphone;
+function pickCustom(): void {
+  forceCustom.value = true;
+  if (!currentSize.value) setSize(mode.value === "mobile" ? FALLBACK.mobile : FALLBACK.desktop);
+  applyCurrent();
+}
+
+function resetAdaptive(): void {
+  forceCustom.value = false;
+  emit("viewport", "adaptive");
+}
+
+/* --- The custom fields ------------------------------------------------- */
+
+function clampSize(value: number, max: number): number {
+  if (!Number.isFinite(value)) return VIEWPORT_MIN;
+  return Math.min(max, Math.max(VIEWPORT_MIN, Math.round(value)));
+}
+
+function editSize(which: "width" | "height", value: string): void {
+  const digits = value.replace(/\D/g, "").slice(0, 4);
+  const number = Number(digits);
+  if (which === "width") {
+    widthText.value = digits;
+    if (digits && number >= VIEWPORT_MIN && number <= VIEWPORT_MAX_WIDTH) width.value = number;
+  } else {
+    heightText.value = digits;
+    if (digits && number >= VIEWPORT_MIN && number <= VIEWPORT_MAX_HEIGHT) height.value = number;
+  }
+}
+
+function commitSize(which: "width" | "height"): void {
+  const text = which === "width" ? widthText.value : heightText.value;
+  const current = which === "width" ? width.value : height.value;
+  const parsed = Number(text);
+  const next = clampSize(parsed, which === "width" ? VIEWPORT_MAX_WIDTH : VIEWPORT_MAX_HEIGHT);
+  if (!text || !Number.isFinite(parsed)) {
+    if (which === "width") widthText.value = String(current);
+    else heightText.value = String(current);
+    return;
+  }
+  if (which === "width") {
+    width.value = next;
+    widthText.value = String(next);
+  } else {
+    height.value = next;
+    heightText.value = String(next);
+  }
+  forceCustom.value = true;
+  applyCurrent();
+}
+
+function swapOrientation(): void {
+  const nextWidth = height.value;
+  const nextHeight = width.value;
+  setSize({ width: nextWidth, height: nextHeight });
+  if (mode.value === "mobile" && activeMobileName.value && !forceCustom.value) {
+    applyMobile(activeMobileName.value);
+    return;
+  }
+  forceCustom.value = true;
+  applyCurrent();
 }
 </script>
 
 <template>
   <div class="device-panel" data-device-panel>
-    <div class="device-layout">
-      <div class="device-body">
-        <!-- Drag box. The only place a size can be dragged, see startDrag. -->
-        <div class="preview">
-          <div class="preview-frame">
-            <div class="preview-size mono">{{ width }} × {{ height }}</div>
-            <div
-              class="preview-grip"
-              data-device-grip
-              @pointerdown="startDrag"
-              @pointermove="onDrag"
-              @pointerup="endDrag"
-              @pointercancel="endDrag"
-            ></div>
-          </div>
-          <p class="preview-hint">{{ t("app.deviceDragHint") }}</p>
-        </div>
-
-        <div class="device-fields">
-          <div class="field-row">
-            <FormField plain :label="t('app.deviceWidth')">
-              <TextField
-                mono
-                type="number"
-                :min="VIEWPORT_MIN"
-                :max="VIEWPORT_MAX_WIDTH"
-                :model-value="width"
-                data-device-width
-                @change="width = clampSize(($event.target as HTMLInputElement).value, VIEWPORT_MAX_WIDTH)"
-              />
-            </FormField>
-            <FormField plain :label="t('app.deviceHeight')">
-              <TextField
-                mono
-                type="number"
-                :min="VIEWPORT_MIN"
-                :max="VIEWPORT_MAX_HEIGHT"
-                :model-value="height"
-                data-device-height
-                @change="height = clampSize(($event.target as HTMLInputElement).value, VIEWPORT_MAX_HEIGHT)"
-              />
-            </FormField>
-          </div>
-
-          <div class="field-row">
-            <FormField plain :label="t('app.deviceDpr')">
-              <TextField
-                mono
-                type="number"
-                :min="DEVICE_DPR_MIN"
-                :max="DEVICE_DPR_MAX"
-                step="0.1"
-                v-model.number="dpr"
-                data-device-dpr
-              />
-            </FormField>
-            <Checkbox v-model="touch" data-device-touch>{{ t("app.deviceTouch") }}</Checkbox>
-          </div>
-
-          <FormField plain :label="t('app.deviceUa')">
-            <TextField v-model="userAgent" mono data-device-ua />
-          </FormField>
-
-          <div class="actions">
-            <AppButton variant="primary" data-device-apply @click="applyDevice">
-              {{ t("app.deviceApply") }}
-            </AppButton>
-            <AppButton data-device-size-only @click="applyViewport">
-              {{ t("app.deviceSizeOnly") }}
-            </AppButton>
-            <AppButton v-if="device" variant="ghost" data-device-clear @click="emit('device', null)">
-              {{ t("app.deviceClear") }}
-            </AppButton>
-          </div>
-        </div>
-      </div>
-
-      <div class="device-lists">
-        <section class="list-block">
-          <p class="list-title">{{ t("app.devicePresets") }}</p>
-          <button
-            v-for="preset in DEVICE_PRESETS"
-            :key="preset.name"
-            type="button"
-            class="list-row"
-            :class="{ active: device?.name === preset.name }"
-            :data-device-preset="preset.name"
-            @click="pickDevice(preset)"
-          >
-            <component :is="iconFor(preset)" :size="13" />
-            <span class="row-name">{{ preset.name }}</span>
-            <span class="row-meta mono">{{ preset.width }}×{{ preset.height }}</span>
-          </button>
-        </section>
-
-        <section class="list-block">
-          <p class="list-title">{{ t("app.deviceViewports") }}</p>
-          <button
-            type="button"
-            class="list-row"
-            :class="{ active: !device && !viewport }"
-            data-device-adaptive
-            @click="emit('viewport', 'adaptive')"
-          >
-            <Monitor :size="13" />
-            <span class="row-name">{{ t("app.viewportGlobalOff") }}</span>
-          </button>
-          <button
-            v-for="preset in VIEWPORT_PRESETS"
-            :key="preset.name"
-            type="button"
-            class="list-row"
-            :class="{
-              active:
-                !device && viewport?.width === preset.width && viewport?.height === preset.height,
-            }"
-            :data-viewport-preset="preset.name"
-            @click="pickViewport(preset)"
-          >
-            <Monitor :size="13" />
-            <span class="row-name mono">{{ preset.name }}</span>
-          </button>
-        </section>
-      </div>
+    <div class="mode-switch" role="tablist">
+      <button
+        type="button"
+        class="mode"
+        :class="{ active: mode === 'desktop' }"
+        role="tab"
+        :aria-selected="mode === 'desktop'"
+        data-device-mode="desktop"
+        @click="setMode('desktop')"
+      >
+        <Monitor :size="12" />
+        {{ t("app.deviceDesktop") }}
+      </button>
+      <button
+        type="button"
+        class="mode"
+        :class="{ active: mode === 'mobile' }"
+        role="tab"
+        :aria-selected="mode === 'mobile'"
+        data-device-mode="mobile"
+        @click="setMode('mobile')"
+      >
+        <Smartphone :size="12" />
+        {{ t("app.deviceMobile") }}
+      </button>
     </div>
+
+    <section class="resolutions">
+      <div class="section-head">
+        <p class="section-title">{{ t("app.deviceResolution") }}</p>
+        <IconButton
+          v-if="currentSize"
+          data-device-swap
+          :ariaLabel="t('app.deviceSwap')"
+          @click="swapOrientation"
+        >
+          <ArrowLeftRight :size="12" />
+        </IconButton>
+      </div>
+
+      <template v-if="mode === 'desktop'">
+        <button
+          type="button"
+          class="res-row"
+          :class="{ active: !currentSize }"
+          data-device-adaptive
+          @click="resetAdaptive"
+        >
+          <Monitor :size="12" />
+          <span class="res-name">{{ t("app.deviceAdaptive") }}</span>
+        </button>
+        <button
+          v-for="row in DESKTOP_RESOLUTIONS"
+          :key="`desktop-${row.width}x${row.height}`"
+          type="button"
+          class="res-row"
+          :class="{ active: activeDesktopSize === `${row.width}x${row.height}` }"
+          :data-device-resolution="`${row.width}x${row.height}`"
+          @click="pickDesktop(row)"
+        >
+          <span class="res-name mono">{{ row.width }} × {{ row.height }}</span>
+        </button>
+      </template>
+
+      <template v-else>
+        <button
+          v-for="preset in DEVICE_PRESETS"
+          :key="preset.name"
+          type="button"
+          class="res-row"
+          :class="{ active: activeMobileName === preset.name }"
+          :data-device-device="preset.name"
+          :data-device-resolution="`${preset.width}x${preset.height}`"
+          @click="pickDevice(preset)"
+        >
+          <span class="res-name">{{ preset.name }}</span>
+          <span class="res-size mono">
+            {{ activeMobileName === preset.name ? `${width} × ${height}` : `${preset.width} × ${preset.height}` }}
+          </span>
+        </button>
+      </template>
+
+      <button
+        type="button"
+        class="res-row"
+        :class="{ active: isCustom }"
+        data-device-custom
+        @click="pickCustom"
+      >
+        <span class="res-name">{{ t("app.deviceCustom") }}</span>
+        <span v-if="isCustom" class="res-size mono">{{ width }} × {{ height }}</span>
+      </button>
+    </section>
+
+    <div v-if="isCustom" class="custom-size">
+      <FormField plain class="size-field" :label="t('app.deviceWidth')">
+        <TextField
+          mono
+          inputmode="numeric"
+          pattern="[0-9]*"
+          spellcheck="false"
+          :model-value="widthText"
+          data-device-width
+          @update:model-value="editSize('width', $event)"
+          @change="commitSize('width')"
+          @keydown.enter="commitSize('width')"
+        />
+      </FormField>
+      <span class="times">×</span>
+      <FormField plain class="size-field" :label="t('app.deviceHeight')">
+        <TextField
+          mono
+          inputmode="numeric"
+          pattern="[0-9]*"
+          spellcheck="false"
+          :model-value="heightText"
+          data-device-height
+          @update:model-value="editSize('height', $event)"
+          @change="commitSize('height')"
+          @keydown.enter="commitSize('height')"
+        />
+      </FormField>
+    </div>
+    <p v-if="isCustom" class="hint">{{ t("app.deviceCustomHint") }}</p>
   </div>
 </template>
 
 <style scoped>
 .device-panel {
-  height: 100%;
-  min-height: 0;
-  background: var(--surface);
-  /*
-   * Container queries, not media queries.
-   *
-   * The panel's width depends on the view's layout (a 2×2 cell gives it a
-   * quarter of a quarter), not on the window. A `@media` rule would never fire
-   * for the case this has to handle — a narrow panel in a wide window — so the
-   * panel measures itself instead.
-   *
-   * The container has to be this outer element: a container query resolves
-   * against an *ancestor*, so `container-type` cannot sit on the element whose
-   * own children the query is supposed to restyle.
-   */
-  container-type: inline-size;
-}
-
-.device-layout {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
   height: 100%;
   min-height: 0;
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+  background: var(--surface);
   font-size: 11.5px;
   color: var(--text-secondary);
 }
 
-.device-body {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  gap: 16px;
-  padding: 12px 14px;
-  border-right: 1px solid var(--line-soft);
-  overflow: auto;
-}
+/* --- Mode ----------------------------------------------------------------- */
 
-.preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
-
-/* A box whose bottom-right corner is the grip. Its own size is fixed so the
-   grip stays reachable at any viewport: the *number* changes, not the box. */
-.preview-frame {
-  position: relative;
-  box-sizing: border-box;
-  width: 148px;
-  max-width: 100%;
-  height: 148px;
-  border: 1px dashed var(--line);
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
 
-.preview-size {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 10.5px;
-  color: var(--faint);
+.mode {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 1px);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
 }
 
-.preview-grip {
-  position: absolute;
-  right: -4px;
-  bottom: -4px;
-  width: 14px;
-  height: 14px;
-  border-right: 2px solid var(--accent-text);
-  border-bottom: 2px solid var(--accent-text);
-  border-radius: 0 0 3px 0;
-  cursor: nwse-resize;
-  touch-action: none;
+.mode:hover {
+  color: var(--text);
 }
 
-.preview-hint {
+.mode.active {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* --- Resolution list ------------------------------------------------------ */
+
+.resolutions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  padding: 0 2px;
+}
+
+.section-title {
   margin: 0;
-  max-width: 148px;
-  font-size: 9.5px;
-  line-height: 1.5;
-  color: var(--faint);
-  text-align: center;
-}
-
-.device-fields {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-
-.field-row {
-  display: flex;
-  gap: 8px;
-}
-
-/* This panel is 210px wide, so its fields are a size smaller than a dialog's.
-   The overrides are sizes only — the look is the shared field's. */
-.device-fields :deep(.field) {
-  flex: 1 1 0;
-  gap: 3px;
-}
-
-.device-fields :deep(.input) {
-  height: 26px;
-  padding: 0 7px;
-  background: var(--surface-2);
-  font-size: 11px;
-}
-
-/* The touch box sits on the same baseline as the number input beside it, which
-   has no caption of its own to line up against. */
-.device-fields :deep(.check) {
-  align-items: flex-end;
-  padding-bottom: 5px;
-  font-size: 10.5px;
-  color: var(--text-secondary);
-}
-
-.device-fields :deep(.btn) {
-  height: 26px;
-  padding: 0 10px;
-  font-size: 11px;
-}
-
-.actions {
-  display: flex;
-  gap: 6px;
-  margin-top: auto;
-}
-
-.device-lists {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  gap: 10px;
-  width: 210px;
-  padding: 12px 10px;
-  overflow: auto;
-}
-
-.list-title {
-  margin: 0 0 4px 2px;
   font-size: 9.5px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--faint);
 }
 
-.list-row {
+.res-row {
   display: flex;
-  align-items: center;
-  gap: 7px;
+  align-items: baseline;
+  gap: 8px;
   width: 100%;
-  padding: 5px 7px;
+  padding: 6px 7px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -458,79 +489,72 @@ function iconFor(preset: EmbeddedDevice) {
   cursor: pointer;
 }
 
-.list-row:hover {
+.res-row > svg {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.res-row:hover {
   background: var(--surface-2);
 }
 
-.list-row.active {
+.res-row.active {
   background: var(--surface-3);
   color: var(--text);
 }
 
-.row-name {
-  flex: 1 1 auto;
+.res-name {
+  flex: 0 0 auto;
+}
+
+.res-size {
   min-width: 0;
+  margin-left: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.row-meta {
-  flex: none;
-  font-size: 9.5px;
+  font-size: 10px;
   color: var(--faint);
 }
 
-/*
- * Narrow panel: one column, one scrollbar.
- *
- * In a docked panel the device form and the preset list cannot sit side by side
- * — five fields plus a drag box already need most of the width. Stacking them
- * *and* giving each its own scrollbar was worse than either: the Apply button
- * ended up below an inner scroll area that gave no sign it existed.
- *
- * So the two blocks keep their natural heights and the panel scrolls as a
- * whole: preview, parameters, actions, then the presets.
- *
- * This block sits at the end of the sheet on purpose. A container query has the
- * same specificity as the plain rule it overrides, so source order decides —
- * written above `.device-body`/`.device-lists` it was silently dropped, and all
- * that survived was `flex-direction`, leaving Apply clipped inside a
- * fixed-height inner scroll box.
- */
-@container (max-width: 520px) {
-  .device-layout {
-    flex-direction: column;
-    overflow-y: auto;
-  }
+.res-row.active .res-size {
+  color: var(--muted);
+}
 
-  .device-body {
-    flex: none;
-    flex-direction: column;
-    gap: 12px;
-    padding-bottom: 0;
-    border-right: none;
-    overflow: visible;
-  }
+/* --- Custom size ---------------------------------------------------------- */
 
-  .device-lists {
-    flex: none;
-    width: auto;
-    overflow: visible;
-  }
+.custom-size {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
 
-  /* Width and height one per row: two 200px columns clip their inputs. */
-  .field-row {
-    flex-direction: column;
-  }
+.size-field {
+  flex: 1 1 0;
+  min-width: 0;
+}
 
-  .check {
-    align-items: center;
-    padding-bottom: 0;
-  }
+.device-panel :deep(.field) {
+  gap: 3px;
+  min-width: 0;
+}
 
-  .actions {
-    flex-wrap: wrap;
-  }
+.device-panel :deep(.input) {
+  height: 26px;
+  padding: 0 7px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+
+.times {
+  padding-bottom: 6px;
+  color: var(--faint);
+}
+
+.hint {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--faint);
 }
 </style>

@@ -68,7 +68,7 @@ describe("headless runs", () => {
     // during every automated pass.
     expect(browserSource).toContain('openDevTools({ mode: "detach" })');
     expect(browserSource).toMatch(
-      /openDevTools\(tabId: string\): void \{[\s\S]*?new WebContentsView\([\s\S]*?setDevToolsWebContents\(view\.webContents\)/,
+      /async openDevTools\(tabId: string\): Promise<void> \{[\s\S]*?new WebContentsView\([\s\S]*?setDevToolsWebContents\(view\.webContents\)/,
     );
     // No detached window of ours: the only `BrowserWindow` references left are
     // the host window and the app-icon plumbing.

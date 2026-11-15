@@ -160,7 +160,8 @@ describe("AI origin gate contract", () => {
       "\n",
     );
     const start = main.indexOf("createTab: async (input) => {");
-    const block = main.slice(start, start + 1200);
+    const end = main.indexOf("navigate: (tabId, url)", start);
+    const block = main.slice(start, end > start ? end : start + 2000);
     expect(block).toContain("...(input.identityId ? {} : { clean: true })");
   });
 });

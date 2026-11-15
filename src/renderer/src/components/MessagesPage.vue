@@ -177,7 +177,7 @@ async function clearAll(): Promise<void> {
 
     <EmptyState v-if="rows.length === 0" :text="$t('app.messagesEmpty')" />
 
-    <ul v-else class="rows">
+    <ul v-else class="rows" data-message-scroll>
       <li
         v-for="message in rows"
         :key="message.id"
@@ -312,6 +312,7 @@ async function clearAll(): Promise<void> {
   list-style: none;
   margin: 0;
   padding: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
 }

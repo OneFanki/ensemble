@@ -8,7 +8,7 @@
  * a row means — the warning tone of a refusal, the count only appearing when it
  * is more than one — lives here, so the panel cannot disagree with the page.
  */
-import { CircleSlash, Wrench } from "lucide-vue-next";
+import { ChevronRight, CircleSlash, Wrench } from "lucide-vue-next";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { AiActivityRecord } from "@shared/types";
@@ -17,9 +17,22 @@ const props = defineProps<{
   record: AiActivityRecord;
   /** Compact spacing for the panel; the page keeps the roomier row. */
   dense?: boolean;
+  /** The page can open this row; the toolbar panel only glances at it. */
+  interactive?: boolean;
+  expanded?: boolean;
 }>();
 
+const emit = defineEmits<{ select: [] }>();
+
 const { t } = useI18n();
+
+const canExpand = computed(
+  () => Boolean(props.interactive) && (props.record.details?.length ?? 0) > 0,
+);
+
+function toggle(): void {
+  if (canExpand.value) emit("select");
+}
 
 /** Refused rows are the only ones that get an icon: the rest are routine. */
 const refused = computed(() => !props.record.originAuthorized || !props.record.ok);
@@ -57,7 +70,17 @@ const summary = computed(() => props.record.summary?.trim() || props.record.tool
 </script>
 
 <template>
-  <div class="ai-row" :class="{ dense, refused }" :data-ai-record="record.id">
+  <div
+    class="ai-row"
+    :class="{ dense, refused, interactive: canExpand, expanded }"
+    :data-ai-record="record.id"
+    :role="canExpand ? 'button' : undefined"
+    :tabindex="canExpand ? 0 : undefined"
+    :aria-expanded="canExpand ? Boolean(expanded) : undefined"
+    @click="toggle"
+    @keydown.enter.prevent="toggle"
+    @keydown.space.prevent="toggle"
+  >
     <component :is="refused ? CircleSlash : Wrench" :size="12" class="ai-row-icon" />
     <!--
       What was done, then which tool did it.
@@ -78,6 +101,13 @@ const summary = computed(() => props.record.summary?.trim() || props.record.tool
       {{ record.approval === "timeout" ? t("app.aiActivityTimedOut") : t("app.aiActivityRefused") }}
     </span>
     <span class="ai-row-when mono">{{ when }}</span>
+    <ChevronRight
+      v-if="canExpand"
+      :size="11"
+      class="ai-row-chevron"
+      :class="{ open: expanded }"
+      aria-hidden="true"
+    />
   </div>
 </template>
 
@@ -155,5 +185,29 @@ const summary = computed(() => props.record.summary?.trim() || props.record.tool
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   color: var(--faint);
+}
+
+.ai-row.interactive {
+  cursor: pointer;
+}
+
+.ai-row.interactive:hover,
+.ai-row.interactive.expanded {
+  background: var(--surface-2);
+}
+
+.ai-row.interactive:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ai-row-chevron {
+  flex: 0 0 auto;
+  color: var(--faint);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.ai-row-chevron.open {
+  transform: rotate(90deg);
 }
 </style>

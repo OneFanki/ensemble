@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { JsonStore } from "./storage/json-store";
-import type { AiActivityRecord, AiActivityInput } from "@shared/types";
+import type { AiActivityDetail, AiActivityRecord, AiActivityInput } from "@shared/types";
 
 /**
  * What an AI client did, as a log rather than as news.
@@ -35,6 +35,23 @@ export const AI_ACTIVITY_LIMIT = 1000;
  * separate thing the user would want to see separately.
  */
 export const AI_ACTIVITY_MERGE_MS = 10_000;
+
+/**
+ * How many calls a merged row keeps details for.
+ *
+ * A loop can repeat the same tool dozens of times; keeping every script would
+ * turn one row into a file of its own. Three is enough to see a short sequence
+ * and the latest behaviour without growing without bound.
+ */
+export const AI_ACTIVITY_DETAILS_MAX = 3;
+
+function mergeDetails(
+  existing: AiActivityDetail[] | undefined,
+  incoming: AiActivityDetail[] | undefined,
+): AiActivityDetail[] | undefined {
+  if (!incoming?.length) return existing;
+  return [...incoming, ...(existing ?? [])].slice(0, AI_ACTIVITY_DETAILS_MAX);
+}
 
 interface ActivityFile {
   records: AiActivityRecord[];
@@ -71,6 +88,9 @@ export class AiActivityStore {
             // call the user allowed once into one covered by a standing grant
             // would leave one row whose answer describes neither of them.
             item.approval === input.approval &&
+            // Same tab is not the same place: a page can navigate between two
+            // calls, and folding them kept the first origin as the group label.
+            item.origin === input.origin &&
             item.tabId === input.tabId &&
             now - Date.parse(item.at) < mergeMs,
         )
@@ -78,6 +98,11 @@ export class AiActivityStore {
     if (twin) {
       twin.at = new Date(now).toISOString();
       twin.count += 1;
+      // The row is one line for the whole run, but it should describe the most
+      // recent call rather than the first one.
+      if (input.summary) twin.summary = input.summary;
+      const details = mergeDetails(twin.details, input.details);
+      if (details?.length) twin.details = details;
       // Error state travels with the newest attempt; the approval never does,
       // because a row only merges with rows that ended the same way.
       if (input.error) twin.error = input.error;
@@ -105,6 +130,9 @@ export class AiActivityStore {
       tabId: input.tabId,
       ...(input.tabTitle ? { tabTitle: input.tabTitle } : {}),
       ...(input.summary ? { summary: input.summary } : {}),
+      ...(input.details?.length
+        ? { details: input.details.slice(0, AI_ACTIVITY_DETAILS_MAX) }
+        : {}),
       ok: input.ok,
       originAuthorized: input.originAuthorized,
       ...(input.approval ? { approval: input.approval } : {}),

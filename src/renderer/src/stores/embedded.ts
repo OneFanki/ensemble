@@ -466,6 +466,29 @@ export const useEmbeddedStore = defineStore("embedded", () => {
   }
 
   /**
+   * Sets the per-tab sleep policy.
+   *
+   * Like {@link setViewport}, the result arrives as a state push: sleeping is
+   * decided in the main process, and the tab strip reads `sleeping` /
+   * `sleepPolicy` from that broadcast. Setting "never" wakes the page first, so
+   * the broadcast that follows already carries the new state.
+   */
+  async function setSleepPolicy(tabId: string, policy: "auto" | "never"): Promise<void> {
+    await window.ensemble.setEmbeddedSleep(tabId, policy);
+  }
+
+  /**
+   * Mutes or unmutes one page's output.
+   *
+   * This is the user's action, so the main process records their intent and a
+   * later AI operation will not silently re-mute the tab. The new state arrives
+   * through the same broadcast the rest of the chrome reads.
+   */
+  async function setMuted(tabId: string, muted: boolean): Promise<void> {
+    await window.ensemble.setEmbeddedMuted(tabId, muted);
+  }
+
+  /**
    * Sets the workspace default viewport, or clears it with `null`.
    *
    * Stored as a setting rather than broadcast state: it survives a restart, it
@@ -668,6 +691,8 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     createView,
     setLayout,
     setViewport,
+    setSleepPolicy,
+    setMuted,
     setDefaultViewport,
     groupIntoLooseView,
     setSlotRects,

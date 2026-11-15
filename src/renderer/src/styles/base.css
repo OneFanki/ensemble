@@ -20,6 +20,13 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
   user-select: none;
+  /*
+   * Name the host's own default explicitly instead of relying on `auto`, which
+   * on Windows can keep the last cursor Chromium applied after the pointer
+   * leaves a page that changed it. Overlays teleported to body inherit this
+   * too; buttons and inputs still override it.
+   */
+  cursor: default;
 }
 
 button {

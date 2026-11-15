@@ -35,6 +35,7 @@ import {
   viewDraftSchema,
 } from "@shared/schemas";
 import type {
+  AiActivityDetail,
   AiApprovalDecision,
   AiApprovalOutcome,
   Identity,
@@ -135,6 +136,24 @@ interface ToolDefinition {
    */
   inputTarget?: (args: Record<string, unknown>) => string | undefined;
   /**
+   * Page this tool works on, even when it does not send input.
+   *
+   * Reads, screenshots, performance sampling and navigation all touch a page
+   * without passing the origin gate. They still need to mute it by default, and
+   * some of them should be recorded in the activity log, so they name their tab
+   * here rather than overloading `inputTarget` (which would incorrectly subject
+   * a read to the write gate).
+   */
+  pageTarget?: (args: Record<string, unknown>) => string | undefined;
+  /**
+   * Whether this call belongs in the page activity log.
+   *
+   * Defaults to "only tools with `inputTarget`", the historical behaviour. A
+   * tool that names a page but does not send input can opt in; one that names a
+   * page for muting alone should not flood the log.
+   */
+  recordsPageAction?: boolean;
+  /**
    * Callable but absent from `tools/list`.
    *
    * For compatibility aliases: a client already configured against an old name
@@ -181,6 +200,10 @@ export interface EmbeddedSurface {
       /** Container the tab currently sits in; used to undo a failed compose. */
       viewId?: string;
       clean?: boolean;
+      /** Default-profile tabs report `"default"`; absent on identity pages. */
+      profileId?: string;
+      muted?: boolean;
+      audible?: boolean;
     }>;
     views?: Array<{
       id: string;
@@ -221,6 +244,8 @@ export interface EmbeddedSurface {
     siteId?: string;
     label?: string;
     color?: string;
+    /** Start the page muted; AI-created pages pass true. */
+    muted?: boolean;
   }): Promise<unknown>;
   navigate(tabId: string, url: string): Promise<unknown>;
   closeTab(tabId: string): unknown;
@@ -306,6 +331,10 @@ export interface EmbeddedSurface {
   setLayout(layoutId: string, viewId?: string): unknown;
   /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
   setViewport(tabId: string, size: { width: number; height: number } | null): unknown;
+  /** Mutes or unmutes a page; `byUser` is false for AI-driven calls. */
+  setMuted?(tabId: string, muted: boolean, options?: { byUser?: boolean }): unknown;
+  /** Mutes before an AI page operation, unless the user asked for sound. */
+  muteForAi?(tabId: string): void;
   pinTab(slotIndex: number, tabId: string | null, viewId?: string): unknown;
   /** Reorders the dock, or moves a tab in/out of a view. */
   moveTab(
@@ -657,27 +686,99 @@ export function redactMcpArgs(args: unknown): unknown {
  * `type_browser_text` is the string being typed, which may be a password the AI
  * was handed — naming the field it is going into is enough to recognise the call.
  */
-function describeToolAction(tool: string, args: Record<string, unknown>): string {
+export function describeToolAction(tool: string, args: Record<string, unknown>): string {
   const named = (value: unknown): string | undefined =>
     typeof value === "string" && value.trim() ? value.trim().slice(0, 80) : undefined;
-  const target =
+  const clickTarget =
     named(args["label"]) ?? named(args["text"]) ?? named(args["selector"]) ?? named(args["role"]);
+  /*
+   * A typed value is never a target.
+   *
+   * `type_browser_text`'s `text` is the string being typed, which may be a
+   * password handed to the AI. The old target chain read it before `selector`,
+   * so one call could write the secret into both the audit summary and the
+   * activity row. Naming the field is enough to recognise the call.
+   */
+  const typeTarget =
+    named(args["label"]) ?? named(args["selector"]) ?? named(args["role"]);
   switch (tool) {
     case "click_browser_element":
-      return target ? `点击「${target}」` : "点击页面元素";
+      return clickTarget ? `点击「${clickTarget}」` : "点击页面元素";
     case "type_browser_text":
-      return target ? `在「${target}」输入` : "在页面上输入";
+      return typeTarget ? `在「${typeTarget}」输入` : "在页面上输入";
     case "fill_browser_form":
       return "填写表单";
     case "fill_browser_login":
       return "填充登录信息";
-    case "evaluate_browser_page":
-      return "在页面里执行脚本";
+    case "evaluate_browser_page": {
+      const expression = typeof args["expression"] === "string" ? args["expression"] : "";
+      const preview = expression.replace(/\s+/g, " ").trim().slice(0, 80);
+      return preview ? `执行脚本：${preview}` : "在页面里执行脚本";
+    }
     case "run_flow":
       return named(args["flowName"]) ? `运行流程「${named(args["flowName"])}」` : "运行流程";
     default:
       return tool;
   }
+}
+
+/** Largest amount of one detail field kept in the activity file. */
+const ACTIVITY_DETAIL_MAX_CHARS = 4_000;
+
+/** Truncates nested argument values so one script cannot balloon the log. */
+function boundActivityValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    return value.length > ACTIVITY_DETAIL_MAX_CHARS
+      ? `${value.slice(0, ACTIVITY_DETAIL_MAX_CHARS)}…`
+      : value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => boundActivityValue(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    if (depth >= 4) return "[…]";
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 30)) {
+      out[key] = boundActivityValue(item, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Removes storage partitions from a tool result before it reaches an AI client.
+ *
+ * `partition` is an implementation detail of Chromium's session storage. The
+ * default profile's literal happens to be `persist:embedded-clean` because it
+ * predates profiles, and a client reading that string reasonably concludes the
+ * page is a throwaway session — which changes how it treats the login. Only
+ * `clean` should answer that question, so the raw name never leaves the app.
+ */
+export function withoutPartition(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutPartition);
+  if (typeof value !== "object" || value === null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "partition") continue;
+    out[key] = withoutPartition(item);
+  }
+  return out;
+}
+
+/** A bounded text preview of a tool result, for the activity detail. */
+export function previewActivityResult(output: unknown): string | undefined {
+  if (output === undefined || output === null) return undefined;
+  let text: string;
+  try {
+    text = typeof output === "string" ? output : JSON.stringify(output, null, 2);
+  } catch {
+    text = String(output);
+  }
+  if (!text) return undefined;
+  return text.length > ACTIVITY_DETAIL_MAX_CHARS
+    ? `${text.slice(0, ACTIVITY_DETAIL_MAX_CHARS)}…`
+    : text;
 }
 
 function timingSafeToken(actual: string, expected: string): boolean {
@@ -821,6 +922,7 @@ export class McpServer {
         clean?: boolean;
         tabTitle?: string;
         summary?: string;
+        details?: AiActivityDetail[];
         approval?: AiApprovalOutcome;
         error?: string;
       }) => void;
@@ -1204,6 +1306,23 @@ export class McpServer {
             return;
           }
           try {
+            /*
+             * An AI page operation starts muted unless the user asked for sound.
+             *
+             * The explicit mute tool is exempt: auto-muting before an unmute
+             * would undo the call it is about to make. Applying this after the
+             * approval decision means a refused call does not silence anything.
+             */
+            try {
+              const pageId =
+                tool.pageTarget?.(params.arguments ?? {}) ??
+                tool.inputTarget?.(params.arguments ?? {});
+              if (pageId && tool.name !== "set_browser_muted") {
+                this.options.embedded?.muteForAi?.(pageId);
+              }
+            } catch {
+              // A tab lookup that fails must not turn the tool call into a failure.
+            }
             const output = await tool.run(params.arguments ?? {});
             const page = this.notePageAction(
               tool,
@@ -1211,6 +1330,8 @@ export class McpServer {
               true,
               true,
               verdict.approval,
+              undefined,
+              output,
             );
             this.audit(
               tool.name,
@@ -1219,13 +1340,17 @@ export class McpServer {
               undefined,
               page,
             );
+            // The client sees the same result minus storage internals. The
+            // default profile's partition literally contains "clean", and a
+            // model reading it has no way to know that is a legacy name.
+            const clientOutput = withoutPartition(output);
             send(200, {
               jsonrpc: "2.0",
               id,
               result: {
                 content: tool.content
-                  ? tool.content(output)
-                  : [{ type: "text", text: JSON.stringify(output ?? null, null, 2) }],
+                  ? tool.content(clientOutput)
+                  : [{ type: "text", text: JSON.stringify(clientOutput ?? null, null, 2) }],
               },
             });
           } catch (error) {
@@ -1560,6 +1685,33 @@ export class McpServer {
    * the dock's badge counts and the unit a reader of the log actually wants when
    * two windows of one site are open).
    */
+  /**
+   * One call's arguments and result, small enough to keep in the activity log.
+   *
+   * Arguments go through the same secret handling as the audit log first. A
+   * typed value is always masked: `type_browser_text`'s `text` may be a password
+   * the AI was handed, and the detail view is a renderer surface.
+   */
+  private activityDetail(
+    tool: string,
+    args: Record<string, unknown>,
+    output: unknown,
+  ): AiActivityDetail {
+    const masked = this.auditArgs(args, output);
+    const redacted =
+      typeof masked === "object" && masked !== null
+        ? (redactMcpArgs(masked) as Record<string, unknown>)
+        : {};
+    if (tool === "type_browser_text" && "text" in redacted) redacted["text"] = "[redacted]";
+    const bounded = boundActivityValue(redacted) as Record<string, unknown>;
+    const result = previewActivityResult(output);
+    return {
+      at: new Date().toISOString(),
+      ...(Object.keys(bounded).length ? { args: bounded } : {}),
+      ...(result ? { result } : {}),
+    };
+  }
+
   private notePageAction(
     tool: ToolDefinition,
     args: Record<string, unknown>,
@@ -1567,13 +1719,17 @@ export class McpServer {
     originAuthorized: boolean,
     approval?: AiApprovalOutcome,
     error?: string,
+    output?: unknown,
   ): { origin: string; tabId: string } | undefined {
-    if (!tool.inputTarget || !this.options.embedded?.aiPageContext) return undefined;
+    const records = tool.recordsPageAction ?? Boolean(tool.inputTarget);
+    if (!records || !this.options.embedded?.aiPageContext) return undefined;
+    const target = tool.pageTarget ?? tool.inputTarget;
+    if (!target) return undefined;
     let tabId: string | undefined;
     let origin = "";
     let facts: ReturnType<NonNullable<EmbeddedSurface["actionFacts"]>> | undefined;
     try {
-      tabId = tool.inputTarget(args);
+      tabId = target(args);
       if (!tabId) return undefined;
       origin = this.options.embedded.aiPageContext(tabId).origin;
       // The richer facts are optional on the surface, so a caller that cannot
@@ -1598,6 +1754,7 @@ export class McpServer {
         // Built here, from the same formatter the authorization card uses, so
         // "what the AI asked to do" and "what it did" are the same sentence.
         summary: describeToolAction(tool.name, args),
+        ...(ok || error ? { details: [this.activityDetail(tool.name, args, output)] } : {}),
         ...(approval ? { approval } : {}),
         ...(error ? { error } : {}),
       });
@@ -2219,6 +2376,9 @@ export class McpServer {
           // directly instead of relying on ordering.
           const embeddedSurface = this.options.embedded;
           if (!embeddedSurface) throw new Error("内置浏览器不可用，请先打开内置浏览器页面");
+          // A flow that opened its own page had no tab id when the dispatch-level
+          // mute ran; mute it now, before the first step can make noise.
+          embeddedSurface.muteForAi?.(tabId);
           const run = await embeddedSurface.runFlow(tabId, flow.steps, {
             baseUrl: site.baseUrl,
             vars: values,
@@ -2833,7 +2993,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。",
+          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；没有 clean 的页面属于某个档案，`profileId: \"default\"` 就是默认档案。",
         kind: "read",
         inputSchema: object({}),
         run: () => surface().state(),
@@ -2844,7 +3004,18 @@ export class McpServer {
           "把保存好的视图（一组身份 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，用 launch_view，或让用户自己切过去。",
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
-        run: (args) => surface().openView(String(args["viewId"] ?? "")),
+        run: async (args) => {
+          const opened = await surface().openView(String(args["viewId"] ?? ""));
+          // AI-opened pages start muted like any other AI page operation, but
+          // a page the user already asked to hear stays unmuted.
+          const tabs = (opened as { tabs?: Array<{ id?: unknown }> } | null)?.tabs;
+          if (Array.isArray(tabs)) {
+            for (const tab of tabs) {
+              if (typeof tab.id === "string") surface().muteForAi?.(tab.id);
+            }
+          }
+          return opened;
+        },
       },
       {
         name: "open_browser_tab",
@@ -2872,6 +3043,9 @@ export class McpServer {
           const label = typeof args["label"] === "string" ? args["label"] : identity?.name;
           return surface().createTab({
             url: rawUrl,
+            // An AI-opened page is an AI page operation from its first frame:
+            // a site that autoplays should not surprise the user.
+            muted: true,
             ...(identityId ? { identityId } : {}),
             ...(siteId ? { siteId } : {}),
             ...(label ? { label } : {}),
@@ -2888,6 +3062,7 @@ export class McpServer {
           { tabId: tabIdProp(), url: string("目标地址") },
           ["url"],
         ),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const id = tabId(args);
           const target = String(args["url"] ?? "");
@@ -2920,6 +3095,7 @@ export class McpServer {
           tabId: tabIdProp(),
           maxNodes: integer("最多返回多少个元素，默认 400"),
         }),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const max = Number(args["maxNodes"]);
           return surface().snapshotDom(tabId(args), {
@@ -2933,6 +3109,7 @@ export class McpServer {
           "读取页面自己记下的报错、console 输出和网络请求，读完即清空——回答的是「上次读取之后发生了什么」。排查「点了保存却没反应」时先用它：能看到前端异常和失败的 fetch / XHR。看不到跨域 iframe 的请求，也看不到浏览器自身的警告。",
         kind: "read",
         inputSchema: object({ tabId: tabIdProp() }),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const read = surface().readPageActivity;
           if (!read) throw new Error("当前浏览器表面不支持读取控制台");
@@ -2948,6 +3125,7 @@ export class McpServer {
           tabId: tabIdProp(),
           durationMs: integer("观察时长，默认 1000，范围 200–10000"),
         }),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const measure = surface().measurePerformance;
           if (!measure) throw new Error("当前浏览器表面不支持性能测量");
@@ -2964,6 +3142,7 @@ export class McpServer {
           "读取这一页的逐点性能数据（当前采集区间内的全部采样），用于自己算任意统计量或看趋势。区间与采样间隔由设置页的「性能采集区间」「性能采样间隔」决定，默认最近 20 秒、每 200ms 一个点。数据只在有人读过之后才继续累积，闲置 15 秒即停止，所以两次读之间若隔得更久，前面那段就没有。只要汇总（均值、峰值、峰值时刻）用 measure_browser_performance。",
         kind: "read",
         inputSchema: object({ tabId: tabIdProp() }),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const read = surface().readPerfHistory;
           if (!read) throw new Error("当前浏览器表面不支持读取性能数据");
@@ -2979,6 +3158,7 @@ export class McpServer {
           tabId: tabIdProp(),
           ...targetProps({ text: string("按钮或链接上的文字") }),
         }),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const target = targetFrom(args, { withText: true });
           return surface().visibility(tabId(args), target);
@@ -3098,6 +3278,7 @@ export class McpServer {
           },
           ["condition"],
         ),
+        pageTarget: (args) => tabId(args),
         run: (args) => {
           const condition = String(args["condition"] ?? "");
           if (
@@ -3156,6 +3337,7 @@ export class McpServer {
           inline: boolean("是否把图像随结果返回，默认否；远程客户端需要它才能看到画面"),
           timeoutMs: integer("等画面的上限，默认 15000，最大 60000。超时返回 page-busy"),
         }),
+        pageTarget: (args) => tabId(args),
         run: async (args) => {
           const timeout = Number(args["timeoutMs"]);
           const timeoutMs =
@@ -3416,6 +3598,32 @@ export class McpServer {
         inputSchema: object({ tabId: tabIdProp() }, []),
         inputTarget: (args) => tabId(args),
         run: (args) => surface().setViewport(tabId(args), null),
+      },
+      {
+        name: "set_browser_muted",
+        description:
+          "静音或取消静音一个标签页的输出。只影响 Ensemble 是否播放这个页面的声音，不改变页面自己的媒体状态、Web Audio 或任何音频逻辑——AI 仍然可以正常测试声音相关功能。tabId 省略时用当前标签页。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            muted: boolean("true 表示静音，false 表示取消静音"),
+          },
+          ["muted"],
+        ),
+        // Deliberately not `inputTarget`: muting is not page input, so it must
+        // not require the origin to be writable. It still names a page, so the
+        // activity log records who muted what.
+        pageTarget: (args) => tabId(args),
+        recordsPageAction: true,
+        run: (args) => {
+          if (typeof args["muted"] !== "boolean") throw new Error("muted 必须是布尔值");
+          const id = tabId(args);
+          const setMuted = surface().setMuted;
+          if (!setMuted) throw new Error("这个宿不支持静音");
+          setMuted.call(surface(), id, args["muted"], { byUser: false });
+          return { tabId: id, muted: args["muted"] };
+        },
       },
       {
         name: "pin_browser_tab",
@@ -3749,6 +3957,10 @@ export class McpServer {
           "在一个浏览器里切换显示哪一页。一个格位放的是一个浏览器，它可以有多个页面（页面里点开的链接）；这个工具决定该浏览器当前显示哪一页。",
         kind: "run",
         inputSchema: object({ pageId: string("要显示的那个页面 id") }, ["pageId"]),
+        // Switching a page is not page input, but the page it reveals may
+        // already be playing; mute it if the user has not asked for sound.
+        pageTarget: (args) =>
+          typeof args["pageId"] === "string" && args["pageId"] ? args["pageId"] : undefined,
         run: (args) => surface().activate(String(args["pageId"] ?? "")),
       },
     ];

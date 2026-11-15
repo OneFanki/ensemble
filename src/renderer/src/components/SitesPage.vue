@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Site, Tag as WorkspaceTag } from "@shared/types";
+import type { CollectionView, Site, Tag as WorkspaceTag } from "@shared/types";
 import { Globe, GripVertical, Pencil, Plus, Trash2 } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -24,6 +24,12 @@ const { t } = useI18n();
 
 const sites = computed(() => store.sites);
 const tags = computed(() => store.snapshot?.tags ?? []);
+/** The page's chosen density; the default is the compact one. */
+const viewMode = computed<CollectionView>(() => store.settings.sitesView ?? "list");
+
+async function setView(next: CollectionView): Promise<void> {
+  await store.saveSettings({ sitesView: next });
+}
 
 /*
  * Reordering by dragging a card's grip.
@@ -124,6 +130,7 @@ async function openSiteExternal(site: Site, engineId: string): Promise<void> {
 }
 
 import AppButton from "./ui/AppButton.vue";
+import CollectionViewToggle from "./ui/CollectionViewToggle.vue";
 import EmptyState from "./ui/EmptyState.vue";
 import IconButton from "./ui/IconButton.vue";
 import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
@@ -133,6 +140,11 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   <section class="page sites">
     <PageHeader :title="$t('app.sites')">
       <template #actions>
+        <CollectionViewToggle
+          v-if="sites.length"
+          :model-value="viewMode"
+          @update:model-value="setView"
+        />
         <GroupCollapseAll
           v-if="groups.length > 1"
           :all-collapsed="allCollapsed"
@@ -171,7 +183,22 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
             @toggle="groupCollapse.toggle(group.key)"
           />
 
-          <div v-if="!groupCollapse.isCollapsed(group.key)" class="env-grid">
+          <div
+            v-if="!groupCollapse.isCollapsed(group.key)"
+            class="env-grid"
+            :class="`view-${viewMode}`"
+          >
+            <!-- One header per group: the columns are per group because a group
+                 is the local table. A single header pinned above the page would
+                 sit apart from every group but the first. -->
+            <div v-if="viewMode === 'table'" class="env-table-head" aria-hidden="true">
+              <span></span>
+              <span>{{ $t("app.site") }}</span>
+              <span>{{ $t("app.columnAddress") }}</span>
+              <span>{{ $t("app.columnAccountsViews") }}</span>
+              <span class="table-head-actions">{{ $t("app.columnActions") }}</span>
+            </div>
+
             <article
               v-for="site in group.sites"
               :key="site.id"
@@ -181,27 +208,17 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
               @dragleave="onSiteDragLeave(site)"
               @drop.prevent="onSiteDrop(site)"
             >
-              <div class="card-head">
-                <span
-                  class="site-grip"
-                  draggable="true"
-                  :title="$t('app.dragReorder')"
-                  :aria-label="$t('app.dragReorder')"
-                  @dragstart="onSiteDragStart(site, $event)"
-                  @dragend="onSiteDragEnd"
-                >
-                  <GripVertical :size="12" />
-                </span>
-                <h2 class="env-name">{{ site.name }}</h2>
-                <span class="card-actions">
-                  <IconButton :ariaLabel="$t('app.edit')" @click="emit('editSite', site.id)">
-                    <Pencil :size="12" />
-                  </IconButton>
-                  <IconButton variant="danger" :ariaLabel="$t('app.delete')" @click="remove(site)">
-                    <Trash2 :size="12" />
-                  </IconButton>
-                </span>
-              </div>
+              <span
+                class="site-grip"
+                draggable="true"
+                :title="$t('app.dragReorder')"
+                :aria-label="$t('app.dragReorder')"
+                @dragstart="onSiteDragStart(site, $event)"
+                @dragend="onSiteDragEnd"
+              >
+                <GripVertical :size="12" />
+              </span>
+              <h2 class="env-name">{{ site.name }}</h2>
 
               <p class="env-url mono" :title="site.baseUrl">
                 <Globe :size="11" />
@@ -228,7 +245,7 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
               </div>
 
               <!--
-                The card's main action is another account on this system.
+                The row's main action is another account on this system.
                 "Open the site" used to be here as the primary button, which made
                 a site look like a place to visit — the same kind of thing as a
                 bookmark. It is not: a site is a login recipe and the header of a
@@ -237,12 +254,12 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 
                 Opening is a launch, so it uses the same split control as every
                 other launch point: the main half opens the login page in the
-                built-in surface, the arrow offers an external browser. Two filled
-                buttons side by side made the card look like a toolbar with no
-                hierarchy — one primary action plus one launch control says which
-                of the two is the thing you usually came to do.
+                built-in surface, the arrow offers an external browser. The two
+                icon buttons sit after the two actions the row exists for, so the
+                right edge reads as "what you usually came to do, then what you
+                do to the site itself".
               -->
-              <div class="card-foot">
+              <div class="card-actions">
                 <AppButton
                   size="sm"
                   variant="primary"
@@ -254,12 +271,20 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
                   {{ $t("app.newIdentity") }}
                 </AppButton>
                 <LaunchSplitButton
-                  :label="$t('app.openSite')"
+                  compact
                   :aria-label="$t('app.openSiteHint')"
                   :data-hook="`site-${site.id}`"
                   @launch="store.markSiteUsed(site.id); emit('openSite', site.id)"
                   @launch-external="openSiteExternal(site, $event)"
                 />
+                <span class="card-manage">
+                  <IconButton :ariaLabel="$t('app.edit')" @click="emit('editSite', site.id)">
+                    <Pencil :size="12" />
+                  </IconButton>
+                  <IconButton variant="danger" :ariaLabel="$t('app.delete')" @click="remove(site)">
+                    <Trash2 :size="12" />
+                  </IconButton>
+                </span>
               </div>
             </article>
           </div>
@@ -271,18 +296,45 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 
 <style scoped>
 .env-grid {
+  /* One template for both densities: the header row and every site row share
+     these tracks, so a column stays a column across rows. All of them are flex
+     tracks rather than `auto`, otherwise one long address would widen the
+     address column of only its own row. */
+  --site-cols: 14px minmax(0, 0.9fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(190px, 0.9fr);
   margin-top: 10px;
+  min-width: 0;
+}
+
+.env-grid.view-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Table mode joins the rows into one block: the header is the top cap and each
+   row keeps only its side and bottom rules. */
+.env-grid.view-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.env-table-head {
   display: grid;
-  /* The mockup's grid: `repeat(auto-fill, minmax(212px, 1fr))` with a 10px gap.
-     A wide minimum (300–460px) fitted two fat cards on a 1240px pane and left
-     most of the page empty; a site card holds a name, an address and three
-     facts, which is exactly what 212px is for. */
-  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
-  /* Rows size to their card, never to leftover container height: the cards clip
-     their own overflow, so a compressed row silently eats their footer. */
-  grid-auto-rows: min-content;
+  grid-template-columns: var(--site-cols);
+  align-items: center;
   gap: 10px;
-  align-content: start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-elevated);
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  min-width: 0;
+}
+
+.table-head-actions {
+  justify-self: end;
 }
 
 .group-list {
@@ -295,18 +347,25 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   /* A hairline that actually reads. With the card and the page both at
      `--surface`, `--line-soft` sat at 1.15:1 against it — visible on a large
      dark screenshot, invisible on a white page at 100%. The stronger step keeps
-     the flat look and still states the card's edge. */
+     the flat look and still states the row's edge. */
+  display: grid;
+  grid-template-columns: var(--site-cols);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  /* No internal rules: the card is one thought (name, address, three facts,
-     open), and a rule between each of those four made a 300px box look like a
-     small form. */
-  padding: 12px 13px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
+}
+
+.view-table .env-card {
+  border-radius: 0;
+  border-top: 0;
+}
+
+.view-table .env-card:last-child {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .env-card:hover {
@@ -318,7 +377,7 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   background: color-mix(in srgb, var(--accent) 4%, var(--surface));
 }
 
-/* Drag handle: cards carry buttons, so only the grip starts a drag. */
+/* Drag handle: rows carry buttons, so only the grip starts a drag. */
 .site-grip {
   display: inline-flex;
   align-items: center;
@@ -335,17 +394,10 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   opacity: 0.5;
 }
 
-/* Insertion line at the top of the card the drag would land on. */
+/* Insertion line at the top of the row the drag would land on. */
 .env-card.drop {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
 }
 
 .env-name {
@@ -356,19 +408,6 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-}
-
-.active-chip {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  color: var(--accent-text);
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
-  border-radius: 999px;
-  padding: 2px 7px 2px 5px;
-  flex: 0 0 auto;
 }
 
 .env-url {
@@ -390,10 +429,11 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 .env-meta {
   margin: 0;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  overflow: hidden;
 }
 
 /* The mockup draws facts as 19px chips on the field colour. */
@@ -401,6 +441,7 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
   height: 19px;
   padding: 0 7px;
   border-radius: var(--radius-sm);
@@ -421,37 +462,25 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
   background: var(--accent-soft);
 }
 
-/* Pushed to the card's bottom edge without a rule above it: the card's own
-   border already separates it from the next one.
-   One primary action and one launch control, both 26px tall so their baselines
-   agree — a 24px and a 29px control side by side is what made this row look
-   like two unrelated buttons sharing a line. */
-.card-foot {
+/* The row's actions, right-aligned so every row's controls end on the same
+   vertical line. The two icon buttons follow the actions the row exists for. */
+.card-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: auto;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
 }
 
-.card-foot > :deep(.btn) {
+.card-actions > :deep(.btn) {
   height: 26px;
-  padding: 0 10px;
+  padding: 0 9px;
   font-size: 11.5px;
 }
 
-.card-actions {
-  margin-left: auto;
-  display: flex;
+.card-manage {
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
   flex: 0 0 auto;
-}
-
-.icon-btn + .icon-btn {
-  margin-left: 0;
-}
-
-.btn.small {
-  padding: 5px 10px;
 }
 </style>

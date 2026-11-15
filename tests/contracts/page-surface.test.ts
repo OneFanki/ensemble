@@ -40,7 +40,7 @@ describe("the manager addresses pages through a carrier-neutral surface", () => 
     // Anchored on the opening method: a `WebContentsView` created anywhere else
     // is a page that main is positioning again.
     expect(BROWSER).toMatch(
-      /openDevTools\(tabId: string\): void \{[\s\S]*?new WebContentsView\([\s\S]*?contentView\.addChildView\(view\)/,
+      /async openDevTools\(tabId: string\): Promise<void> \{[\s\S]*?new WebContentsView\([\s\S]*?contentView\.addChildView\(view\)/,
     );
   });
 

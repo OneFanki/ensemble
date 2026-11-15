@@ -82,6 +82,7 @@
 | `Checkbox` | 复选框 + 文案 | `v-model`、`disabled` |
 | `EmptyState` | 空列表的整套框架 | `text`、`note`、`#icon` 与默认动作槽 |
 | `InputShell` | 带描边的输入容器 + 聚焦扫光 | `size`（toolbar/hero）、`as` |
+| `CollectionViewToggle` | 列表 / 表格两态切换 | `modelValue`、`data-collection-view` |
 
 这条规则是踩出来的，两次：
 
@@ -100,11 +101,18 @@
 `tests/contracts/ui-components.test.ts` 守护：`components/ui/` 之外再出现 `class="btn"` /
 `"input"` / `"field"` / `"check"` / `"link-btn"` / `"empty"` 即失败。
 
-**搜索框是一个控件。** 地址栏与新标签页的搜索框都用 `InputShell`：它画边框、底色，并在
-聚焦时播一次金色光弧（约 700ms，一遍即止，之后是干净的 1px 描边）。两处曾经各写一套，
-地址栏浅色下的聚焦色取的是 `--accent-text`（深褐金，为白底正文选的颜色），看起来是一条
-脏线。扫光的动画由 `:focus-within` 纯 CSS 触发，失焦即复位，不需要 JS 状态。
+**搜索框是一个控件。** 地址栏与新标签页的搜索框都用 `InputShell`：它画底色，并用一层 SVG
+画完整轮廓——静止是 1px 细线，聚焦后是 2px 主色线，中间跑一圈 2px 的短划（500ms，一遍即止）。
+轮廓从头到尾都是 SVG，不用 CSS `border`：边框是另一条线、粗细也不同，2px 的扫光跑在 1px
+边框上时，最终高亮看起来会比扫光细。两处曾经各写一套，地址栏浅色下的聚焦色取的是
+`--accent-text`（深褐金，为白底正文选的颜色），看起来是一条脏线。扫光的动画由
+`:focus-within` 纯 CSS 触发，失焦即复位，不需要 JS 状态。
 
+
+**站点与账号各有一份列表 / 表格偏好。** 两页共用 `CollectionViewToggle`，选择写进
+`settings.sitesView` / `settings.identitiesView`（默认 `list`），刷新与重启后保持。列表是紧凑
+单行，适合按名字快速扫；表格每组带列头，适合横向比较地址、角色与状态。两种视图共享同一份
+行结构与拖拽钩子（`.env-card`、`.site-grip`、`.id-card`），切换只改网格模板与列头，不重建行。
 
 **所有写操作的表单都在 `Modal` 里。** 页面正文只留列表与筛选，新建、编辑、改名一律开
 弹窗：一个按需出现的表单会把下面的列表挤下去，而内联的编辑会重排它所在的那一行——
@@ -275,7 +283,9 @@ Electron 不绑任何默认刷新，不拦就是死键。
   档案是「一套 Cookie 加一个名字」，存成 `settings.profiles`，随设置文件走而不进导出包。
   - **默认档案**（`id: "default"`）是一个固定的 `persist:` 分区，新标签页、书签与地址栏
     输入的地址默认都落在那里，登录一次长期有效。它沿用旧字符串 `persist:embedded-clean`
-    是为了接住用户升级前已有的登录。
+    是为了接住用户升级前已有的登录。**这个字符串是存储实现，不是语义**：MCP 的标签列表在
+    返回前删掉 `partition`，只保留 `clean` 与 `profileId`，否则一个读到 "clean" 的客户端会
+    把默认档案误判成一次性会话。
   - **干净会话**（`id: "clean"`）是每个浏览器一个不带 `persist:` 前缀的内存会话
     （`embeddedCleanPartition`），退出即消失。
   - **自建档案**（`persist:profile-<id>`，`embeddedProfilePartition`）与默认档案同构，
@@ -493,13 +503,23 @@ Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不
   渲染层 CSP 是 `img-src 'self' data:`，不加载远程图片；更重要的是图标要用页面自己的会话去取
   （登录态、区域、Cookie 都跟着走），只有主进程做得到。`inlineFavicon` 把类型与大小规则抽成
   纯函数，避免为了测它而启动 Electron。
-- **停放页空闲后睡眠（`aiIdleFreeze`，headless 关闭）。** 页面挪出窗口只是看不见，Chromium
-  仍视其为「可见」，原生后台节流永不触发——应用窗口在屏上时，每个停放页（包括 3D 首页）都会
-  满速渲染。真正生效的是 CDP `Page.setWebLifecycleState: "frozen"`：页面 JavaScript 整体挂起
-  （冻结页上 evaluate 永不返回），3D 场景随之停。停放页闲置 60 秒（窗口期内无任何 CDP 流量）
-  后由 10 秒一轮的扫描冻结，**扫描在浏览器构造时无条件启动**；AI 的每条命令经
-  `EmbeddedCdp.send` 前都会 **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击永远落在
-  活页面上。扫描刻意保守：台上、加载中、崩溃、空白、有声、开着 DevTools 的页面一律不动。
+- **停放页空闲后睡眠（`aiIdleFreeze`，headless 关闭，`ENSEMBLE_SLEEP_TEST` 可开）。**
+  页面挪出窗口只是看不见，Chromium 仍视其为「可见」，原生后台节流永不触发——应用窗口在屏上
+  时，每个停放页（包括 3D 首页）都会满速渲染。真正生效的是 CDP
+  `Page.setWebLifecycleState: "frozen"`：页面 JavaScript 整体挂起（冻结页上 evaluate 永不
+  返回），3D 场景随之停。停放页闲置 60 秒（窗口期内无任何 CDP 流量）后由 10 秒一轮的扫描
+  冻结，**扫描在浏览器构造时无条件启动**。AI 的每条命令在 `GuestCdp` 的 `send` /
+  `evaluate` / `screenshot` 前都会 **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击
+  永远落在活页面上；`lifecycle()` 自己不走这条钩子，否则扫描的冻结会把自己标成活动。
+  扫描的判定集中在 `src/core/cdp/sleep.ts` 的 `shouldSleepPage`，它把台上、已冻结、无载体、
+  加载、崩溃、空白、DevTools、有声、`sleepPolicy: "never"`、AI 窗口与**命令在途**
+  一次性判完。命令在途由 `CdpExecutor.busy()` 报告（guest 走 `GuestSessions.pending` 计数），
+  扫描遇到忙碌页就刷新 AI 窗口并跳过——一个跑了几分钟的 `evaluate` 不会在脚本中间被冻住，
+  命令结束后仍享有完整宽限期。
+  每个标签页可单独设「永不休眠」（右键菜单，`setSleepPolicy`），设为 never 时立刻唤醒；
+  默认策略就是「跟随默认」。休眠页在 favicon 槽显示蓝色雪花，永不眠页在标题旁显示图钉，
+  两处标签的 `title` 也写明状态。`sleepGraceMs` / `sleepSweepMs` 是构造参数，
+  仅 e2e 用 `ENSEMBLE_SLEEP_GRACE_MS` / `ENSEMBLE_SLEEP_SWEEP_MS` 缩短；生产恒为 60s / 10s。
   另注意窗口级遮挡：整个应用被盖住或移出屏幕时，Chromium 原生节流本就会把所有页压停。
 
 ### 流程：把走通的操作存成资产
@@ -560,6 +580,18 @@ Playwright 只通过显式开启的调试端口接管内置表面（`connectOver
 对话框、下载、上传、扩展、原生密码管理器、Google SSO 全部保持浏览器原生行为。
 
 ## 启动链路
+
+**管理台自己先显示一层启动画面。** workspace 快照、内置表面状态和首帧排版不是同时到的：
+把壳体直接画出来，会先闪一帧空数据的新标签页，或一帧被启动行挤成半高的布局。启动画面
+因此是覆盖整个窗口的 `position: absolute` 层（居中 Logo），壳体在它背后完成挂载与首次
+测量；两帧之后启动画面淡出。它**不能**做成 flex 行——那正是旧实现把新标签页压到下半屏
+的原因。启动期间 `stageSuspended` 保持为真，把原生 guest 全部停在窗口外：原生表面会盖过
+任何 HTML，恢复视图的页面不能在启动画面上面露出来。最短显示 500ms 只是避免快速启动时
+闪两帧 Logo，不是假进度；workspace 一直不返回时 8 秒看门狗会放行到界面，避免永久停在
+启动页。`scripts/e2e-boot-splash.mjs` 在启动早期采样：启动层必须铺满窗口、壳体必须已是
+全高，随后启动层消失。
+
+外部浏览器的启动链路：
 
 ```
 resolveEngine(identity, environment)
@@ -924,6 +956,17 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 三四个整窗页面叠在同一个矩形上闪。合成器对透明节点照常出帧，截图路径不受影响。
 详见 `docs/design/browser-surface.md` 的「呈现」一节。
 
+**声音是标签页的状态，不是页面的实现。** 主进程监听 `audio-state-changed`，页面主动发声时
+标签条出现喇叭（`Volume2`），静音时出现 `VolumeX`；点击即切换，走 `embedded:muted` 通道由
+主进程调 `setAudioMuted`。静音记在标签记录上，`did-finish-load` 重放一次，所以刷新不丢。
+它只关 Ensemble 的输出：页面里的 `AudioContext`、音量节点与「是否在播放」的判断都不受影响，
+AI 调试声音界面才不必被外放打扰。
+
+**AI 操作默认静音，除非用户要过声音。** MCP 的 `tools/call` 在审批通过后、执行工具前调
+`muteForAi(tabId)`；AI 新建的标签、`open_browser_view` / `run_flow` 打开的页面从创建起就带
+`muted`。用户手动点过取消静音后 `userUnmuted` 置位，之后的 AI 操作不再自动覆盖；AI 显式调用
+`set_browser_muted` 仍然可以静音——那是它自己的意图，不是默认策略。
+
 **批量操作要合并广播。** `BrowserManager` 的 `withoutBroadcasts()` 包住 `createView` 与整个
 `launchIdentityBatch`：逐条广播会让渲染层把「容器在、页面还没到」的中间态真画出来，舞台就
 空一下再填满。合并后一次启动只发一次终态；失败回滚的路径必须先释放 hold 再抛错，否则界面
@@ -936,16 +979,22 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 「谁拥有这块矩形」，不是「谁盖在上面」。切到自绘页签时原生前端被**移到 0×0 停放**而不是
 销毁，控制台历史因此还在。
 
-**尺寸和设备是两件事，界面必须分开。** 两者容易被看成同一个「分辨率设置」，语义其实不同：
+**原生前端的语言是宿主偏好，不是 localStorage。** 接上宿主后，DevTools 从 Electron 的
+DevTools pref service 读 `language` 与 `disable-locale-info-bar`（值都是 JSON 字符串），
+只有前端自己的 `InspectorFrontendHost.setPreference` 写得进去；未挂载的文档拿到的是 stub，
+写 localStorage 看起来成功，真正的面板永远读不到。打开面板前先用一个**离屏、真正挂到被测页**
+的临时前端写入并读回这两个偏好，关掉它，再开可见面板。**不能**在即将变成面板的那份视图里
+预加载前端：前端先初始化、后 `setDevToolsWebContents`，会留下一个工具栏正常、Elements 全空的
+空壳。`devtools-language.ts` 收口这段临时视图的创建与清理。
 
-| 选择 | 做了什么 | 页面认为自己是 |
-| --- | --- | --- |
-| 只改尺寸 | `Emulation.setDeviceMetricsOverride` 钉住布局视口 | 桌面（无触摸、桌面 UA、`pointer: fine`） |
-| 应用设备 | 尺寸 + `setTouchEmulationEnabled` + `setUserAgentOverride` | 该设备 |
-
-只钉尺寸是「验 768px 布局」这一需求的正解：页面不该因为你要看窄屏就以为自己是手机。
-两者互斥，且**改尺寸会替换掉设备**（保留尺寸、停止假扮手机），**清除设备会保留尺寸**
-（只回到桌面身份）——这是实际调试时的方向，只有「自适应」才回到铺满格位。
+**设备页先分桌面与移动端，再选具体尺寸。** 桌面模式是纯几何：自适应、五个常用桌面分辨率、
+自定义；页面仍是无触摸、桌面 UA 的浏览器。移动端模式是身份：五个设备各带尺寸、DPR、触摸
+与移动端 UA，点一下整套生效；「自定义」沿用上一个设备的 DPR / UA，只改宽高。旋转按钮交换
+宽高并保留设备名；拖动页面边缘或输入宽高，选择自动落到「自定义」——列表始终回答页面现在
+穿的是什么，且只有一行处于选中态（自定义尺寸恰好等于某个预设时仍算自定义）。切回桌面模式
+恢复的是**进入移动端之前的桌面答案**（某个分辨率、显式自适应，或继续跟随工作区默认），
+不会把手机的 393×852 当成一个自定义桌面视口留在页面上。底层仍是 viewport / device 两条
+路径，`mobile` 跟**设备身份**走，不跟触摸开关走（见踩坑库 2026-11-14）。
 
 三条实测得出的规则（来自 CDP 探针，不是推测）：
 
@@ -956,11 +1005,53 @@ View     N ── N Tag（同上；筛选时合并成员及其站点的标签）
 3. **`setDeviceMetricsOverride` 会钉死 CSS 视口，与节点的 box 无关。** 这让几何错误在设备
    模式下不可见：box 算错了，页面照样报 393px。修几何问题时不能只在设备模式下验收。
 
+**触摸能力常开，鼠标转触摸跟着指针开关。** 两个 CDP 命令不是一回事：
+
+- `Emulation.setTouchEmulationEnabled` 只声明 `maxTouchPoints`，让页面相信自己支持触摸。
+  它对整个设备会话常开，`maxTouchPoints` 不会因为指针移动而闪成 0。
+- `Emulation.setEmitTouchEventsForMouse` 把鼠标按下 / 移动 / 抬起合成 touch 事件，拖拽才会
+  变成滑动。它**同时会给原生窗口装一张 Chromium 自己的触摸光标**（深灰色圆点），而且这张
+  光标是窗口级的，不是页面级的。
+
+旧实现一直开着第二条命令，所以切到移动端后整个窗口都是灰点，连工具栏和原生 DevTools 都
+盖住；页面里再画一个 DOM 圆点，就成了两个圆点。现在由主进程轮询系统指针
+（`screen.getCursorScreenPoint`），只用 `pointerInsidePage` 判断指针是否落在某个触摸页
+的矩形内：落在里面才启用鼠标转触摸，离开、窗口失焦或最小化就立即禁用。圆点因此就是
+Chromium 的原生触摸光标，只在该页面内出现，跟随没有 IPC 延迟，也不会污染页面 DOM 或截图。
+页面自己的 `maxTouchPoints` 始终不变。
+
+**关闭转换就会交还光标。** 触摸光标是 `setEmitTouchEventsForMouse` 的副作用，不是窗口上
+残留的图片：命令一关，Chromium 按指针下的元素重新算光标并调 `SetCursor`，指针随后移过
+工具栏时也会继续按宿主自己的 cursor 走。早期实现额外在渲染层注入过一张 32×32 的箭头图片
+（`html.cursor-refresh` 类），用来「逼」一次刷新；它和系统主题不同色，指针每次进出页面都会
+闪一下，这套 IPC 与样式已整体删除。应用根（`body`）与 DevTools 前端根仍显式写
+`cursor: default`，按钮、输入框与缩放手柄各自的 cursor 仍然覆盖它。**缩放因子由布局统一归还。** 固定视口激活期间，页面 `zoomFactor` 就是 fit 比例，用来让
+CSS 视口保持请求的尺寸；设置页、设备页、拖拽边框、键盘快捷键都能清掉视口，任何一条路径
+忘了恢复，页面就会带着 0.4 倍缩放进入自适应模式——文字特别小，而尺寸状态看起来全对。
+`placePageSurface` 的「无固定视口」分支因此无条件执行
+`applyZoom(tab, tab.zoomOverride ?? defaultZoom)`：布局是每条路径都会经过的地方，把恢复放
+在这里，新增一条清视口路径也不会再留下残留缩放。e2e 用固定 1920×1080 再切自适应，断言
+页面 DPR 回到基线、CSS 视口等于主进程发布的页面盒宽度。
+
 **分栏按格位算，不按适配后的页面算。** 页面有固定视口时会 `viewportFitRect` 缩成一个保持
 宽高比的盒子；拿这个盒子去分 42% 给面板，一个 393×852 的手机适配出来的窄盒会让面板只剩
 一百多像素——用面板选设备，选完就没法再操作。正确做法是：分栏宽度 = 格位宽度 ×
 (1 − 面板占比)，页面再在**剩下的区域**里重新 `viewportFitRect` 并同步 `zoomFactor`。
 一句话：**面板占多少由容器决定，页面画多大由宽高比决定**，两个矩形不能混用。
+
+**尺寸在页面边沿上拖，面板只负责精确值。** 舞台在页面外框上叠一层 `PageSizeFrame`：右边、
+下边、右下角三段拖拽区，右下角常驻一个斜纹握把，悬停边线时亮起主色，`W × H` 徽标贴在页框
+外侧（贴边时收进内侧并让开握把）。固定视口的页面在格位内再让出
+`EMBEDDED_PAGE_FRAME_GUTTER`（10px）的舞台边距，手柄因此落在**页面外的宿主空间**：guest 是
+原生表面，压在手柄上的那截会把指针和光标一起抢走，触摸模式下更会被页面的圆点光标盖住——
+留边之后，圆点停在网站视窗边缘，边框恢复成普通的缩放光标。拖动按页面中心与**起始 fit
+比例**换算，被拖的边跟指针走；宽高先钳到 `cell`（主进程随 `bounds` 一起发布的适配盒）在
+该比例下装得下的上限，超过就停在格位边缘，而不是让页面重新缩小——否则指针继续外移时页面
+反而在另一边变窄，边框也会从页面上滑开。页面缩小到重新装进格位时按新的 fit 比例重画草稿
+框，边框始终贴在页面上。80ms 节流，松手提交最终值。拖拽期间 `store.holdPointer()` 让 guest
+让出指针，否则 `webview` 会吃掉 mousemove。带设备的页面只改宽高、保留 DPR / 触摸 / UA，并
+去掉设备名——拖过之后它就是自定义尺寸，不再冒充某个型号；自适应页面不显示手柄，没有固定
+视口可调。
 
 **性能采样只在那一页显示时进行。** `Performance.enable` + `Performance.getMetrics` 拿到的是
 累计计数（`TaskDuration`、`LayoutCount`、`RecalcStyleCount` 等），需要按间隔差分才是
@@ -1203,16 +1294,22 @@ AI 在页面上做了什么，是一个**记录**，不是通知。它有过一�
 一次点击和紧随其后的输入折成同一行，工具名还停在第一次那个。
 
 - 存在 `<userData>/ai-activity.json`（`core/ai-activity.ts`），自己的上限 1000 条，自己的
-  去重键（工具 + 结果 + 是否被拒 + 授权结论，10 秒窗口），**没有已读状态**——没人需要确认
+  去重键（工具 + 结果 + 是否被拒 + 授权结论 + 来源，10 秒窗口），**没有已读状态**——没人需要确认
   AI 点了一下，一个随调用增长的徽标只是把这堆噪音挪了个位置。
+- **每条调用留一份可核查的细节。** `details` 最多 3 条，每条存脱敏后的参数与结果摘要；
+  `evaluate_browser_page` 的摘要行以脚本首行开头，展开能看到完整脚本与结果（结果截断到
+  4000 字符）。`type_browser_text` 的正文永远记成 `[redacted]`，密码字段不进库。历史记录
+  没有这部分，不补造。
 - 每条带 `origin / siteId / identityId / profileId / clean / tabId / tabTitle / ok /
   originAuthorized / approval / error`。站点与档案不是判定依据，是读记录时要回答的问题
-  （「它在这个站点的哪个档案里做的」）。
+  （「它在这个站点的哪个档案里做的」）。**`partition` 不写进记录也不返回给 AI**：默认档案
+  的历史分区名里带着 "clean"，读它的人会把长期会话误判成一次性会话。
 - 分组在 `shared/ai-activity.ts` 里做，面板与页面共用：有已知站点按 `siteId`，没有就按
   origin。两处各写一份的那天，面板会换一种方式分组而没人发现。
 - 入口两个：工具栏的 AI 按钮（面板里最近两个站点、各三行，加当前页的授权状态与服务状态），
   以及工作台侧栏的「AI 记录」页（全部站点、全部行、可清空）。面板**不**承担编辑完整策略的
-  职责——那是设置页的 `AiPolicyEditor`，四个档位与整张名单在那里。
+  职责——那是设置页的 `AiPolicyEditor`，四个档位与整张名单在那里。记录页与消息页都走
+  `.page` + `.page-body` 的固定页头 / 单滚动区契约，长历史不会把后面的行裁掉。
 - 写入发生在 `onPageAction` 里，且**在检查窗口是否存在之前**：应用收在托盘里时 AI 照样在动，
   只记屏幕上看得到的调用等于漏掉最没人看着的那些。
 

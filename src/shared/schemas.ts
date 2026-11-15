@@ -220,6 +220,8 @@ export const settingsPatchSchema = z.object({
     })
     .nullable()
     .optional(),
+  sitesView: z.enum(["list", "table"]).optional(),
+  identitiesView: z.enum(["list", "table"]).optional(),
   /**
    * Performance monitor cadence and reach.
    *

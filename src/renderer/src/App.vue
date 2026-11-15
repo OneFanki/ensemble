@@ -81,6 +81,21 @@ const navigation = useNavigationStore();
 const view = ref<View>("browser");
 const mode = ref<ShellMode>(store.settings.shellMode ?? "browse");
 /**
+ * Whether the opening splash is still covering the shell.
+ *
+ * `store.loading` alone was not enough: it clears inside `init()` before the
+ * embedded state and the first stage measurement have landed, so the window
+ * showed one frame of a half-built new tab. The splash stays until both stores
+ * are ready and the shell has painted behind it, which also keeps the first
+ * frame from being the boot row pushing the browser into the lower half.
+ */
+const bootReady = ref(false);
+const bootStartedAt = performance.now();
+/** A workspace that never answers must not leave the window on the splash. */
+const bootWatchdog = window.setTimeout(() => {
+  bootReady.value = true;
+}, 8_000);
+/**
  * The sidebar is up while the workbench is, and while any management page is.
  *
  * It used to be two separate things that each owned their own half of this:
@@ -203,6 +218,28 @@ const capturePromptVisible = computed(
   () => captureVisible.value && store.pendingLogins.length > 0 && !captureCovered.value,
 );
 
+/**
+ * Holds the splash for a moment, then reveals the painted shell.
+ *
+ * The minimum is not a spinner pretending work is still happening: it keeps a
+ * fast start from flashing a logo for two frames, and gives the first paint of
+ * the shell something to land behind. Fonts are awaited for the same reason —
+ * revealing before they settle moves every label a frame after the user starts
+ * reading it.
+ */
+async function finishBoot(): Promise<void> {
+  await document.fonts.ready.catch(() => undefined);
+  const remaining = 500 - (performance.now() - bootStartedAt);
+  if (remaining > 0) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+  }
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  window.clearTimeout(bootWatchdog);
+  bootReady.value = true;
+}
+
 onMounted(async () => {
   await store.init();
   await embedded.init();
@@ -236,24 +273,6 @@ onMounted(async () => {
   window.ensemble.onEmbeddedPage(() => {
     if (view.value !== "browser") switchView("browser");
   });
-  /*
-   * First run: the guide opens by itself, once.
-   *
-   * It used to be a spotlight tour that pointed at live controls, and that was
-   * the wrong shape here twice over: the UI it pointed at kept moving, and a
-   * series of callouts teaches where a button is without ever saying what the
-   * product is for. The guide answers both in one page, and it is the same page
-   * the title-bar dot and the Settings entry open later — so there is exactly
-   * one introduction to keep current.
-   *
-   * Deferred a frame so the shell has painted: opening it before the browser
-   * page exists makes the backdrop flash over an empty window.
-   */
-  if (guideIsUnread(store.settings)) {
-    window.setTimeout(() => {
-      void openGuide();
-    }, 350);
-  }
   // The main process restores the last view itself; the renderer only reports it
   // so the user knows why several windows just appeared.
   window.ensemble.onViewRestored((outcome) => {
@@ -277,6 +296,26 @@ onMounted(async () => {
   // Defaulting the section keeps "wherever I was" for this entry: the user asked
   // for settings, not for a particular pane.
   window.ensemble.onOpenSettings(() => openSettings(settingsSection.value));
+
+  await finishBoot();
+  /*
+   * First run: the guide opens by itself, once.
+   *
+   * It used to be a spotlight tour that pointed at live controls, and that was
+   * the wrong shape here twice over: the UI it pointed at kept moving, and a
+   * series of callouts teaches where a button is without ever saying what the
+   * product is for. The guide answers both in one page, and it is the same page
+   * the title-bar dot and the Settings entry open later — so there is exactly
+   * one introduction to keep current.
+   *
+   * Scheduled after the splash: opening it underneath would make the first
+   * visible frame the guide's backdrop instead of the shell.
+   */
+  if (guideIsUnread(store.settings)) {
+    window.setTimeout(() => {
+      void openGuide();
+    }, 350);
+  }
 });
 
 function applyTheme(theme: "dark" | "light" | "system") {
@@ -300,7 +339,9 @@ function handleSystemThemeChange() {
 
 const systemTheme = window.matchMedia("(prefers-color-scheme: light)");
 systemTheme.addEventListener("change", handleSystemThemeChange);
-onUnmounted(() => systemTheme.removeEventListener("change", handleSystemThemeChange));
+onUnmounted(() => {
+  systemTheme.removeEventListener("change", handleSystemThemeChange);
+});
 
 function switchView(next: View) {
   view.value = next;
@@ -371,8 +412,8 @@ function openWorkspace() {
  * it replaced.
  */
 watch(
-  view,
-  (next) => embedded.suspendStage(next !== "browser"),
+  [view, bootReady],
+  ([next, ready]) => embedded.suspendStage(!ready || next !== "browser"),
   { flush: "sync", immediate: true },
 );
 
@@ -827,13 +868,17 @@ async function handleLocale(locale: LocaleSetting) {
       tabs from there.
     -->
     <GuestPool />
-    <div v-if="store.loading" class="boot">
-      <Logo :size="30" />
-      <span class="boot-copy">
-        <span class="boot-name">Ensemble</span>
-        <span class="boot-hint">{{ $t("app.bootHint") }}</span>
-      </span>
-    </div>
+    <!-- Covers the shell until it has painted, instead of taking a flex row of
+         its own and squeezing the browser into the lower half of the window. -->
+    <Transition name="boot-fade">
+      <div v-if="!bootReady" class="boot drag-region" aria-busy="true">
+        <span class="boot-mark"><Logo :size="34" /></span>
+        <span class="boot-copy">
+          <span class="boot-name">Ensemble</span>
+          <span class="boot-hint">{{ $t("app.bootHint") }}</span>
+        </span>
+      </div>
+    </Transition>
 
     <!--
       One shell for everything except settings: a column of destinations on the
@@ -1041,20 +1086,69 @@ async function handleLocale(locale: LocaleSetting) {
  * button, instance count in the dock header, version in the console).
  */
 .app-shell {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--content);
 }
 
+/*
+ * The opening splash is an overlay, never a row.
+ *
+ * It used to be a flex child beside the shell, so during initialization the
+ * window was split: the logo in the top half and a half-height new tab in the
+ * bottom half. Making it absolute both removes that frame and gives the shell
+ * the whole window to lay itself out behind the logo.
+ */
 .boot {
-  flex: 1 1 auto;
+  position: absolute;
+  inset: 0;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: var(--muted);
+  /*
+   * A fixed dark brand surface, not the theme's content colour. The theme is
+   * only known after the workspace snapshot arrives, so a themed splash would
+   * flip colour mid-boot on a light-theme machine; a dark opening that fades to
+   * either theme reads as intentional.
+   */
+  background: #101317;
+  color: #8b949e;
+  --logo-back: #c9d1d9;
+  --logo-mid: #8a939e;
+  --logo-card: #e0a44e;
+  --logo-glyph: #1a1206;
   font-size: var(--fs-base);
+}
+
+.boot-mark {
+  display: flex;
+  animation: boot-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes boot-breathe {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.boot-fade-leave-active {
+  transition: opacity 180ms ease;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.boot-fade-leave-to {
+  opacity: 0;
 }
 
 .boot-copy {
@@ -1066,12 +1160,12 @@ async function handleLocale(locale: LocaleSetting) {
 .boot-name {
   font-size: var(--fs-md);
   font-weight: 500;
-  color: var(--text);
+  color: #e6e8eb;
 }
 
 .boot-hint {
   font-size: var(--fs-2xs);
-  color: var(--faint);
+  color: #8b949e;
 }
 
 /*

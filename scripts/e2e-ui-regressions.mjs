@@ -1728,6 +1728,81 @@ try {
     newTabLayout,
   );
 
+  // The field's row and the text on it share a centre line. The input used to
+  // carry its own height on top of the shell's `stretch`, and a stretched flex
+  // item with an explicit height aligns at the cross-start: every placeholder
+  // sat five pixels above the middle of the box.
+  //
+  // Focus has to paint the shell's outline, not the field. The old treatment was
+  // a conic gradient with a glow clipped inside the box, so focusing washed a
+  // rotating light across the content; the replacement is one SVG dash on the
+  // outline, which also fixes the corner case where an absolutely positioned
+  // SVG keeps its intrinsic 300×150 size instead of the shell's.
+  //
+  // The outline is SVG in every state, so the settled accent line is the exact
+  // same 2px stroke the dash travelled on. A CSS border underneath was a 1px
+  // second line, which made the final highlight look thinner than the sweep.
+  const newTabField = await client.evaluate(`(async () => {
+    const box = document.querySelector('.stage .blank-slot .nt-box');
+    const input = box?.querySelector('.nt-input');
+    const trace = box?.querySelector('.sweep-line');
+    if (!box || !input || !trace) return null;
+    input.focus();
+    await new Promise((r) => setTimeout(r, 150));
+    const b = box.getBoundingClientRect();
+    const i = input.getBoundingClientRect();
+    const t = trace.getBoundingClientRect();
+    const style = getComputedStyle(trace);
+    const sweepWidth = style.strokeWidth;
+    // Past the 500ms lap and its tail: the settled stroke is fully in by now.
+    await new Promise((r) => setTimeout(r, 600));
+    const focus = getComputedStyle(box.querySelector('.shell-focus'));
+    const outline = getComputedStyle(box.querySelector('.shell-outline'));
+    return {
+      centreGap: Math.abs((b.top + b.bottom) / 2 - (i.top + i.bottom) / 2),
+      focused: box.matches(':focus-within'),
+      traceInset: {
+        left: t.left - b.left,
+        top: t.top - b.top,
+        right: b.right - t.right,
+        bottom: b.bottom - t.bottom,
+      },
+      fill: style.fill,
+      stroke: style.stroke,
+      animated: style.animationName !== "none" && style.animationDuration !== "0s",
+      sweepWidth,
+      focusWidth: focus.strokeWidth,
+      focusOpacity: Number(focus.opacity),
+      outlineWidth: outline.strokeWidth,
+      borderWidth: getComputedStyle(box).borderTopWidth,
+    };
+  })()`);
+  check(
+    "the new-tab field centres its text in the box",
+    newTabField?.centreGap !== undefined && newTabField.centreGap <= 1,
+    newTabField,
+  );
+  check(
+    "focus traces the outline instead of painting inside the field",
+    newTabField?.focused === true &&
+      newTabField?.fill === "none" &&
+      newTabField?.stroke !== "none" &&
+      newTabField?.animated === true &&
+      [newTabField.traceInset.left, newTabField.traceInset.top, newTabField.traceInset.right, newTabField.traceInset.bottom].every(
+        (inset) => inset > 0 && inset < 3,
+      ),
+    newTabField,
+  );
+  check(
+    "the settled focus line is the sweep's own stroke, with no CSS border",
+    newTabField?.focusOpacity === 1 &&
+      newTabField?.sweepWidth === "2px" &&
+      newTabField?.focusWidth === newTabField?.sweepWidth &&
+      newTabField?.outlineWidth === "1px" &&
+      parseFloat(newTabField?.borderWidth ?? "1") === 0,
+    newTabField,
+  );
+
   // The backdrop picker is the "make the homepage mine" affordance: choosing a
   // swatch has to persist, or it is only a preview.
   const backdrop = await client.evaluate(`(async () => {
@@ -1737,12 +1812,23 @@ try {
     surface.querySelector('.nt-look-btn')?.click();
     await new Promise((r) => setTimeout(r, 120));
     const swatches = [...surface.querySelectorAll('.nt-swatch')];
+    // A preview has to preview something: a 5% wash in a 20px circle is the
+    // same near-black disc for every preset, which is what the picker used to
+    // show. The swatch paint is the same hues at thumbnail strength.
+    const paints = swatches.map((el) => getComputedStyle(el).backgroundImage);
     const target = swatches.find((el) => !el.classList.contains('active')) ?? swatches[0];
-    const chosen = target?.getAttribute('title') ?? "";
+    const chosen = target?.getAttribute("title") ?? "";
     target?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await new Promise((r) => setTimeout(r, 400));
     const after = (await window.ensemble.getWorkspace()).settings.newTabBackground;
-    return { before, after, chosen, count: swatches.length, reopened: false };
+    return {
+      before,
+      after,
+      chosen,
+      count: swatches.length,
+      uniquePaints: new Set(paints).size,
+      reopened: false,
+    };
   })()`);
   check(
     "picking a backdrop persists it as a setting",
@@ -1750,6 +1836,11 @@ try {
       Boolean(backdrop?.after) &&
       backdrop?.after !== backdrop?.before &&
       (backdrop?.count ?? 0) >= 3,
+    backdrop,
+  );
+  check(
+    "every backdrop offers its own preview",
+    backdrop?.count >= 3 && backdrop?.uniquePaints === backdrop?.count,
     backdrop,
   );
 
@@ -1881,6 +1972,25 @@ try {
   );
 
   // --- Page actions: close one page, and the right-click menu ---------------
+  // Closing several pages quickly used to mean hovering each one first. Both
+  // strips now render the close button at rest; the cell's strip is checked
+  // here (the window strip is covered by the tab-sleep suite).
+  const slotCloses = await client.evaluate(`(() =>
+    [...document.querySelectorAll('.stage .slot-tab')].map((tab) => {
+      const close = tab.querySelector('.slot-tab-close');
+      return {
+        id: tab.getAttribute('data-tab-id'),
+        current: tab.classList.contains('current'),
+        opacity: close ? Number(getComputedStyle(close).opacity) : null,
+      };
+    })
+  )()`);
+  check(
+    "every page tab in a cell shows its close button without hovering",
+    slotCloses?.length > 0 && slotCloses.every((tab) => (tab.opacity ?? 0) >= 0.5),
+    slotCloses,
+  );
+
   const closeOne = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
     const view = state.views.find((item) => item.id === state.activeViewId);
@@ -2985,10 +3095,12 @@ try {
     emptyPlus,
   );
 
-  // --- Accounts of different shapes keep one card height --------------------
-  // A long role, a non-default browser and extra fields used to wrap a card to a
-  // second chip line, which stretched its grid row and left every neighbour with
-  // a band of empty space under its actions.
+  // --- Accounts of different shapes keep one row height ---------------------
+  // A long role, a non-default browser and extra fields used to wrap an account
+  // to a second chip line, which stretched its grid row and left every neighbour
+  // with a band of empty space under its actions. The default is a list now, so
+  // the assertion follows rows instead of grid cells: every row in a group shares
+  // a height, and the wordy account's chips still sit on one line.
   const wordySeed = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const snap = await api.getWorkspace();
@@ -3009,24 +3121,43 @@ try {
     return { ok: true, siteId: site.id };
   })()`);
   await openConsolePage(client, "identities");
+  // Earlier checks fold and reopen groups; the wordy account has to be on
+  // screen for its chips to be measurable.
+  await client.evaluate(`(() => {
+    for (const head of document.querySelectorAll('.identities .group-head[aria-expanded="false"]')) {
+      head.click();
+    }
+    return true;
+  })()`);
+  await wait(300);
   await waitFor(client, `document.querySelectorAll('.id-card').length >= 2`);
   const heights = await client.evaluate(`(() => {
     const cards = [...document.querySelectorAll('.id-card')];
-    const rows = new Map();
-    for (const card of cards) {
-      const rect = card.getBoundingClientRect();
-      const y = Math.round(rect.y);
-      if (!rows.has(y)) rows.set(y, []);
-      rows.get(y).push(Math.round(rect.height));
+    // Collect heights per group: rows between one group header and the next.
+    const parent = cards[0]?.parentElement;
+    const groups = [];
+    let current = null;
+    for (const node of parent ? [...parent.children] : []) {
+      if (node.classList.contains('group-head')) {
+        current = [];
+        groups.push(current);
+      } else if (node.classList.contains('id-card')) {
+        if (!current) {
+          current = [];
+          groups.push(current);
+        }
+        current.push(Math.round(node.getBoundingClientRect().height));
+      }
     }
-    const groups = [...rows.values()].filter((list) => list.length > 1);
     const wordy = cards.find((card) => card.querySelector('.name')?.textContent?.includes('长描述'));
     const chips = wordy ? [...wordy.querySelectorAll('.meta-row > .tag')] : [];
+    const visibleGroups = groups.filter((list) => list.length > 0);
     return {
       cardCount: cards.length,
-      // Cards sharing a grid row share a height.
-      uniform: groups.length > 0 && groups.every((list) => new Set(list).size === 1),
-      groups: groups.length,
+      groupCount: visibleGroups.length,
+      // Rows of the same group share a height.
+      uniform: visibleGroups.length > 0 && visibleGroups.every((list) => new Set(list).size === 1),
+      heights: visibleGroups,
       chips: chips.length,
       // One line means every chip shares a top edge.
       oneLine: chips.length > 0 && new Set(chips.map((chip) => Math.round(chip.getBoundingClientRect().top))).size === 1,
@@ -3034,13 +3165,16 @@ try {
     };
   })()`);
   check(
-    "accounts of different shapes keep one card height",
-    wordySeed?.ok === true && heights?.uniform === true && heights?.oneLine === true,
+    "accounts of different shapes keep one row height",
+    wordySeed?.ok === true &&
+      heights?.uniform === true &&
+      heights?.oneLine === true &&
+      heights?.groupCount >= 1,
     heights,
   );
   // Folding must not hide: the counter carries the names it swallowed.
   check(
-    "the facts a card folds away stay readable from its counter",
+    "the facts a row folds away stay readable from its counter",
     typeof heights?.folded === "string" && heights.folded.length > 0,
     heights,
   );

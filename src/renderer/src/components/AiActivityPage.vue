@@ -15,6 +15,7 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { groupAiActivity } from "@shared/ai-activity";
 import type { AiActivitySiteGroup } from "@shared/types";
+import AiActivityDetail from "./AiActivityDetail.vue";
 import AiActivityRow from "./AiActivityRow.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import GroupHeader from "./ui/GroupHeader.vue";
@@ -29,6 +30,7 @@ const confirm = useConfirmStore();
 const { t } = useI18n();
 
 const collapsed = ref<Record<string, boolean>>({});
+const expanded = ref<Record<string, boolean>>({});
 const groups = computed<AiActivitySiteGroup[]>(() => groupAiActivity(workspace.aiActivity));
 
 const allCollapsed = computed(
@@ -70,6 +72,10 @@ function toggle(group: AiActivitySiteGroup): void {
   collapsed.value = { ...collapsed.value, [group.key]: !collapsed.value[group.key] };
 }
 
+function toggleRecord(id: string): void {
+  expanded.value = { ...expanded.value, [id]: !expanded.value[id] };
+}
+
 function toggleAll(): void {
   const next = !allCollapsed.value;
   collapsed.value = Object.fromEntries(groups.value.map((group) => [group.key, next]));
@@ -103,28 +109,43 @@ async function clearAll(): Promise<void> {
       <template #icon><Sparkles :size="20" /></template>
     </EmptyState>
 
-    <div v-else class="groups">
-      <section v-for="group in groups" :key="group.key" class="group" :data-ai-activity-group="group.key">
-        <GroupHeader
-          :name="siteNameOf(group)"
-          :count="group.records.length"
-          :collapsed="Boolean(collapsed[group.key])"
-          @toggle="toggle(group)"
+    <div v-else class="page-body" data-ai-activity-scroll>
+      <div class="groups">
+        <section
+          v-for="group in groups"
+          :key="group.key"
+          class="group"
+          :data-ai-activity-group="group.key"
         >
-          <template #meta>
-            <span v-if="contextOf(group)" class="group-context">{{ contextOf(group) }}</span>
-            <!-- The address is the group's name when the workspace has no site for
-                 it; printing it twice was how a row read "127.0.0.1:52228 默认档案
-                 127.0.0.1:52228". -->
-            <span v-if="siteNameOf(group) !== group.origin" class="group-origin mono">
-              {{ group.origin }}
-            </span>
-          </template>
-        </GroupHeader>
-        <div v-if="!collapsed[group.key]" class="rows">
-          <AiActivityRow v-for="record in group.records" :key="record.id" :record="record" />
-        </div>
-      </section>
+          <GroupHeader
+            :name="siteNameOf(group)"
+            :count="group.records.length"
+            :collapsed="Boolean(collapsed[group.key])"
+            @toggle="toggle(group)"
+          >
+            <template #meta>
+              <span v-if="contextOf(group)" class="group-context">{{ contextOf(group) }}</span>
+              <!-- The address is the group's name when the workspace has no site for
+                   it; printing it twice was how a row read "127.0.0.1:52228 默认档案
+                   127.0.0.1:52228". -->
+              <span v-if="siteNameOf(group) !== group.origin" class="group-origin mono">
+                {{ group.origin }}
+              </span>
+            </template>
+          </GroupHeader>
+          <div v-if="!collapsed[group.key]" class="rows">
+            <template v-for="record in group.records" :key="record.id">
+              <AiActivityRow
+                :record="record"
+                interactive
+                :expanded="Boolean(expanded[record.id])"
+                @select="toggleRecord(record.id)"
+              />
+              <AiActivityDetail v-if="expanded[record.id]" :record="record" />
+            </template>
+          </div>
+        </section>
+      </div>
     </div>
   </section>
 </template>

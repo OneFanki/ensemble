@@ -26,6 +26,15 @@ export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
  */
 export interface CdpExecutor {
   isAttached(): boolean;
+  /**
+   * True while a command is waiting for its reply.
+   *
+   * The sleep sweep reads this: a long `evaluate` outlives the AI grace window,
+   * and freezing the page in the middle of it turns a running script into a
+   * thirty-second timeout. "Not idle" is a fact about the command stream, not
+   * about when the last command started.
+   */
+  busy(): boolean;
   prepare(): Promise<void>;
   detach(): void;
   send<T = unknown>(
@@ -84,20 +93,17 @@ export class EmbeddedCdp implements CdpExecutor {
   private attached = false;
   /** Resolves once attach and focus emulation are both in place. */
   private ready: Promise<void> | null = null;
+  /** Commands waiting for their reply; see `busy()`. */
+  private pending = 0;
 
-  constructor(
-    private readonly contents: WebContents,
-    /**
-     * Called before every protocol command. The browser manager uses it to
-     * keep the page usable: a parked page idles hidden after a while, and the
-     * first CDP call of an AI burst must show it again before the actual
-     * command runs — screenshots and input dispatch included.
-     */
-    private readonly onActivity?: () => Promise<void> | void,
-  ) {}
+  constructor(private readonly contents: WebContents) {}
 
   isAttached(): boolean {
     return this.attached && !this.contents.isDestroyed();
+  }
+
+  busy(): boolean {
+    return this.pending > 0;
   }
 
   /** Attaches and turns on focus emulation. Safe to call concurrently. */
@@ -142,7 +148,6 @@ export class EmbeddedCdp implements CdpExecutor {
     params: Record<string, unknown> = {},
     options: { timeoutMs?: number } = {},
   ): Promise<T> {
-    await this.onActivity?.();
     await this.prepare();
     /*
      * Every command is bounded.
@@ -159,11 +164,16 @@ export class EmbeddedCdp implements CdpExecutor {
      * commands rather than one long one, so this ceiling does not cap it.
      */
     const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    return (await withDeadline(
-      this.contents.debugger.sendCommand(method, params) as Promise<T>,
-      timeoutMs,
-      `CDP ${method} 没有响应`,
-    )) as T;
+    this.pending += 1;
+    try {
+      return (await withDeadline(
+        this.contents.debugger.sendCommand(method, params) as Promise<T>,
+        timeoutMs,
+        `CDP ${method} 没有响应`,
+      )) as T;
+    } finally {
+      this.pending -= 1;
+    }
   }
 
   /**

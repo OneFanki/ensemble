@@ -22,6 +22,9 @@
 允许名单里（或本次已授权）才会执行。判定只看站点 origin，档案与账号只作为记录里的上下文。
 未声明闸门的 `run` 工具不接触被测页面内容——它们操作的是窗口、布局或标签条。
 
+**`pageTarget` 不是闸门。** 读页面、截图、等待、性能读取和切换页面也会声明它，用途只有两个：
+在 AI 操作前把页面静音，以及决定活动记录归属哪个标签页。它不会让一个只读工具获得写权限。
+
 **`hidden: true`** 是旧名字的兼容别名，不广播给客户端，只在直接调用时生效。新代码不要再用。
 
 **时限。** 没有特别说明的工具沿用 CDP 单命令 30 秒上限（`DEFAULT_COMMAND_TIMEOUT_MS`）。
@@ -57,12 +60,13 @@
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `list_browser_tabs` | read | — | 无 | 标签 id、所属身份、标题、地址、布局 |
+| `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案 | 标签 id、所属身份、档案、标题、地址、布局、静音/有声 |
 | `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接 | 导航后的地址与标题 |
-| `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | `{ ok: true }` |
+| `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态 |
 | `set_browser_layout` / `pin_browser_tab` / `compose_view` | run / run / write | — | 省略 `viewId` 时作用于台上的视图 | 布局或容器 |
 | `set_browser_viewport` / `reset_browser_viewport` | run | 是 | 宽 320–3840、高 320–2160 | 生效后的尺寸 |
+| `set_browser_muted` | run | — | 只切换 Ensemble 的输出；页面自己的媒体与 Web Audio 照常运行。不受来源闸门限制，AI 自动静音不会覆盖用户手动取消的静音 | `{ tabId, muted }` |
 
 ### 内置浏览器 · 观察
 

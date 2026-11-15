@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Identity, RoleColor } from "@shared/types";
+import type { CollectionView, Identity, RoleColor } from "@shared/types";
 import {
   Check,
   CheckSquare,
@@ -23,6 +23,7 @@ import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
+import CollectionViewToggle from "./ui/CollectionViewToggle.vue";
 import EmptyState from "./ui/EmptyState.vue";
 import FormField from "./ui/FormField.vue";
 import IconButton from "./ui/IconButton.vue";
@@ -44,6 +45,12 @@ const embedded = useEmbeddedStore();
 const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
+/** The page's chosen density; the default is the compact one. */
+const viewMode = computed<CollectionView>(() => store.settings.identitiesView ?? "list");
+
+async function setView(next: CollectionView): Promise<void> {
+  await store.saveSettings({ identitiesView: next });
+}
 /**
  * Selection mode. The cards are buttons that launch (or open) on click, so
  * launching a handful one by one means every new browser window covers the next
@@ -503,6 +510,7 @@ function extraFacts(identity: Identity): string[] {
         :all-collapsed="allCollapsed"
         @toggle="groupCollapse.toggleAll(groupKeys)"
       />
+      <CollectionViewToggle :model-value="viewMode" @update:model-value="setView" />
       <AppButton class="health" @click="emit('sessionHealth')">
         <HeartPulse :size="13" />
         {{ $t("app.sessionHealth") }}
@@ -649,7 +657,7 @@ function extraFacts(identity: Identity): string[] {
     </Modal>
 
     <div class="page-body">
-      <div class="cards">
+      <div class="cards" :class="`view-${viewMode}`">
       <!-- Grouped by site; a view may span sites, so the account page no longer
            hides everything outside one global "current site". -->
       <template v-for="group in groups" :key="group.siteId">
@@ -658,7 +666,6 @@ function extraFacts(identity: Identity): string[] {
              The address and the add button ride in slots because they belong to
              this page, not to every grouped list. -->
         <GroupHeader
-          class="group-span"
           :name="group.name"
           :count="group.people.length"
           :collapsed="groupCollapse.isCollapsed(group.siteId)"
@@ -680,14 +687,29 @@ function extraFacts(identity: Identity): string[] {
           </template>
         </GroupHeader>
         <template v-if="!groupCollapse.isCollapsed(group.siteId)">
+          <!-- One header per group: the columns are per group because a group is
+               the local table. A single header above the page would sit apart
+               from every group but the first. -->
+          <div
+            v-if="viewMode === 'table'"
+            class="id-table-head"
+            :class="{ picking: selecting }"
+            aria-hidden="true"
+          >
+            <span v-if="selecting"></span>
+            <span>{{ $t("app.columnAccount") }}</span>
+            <span>{{ $t("app.columnRolePassword") }}</span>
+            <span>{{ $t("app.status") }}</span>
+            <span class="table-head-actions">{{ $t("app.columnActions") }}</span>
+          </div>
           <!--
             A `div` with a button role, not a `<button>`.
 
-            The card now carries a real launch control, and a `<button>` cannot
-            contain one — the parser would close the card at the inner button's
+            The row now carries a real launch control, and a `<button>` cannot
+            contain one — the parser would close the row at the inner button's
             tag and the actions would fall outside it. The role and the key
             handlers keep everything a button gave us: a tab stop, Enter and
-            Space activating the card itself, and `aria-pressed` in selection
+            Space activating the row itself, and `aria-pressed` in selection
             mode.
           -->
           <div
@@ -707,7 +729,7 @@ function extraFacts(identity: Identity): string[] {
             @keydown.enter.prevent="onCardClick(identity)"
             @keydown.space.prevent="onCardClick(identity)"
           >
-            <!-- Selection mode hides the per-card actions: in that mode the card is a
+            <!-- Selection mode hides the per-row actions: in that mode the row is a
                  checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
             <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
               <Check v-if="selected.has(identity.id)" :size="11" />
@@ -718,29 +740,18 @@ function extraFacts(identity: Identity): string[] {
                 <span class="name">{{ identity.name }}</span>
                 <span class="acct mono">{{ identity.username }}</span>
               </span>
-              <span
-                class="state mono"
-                :class="{
-                  live: Boolean(store.instanceFor(identity.id)),
-                  warn: identity.status === 'expired',
-                }"
-                :title="statusLabel(identity)"
-              >
-                <span class="dot"></span>{{ statusLabel(identity) }}
-              </span>
             </div>
 
             <!--
               Two facts always, the rest counted.
               
               Every account answers "which role" and "is a password stored" —
-              those are what a grid of accounts is compared on, so they always
+              those are what a list of accounts is compared on, so they always
               get a chip. Everything else (a non-default browser, extra login
               fields) folds into one "+N" chip whose tooltip names them. Showing
-              them inline made a four-chip card either wrap to a second line —
-              which made its whole grid row taller — or truncate every label into
-              "未…" and "Micr…". Neither is worth a fact the user did not come to
-              this page for.
+              them inline made a four-chip row either wrap — which made its whole
+              table row taller — or truncate every label into "未…" and "Micr…".
+              Neither is worth a fact the user did not come to this page for.
             -->
             <div class="meta-row">
               <span class="tag tag-role" :title="identity.role">{{ identity.role }}</span>
@@ -757,15 +768,26 @@ function extraFacts(identity: Identity): string[] {
               </span>
             </div>
 
+            <span
+              class="state mono"
+              :class="{
+                live: Boolean(store.instanceFor(identity.id)),
+                warn: identity.status === 'expired',
+              }"
+              :title="statusLabel(identity)"
+            >
+              <span class="dot"></span>{{ statusLabel(identity) }}
+            </span>
+
             <!--
-              The card's actions, in two groups.
+              The row's actions, in two groups.
 
               Left: what you do to this account's session — launch (or raise, then
               stop), relogin, check. Right: the management actions, as icon
               buttons, because "编辑" as a text link sat at the same visual weight
               as "重新登录" while doing something of a different kind. Icons on the
-              right edge also make every card's action row end at the same place,
-              which is what lets the grid be scanned vertically.
+              right edge also make every row's actions end at the same place,
+              which is what lets the list be scanned vertically.
             -->
             <div v-if="!selecting" class="card-actions">
               <span class="card-session">
@@ -965,33 +987,55 @@ function extraFacts(identity: Identity): string[] {
 }
 
 .cards {
-  display: grid;
-  /* The mockup's minimum, 212px, so the grid packs the same number of columns it
-     draws. The card was briefly 264px to stop the name and the "unchecked" state
-     truncating into each other — that was before the name and the address moved
-     onto two stacked lines, which is what actually bought the width back. */
-  grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
-  /* Rows size to their content. As grid items in a scrolling container they were
-     being compressed to the leftover height, and the card's own `overflow: hidden`
-     then clipped its action row. */
-  grid-auto-rows: min-content;
+  /* One template for the rows and the per-group table header: a column stays a
+     column across rows. The flexible tracks are `fr` rather than `auto`, so one
+     long role label cannot widen the role column of only its own row. */
+  --id-cols: minmax(0, 1.1fr) minmax(0, 0.8fr) 92px minmax(190px, 1.5fr);
+  display: flex;
+  flex-direction: column;
   /* Grow to the body's height so a short list still starts at the top and the
-     empty state (below) has a full-height box to centre itself in. Without this
-     the grid is content-height and the placeholder lands under the header,
-     half a page away from where every other page centres the same box. */
+     empty state (below) has a full-height box to centre itself in. */
   flex: 1 1 auto;
-  align-content: start;
-  gap: 7px;
-  align-content: start;
+  gap: 6px;
+  min-width: 0;
   padding: 1px 2px 2px 1px;
 }
 
-/* Site group headers span the grid; they are the replacement for the old
-   title-bar site switcher, so they carry the address and the count. */
-/* A group header inside the cards grid spans every column, so the site name
-   sits above its own cards rather than in the first cell. */
-.group-span {
-  grid-column: 1 / -1;
+.id-table-head {
+  display: grid;
+  grid-template-columns: var(--id-cols);
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--bg-elevated);
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+/* Table mode joins the rows into one block; the gap that separates list rows
+   would otherwise break every row out of the table. Groups still need air
+   between them, so the spacing moves to the group header. */
+.cards.view-table {
+  gap: 0;
+}
+
+.cards.view-table > .group-head {
+  margin-top: 18px;
+}
+
+.cards.view-table > .group-head:first-child {
+  margin-top: 0;
+}
+
+.id-table-head.picking {
+  grid-template-columns: 16px var(--id-cols);
+}
+
+.table-head-actions {
+  justify-self: end;
 }
 
 .group-url {
@@ -1086,27 +1130,33 @@ function extraFacts(identity: Identity): string[] {
   cursor: pointer;
   font: inherit;
   color: inherit;
-  /* Same reasoning as the sites card: the page and the card share a surface, so
-     the edge has to be the stronger hairline or the card disappears into the
+  /* Same reasoning as the sites row: the page and the row share a surface, so
+     the edge has to be the stronger hairline or the row disappears into the
      background in the light theme. */
+  display: grid;
+  grid-template-columns: var(--id-cols);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 46px;
+  padding: 7px 10px 7px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  /* One flat surface. The card used to fade from `--surface` to `--bg-elevated`
-     down its height, which on a grid of cards read as a sheen on each one; a
-     border and the identity's own left rule are enough to separate a card from
-     the page. */
+  /* One flat surface. A border and the identity's own left rule are enough to
+     separate a row from the page. */
   background: var(--surface);
-  /* Dense on purpose: the page's job is comparing many accounts at once, and a
-     card that spends three rows on a password-dots decoration costs a visible
-     slice of screen per account. One identity line plus one fact line is the
-     whole card; the action row appears on hover so it costs no height. */
-  padding: 8px 10px 8px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
   overflow: hidden;
-  min-width: 0;
   transition: border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out);
+}
+
+.id-card.picking {
+  grid-template-columns: 16px var(--id-cols);
+  cursor: pointer;
+}
+
+.view-table .id-card {
+  border-radius: 0;
+  border-top: 0;
 }
 
 .id-card::before {
@@ -1118,7 +1168,7 @@ function extraFacts(identity: Identity): string[] {
   opacity: 0.9;
 }
 
-/* No lift on hover: a card that rises under the cursor makes a grid feel like a
+/* No lift on hover: a row that rises under the cursor makes a list feel like a
    stack of loose tiles. The border taking the identity colour is the response. */
 .id-card:hover {
   border-color: color-mix(in srgb, var(--role) 34%, var(--line));
@@ -1129,21 +1179,14 @@ function extraFacts(identity: Identity): string[] {
   background: var(--surface-2);
 }
 
-.id-card.picking {
-  cursor: pointer;
-}
-
 .id-card.picked {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
-/* A checkbox in the corner, sized like the cards' own tags so it reads as part
-   of the card rather than an overlay widget. */
+/* A checkbox in the leading cell, sized like the rows' own tags so it reads as
+   part of the row rather than an overlay widget. */
 .pick-mark {
-  position: absolute;
-  top: 9px;
-  right: 9px;
   width: 15px;
   height: 15px;
   border-radius: 4px;
@@ -1159,16 +1202,12 @@ function extraFacts(identity: Identity): string[] {
   background: var(--action);
 }
 
-/* The status text sits in the same corner, so it yields while selecting. */
-.id-card.picking .state {
-  opacity: 0;
-}
-
 .card-pick-note {
   font-size: 10.5px;
   color: var(--faint);
-  border-top: 1px solid var(--line-soft);
-  padding-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card-top {
@@ -1194,11 +1233,9 @@ function extraFacts(identity: Identity): string[] {
   font-weight: 500;
 }
 
-/* Name over account, not beside it.
-   Side by side, the two shared a card that is only 264px wide at its narrowest:
-   once the status label and the avatar took their width, every account name
-   collapsed to "管理员 · 主..." and every address to the same handful of
-   characters. Stacked, each gets the full remaining width and both usually fit. */
+/* Name over account, not beside it. The account cell in a row is narrow enough
+   that side-by-side name and address would each truncate to a few characters;
+   stacked, both usually fit and the row height still has room for the avatar. */
 .who {
   min-width: 0;
   flex: 1 1 auto;
@@ -1226,10 +1263,11 @@ function extraFacts(identity: Identity): string[] {
 }
 
 .state {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  overflow: hidden;
   font-size: 10.5px;
   color: var(--faint);
   white-space: nowrap;
@@ -1261,16 +1299,16 @@ function extraFacts(identity: Identity): string[] {
 }
 
 /*
- * Facts stay on ONE line, and the card stays the same height whatever an account
+ * Facts stay on ONE line, and the row stays the same height whatever an account
  * carries.
  *
  * The row used to wrap. That looked harmless while every seed account had the
  * same three chips, but a real workspace has accounts with a long role label, a
- * custom engine and several extra fields — those cards grew a second chip line
- * and a second action line, the whole grid row stretched to match, and every
- * neighbouring card got a band of empty space under its actions. Three fixed
- * rows (identity, facts, actions) is what makes a grid of accounts comparable at
- * a glance, which is the only reason this page exists.
+ * custom engine and several extra fields — those rows grew a second chip line,
+ * the whole table row stretched to match, and every neighbouring row got a band
+ * of empty space under its actions. One aligned line of chips is what makes a
+ * list of accounts comparable at a glance, which is the only reason this page
+ * exists.
  *
  * So the row holds exactly what always fits: the role (given its natural width,
  * it is the fact people scan for) and the password state. Anything else becomes
@@ -1327,23 +1365,24 @@ function extraFacts(identity: Identity): string[] {
 }
 
 /*
- * Always visible, three rows in total: identity, facts, actions.
+ * Always visible, in the last column of the row.
  *
- * Folding this row until hover was a mistake: the card changed height whenever
- * the pointer crossed it, so a grid of cards reflowed as the mouse moved. A
- * stable card is worth more than the ~18px it saves, and three rows is the size
- * the page was designed around anyway.
+ * Folding this cell until hover was a mistake: the row changed height whenever
+ * the pointer crossed it, so the list reflowed as the mouse moved. A stable row
+ * is worth more than the ~18px it saves.
  *
- * The row does not wrap, for the same reason the facts row does not: one
+ * The cell does not wrap, for the same reason the facts cell does not: one
  * account with an extra action ("stop" instead of "switch") must not make its
- * card one line taller than the rest. Session actions sit left, management
+ * row one line taller than the rest. Session actions sit left, management
  * actions are pinned to the right edge as icon buttons.
  */
 .card-actions {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
   overflow: hidden;
   font-size: 11px;
   color: var(--muted);
@@ -1447,7 +1486,7 @@ function extraFacts(identity: Identity): string[] {
 
 @media (max-width: 820px) {
   .cards {
-    grid-template-columns: minmax(0, 1fr);
+    --id-cols: minmax(0, 1.1fr) minmax(0, 0.8fr) 78px minmax(150px, 1.4fr);
   }
 }
 

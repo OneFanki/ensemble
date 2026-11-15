@@ -466,6 +466,9 @@ export interface BrowserProfile {
 
 export type BrowserProfileRetention = "persist" | "ephemeral";
 
+/** Density the Sites and Identities pages use to list their rows. */
+export type CollectionView = "list" | "table";
+
 export interface AppSettings {
   theme: "dark" | "light" | "system";
   /** UI language; `"system"` follows the OS. See {@link LocaleSetting}. */
@@ -603,6 +606,16 @@ export interface AppSettings {
    * size, a fixed viewport changes the layout size itself.
    */
   browserViewport: EmbeddedViewport | null;
+  /**
+   * How the Sites page lays its rows out.
+   *
+   * A site is a name, an address and two counts; a list reads that as one line
+   * per site, while a table keeps the columns aligned for scanning. Neither is
+   * right for everyone, so the choice is a setting rather than a default.
+   */
+  sitesView: CollectionView;
+  /** How the Identities page lays its rows out; see {@link sitesView}. */
+  identitiesView: CollectionView;
   /**
    * How far back the performance monitor's chart reaches, in milliseconds.
    *
@@ -882,6 +895,8 @@ export type SettingsPatch = Partial<
     | "autoSubmitLogin"
     | "browserZoom"
     | "browserViewport"
+    | "sitesView"
+    | "identitiesView"
     | "perfWindowMs"
     | "perfSampleIntervalMs"
     | "searchEngineId"
@@ -1111,6 +1126,22 @@ export type AiApprovalDecision = "allow-once" | "allow-session" | "allow-always"
 export type AiApprovalOutcome = AiApprovalDecision | "timeout";
 
 /**
+ * Details of one call inside an activity row.
+ *
+ * `summary` answers "what kind of call was this"; this answers "what did it
+ * actually contain". Arguments go through the same redaction as the audit log,
+ * and results are capped so one page dump cannot turn the log into a file of
+ * megabytes. `at` is per detail because a merged row can hold several calls.
+ */
+export interface AiActivityDetail {
+  at: string;
+  /** Redacted arguments; absent when the tool took none. */
+  args?: Record<string, unknown>;
+  /** Truncated result preview; absent when there was no output to keep. */
+  result?: string;
+}
+
+/**
  * One AI call that touched a page.
  *
  * A log entry, not a notification: there is no read flag and no unread count,
@@ -1137,10 +1168,18 @@ export interface AiActivityRecord {
    * One plain-language line naming what the call did ("点击「投放」").
    *
    * Stored rather than derived: a tool name alone does not say what was clicked,
-   * and the arguments are not kept — this is the only surviving "what happened",
-   * and it is built by the same redacting formatter the authorization card uses.
+   * and a script call needs at least a preview of the script. The full material
+   * lives in {@link details}; this is the line a reader can scan without opening
+   * anything.
    */
   summary?: string;
+  /**
+   * Recent calls folded into this row, newest first.
+   *
+   * Capped by the store: a repeated call keeps at most three samples. Old rows
+   * written before this field existed have none and simply do not expand.
+   */
+  details?: AiActivityDetail[];
   ok: boolean;
   /** False when the call was refused by the page's origin gate. */
   originAuthorized: boolean;
@@ -1161,6 +1200,7 @@ export interface AiActivityInput {
   tabId: string;
   tabTitle?: string;
   summary?: string;
+  details?: AiActivityDetail[];
   ok: boolean;
   originAuthorized: boolean;
   approval?: AiApprovalOutcome;

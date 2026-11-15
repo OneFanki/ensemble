@@ -49,6 +49,7 @@ import {
   Minus,
   Monitor,
   MoreHorizontal,
+  Pin,
   Plus,
   Power,
   RefreshCw,
@@ -57,10 +58,13 @@ import {
   Settings,
   ShieldOff,
   Smartphone,
+  Snowflake,
   Sparkles,
   Star,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   X,
   ZoomIn,
 } from "lucide-vue-next";
@@ -75,6 +79,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
 import DevicePanel from "./DevicePanel.vue";
 import AiPanel from "./AiPanel.vue";
+import PageSizeFrame from "./PageSizeFrame.vue";
 import InstanceTabStrip from "./InstanceTabStrip.vue";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
@@ -282,6 +287,25 @@ const windowActivePageId = computed<string | null>(() => {
   const index = focused ? view.slotTabs.indexOf(focused) : -1;
   return (index >= 0 ? slotPage(focused, index) : undefined)?.id ?? null;
 });
+
+/**
+ * The sleep state a tab should show, if any.
+ *
+ * `sleeping` and the `never` policy are mutually exclusive in practice — setting
+ * the policy wakes the page — but they are separate facts, so the badge picks
+ * the live state first and the policy second.
+ */
+function sleepStateOf(page: EmbeddedTab): "sleeping" | "never" | undefined {
+  if (page.sleeping) return "sleeping";
+  return page.sleepPolicy === "never" ? "never" : undefined;
+}
+
+/** The tab's native tooltip: URL first, then why the icon looks different. */
+function pageTitle(page: EmbeddedTab): string {
+  const state = sleepStateOf(page);
+  if (!state) return page.url;
+  return `${page.url}\n${state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep")}`;
+}
 
 /**
  * Clicking a window-level tab shows that page in the focused cell.
@@ -781,6 +805,37 @@ const menuViewportOverride = computed(() => {
   const id = tabMenu.value?.page.id;
   return id ? store.state.tabs.find((tab) => tab.id === id)?.viewportOverride : undefined;
 });
+
+/** The menu page's sleep policy, read live so a change marks the new row. */
+const menuSleepPolicy = computed(() => {
+  const id = tabMenu.value?.page.id;
+  return id ? store.state.tabs.find((tab) => tab.id === id)?.sleepPolicy : undefined;
+});
+
+/** The menu page's mute state, read live like the sleep policy. */
+const menuMuted = computed(() => {
+  const id = tabMenu.value?.page.id;
+  return Boolean(id && store.state.tabs.find((tab) => tab.id === id)?.muted);
+});
+
+async function toggleMenuMute(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.setMuted(page.id, !page.muted);
+}
+
+/**
+ * Applies a sleep policy to the menu's page.
+ *
+ * Closing the menu is part of the action, like the viewport rows: the menu
+ * floats over a frozen stage, and a policy change that stayed open would look
+ * like it had done nothing.
+ */
+async function applySleepPolicy(policy: "auto" | "never"): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.setSleepPolicy(page.id, policy);
+}
 
 const customWidth = ref("");
 const customHeight = ref("");
@@ -1289,6 +1344,7 @@ const devtoolsPanels = computed(() => {
       tab: entry.tab,
       device: entry.page.device,
       viewport: entry.page.viewport,
+      viewportOverride: entry.page.viewportOverride,
       /*
        * A narrow panel keeps only the tab icons.
        *
@@ -1373,6 +1429,35 @@ async function setViewport(
     await window.ensemble.setEmbeddedViewport(tabId, mode);
   } catch (error) {
     workspace.notify(String((error as Error)?.message ?? error), "error");
+  }
+}
+
+/**
+ * The page whose edges get resize handles.
+ *
+ * Only a fixed-size page has an edge to drag: an adaptive page has no CSS size
+ * of its own, and a blank page has no guest at all. One page at a time is also
+ * what keeps the overlay from becoming a second set of cell borders in a grid.
+ */
+const pageFrameTab = computed(() => {
+  const tab = activeTab.value;
+  if (!tab || !tab.bounds || tab.sleeping || isBlankTab(tab)) return undefined;
+  if (!tab.device && !tab.viewport) return undefined;
+  return store.isOnStage(tab) ? tab : undefined;
+});
+
+function resizePage(size: { width: number; height: number }): void {
+  const tab = pageFrameTab.value;
+  if (!tab) return;
+  if (tab.device) {
+    // A dragged size is no longer the preset it started from. Keeping the name
+    // would leave "iPhone 15" selected in the panel while the page wears a size
+    // that device never had; dropping it makes Custom the honest answer.
+    const profile = { ...tab.device };
+    delete profile.name;
+    void setDevice(tab.id, { ...profile, width: size.width, height: size.height });
+  } else {
+    void setViewport(tab.id, size);
   }
 }
 
@@ -2053,7 +2138,8 @@ function fillMessage(reason?: string): string {
             :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
             :aria-selected="page.id === windowActivePageId"
             :data-tab-id="page.id"
-            :title="page.url"
+            :data-sleep="sleepStateOf(page)"
+            :title="pageTitle(page)"
             draggable="true"
             @click="activateWindowPage(page.id)"
             @mousedown="onWindowPageMouseDown"
@@ -2065,17 +2151,53 @@ function fillMessage(reason?: string): string {
             @drop="onStripTabDrop(page, $event)"
             @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
           >
+            <!-- One icon slot, three states: loading, asleep, or the site. The
+                 spinner used to replace the close button, which left a loading
+                 tab with no way to close it and moved the close when it
+                 finished. -->
             <span class="tab-fav">
-              <TabIcon :src="page.favicon" :size="13" />
+              <span
+                v-if="page.loading"
+                class="tab-loading"
+                :aria-label="t('app.browserLoading')"
+              ></span>
+              <Snowflake
+                v-else-if="page.sleeping"
+                :size="12"
+                class="tab-sleep"
+                :aria-label="t('app.tabSleeping')"
+              />
+              <TabIcon v-else :src="page.favicon" :size="13" />
             </span>
             <span class="tab-label">{{ store.titleOf(page) }}</span>
+            <Pin
+              v-if="!page.sleeping && page.sleepPolicy === 'never'"
+              :size="10"
+              class="tab-keep"
+              :aria-label="t('app.tabNeverSleep')"
+            />
+            <!-- A page that is making sound gets a control, and a muted page
+                 keeps one so it can be unmuted without a menu. -->
             <span
-              v-if="page.loading"
-              class="tab-loading"
-              :aria-label="t('app.browserLoading')"
-            ></span>
+              v-if="page.audible || page.muted"
+              class="tab-audio"
+              :class="{ muted: page.muted }"
+              role="button"
+              tabindex="0"
+              :data-audio="page.muted ? 'muted' : 'audible'"
+              :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+              v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+              @click.stop="void store.setMuted(page.id, !page.muted)"
+              @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
+              @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
+            >
+              <VolumeX v-if="page.muted" :size="11" />
+              <Volume2 v-else :size="11" />
+            </span>
+            <!-- Always rendered. A close affordance that exists only on the
+                 current tab turns "close these four" into four hover round
+                 trips; the resting state is quiet enough not to compete. -->
             <span
-              v-else-if="page.id === windowActivePageId"
               class="tab-close"
               role="button"
               tabindex="0"
@@ -2227,7 +2349,7 @@ function fillMessage(reason?: string): string {
           :class="{ active: aiPanelOpen, live: aiRunning }"
           :aria-label="t('app.mcpAiAccess')"
           :aria-expanded="aiPanelOpen"
-          v-tooltip="aiRunning ? t('app.aiEndpointRunning') : t('app.aiEndpointOff')"
+          v-tooltip="t('app.mcpAiAccess')"
           data-ai-panel
           @click="toggleAiPanel"
         >
@@ -2852,6 +2974,15 @@ function fillMessage(reason?: string): string {
         <NewTabPage :tab="surface.tab" @open-bookmark="openBookmark" />
       </div>
 
+      <!-- The page's own resize edges, over the guest and under the panels. -->
+      <PageSizeFrame
+        v-if="pageFrameTab"
+        :tab="pageFrameTab"
+        :stage-width="stageBox.width"
+        :stage-height="stageBox.height"
+        @resize="resizePage"
+      />
+
       <!--
         A flat stage gets no header band, in either mode.
 
@@ -3124,6 +3255,7 @@ function fillMessage(reason?: string): string {
             v-if="panel.tab === 'device'"
             :device="panel.device"
             :viewport="panel.viewport ?? null"
+            :viewport-override="panel.viewportOverride"
             @device="setDevice(panel.tabId, $event)"
             @viewport="setViewport(panel.tabId, $event)"
           />
@@ -3275,6 +3407,49 @@ function fillMessage(reason?: string): string {
           </button>
         </div>
         <p v-if="viewportError" class="viewport-error" role="alert">{{ viewportError }}</p>
+        <div class="tab-menu-sep"></div>
+        <!--
+          Sleep policy, per page. "Follow default" is the resting choice: a page
+          off stage sleeps after an idle period, which is what keeps a dozen
+          background pages from each running a scene. "Never sleep" is the
+          exception for the page that has to keep working in the background.
+        -->
+        <div class="menu-section-label">{{ t("app.tabSleepPolicy") }}</div>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :class="{ checked: menuSleepPolicy !== 'never' }"
+          data-sleep-policy="auto"
+          @click="applySleepPolicy('auto')"
+        >
+          <Snowflake :size="12" />
+          {{ t("app.tabSleepDefault") }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :class="{ checked: menuSleepPolicy === 'never' }"
+          data-sleep-policy="never"
+          @click="applySleepPolicy('never')"
+        >
+          <Pin :size="11" />
+          {{ t("app.tabNeverSleep") }}
+        </button>
+        <div class="tab-menu-sep"></div>
+        <button
+          type="button"
+          role="menuitem"
+          class="tab-menu-item"
+          :class="{ checked: menuMuted }"
+          :data-tab-mute="menuMuted ? 'unmute' : 'mute'"
+          @click="toggleMenuMute"
+        >
+          <VolumeX v-if="menuMuted" :size="12" />
+          <Volume2 v-else :size="12" />
+          {{ menuMuted ? t("app.tabUnmute") : t("app.tabMute") }}
+        </button>
         <div class="tab-menu-sep"></div>
         <button type="button" role="menuitem" class="tab-menu-item" @click="closeTab">
           <X :size="12" />
@@ -3521,8 +3696,32 @@ function fillMessage(reason?: string): string {
   flex: 1 1 auto;
 }
 
-/* The close affordance appears on the current tab and on hover: always-on
-   crosses in a 30px pill eat the title. */
+/* Only present when the page is audible or muted, so it costs no width on a
+   silent tab. The muted glyph stays after the sound stops: that is the only
+   place to click to bring it back. */
+.tab-audio {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  color: var(--dim);
+  flex: 0 0 15px;
+}
+
+.tab-audio.muted {
+  color: var(--faint);
+}
+
+.tab-audio:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Always present, quiet at rest and full strength under the pointer. The close
+   used to exist only on the current tab, so closing several meant hovering each
+   one on the way; a half-opacity cross is still not the loudest mark in the
+   strip, and the title keeps the space it had. */
 .tab-close {
   display: grid;
   place-items: center;
@@ -3531,7 +3730,7 @@ function fillMessage(reason?: string): string {
   border-radius: 4px;
   color: var(--faint);
   flex: 0 0 16px;
-  opacity: 0;
+  opacity: 0.6;
 }
 
 .tab:hover .tab-close,
@@ -3539,18 +3738,28 @@ function fillMessage(reason?: string): string {
   opacity: 1;
 }
 
+/* The sleep state uses the favicon slot; the never-sleep pin sits beside the
+   title so it is visible without hovering. */
+.tab-sleep {
+  color: var(--blue);
+}
+
+.tab-keep {
+  flex: 0 0 auto;
+  color: var(--accent-text);
+}
+
 .tab-close:hover {
   background: color-mix(in srgb, var(--red) 20%, transparent);
   color: var(--red);
 }
 
-/* A loading tab spends the close button's slot on a spinner, so the title does
-   not shift when the page finishes. */
+/* In the favicon slot: the site icon is not meaningful until the page answers,
+   and this keeps the close button present while it loads. */
 .tab-loading {
   width: 12px;
   height: 12px;
   flex: 0 0 12px;
-  margin-right: 2px;
   border-radius: 50%;
   border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-top-color: var(--accent-text);
@@ -4586,7 +4795,8 @@ function fillMessage(reason?: string): string {
   min-width: 0;
   height: 24px;
   padding: 0 6px;
-  border-radius: var(--radius-sm);
+  --shell-radius: var(--radius-sm);
+  border-radius: var(--shell-radius);
 }
 
 .findbar .icon {

@@ -275,6 +275,8 @@ const api: EnsembleApi = {
   zoomEmbeddedTab: (tabId, direction) => ipcRenderer.invoke(IPC.embeddedZoom, tabId, direction),
   setEmbeddedViewport: (tabId, size) => ipcRenderer.invoke(IPC.embeddedViewport, tabId, size),
   setEmbeddedDevice: (tabId, device) => ipcRenderer.invoke(IPC.embeddedDevice, tabId, device),
+  setEmbeddedSleep: (tabId, policy) => ipcRenderer.invoke(IPC.embeddedSleep, tabId, policy),
+  setEmbeddedMuted: (tabId, muted) => ipcRenderer.invoke(IPC.embeddedMuted, tabId, muted),
   readEmbeddedPerf: (tabId) => ipcRenderer.invoke(IPC.embeddedPerf, tabId),
   showEmbeddedDevtoolsTab: (tabId, tab) =>
     ipcRenderer.invoke(IPC.embeddedDevtoolsTab, tabId, tab),

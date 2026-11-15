@@ -43,8 +43,13 @@ describe("backdrop presets", () => {
    * The paint is in the stylesheet, so this is the test that keeps a preset from
    * becoming a name with no picture behind it. It also pins the light theme: a
    * preset that only defines its dark value is the exact bug this redesign fixed
-   * — five dark swatches in a white picker and a dark wash under a light
-   * headline. Both themes, every id, no exceptions.
+   * — a dark wash under a light headline. Both themes, every id, no exceptions.
+   *
+   * The swatch is a separate paint (`--nt-swatch-paint`) because it has the
+   * opposite job: the surface is a whisper behind the field, the thumbnail is a
+   * legible sample. Its hues and base resolve in either theme, so it needs no
+   * light-specific rule; what it must have is its own declaration per preset,
+   * or the picker goes back to four identical dark discs.
    *
    * A file read rather than a render because these rules are plain CSS in a
    * scoped block: there is nothing to instantiate, and the failure mode (a
@@ -56,9 +61,11 @@ describe("backdrop presets", () => {
       "utf8",
     );
     for (const preset of NEW_TAB_BACKDROPS) {
-      const dark = `.nt-swatch[data-backdrop="${preset.id}"]`;
-      const light = `:root[data-theme="light"] .nt-swatch[data-backdrop="${preset.id}"]`;
-      expect(sheet, `${preset.id} (dark)`).toContain(dark);
+      const swatch = `.nt-swatch[data-backdrop="${preset.id}"]`;
+      const surface = `.nt-bg[data-backdrop="${preset.id}"]`;
+      const light = `:root[data-theme="light"] .nt-bg[data-backdrop="${preset.id}"]`;
+      expect(sheet, `${preset.id} (swatch)`).toContain(swatch);
+      expect(sheet, `${preset.id} (dark)`).toContain(surface);
       /*
        * Every preset needs its own light value, except one whose paint is
        * `var(--bg)` and therefore already resolves per theme — restating that
@@ -67,8 +74,8 @@ describe("backdrop presets", () => {
        * colours in both themes, which is the bug this test exists for.
        */
       const darkBlock = sheet.slice(
-        sheet.indexOf(dark),
-        sheet.indexOf("}", sheet.indexOf(dark)),
+        sheet.indexOf(surface),
+        sheet.indexOf("}", sheet.indexOf(surface)),
       );
       const themeIndependent = /--nt-paint:\s*var\(--bg\);/.test(darkBlock);
       if (!themeIndependent) {

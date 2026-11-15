@@ -76,6 +76,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // applied to every account at once, which is exactly what a first launch
   // cannot know.
   browserViewport: null,
+  // One line per site/account is the denser reading of the same facts; a table
+  // is there for people who compare columns rather than read rows.
+  sitesView: "list",
+  identitiesView: "list",
   // Five readings a second and a twenty-second chart: fine enough that a 200ms
   // stutter has a visible shape, wide enough to show a burst rather than one
   // sample. Both are adjustable in settings for the other two cases — a slow

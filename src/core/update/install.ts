@@ -29,12 +29,36 @@ export function buildWindowsInstallScript(input: WindowsInstallScript): string {
   return [
     "@echo off",
     "setlocal",
-    // Wait for the app to exit. `tasklist /FI "PID eq N"` prints a line with the
-    // pid while it is alive; the loop exits as soon as that line is gone.
-    `:waitForExit`,
-    `tasklist /FI "PID eq ${pid}" /NH 2>nul | find "${pid}" >nul`,
-    "if not errorlevel 1 (",
-    "  timeout /t 1 /nobreak >nul",
+    // Wait for the app to exit before touching its files.
+    //
+    // This check has been wrong twice, both times from trusting something about
+    // the output rather than reading it:
+    //
+    // 1. `tasklist … | find "N"` depended on PATH resolving `find` to Windows'
+    //    own `find.exe`. Where a Unix `find` came first it treated the argument
+    //    as a file name; where it got no input it blocked on stdin. A user
+    //    upgrading from 2.1.0 was left with a cmd window and a `find` process
+    //    that never exited.
+    // 2. `tasklist … & if not errorlevel 1` is always true: `tasklist` returns 0
+    //    whether or not the filter matched anything, so the loop never waited.
+    //
+    // So the pid is compared explicitly against column 2 of the output — the
+    // only column that is a number, and the only part of the line that does not
+    // change with the system language. `%SystemRoot%` is used so nothing depends
+    // on PATH, and the output goes to a file so `for /f` gets a real stream to
+    // read instead of a literal string.
+    `set "PIDFILE=%TEMP%\\ensemble-wait-${pid}.txt"`,
+    ":waitForExit",
+    `"%SystemRoot%\\System32\\tasklist.exe" /FI "PID eq ${pid}" /NH >"%PIDFILE%" 2>nul`,
+    `set "STILL_RUNNING="`,
+    `for /f "usebackq tokens=1,2" %%A in ("%PIDFILE%") do if "%%B"=="${pid}" set "STILL_RUNNING=1"`,
+    `del "%PIDFILE%" 2>nul`,
+    `if defined STILL_RUNNING (`,
+    // By absolute path for the same reason as `tasklist`: a Unix `timeout` on
+    // PATH reads `/t 1 /nobreak` as a bad interval and exits at once, so the loop
+    // spun without ever pausing — which is what produced the burst of "interrupt"
+    // errors and then a wedged window rather than a slow, silent wait.
+    "  \"%SystemRoot%\\System32\\timeout.exe\" /t 1 /nobreak >nul 2>nul",
     "  goto waitForExit",
     ")",
     // Silent NSIS upgrade. The installer remembers the previous install

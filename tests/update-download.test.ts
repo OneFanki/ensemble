@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { downloadUpdateAsset } from "@core/update/download";
+import { toResponseHeaders } from "@core/update/headers";
 import { buildWindowsInstallScript, updateFileName } from "@core/update/install";
 
 /**
@@ -141,6 +142,44 @@ describe("update download", () => {
   });
 });
 
+describe("response header normalisation", () => {
+  it("keeps a single-valued header whole instead of splitting it per character", () => {
+    // `net.request` returns a single value as a string while its type claims an
+    // array. Iterating the string yielded its digits one by one, so
+    // `Number(content-length)` became NaN and the download had no total — the
+    // progress bar stayed at 0% and then the dialog jumped to "ready".
+    const raw = { "content-length": "104171323", "content-type": "application/octet-stream" } as
+      Record<string, string | string[] | undefined>;
+    const headers = toResponseHeaders(raw);
+
+    expect(headers.get("content-length")).toBe("104171323");
+    expect(Number(headers.get("content-length"))).toBe(104171323);
+    expect(headers.get("content-type")).toBe("application/octet-stream");
+  });
+
+  it("still works when a header really is an array", () => {
+    const raw = { "set-cookie": ["a=1", "b=2"] } as Record<
+      string,
+      string | string[] | undefined
+    >;
+    const headers = toResponseHeaders(raw);
+
+    expect(headers.get("set-cookie")).toContain("a=1");
+    expect(headers.get("set-cookie")).toContain("b=2");
+  });
+
+  it("skips headers that were not sent", () => {
+    const raw = { "content-length": undefined, "x-ok": "1" } as Record<
+      string,
+      string | string[] | undefined
+    >;
+    const headers = toResponseHeaders(raw);
+
+    expect(headers.has("content-length")).toBe(false);
+    expect(headers.get("x-ok")).toBe("1");
+  });
+});
+
 describe("install script", () => {
   it("waits for the app to exit, installs silently, then relaunches", async () => {
     const dir = await tempDir();
@@ -156,13 +195,48 @@ describe("install script", () => {
     );
     const text = await readFile(scriptPath, "utf8");
     // Waiting is the whole point: Windows refuses to overwrite a running exe.
-    expect(text).toContain('tasklist /FI "PID eq 4242" /NH');
+    expect(text).toContain('"PID eq 4242"');
     expect(text).toContain('"C:\\Temp\\ensemble-updates\\Ensemble-1.0.0-setup.exe" /S');
     expect(text).toContain(
       'start "" "C:\\Users\\me\\AppData\\Local\\Programs\\Ensemble\\Ensemble.exe"',
     );
     // The script deletes itself so no console window is left behind.
     expect(text).toContain('del "%~f0"');
+  });
+
+  it("uses no PATH-resolved tools, because the wrong `find` and `timeout` exist", () => {
+    // Two real failures came from calling helpers by bare name. The app spawns
+    // this script with the user's PATH, and on a machine with Git for Windows
+    // that PATH resolves `find` and `timeout` to the MSYS tools first. `find`
+    // then reads its argument as a file name, and `timeout /t 1` is a bad
+    // interval to the Unix one. A 2.1.0 → 2.2.0 upgrade stalled on a cmd window
+    // because of exactly this, so both are pinned to %SystemRoot%.
+    const text = buildWindowsInstallScript({
+      pid: 4242,
+      installerPath: String.raw`C:\Temp\Ensemble-setup.exe`,
+      appExePath: String.raw`C:\Programs\Ensemble\Ensemble.exe`,
+    });
+
+    expect(text).not.toMatch(/\|\s*find\b/);
+    expect(text).not.toMatch(/^\s*timeout\s/m);
+    expect(text).toContain(String.raw`%SystemRoot%\System32\tasklist.exe`);
+    expect(text).toContain(String.raw`%SystemRoot%\System32\timeout.exe`);
+  });
+
+  it("decides the wait from the pid column, not from an exit code", () => {
+    // `tasklist` exits 0 whether or not the filter matched, so `if not
+    // errorlevel 1` is always true and the loop never waits. The pid has to be
+    // read out of column 2 — the only numeric column, and the only part of the
+    // line that does not change with the system language.
+    const text = buildWindowsInstallScript({
+      pid: 4242,
+      installerPath: String.raw`C:\Temp\Ensemble-setup.exe`,
+      appExePath: String.raw`C:\Programs\Ensemble\Ensemble.exe`,
+    });
+
+    expect(text).toContain('tokens=1,2');
+    expect(text).toContain('if "%%B"=="4242"');
+    expect(text).not.toMatch(/if not errorlevel 1/);
   });
 
   it("sanitises the downloaded file name", () => {

@@ -757,6 +757,32 @@ async function submitMaster() {
                 </button>
               </div>
               </SettingRow>
+              <!--
+                A flow's raw CDP step starts at the tier that only acts on the
+                current page. Widening it to network observation and device
+                emulation is a deliberate act, so it is a switch rather than the
+                default. Cross-partition domains stay forbidden either way.
+              -->
+              <SettingRow :label="$t('app.flowCdpSetting')" :hint="$t('app.flowCdpNote')">
+              <div class="segmented">
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: store.settings.flowCdpExtended }"
+                  @click="store.saveSettings({ flowCdpExtended: true })"
+                >
+                  {{ $t("app.on") }}
+                </button>
+                <button
+                  type="button"
+                  class="seg"
+                  :class="{ on: !store.settings.flowCdpExtended }"
+                  @click="store.saveSettings({ flowCdpExtended: false })"
+                >
+                  {{ $t("app.off") }}
+                </button>
+              </div>
+              </SettingRow>
               <SettingRow :label="$t('app.restoreView')" :hint="$t('app.restoreViewNote')">
               <div class="segmented">
                 <button

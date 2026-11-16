@@ -262,6 +262,40 @@ function needsTarget(step: FlowStep): boolean {
   return ["fill", "click", "select", "read", "wait"].includes(step.action);
 }
 
+/**
+ * A raw CDP step's parameters, as text.
+ *
+ * The editor keeps them as a string so a half-typed object is not silently
+ * dropped; `setStepParams` is what turns valid JSON back into an object and
+ * leaves the previous value in place while it is invalid. Saving with invalid
+ * JSON would otherwise store `{}` and the command would run with nothing.
+ */
+function stepParamsText(step: FlowStep): string {
+  if (!step.params || Object.keys(step.params).length === 0) return "";
+  try {
+    return JSON.stringify(step.params);
+  } catch {
+    return "";
+  }
+}
+
+function setStepParams(step: FlowStep, text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    delete step.params;
+    return;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      step.params = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Keep the last valid value: the field is a live editor, and clearing the
+    // step because somebody is mid-keystroke would lose their work.
+  }
+}
+
 async function saveDraft() {
   editorError.value = "";
   const saved = await store.saveFlow({
@@ -575,6 +609,30 @@ async function saveDraft() {
             </div>
 
             <div class="step-fields">
+              <!--
+                Raw CDP is the escape hatch, so the form asks for exactly what a
+                protocol command needs and nothing else. `params` is a JSON object
+                written as text: it is the one field whose shape belongs to the
+                protocol, and pretending otherwise would mean a form that cannot
+                express the command it exists for.
+              -->
+              <template v-if="step.action === 'cdp'">
+                <TextField
+                  v-model="step.method"
+                  class="full"
+                  mono
+                  type="text"
+                  placeholder="DOM.setFileInputFiles"
+                />
+                <TextField
+                  :model-value="stepParamsText(step)"
+                  class="full"
+                  mono
+                  type="text"
+                  placeholder='{"files": ["C:\\tmp\\a.txt"], "backendNodeId": 123}'
+                  @update:model-value="setStepParams(step, $event)"
+                />
+              </template>
               <TextField
                 v-if="step.action === 'navigate'"
                 v-model="step.url"

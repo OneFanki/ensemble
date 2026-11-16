@@ -6,6 +6,7 @@ import {
   PERF_WINDOW_MIN_MS,
 } from "./embedded";
 import { LOCALE_SETTINGS } from "./locale";
+import { FLOW_ACTIONS, WAIT_CONDITIONS } from "./flows";
 
 const httpUrl = z
   .string()
@@ -116,18 +117,29 @@ const flowTargetShape = {
  * "第 2 步（fill）需要 value" instead of a zod path nobody can act on.
  */
 export const flowStepSchema = z.object({
-  action: z.enum(["navigate", "fill", "click", "select", "press", "login", "wait", "read"]),
+  // Derived from the one list, not repeated: a step type added to FLOW_ACTIONS
+  // and forgotten here is rejected with a zod message no caller can act on.
+  action: z.enum(FLOW_ACTIONS),
   ...flowTargetShape,
   note: z.string().max(200).optional(),
   value: z.string().max(4000).optional(),
   url: z.string().max(2000).optional(),
   option: z.string().max(200).optional(),
   key: z.string().max(20).optional(),
-  condition: z.enum(["visible", "hidden", "text", "url", "value"]).optional(),
+  condition: z.enum(WAIT_CONDITIONS).optional(),
   expect: z.string().max(500).optional(),
-  timeoutMs: z.number().int().min(100).max(120_000).optional(),
+  timeoutMs: z.number().int().min(100).max(600_000).optional(),
   optional: z.boolean().optional(),
   as: z.string().max(60).optional(),
+  /**
+   * Raw CDP escape hatch; see `FLOW_ACTIONS` for why it is a separate tier.
+   *
+   * `params` is `unknown` on purpose: the protocol decides each field's shape,
+   * and a schema here would be a second, wrong copy of it. The tier check at run
+   * time is what constrains which commands these can reach.
+   */
+  method: z.string().trim().max(80).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const flowParamSchema = z.object({
@@ -213,6 +225,7 @@ export const settingsPatchSchema = z.object({
    * range check the page-level tool uses, so a stored default can never be a
    * size the UI would refuse to apply.
    */
+  flowCdpExtended: z.boolean().optional(),
   browserViewport: z
     .object({
       width: z.number().int().min(320).max(3840),
@@ -220,8 +233,6 @@ export const settingsPatchSchema = z.object({
     })
     .nullable()
     .optional(),
-  sitesView: z.enum(["list", "table"]).optional(),
-  identitiesView: z.enum(["list", "table"]).optional(),
   /**
    * Performance monitor cadence and reach.
    *

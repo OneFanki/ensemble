@@ -825,3 +825,264 @@ export function buildStabilityExpression(): string {
     return { stable: false, height: last };
   })()`;
 }
+
+/**
+ * Resolves a target to the file input it names, for `DOM.setFileInputFiles`.
+ *
+ * Two things the caller needs back and cannot get from a bare point: whether the
+ * element really is a file input (a click on some other element would do
+ * nothing), and whether it accepts multiple files. Both are reported so the
+ * caller can be told to fix its target instead of watching an upload silently
+ * do nothing.
+ */
+export function buildFileInputExpression(target: TargetInput): string {
+  return `(() => {${HELPERS}
+    const spec = ${targetSource(target)};
+    const found = resolveTarget(spec);
+    if (!found.el) {
+      // A file input is often hidden behind a styled button, so a text match on
+      // the visible button is a legitimate way to ask for it. Try the label path
+      // before giving up.
+      if (typeof spec === "object" && (spec.text || spec.label)) {
+        const wanted = spec.text || spec.label;
+        const all = [];
+        eachRoot((root) => { try { root.querySelectorAll('input[type=file]').forEach((el) => all.push(el)); } catch {} });
+        const scopeText = (el) => {
+          let node = el;
+          for (let depth = 0; node && depth < 6; depth += 1, node = node.parentElement) {
+            if (scoreName(textOf(node), wanted, spec.exact === true) > 0) return node;
+          }
+          return null;
+        };
+        const hit = all.find((el) => scopeText(el));
+        if (hit) return { ok: true, multiple: hit.multiple === true, accept: (hit.getAttribute("accept") || "").slice(0, 200), disabled: hit.disabled === true, matchedBy: "nearby-text" };
+      }
+      return { ok: false, reason: found.reason === "invalid-selector" ? "invalid-selector" : "not-found" };
+    }
+    const el = found.el;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag !== "input" || type !== "file") {
+      return { ok: false, reason: "not-a-file-input", tag, matchedBy: found.matchedBy };
+    }
+    if (el.disabled) return { ok: false, reason: "disabled", tag, matchedBy: found.matchedBy };
+    return {
+      ok: true,
+      multiple: el.multiple === true,
+      accept: (el.getAttribute("accept") || "").slice(0, 200),
+      matchedBy: found.matchedBy,
+      selector: scriptPath(el),
+    };
+  })()`;
+}
+
+/**
+ * Resolves both ends of a drag to viewport points.
+ *
+ * Resolved together rather than one call per end so the two points describe the
+ * same layout: a re-render between two round trips could move the target and the
+ * press would start from a stale coordinate.
+ */
+export function buildDragPointsExpression(from: TargetInput, to: TargetInput): string {
+  return `(() => {${HELPERS}
+    const start = resolveTarget(${targetSource(from)});
+    if (!start.el) return { ok: false, reason: "from-" + (start.reason || "not-found") };
+    if (!isVisible(start.el)) return { ok: false, reason: "from-hidden" };
+    const end = resolveTarget(${targetSource(to)});
+    if (!end.el) return { ok: false, reason: "to-" + (end.reason || "not-found") };
+    if (!isVisible(end.el)) return { ok: false, reason: "to-hidden" };
+    const centre = (el) => {
+      const rect = el.getBoundingClientRect();
+      return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+    };
+    const a = centre(start.el);
+    const b = centre(end.el);
+    return {
+      ok: true,
+      from: a,
+      to: b,
+      fromTag: start.el.tagName.toLowerCase(),
+      toTag: end.el.tagName.toLowerCase(),
+      fromText: textOf(start.el).slice(0, 60),
+      toText: textOf(end.el).slice(0, 60),
+    };
+  })()`;
+}
+
+/**
+ * Reads a checkbox's or radio's state, and flips it when asked.
+ *
+ * Clicking a checkbox to toggle it is not the same as setting it: the click
+ * routes through the label, the wrapper, the framework's own handler, and any
+ * one of them can prevent the default. So the state is read in the page, and only
+ * a mismatch is clicked — which is what makes `check` idempotent, and what stops
+ * a second call from unchecking what the first one set.
+ */
+export function buildCheckExpression(target: TargetInput, desired: boolean): string {
+  return `(() => {${HELPERS}
+    const found = resolveTarget(${targetSource(target)});
+    if (!found.el) return { ok: false, reason: found.reason === "invalid-selector" ? "invalid-selector" : "not-found" };
+    const el = found.el;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag !== "input" || (type !== "checkbox" && type !== "radio")) {
+      return { ok: false, reason: "not-a-toggle", tag, type: type || undefined, matchedBy: found.matchedBy };
+    }
+    if (el.disabled) return { ok: false, reason: "disabled" };
+    if (!isVisible(el)) return { ok: false, reason: "not-visible" };
+    const before = el.checked === true;
+    const desired = ${desired ? "true" : "false"};
+    if (before === desired) return { ok: true, changed: false, checked: before, tag, type, selector: scriptPath(el) };
+    el.click();
+    const after = el.checked === true;
+    return {
+      ok: true,
+      changed: after !== before,
+      checked: after,
+      tag,
+      type,
+      selector: scriptPath(el),
+      // A click that did not change the box is a fact worth reporting: a
+      // disabled label wrapper or a handler calling preventDefault is exactly the
+      // case where the caller otherwise assumes it worked.
+      ...(after === desired ? {} : { stuckAt: before }),
+    };
+  })()`;
+}
+
+/**
+ * Everything about one element that a caller can act on.
+ *
+ * This exists because the alternatives are both bad: `read` gives one string and
+ * no way to ask about an attribute, and `evaluate_browser_page` makes the caller
+ * write DOM code — the part that goes stale the moment the page changes shape.
+ * One call that answers "what is this element, really" replaces a dozen ad-hoc
+ * scripts.
+ *
+ * `attributes` is capped deliberately: a styled element can carry hundreds of
+ * generated class names, and shipping them all costs tokens without answering
+ * anything. The ones a caller needs to *act* are kept even when the cap is hit.
+ */
+export function buildElementInfoExpression(target: TargetInput): string {
+  return `(() => {${HELPERS}
+    const found = resolveTarget(${targetSource(target)});
+    if (!found.el) return { ok: false, reason: found.reason === "invalid-selector" ? "invalid-selector" : "not-found" };
+    const el = found.el;
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const KEEP = ["type", "name", "value", "placeholder", "href", "src", "alt", "title", "role", "aria-label", "aria-checked", "aria-expanded", "aria-disabled", "aria-selected", "data-testid", "data-test", "data-cy", "for", "disabled", "readonly", "required", "multiple", "checked", "selected", "maxlength", "min", "max", "step", "pattern", "target", "rel", "lang", "dir"];
+    const attributes = {};
+    for (const attr of Array.from(el.attributes || [])) {
+      if (KEEP.includes(attr.name) || attr.name.startsWith("aria-") || attr.name.startsWith("data-")) {
+        attributes[attr.name] = String(attr.value).slice(0, 200);
+      }
+    }
+    const state = {
+      visible: isVisible(el),
+      enabled: el.disabled !== true && el.getAttribute("aria-disabled") !== "true",
+      focused: el === document.activeElement,
+      checked: typeof el.checked === "boolean" ? el.checked : undefined,
+      selected: typeof el.selected === "boolean" ? el.selected : undefined,
+      expanded: el.getAttribute("aria-expanded") === null ? undefined : el.getAttribute("aria-expanded") === "true",
+      readOnly: el.readOnly === true,
+      editable: el.isContentEditable === true,
+    };
+    return {
+      ok: true,
+      tag,
+      role: roleOf(el),
+      name: nameOf(el).slice(0, 160),
+      text: textOf(el).slice(0, 200),
+      selector: scriptPath(el),
+      matchedBy: found.matchedBy,
+      bounds: rectOf(el),
+      state,
+      attributes,
+      // The value of a control, which is what "what is in this field" means.
+      ...(tag === "input" || tag === "textarea" || tag === "select"
+        ? { value: String(el.value ?? "").slice(0, 500) }
+        : {}),
+      ...(tag === "input" || tag === "textarea" || tag === "select" ? { inputType: type || "text" } : {}),
+      ...(el.parentElement ? { parentTag: el.parentElement.tagName.toLowerCase() } : {}),
+      ...(el.children.length ? { childCount: el.children.length } : {}),
+    };
+  })()`;
+}
+
+/**
+ * Reads one attribute, a list of them, or the element's whole value.
+ *
+ * Separate from `buildElementInfoExpression` on purpose. The common use is "did
+ * this class or aria attribute change" — a question asked in a loop, and paying
+ * for the full info payload every time would make polling expensive. `name`
+ * omitted means "give me the text/value", which is the other common question.
+ */
+export function buildAttributeExpression(target: TargetInput, names: string[] | undefined): string {
+  const wanted = names === undefined ? "null" : JSON.stringify(names.slice(0, 40));
+  return `(() => {${HELPERS}
+    const found = resolveTarget(${targetSource(target)});
+    if (!found.el) return { ok: false, reason: found.reason === "invalid-selector" ? "invalid-selector" : "not-found" };
+    const el = found.el;
+    const names = ${wanted};
+    const tag = el.tagName.toLowerCase();
+    if (names === null) {
+      // No attribute named: answer the question people usually mean instead,
+      // which is "what does this element say".
+      const isControl = tag === "input" || tag === "textarea" || tag === "select";
+      return {
+        ok: true,
+        selector: scriptPath(el),
+        ...(isControl
+          ? { value: String(el.value ?? "").slice(0, 500) }
+          : { text: textOf(el).slice(0, 2000) }),
+      };
+    }
+    const values = {};
+    for (const name of names) {
+      const value = el.getAttribute(name);
+      values[name] = value === null ? null : String(value).slice(0, 1000);
+    }
+    return { ok: true, selector: scriptPath(el), attributes: values };
+  })()`;
+}
+
+/**
+ * The resolved element's box, or null when it does not exist.
+ *
+ * Separate from `buildElementPointExpression` because the point is what an input
+ * event needs and the box is what a screenshot needs: a clipped capture has to
+ * know all four edges, and deriving the size from a centre point is not possible.
+ */
+export function buildElementRectExpression(target: TargetInput): string {
+  return `(() => {
+    ${HELPERS}
+    const found = resolveTarget(${targetSource(target)});
+    if (!found.el) return null;
+    const rect = found.el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    /*
+     * The intersection is computed here rather than in main.
+     *
+     * getBoundingClientRect() returns viewport-relative coordinates that stay
+     * numerically valid far outside the viewport — an element 3000px down a page
+     * reports y = 3000, not "not visible". Intersecting against the viewport is
+     * what turns that into an answer, and the ratio the page needs
+     * (devicePixelRatio) is only knowable from inside the page.
+     */
+    const left = Math.max(0, Math.round(rect.x));
+    const top = Math.max(0, Math.round(rect.y));
+    const right = Math.min(vw, Math.round(rect.x + rect.width));
+    const bottom = Math.min(vh, Math.round(rect.y + rect.height));
+    return {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      viewportWidth: vw,
+      viewportHeight: vh,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      clip: right - left >= 1 && bottom - top >= 1 ? { x: left, y: top, width: right - left, height: bottom - top } : null,
+    };
+  })()`;
+}

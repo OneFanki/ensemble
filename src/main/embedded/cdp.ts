@@ -16,6 +16,15 @@ import { withDeadline } from "@shared/async";
 export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
+ * One CDP event, as a caller sees it.
+ *
+ * Deliberately untyped beyond the method name: domains differ wildly, and the
+ * only caller today (dialog tracking) reads two string fields. A generic
+ * `Record<string, unknown>` would force every listener to narrow anyway.
+ */
+export type CdpEventListener = (method: string, params: Record<string, unknown>) => void;
+
+/**
  * The command surface every displayed page is driven through.
  *
  * Two implementations exist while the carrier migration is in progress: the
@@ -56,14 +65,93 @@ export interface CdpExecutor {
     preferRenderer?: boolean;
     /** How long to wait for pixels before reporting the page as busy. */
     timeoutMs?: number;
+    /**
+     * Rectangle to capture, in CSS pixels of the page.
+     *
+     * A clipped capture always goes through the compositor, because the renderer
+     * path has no rectangle to take. Said here rather than silently dropping the
+     * clip: a caller that asked for one element and got the whole viewport would
+     * have no way to notice.
+     */
+    clip?: { x: number; y: number; width: number; height: number; scale?: number };
   }): Promise<Buffer>;
   clickAt(x: number, y: number): Promise<void>;
+  /**
+   * Moves the pointer without pressing.
+   *
+   * A move is not a formality: it is the only way to open anything that appears
+   * on hover — a menu, a tooltip, a row's actions — and Chromium resolves the
+   * hit target for the *next* press from wherever the pointer was last. Dispatching
+   * a press at a coordinate the pointer never visited can land on nothing.
+   */
+  hoverAt(x: number, y: number): Promise<void>;
+  /**
+   * A wheel event at a point.
+   *
+   * `deltaY` follows the DOM convention: positive scrolls down. Negative delta
+   * scrolls up. Chromium delivers this to whatever is under (x, y), so scrolling a
+   * nested container means passing that container's centre rather than the
+   * viewport's.
+   */
+  scrollAt(x: number, y: number, deltaX: number, deltaY: number): Promise<void>;
   insertText(text: string): Promise<void>;
   navigate(url: string): Promise<void>;
   key(key: string, code: string, keyCode: number): Promise<void>;
+  /**
+   * Presses a key while modifiers are held.
+   *
+   * `modifiers` is Chromium's bit field — Alt 1, Ctrl 2, Meta 4, Shift 8, summed
+   * for combinations — and it belongs on *all three* events: the modifier keys
+   * go down first, the target key is pressed with the mask already set, then
+   * everything comes up in reverse. Setting it only on the target key produces a
+   * keydown whose `ctrlKey` is true while the browser's own state says no key is
+   * held, and sites that check either one see a contradiction.
+   */
+  pressWithModifiers(key: string, code: string, keyCode: number, modifiers: number): Promise<void>;
   /** Selects the focused field's contents, so the next input replaces them. */
   selectAll(): Promise<void>;
   pressNamedKey(name: string): Promise<void>;
+  /**
+   * Answers the page's open JavaScript dialog.
+   *
+   * Separate from `pressNamedKey("Enter")` on purpose: the dialog is drawn by
+   * the browser, not by the page, so no input event reaches it and no DOM query
+   * can see it. This command is the only way to answer one.
+   *
+   * It works even when the opening event was never observed — which matters,
+   * because a session that detached while the dialog appeared has no record of
+   * it. The error it throws when nothing is showing ("No dialog is showing") is
+   * then the honest answer rather than a failure.
+   */
+  handleDialog(accept: boolean, promptText?: string): Promise<void>;
+  /**
+   * Puts files into a file input, the way a file picker would.
+   *
+   * `DOM.setFileInputFiles` needs a backend node id, and the caller only has a
+   * selector: the node is found in the page and handed back as a remote object,
+   * then resolved server-side. The paths are absolute and are read by the browser
+   * process, not by the page — the page never sees a filesystem path it could act
+   * on, which is why this is a command rather than a page-script feature.
+   */
+  setFiles(selector: string, paths: string[]): Promise<void>;
+  /**
+   * Drags from one point to another, with the pointer moves a real drag has.
+   *
+   * A single jump from press to release is not a drag: pages listen for the
+   * intermediate `mousemove` stream (sortable lists compare positions between
+   * moves) and a press immediately followed by a release at a new spot is a click
+   * that missed. Several steps in between is what makes the target's own
+   * drag-over and drop handlers fire.
+   */
+  dragFromTo(from: { x: number; y: number }, to: { x: number; y: number }): Promise<void>;
+  /**
+   * Subscribes to this page's CDP events; the return value unsubscribes.
+   *
+   * Events are never replayed, so a listener that arrives after the event it
+   * cares about has already missed it. The dialog tracker therefore subscribes
+   * when the tab is created, not when a tool happens to ask.
+   */
+  onEvent(listener: CdpEventListener): () => void;
   /**
    * Whether keyboard input only reaches the element the pointer last clicked.
    *
@@ -95,8 +183,49 @@ export class EmbeddedCdp implements CdpExecutor {
   private ready: Promise<void> | null = null;
   /** Commands waiting for their reply; see `busy()`. */
   private pending = 0;
+  /** CDP events this target emitted, so callers can observe them. */
+  private readonly listeners = new Set<CdpEventListener>();
+  private readonly onDebuggerMessage = (
+    _event: Electron.Event,
+    method: string,
+    params: unknown,
+  ): void => {
+    for (const listener of this.listeners) {
+      try {
+        listener(method, (params ?? {}) as Record<string, unknown>);
+      } catch {
+        // A listener is an observer: one that throws must not take down the
+        // debugger's own dispatch loop and leave later events undelivered.
+      }
+    }
+  };
 
   constructor(private readonly contents: WebContents) {}
+
+  /**
+   * Subscribes to this target's CDP events.
+   *
+   * Events are not replayed: a listener added after `Page.javascriptDialogOpening`
+   * fired has missed it. That is why the dialog path pins the session and
+   * registers its listener when the tab is created rather than when a tool is
+   * called.
+   *
+   * One `debugger.on` for the whole client, so adding a second feature that needs
+   * events does not need a second listener on the native object — and the events
+   * it wants are enabled by whatever code enables that domain.
+   */
+  onEvent(listener: CdpEventListener): () => void {
+    if (this.listeners.size === 0 && !this.contents.isDestroyed()) {
+      this.contents.debugger.on("message", this.onDebuggerMessage);
+    }
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0 && !this.contents.isDestroyed()) {
+        this.contents.debugger.removeListener("message", this.onDebuggerMessage);
+      }
+    };
+  }
 
   isAttached(): boolean {
     return this.attached && !this.contents.isDestroyed();
@@ -141,6 +270,100 @@ export class EmbeddedCdp implements CdpExecutor {
     } catch {
       // A destroyed webContents detaches itself.
     }
+  }
+
+  /**
+   * Puts files into a file input.
+   *
+   * The node id is resolved here rather than taken from the caller: `Runtime`
+   * object ids belong to one execution context, and a navigation invalidates
+   * them, so an id passed in from an earlier call is a coin flip. Resolving and
+   * using it in the same command is the only ordering that cannot race.
+   */
+  async setFiles(selector: string, paths: string[]): Promise<void> {
+    const response = await this.send<{ result?: { objectId?: string } }>("Runtime.evaluate", {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+    });
+    const objectId = response?.result?.objectId;
+    if (!objectId) throw new Error(`找不到文件输入框：${selector}`);
+    /*
+     * `backendNodeId`, not `nodeId`: `DOM.requestNode` only answers for nodes the
+     * DOM agent has already pushed to the client, which requires `DOM.enable`
+     * and a document snapshot. `DOM.describeNode` resolves a remote object's node
+     * directly, so it works on the first call and on every page.
+     */
+    const node = await this.send<{ node?: { backendNodeId?: number } }>("DOM.describeNode", {
+      objectId,
+    });
+    const backendNodeId = node?.node?.backendNodeId;
+    if (!backendNodeId) throw new Error(`找不到文件输入框：${selector}`);
+    await this.send("DOM.setFileInputFiles", { files: paths, backendNodeId });
+  }
+
+  /**
+   * Drags between two points with intermediate moves.
+   *
+   * The count is not arbitrary: sortable lists decide "dropped above or below"
+   * from the last few moves, and a two-step drag reads as "teleported". Six moves
+   * is enough for those handlers to see a direction while staying one round trip
+   * per step — the whole drag is a few hundred milliseconds, which is also what a
+   * person's drag looks like.
+   */
+  async dragFromTo(from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from.x, y: from.y });
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: from.x,
+      y: from.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    const steps = 6;
+    for (let step = 1; step <= steps; step += 1) {
+      const x = Math.round(from.x + ((to.x - from.x) * step) / steps);
+      const y = Math.round(from.y + ((to.y - from.y) * step) / steps);
+      // `buttons: 1` on every move is what makes it a drag rather than a hover:
+      // HTML5 drag handlers and `dragover` only fire while a button is held.
+      await this.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x,
+        y,
+        button: "left",
+        buttons: 1,
+      });
+    }
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: to.x,
+      y: to.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+  }
+
+  /**
+   * Answers the page's open JavaScript dialog.
+   *
+   * `Page.handleJavaScriptDialog` is the only way: the dialog lives in the
+   * browser's own UI, so no key event reaches it and no `Runtime.evaluate` runs
+   * while it is up (the page is blocked waiting for the answer). Passing
+   * `promptText` on an `alert`/`confirm` is harmless; Chromium ignores it.
+   */
+  async handleDialog(accept: boolean, promptText?: string): Promise<void> {
+    await this.send(
+      "Page.handleJavaScriptDialog",
+      {
+        accept,
+        ...(promptText === undefined ? {} : { promptText }),
+      },
+      // Bounded, and shorter than the default ceiling: the command that *opened*
+      // the dialog is still waiting for its reply, and Chromium answers one
+      // session's commands in order — so this can queue behind that straggler.
+      // An unbounded wait would report success after 30 seconds of nothing.
+      { timeoutMs: 5_000 },
+    );
   }
 
   async send<T = unknown>(
@@ -271,6 +494,7 @@ export class EmbeddedCdp implements CdpExecutor {
       quality?: number;
       preferRenderer?: boolean;
       timeoutMs?: number;
+      clip?: { x: number; y: number; width: number; height: number; scale?: number };
     } = {},
   ): Promise<Buffer> {
     const format = options.format ?? "png";
@@ -285,7 +509,9 @@ export class EmbeddedCdp implements CdpExecutor {
       if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
       return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
     };
-    if (options.preferRenderer) return fromRenderer();
+    // A clip forces the compositor: `capturePage` takes no rectangle, and cropping
+    // the result would need an image library the main process does not have.
+    if (options.preferRenderer && !options.clip) return fromRenderer();
     try {
       const result = await Promise.race([
         this.send<{ data: string }>(
@@ -293,6 +519,9 @@ export class EmbeddedCdp implements CdpExecutor {
           {
             format,
             ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
+            ...(options.clip
+              ? { clip: { ...options.clip, scale: options.clip.scale ?? 1 } }
+              : {}),
           },
           // The compositor path answers in tens of milliseconds or never. Four
           // seconds is the window in which a real answer could still arrive.
@@ -303,7 +532,13 @@ export class EmbeddedCdp implements CdpExecutor {
         ),
       ]);
       return Buffer.from(result.data, "base64");
-    } catch {
+    } catch (error) {
+      /*
+       * The fallback is only for the unclipped case. `capturePage` ignores the
+       * rectangle, so falling back with a clip would answer "here is your element"
+       * with a picture of the whole viewport — a wrong answer that looks right.
+       */
+      if (options.clip) throw error;
       return fromRenderer();
     }
   }
@@ -329,6 +564,104 @@ export class EmbeddedCdp implements CdpExecutor {
       buttons: 0,
       clickCount: 1,
     });
+  }
+
+  /**
+   * Moves the pointer, without clicking.
+   *
+   * Two dispatches, not one: a bare `mouseMoved` from a position the page never
+   * saw is treated by some sites' hover handlers as a jump rather than a hover,
+   * and CSS `:hover` needs the transition to actually run. Moving *to* the point
+   * again in a second dispatch is what makes `mouseenter` fire on an element the
+   * pointer was not already over.
+   *
+   * No `button` field: including one turns this into a drag move, and a hover
+   * that reports a pressed button opens menus the user never asked for.
+   */
+  async hoverAt(x: number, y: number): Promise<void> {
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    // Browsers coalesce same-position moves; a zero-distance move is a no-op, so
+    // nudge by a pixel and back to guarantee the second one is delivered.
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x + 1, y });
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  }
+
+  /**
+   * Scrolls whatever is under the point.
+   *
+   * `mouseWheel` rather than `window.scrollBy`: a page that scrolls a nested
+   * container (a virtual list, a modal body) ignores viewport scrolling, and a
+   * wheel event routed through the input pipeline also runs the page's own
+   * scroll handlers and lazy-loading, which is what "scroll like a person" means.
+   */
+  async scrollAt(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    // The pointer has to be over the target for the wheel to land there.
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await this.send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x,
+      y,
+      deltaX,
+      deltaY,
+    });
+  }
+
+  /**
+   * Presses a key with modifiers held, in the order a person does it.
+   *
+   * Chromium derives the modifier state from which keys are down, so the mask on
+   * the target event alone is not enough: the browser's own state would still say
+   * nothing is held. Pressing the modifier keys first, then the target with the
+   * mask, then releasing in reverse, is what makes `ctrlKey` / `shiftKey` true on
+   * the keydown handlers that read them.
+   *
+   * The modifier keys themselves are derived from the same bit field the caller
+   * passes, so "Ctrl+Shift+S" needs one number rather than a list of key presses
+   * that has to agree with it.
+   */
+  async pressWithModifiers(
+    key: string,
+    code: string,
+    keyCode: number,
+    modifiers: number,
+  ): Promise<void> {
+    const held = MODIFIER_KEYS.filter((entry) => (modifiers & entry.mask) !== 0);
+    for (const modifier of held) {
+      await this.send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: modifier.key,
+        code: modifier.code,
+        windowsVirtualKeyCode: modifier.keyCode,
+        nativeVirtualKeyCode: modifier.keyCode,
+        modifiers,
+      });
+    }
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers,
+    });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers,
+    });
+    for (const modifier of [...held].reverse()) {
+      await this.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: modifier.key,
+        code: modifier.code,
+        windowsVirtualKeyCode: modifier.keyCode,
+        nativeVirtualKeyCode: modifier.keyCode,
+        modifiers: modifiers & ~modifier.mask,
+      });
+    }
   }
 
   /** Types through the input pipeline so frameworks see real input events. */
@@ -413,6 +746,22 @@ export class EmbeddedCdp implements CdpExecutor {
     });
   }
 }
+
+/**
+ * Chromium's modifier bit field, as the key each bit stands for.
+ *
+ * The numbers are the protocol's, not ours: `Input.dispatchKeyEvent` and
+ * `Input.dispatchMouseEvent` both take this mask, so a click that holds Ctrl and
+ * a keypress that holds Ctrl agree because they read from the same table. A
+ * second copy of these values anywhere else would drift the moment one of them
+ * was fixed.
+ */
+export const MODIFIER_KEYS: Array<{ mask: number; key: string; code: string; keyCode: number }> = [
+  { mask: 1, key: "Alt", code: "AltLeft", keyCode: 18 },
+  { mask: 2, key: "Control", code: "ControlLeft", keyCode: 17 },
+  { mask: 4, key: "Meta", code: "MetaLeft", keyCode: 91 },
+  { mask: 8, key: "Shift", code: "ShiftLeft", keyCode: 16 },
+];
 
 /**
  * Key names a flow may press.

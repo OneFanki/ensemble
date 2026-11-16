@@ -3,8 +3,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   buildDomSnapshotExpression,
+  buildAttributeExpression,
+  buildCheckExpression,
   buildClickHitExpression,
+  buildDragPointsExpression,
+  buildElementInfoExpression,
   buildElementPointExpression,
+  buildElementRectExpression,
+  buildFileInputExpression,
   buildFocusExpression,
   buildReadExpression,
   buildSelectExpression,
@@ -32,6 +38,7 @@ import {
   buildFillExpression,
   type AuthTokenSource,
 } from "@core/cdp/login";
+import { checkCdpCommand } from "@core/cdp/flow-whitelist";
 import {
   type PerfSample,
   type RawMetrics,
@@ -109,7 +116,7 @@ import {
   type Session,
   type WebContents,
 } from "electron";
-import { EmbeddedCdp, type CdpExecutor } from "./cdp";
+import { EmbeddedCdp, KEY_TABLE, MODIFIER_KEYS, type CdpExecutor } from "./cdp";
 import { GuestPageSurface, type PageSurface } from "./surface";
 import { GuestCdp, type GuestCdpTarget } from "./guest-cdp";
 import { LOGIN_CAPTURE_BINDING, LOGIN_CAPTURE_SCRIPT } from "./login-capture";
@@ -127,6 +134,17 @@ import { applyProxyToSession } from "../proxy";
  */
 const SLEEP_GRACE_DEFAULT_MS = 60_000;
 const SLEEP_SWEEP_DEFAULT_MS = 10_000;
+
+/**
+ * How long a JavaScript dialog may block its page before it is dismissed.
+ *
+ * A dialog blocks everything: no DOM read, no click, no screenshot. A caller that
+ * opened one and then failed, or a person who walked away, would otherwise leave
+ * the page unusable until the tab was closed. 30 seconds is long enough for a
+ * human to read a confirm and for an AI step to answer it, and short enough that
+ * the page comes back on its own.
+ */
+const DIALOG_AUTO_DISMISS_MS = 30_000;
 
 /** The sampling knobs in force right now, already range-checked. */
 interface PerfConfig {
@@ -337,6 +355,36 @@ interface TabRecord {
   consoleLog?: Array<{ at: string; level: PageLogLevel; text: string; source?: string }>;
   consoleDropped?: number;
   /**
+   * The JavaScript dialog this page is showing right now, if any.
+   *
+   * Kept on the tab rather than inside a promise because the dialog outlives
+   * every command: it stays up until somebody answers it, and while it is up the
+   * page is blocked — measured on 45.2.1, the `Input.dispatchMouseEvent` that
+   * opened it never returns, and neither does any `Runtime.evaluate` issued
+   * afterwards. A tool that asks "is something in the way" has to answer from
+   * this record alone rather than by asking the page.
+   *
+   * `autoDismiss` is the escape hatch: a caller that never comes back must not
+   * leave the page wedged for the rest of the session.
+   */
+  dialog?: {
+    type: "alert" | "confirm" | "prompt" | "beforeunload";
+    message: string;
+    defaultPrompt?: string;
+    url?: string;
+    openedAt: number;
+    /** Drops the dialog if nobody answers it; cleared when one is answered. */
+    autoDismiss?: ReturnType<typeof setTimeout>;
+  };
+  /**
+   * Unsubscribes the CDP listener that fills in `dialog`.
+   *
+   * Per tab because the executor is rebuilt with the carrier while the record
+   * survives it — closing a page has to unsubscribe, or the listener outlives
+   * the page it describes.
+   */
+  dialogListener?: () => void;
+  /**
    * The DevTools panel this app hosts for the page, when one exists.
    *
    * A guest cannot hand its tools to a `<webview>` — `setDevToolsWebContents`
@@ -466,6 +514,21 @@ export interface EmbeddedBrowserOptions {
   sleepGraceMs?: number;
   /** How often the sleep sweep runs; defaults to 10 seconds. */
   sleepSweepMs?: number;
+  /**
+   * How long a JavaScript dialog may block its page before it is dismissed.
+   *
+   * An option rather than a constant so an e2e can compress it instead of
+   * waiting 30 seconds per case.
+   */
+  dialogAutoDismissMs?: number;
+  /**
+   * Whether a flow's raw `cdp` step may use the optional tier.
+   *
+   * A function, not a boolean: flows run long after the browser was
+   * constructed, and the setting can change in between. Reading it per run is
+   * what makes "the setting is off now" mean what the user expects.
+   */
+  flowCdpExtended?: () => boolean;
   /**
    * Hosts pages as `<webview>` nodes owned by the renderer.
    *
@@ -928,6 +991,15 @@ export class EmbeddedBrowser {
       ...(tab.muted ? { muted: true } : {}),
       ...(audible ? { audible: true } : {}),
       ...(this.frozenTabs.has(tab.id) ? { sleeping: true } : {}),
+      ...(tab.dialog
+        ? {
+            dialog: {
+              type: tab.dialog.type,
+              message: tab.dialog.message,
+              ...(tab.dialog.defaultPrompt ? { defaultPrompt: tab.dialog.defaultPrompt } : {}),
+            },
+          }
+        : {}),
       ...(tab.sleepPolicy ? { sleepPolicy: tab.sleepPolicy } : {}),
       // In viewport mode the fit scale *is* the effective zoom; reporting the
       // untouched override here would make the chrome claim 100% while the
@@ -2415,6 +2487,20 @@ export class EmbeddedBrowser {
       if (tab.device) void this.applyDevice(tab, tab.device, { reapply: true });
     });
     /*
+     * JS 弹窗会卡死页面，所以从页面一创建就盯着。
+     *
+     * 实测（Electron 45.2.1）：`confirm()` 打开后，**触发它的
+     * `Input.dispatchMouseEvent` 永远不返回**，之后的 `Runtime.evaluate` 也一样
+     * ——页面被阻塞在弹窗上。默认的 30 秒单命令上限会把一次 click 变成一次超时，
+     * 调用方看到的却是「点了没反应」。而 `Page.handleJavaScriptDialog` 在弹窗
+     * 打开期间仍能正常应答，所以只要知道有弹窗，就能把页面解开。
+     *
+     * 监听必须在这里注册，不能等到某个工具调用时：事件不重放，等工具跑起来时
+     * 事件早就过去了。`Page.enable` 由 guest manager 的会话建立钩子保证（会话
+     * 空闲释放后重开时会重放），所以订阅本身跟着 executor 走，不跟着会话走。
+     */
+    this.trackDialogs(tab);
+    /*
      * Clicking anywhere inside a page selects that cell.
      *
      * Without this, the selection only moves when a dock row or a slot header is
@@ -2900,6 +2986,10 @@ export class EmbeddedBrowser {
     this.aiActiveUntil.delete(tab.id);
     this.frozenTabs.delete(tab.id);
     this.stagedTabs.delete(tab.id);
+    // A dialog's timers belong to the page that opened them; a closed tab must
+    // not keep a timer alive that would then try to answer a dialog on a page
+    // nobody can reach.
+    this.clearDialog(tab);
     // The last page of an instance carries the instance with it; drop the
     // clean-session marker with it so the set does not grow forever.
     if (!this.tabs.some((item) => item.instanceId === tab.instanceId)) {
@@ -3600,12 +3690,15 @@ export class EmbeddedBrowser {
 
   async snapshotDom(tabId: string, options: { maxNodes?: number } = {}): Promise<DomSnapshot> {
     const tab = this.requireTab(tabId);
-    return tab.cdp.snapshotDom(buildDomSnapshotExpression(options));
+    // Hinted like the actions: reading the page is the first thing a caller does
+    // when an action stalls, and a bare evaluate timeout there reads as "the
+    // selector is wrong" when the real answer is "a dialog is waiting".
+    return this.withDialogHint(tab, () => tab.cdp.snapshotDom(buildDomSnapshotExpression(options)));
   }
 
   async visibility(tabId: string, target: TargetInput): Promise<VisibilityProbe> {
     const tab = this.requireTab(tabId);
-    return tab.cdp.visibility(buildVisibilityExpression(target));
+    return this.withDialogHint(tab, () => tab.cdp.visibility(buildVisibilityExpression(target)));
   }
 
   async click(
@@ -3620,11 +3713,18 @@ export class EmbeddedBrowser {
     hit?: { onTarget: boolean; tag?: string; text?: string };
   }> {
     const tab = this.requireTab(tabId);
-    const point = await tab.cdp.elementPoint(buildElementPointExpression(target));
+    // Wrapped too: with a dialog up, the *first* thing that stalls is this
+    // evaluate, not the input dispatch below it — so a hint on the dispatch alone
+    // never fires and the caller still gets a bare CDP timeout.
+    const point = await this.withDialogHint(tab, () =>
+      tab.cdp.elementPoint(buildElementPointExpression(target)),
+    );
     if (!point.ok || point.x === undefined || point.y === undefined) {
       throw new Error(`无法点击 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
     }
-    await tab.cdp.clickAt(point.x, point.y);
+    const px = point.x;
+    const py = point.y;
+    await this.withDialogHint(tab, () => tab.cdp.clickAt(px, py));
     // An overlay, a late scroll or a re-render can redirect the events. Reading
     // the hit back turns "the site ignored my click" from a guess into a fact
     // the caller can act on.
@@ -3642,6 +3742,568 @@ export class EmbeddedBrowser {
       ...(point.selector ? { selector: point.selector } : {}),
       ...(hit ? { hit } : {}),
     };
+  }
+
+  /**
+   * Moves the pointer over an element.
+   *
+   * The element is resolved to a point with the same expression `click` uses, so
+   * a hover and a click on the same target land on the same pixel — which is
+   * what a hover-then-click flow depends on.
+   *
+   * Returns the element it found, so a caller can tell "hovered the wrong thing"
+   * from "hovered nothing". A silent void would make a menu that never opened
+   * look like a flow bug rather than a selector bug.
+   */
+  async hover(
+    tabId: string,
+    target: TargetInput,
+  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string }> {
+    const tab = this.requireTab(tabId);
+    const point = await this.withDialogHint(tab, () =>
+      tab.cdp.elementPoint(buildElementPointExpression(target)),
+    );
+    if (!point.ok || point.x === undefined || point.y === undefined) {
+      throw new Error(`无法悬停 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
+    }
+    const hx = point.x;
+    const hy = point.y;
+    await this.withDialogHint(tab, () => tab.cdp.hoverAt(hx, hy));
+    return {
+      ok: true,
+      ...(point.tag ? { tag: point.tag } : {}),
+      ...(point.text ? { text: point.text } : {}),
+      ...(point.selector ? { selector: point.selector } : {}),
+    };
+  }
+
+  /**
+   * Scrolls a page, or the container the target sits in.
+   *
+   * Two ways to ask, because they are different questions. With a target, the
+   * wheel lands on that element's centre, so a nested scroll container moves
+   * instead of the page. Without one, the viewport scrolls. `deltaY` is positive
+   * downwards.
+   *
+   * The reported `scrolled` is read back after the wheel event: a page that is
+   * already at its end moves nowhere, and a flow that then looks for new content
+   * would be waiting on a scroll that never happened.
+   */
+  async scroll(
+    tabId: string,
+    options: {
+      target?: TargetInput;
+      deltaX?: number;
+      deltaY?: number;
+    } = {},
+  ): Promise<{ ok: true; scrolled: { x: number; y: number }; moved: boolean }> {
+    const tab = this.requireTab(tabId);
+    /*
+     * Which element actually scrolls is not knowable from the call.
+     *
+     * `scrollTop` on the document is one answer; a nested container is another,
+     * and a wheel event over that container moves *it*, not the page. Reading only
+     * `window.scrollY` therefore reported `moved: false` for the exact case this
+     * tool exists for. So the observer is injected first: it walks up from
+     * whatever sits under the point and records the scroll position of the first
+     * scrollable ancestor (or the document), then reports the change.
+     */
+    const observer = `
+      (() => {
+        if (window.__ensembleScrollProbe) return window.__ensembleScrollProbe.read();
+        const read = () => {
+          const target = window.__ensembleScrollProbe?.element;
+          if (target && target !== document.scrollingElement) {
+            return { x: target.scrollLeft, y: target.scrollTop };
+          }
+          const root = document.scrollingElement || document.documentElement;
+          return { x: root.scrollLeft, y: root.scrollTop };
+        };
+        const probe = { element: null, read };
+        window.__ensembleScrollProbe = probe;
+        return read();
+      })()
+    `;
+
+    let x: number;
+    let y: number;
+    if (options.target) {
+      const scrollTarget = options.target;
+      const point = await this.withDialogHint(tab, () =>
+        tab.cdp.elementPoint(buildElementPointExpression(scrollTarget)),
+      );
+      if (!point.ok || point.x === undefined || point.y === undefined) {
+        throw new Error(`无法滚动 ${describeTarget(options.target)}：${point.reason ?? "unknown"}`);
+      }
+      x = point.x;
+      y = point.y;
+      // Point the probe at the scrollable ancestor of the target the caller named,
+      // so the before/after reading is about the thing they asked to move.
+      await tab.cdp.evaluate(`
+        (() => {
+          ${observer};
+          const el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
+          let node = el;
+          while (node && node !== document.body) {
+            const style = getComputedStyle(node);
+            if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) {
+              window.__ensembleScrollProbe.element = node;
+              return true;
+            }
+            node = node.parentElement;
+          }
+          window.__ensembleScrollProbe.element = null;
+          return false;
+        })()
+      `);
+    } else {
+      // The viewport's centre: a wheel at a corner can land on a scrollbar or
+      // outside the content area of a page that pads its body.
+      const size = await tab.cdp.evaluate<{ width: number; height: number }>(
+        `({ width: window.innerWidth, height: window.innerHeight })`,
+      );
+      x = Math.round(size.width / 2);
+      y = Math.round(size.height / 2);
+      await tab.cdp.evaluate(`(() => { ${observer}; window.__ensembleScrollProbe.element = null; return true; })()`);
+    }
+    const before = await tab.cdp.evaluate<{ x: number; y: number }>(
+      `window.__ensembleScrollProbe.read()`,
+    );
+    await this.withDialogHint(tab, () => tab.cdp.scrollAt(x, y, options.deltaX ?? 0, options.deltaY ?? 0));
+    // A wheel event is queued against the compositor, not applied synchronously.
+    // Reading in the same tick measured the pre-scroll position and reported
+    // `moved: false` for a scroll that had in fact happened.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const after = await tab.cdp.evaluate<{ x: number; y: number }>(
+      `window.__ensembleScrollProbe.read()`,
+    );
+    return {
+      ok: true,
+      scrolled: after,
+      moved: after.x !== before.x || after.y !== before.y,
+    };
+  }
+
+  /**
+   * Presses a key combination.
+   *
+   * `keys` is written the way the shortcut reads: `"Control+a"`, `"Control+Shift+s"`,
+   * `"Meta+Enter"`. That spelling is what makes the call self-explanatory; the
+   * bit mask Chromium wants is derived from it here rather than asked of the
+   * caller, who would have to look up that Alt is 1 and Ctrl is 2.
+   */
+  async pressKeys(
+    tabId: string,
+    keys: string,
+  ): Promise<{ ok: true; keys: string; modifiers: number }> {
+    const tab = this.requireTab(tabId);
+    const parts = keys
+      .split("+")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length === 0) throw new Error("按键组合不能为空");
+    const target = parts[parts.length - 1] as string;
+    const modifierNames = parts.slice(0, -1);
+    let modifiers = 0;
+    for (const name of modifierNames) {
+      const entry = MODIFIER_KEYS.find(
+        (item) => item.key.toLowerCase() === name.toLowerCase() ||
+          (name.toLowerCase() === "ctrl" && item.key === "Control") ||
+          (name.toLowerCase() === "cmd" && item.key === "Meta") ||
+          (name.toLowerCase() === "option" && item.key === "Alt"),
+      );
+      if (!entry) throw new Error(`不认识的修饰键：${name}`);
+      modifiers |= entry.mask;
+    }
+    const keyEntry = KEY_TABLE[target] ?? KEY_TABLE[target.charAt(0).toUpperCase() + target.slice(1)];
+    if (!keyEntry) {
+      // A single character is a legitimate shortcut target ("Control+a"); it has
+      // no entry in the named-key table because its code is derived, not listed.
+      if (target.length === 1) {
+        const upper = target.toUpperCase();
+        await tab.cdp.pressWithModifiers(target, `Key${upper}`, upper.charCodeAt(0), modifiers);
+        return { ok: true, keys, modifiers };
+      }
+      throw new Error(`不支持的按键：${target}`);
+    }
+    await tab.cdp.pressWithModifiers(keyEntry.key, keyEntry.code, keyEntry.keyCode, modifiers);
+    return { ok: true, keys, modifiers };
+  }
+
+  /**
+   * Puts files into a file input.
+   *
+   * The element is resolved first so the caller learns *why* nothing happened:
+   * "that is not a file input", "it is disabled", "it accepts one file but you
+   * passed five" are all answers a bare command cannot give. Paths must be
+   * absolute and exist — the browser reads them, not the page.
+   *
+   * `multiple: false` with more than one path is refused rather than silently
+   * truncated: a form that received one of five files reports success, and the
+   * caller would go on to assert against a half-uploaded record.
+   */
+  async setFiles(
+    tabId: string,
+    target: TargetInput,
+    paths: string[],
+  ): Promise<{
+    ok: true;
+    count: number;
+    multiple: boolean;
+    selector?: string;
+  }> {
+    const tab = this.requireTab(tabId);
+    if (paths.length === 0) throw new Error("至少要给一个文件路径");
+    const probe = await this.withDialogHint(tab, () =>
+      tab.cdp.evaluate<{
+        ok: boolean;
+        reason?: string;
+        multiple?: boolean;
+        accept?: string;
+        selector?: string;
+        tag?: string;
+      }>(buildFileInputExpression(target)),
+    );
+    if (!probe.ok) {
+      throw new Error(`无法上传到 ${describeTarget(target)}：${probe.reason ?? "unknown"}`);
+    }
+    if (probe.multiple !== true && paths.length > 1) {
+      throw new Error(
+        `这个文件框只能收一个文件（给了 ${paths.length} 个）：${describeTarget(target)}`,
+      );
+    }
+    // A selector is needed because `DOM.setFileInputFiles` takes a node, and the
+    // expression resolves one from CSS. The same page, milliseconds later: the
+    // probe above ran in the same document, so this cannot drift to another node.
+    const selector = probe.selector;
+    if (!selector) throw new Error(`无法定位文件框：${describeTarget(target)}`);
+    await this.withDialogHint(tab, () => tab.cdp.setFiles(selector, paths));
+    return {
+      ok: true,
+      count: paths.length,
+      multiple: probe.multiple === true,
+      selector,
+    };
+  }
+
+  /**
+   * Drags one element onto another.
+   *
+   * Both ends resolve in one page call so they describe the same layout: a
+   * re-render between two round trips could move the target and the press would
+   * start from a stale coordinate. `moved: false` reports a page whose drag
+   * handler never fired, which is the difference between "the drop did nothing"
+   * and "the drag never started".
+   */
+  async drag(
+    tabId: string,
+    from: TargetInput,
+    to: TargetInput,
+  ): Promise<{
+    ok: true;
+    fromTag?: string;
+    toTag?: string;
+    fromText?: string;
+    toText?: string;
+  }> {
+    const tab = this.requireTab(tabId);
+    const points = await this.withDialogHint(tab, () =>
+      tab.cdp.evaluate<{
+        ok: boolean;
+        reason?: string;
+        from?: { x: number; y: number };
+        to?: { x: number; y: number };
+        fromTag?: string;
+        toTag?: string;
+        fromText?: string;
+        toText?: string;
+      }>(buildDragPointsExpression(from, to)),
+    );
+    if (!points.ok || !points.from || !points.to) {
+      throw new Error(`无法拖拽：${points.reason ?? "unknown"}`);
+    }
+    await this.withDialogHint(tab, () => tab.cdp.dragFromTo(points.from!, points.to!));
+    return {
+      ok: true,
+      ...(points.fromTag ? { fromTag: points.fromTag } : {}),
+      ...(points.toTag ? { toTag: points.toTag } : {}),
+      ...(points.fromText ? { fromText: points.fromText } : {}),
+      ...(points.toText ? { toText: points.toText } : {}),
+    };
+  }
+
+  /**
+   * Sets a checkbox or radio to a chosen state.
+   *
+   * Idempotent by design: the state is read in the page and the box is clicked
+   * only on a mismatch. A caller that says `check` twice must not end up with an
+   * unchecked box, which is exactly what blind clicking produces.
+   *
+   * `changed: false` with `checked` matching the request is the "it was already
+   * like that" answer; `stuckAt` means the click did not move it (a disabled
+   * wrapper, a handler calling `preventDefault`) and the caller should stop rather
+   * than retry.
+   */
+  async setChecked(
+    tabId: string,
+    target: TargetInput,
+    desired: boolean,
+  ): Promise<{
+    ok: true;
+    checked: boolean;
+    changed: boolean;
+    selector?: string;
+    stuckAt?: boolean;
+  }> {
+    const tab = this.requireTab(tabId);
+    const result = await this.withDialogHint(tab, () =>
+      tab.cdp.evaluate<{
+        ok: boolean;
+        reason?: string;
+        checked?: boolean;
+        changed?: boolean;
+        selector?: string;
+        tag?: string;
+        type?: string;
+        stuckAt?: boolean;
+      }>(buildCheckExpression(target, desired)),
+    );
+    if (!result.ok) {
+      throw new Error(`无法设置 ${describeTarget(target)}：${result.reason ?? "unknown"}`);
+    }
+    return {
+      ok: true,
+      checked: result.checked === true,
+      changed: result.changed === true,
+      ...(result.selector ? { selector: result.selector } : {}),
+      ...(result.stuckAt !== undefined ? { stuckAt: result.stuckAt } : {}),
+    };
+  }
+
+  /**
+   * Everything about one element that a caller can act on.
+   *
+   * The alternative was for callers to write DOM code through
+   * `evaluate_browser_page`, which is the part that goes stale the first time the
+   * page's markup changes. This answers "what is this element, is it enabled,
+   * what is in it, what does its aria say" in one call.
+   */
+  async elementInfo(tabId: string, target: TargetInput): Promise<unknown> {
+    const tab = this.requireTab(tabId);
+    const info = await this.withDialogHint(tab, () =>
+      tab.cdp.evaluate<{ ok: boolean; reason?: string }>(buildElementInfoExpression(target)),
+    );
+    if (!info.ok) {
+      throw new Error(`找不到 ${describeTarget(target)}：${info.reason ?? "unknown"}`);
+    }
+    return info;
+  }
+
+  /**
+   * Reads attributes, or the element's text/value when no name is given.
+   *
+   * Attribute reads are the polling question ("did this become aria-disabled"),
+   * so this answers just that rather than the full element picture. A missing
+   * attribute comes back as `null`, which is different from the element not
+   * existing — the latter throws.
+   */
+  async attributes(
+    tabId: string,
+    target: TargetInput,
+    names?: string[],
+  ): Promise<unknown> {
+    const tab = this.requireTab(tabId);
+    const result = await this.withDialogHint(tab, () =>
+      tab.cdp.evaluate<{ ok: boolean; reason?: string }>(buildAttributeExpression(target, names)),
+    );
+    if (!result.ok) {
+      throw new Error(`找不到 ${describeTarget(target)}：${result.reason ?? "unknown"}`);
+    }
+    return result;
+  }
+
+  /**
+   * The JavaScript dialog this page is showing, if any.
+   *
+   * A read, not a poll: the record is filled by the CDP listener installed when
+   * the page was created, so the answer works even while the page is blocked —
+   * which is precisely when a caller needs to ask.
+   */
+  dialogStatus(tabId: string): {
+    dialog: { type: string; message: string; defaultPrompt?: string; url?: string; msOpen: number } | null;
+  } {
+    const tab = this.findTab(tabId);
+    if (!tab?.dialog) return { dialog: null };
+    return {
+      dialog: {
+        type: tab.dialog.type,
+        message: tab.dialog.message,
+        ...(tab.dialog.defaultPrompt ? { defaultPrompt: tab.dialog.defaultPrompt } : {}),
+        ...(tab.dialog.url ? { url: tab.dialog.url } : {}),
+        msOpen: Date.now() - tab.dialog.openedAt,
+      },
+    };
+  }
+
+  /**
+   * Answers the page's JavaScript dialog.
+   *
+   * `accept: false` dismisses (the browser's "取消"); `true` confirms. For a
+   * prompt, `promptText` is what gets typed into it — omitted means the field's
+   * default value, which is what pressing OK without editing does.
+   *
+   * **Why this exists at all**, measured on Electron 45.2.1: while a dialog is
+   * open the page is blocked, and the `Input.dispatchMouseEvent` that opened it
+   * never replies. A click tool therefore reports a 30-second timeout on a page
+   * that is merely waiting for an answer, and every later read fails the same
+   * way. Answering the dialog is the only thing that unblocks it.
+   *
+   * Answers even when no event was seen — a dialog can open while the session was
+   * released, and Chromium's own `Page.handleJavaScriptDialog` works regardless.
+   * In that case the record is cleared from this side and the answer is reported
+   * as `handled: true`; the page's own behaviour is the evidence either way.
+   *
+   * **Never reports success it did not have.** The command shares one session
+   * queue with the input dispatch the dialog is holding, so it can queue behind
+   * that straggler and time out. When it does, the dialog is still up and saying
+   * otherwise would send the caller to retry a page that is still blocked — the
+   * record is left in place and the failure is reported.
+   */
+  async handleDialog(
+    tabId: string,
+    options: { accept: boolean; promptText?: string },
+  ): Promise<{ ok: true; handled: boolean; type?: string }> {
+    const tab = this.requireTab(tabId);
+    const type = tab.dialog?.type;
+    try {
+      await tab.cdp.handleDialog(options.accept, options.promptText);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // "No dialog is showing" is a fact, not a failure: the caller raced a page
+      // that closed its own dialog, or the record is stale. Reporting an error
+      // would make an idempotent answer look broken.
+      if (/no dialog is showing|No dialog/i.test(message)) {
+        this.clearDialog(tab);
+        return { ok: true, handled: false, ...(type ? { type } : {}) };
+      }
+      // Anything else — a timeout behind the stalled click, a dead session — means
+      // the dialog is still there. Keep the record so the next attempt can find it.
+      throw error;
+    }
+    this.clearDialog(tab);
+    // The page resumes on the next task; reporting success before that would let
+    // a caller's very next command race the unblock.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return { ok: true, handled: true, ...(type ? { type } : {}) };
+  }
+
+  /**
+   * Subscribes a page's dialog events into its own record.
+   *
+   * The subscription is on the executor (per page) rather than on the CDP
+   * session, because the session is released on idle and reopened later — a
+   * listener that died with it would miss the dialog that made a page look
+   * frozen. `Page.enable` is restored by the guest manager on every session open,
+   * so the events keep arriving across those reopens.
+   */
+  private trackDialogs(tab: TabRecord): void {
+    tab.dialogListener?.();
+    tab.dialogListener = tab.cdp.onEvent((method, params) => {
+      if (method === "Page.javascriptDialogOpening") {
+        const type = String(params["type"] ?? "");
+        const known = type === "alert" || type === "confirm" || type === "prompt" || type === "beforeunload";
+        this.clearDialog(tab);
+        tab.dialog = {
+          type: known ? type : "alert",
+          message: String(params["message"] ?? ""),
+          ...(typeof params["defaultPrompt"] === "string" && params["defaultPrompt"]
+            ? { defaultPrompt: params["defaultPrompt"] }
+            : {}),
+          ...(typeof params["url"] === "string" && params["url"] ? { url: params["url"] } : {}),
+          openedAt: Date.now(),
+        };
+        /*
+         * A dialog nobody answers blocks the page for the rest of the session —
+         * no read, no click, no screenshot. The auto-dismiss is what makes that
+         * bounded: the caller that opened it usually answers within a step or
+         * two, and a person who walked away costs one dismissed confirm rather
+         * than a page that has to be closed.
+         */
+        const budget = this.options.dialogAutoDismissMs ?? DIALOG_AUTO_DISMISS_MS;
+        tab.dialog.autoDismiss = setTimeout(() => {
+          const open = tab.dialog;
+          if (!open) return;
+          delete open.autoDismiss;
+          void tab.cdp.handleDialog(false).catch(() => undefined);
+          this.clearDialog(tab);
+          this.emitState();
+        }, budget);
+        tab.dialog.autoDismiss.unref?.();
+        this.emitState();
+        return;
+      }
+      if (method === "Page.javascriptDialogClosed") {
+        // Fires when the page's own code or the browser closes it — including the
+        // case where our auto-dismiss fired first. Clearing here keeps the record
+        // from outliving the dialog.
+        this.clearDialog(tab);
+        this.emitState();
+      }
+    });
+  }
+
+  /** Drops the dialog record and its timer, without answering anything. */
+  private clearDialog(tab: TabRecord): void {
+    const dialog = tab.dialog;
+    if (!dialog) return;
+    if (dialog.autoDismiss) clearTimeout(dialog.autoDismiss);
+    delete tab.dialog;
+  }
+
+  /**
+   * Names a dialog as the reason a page command stalled.
+   *
+   * Measured on 45.2.1: while a dialog is up, the `Input.dispatch*` that opened
+   * it never returns and neither does any `Runtime.evaluate`. Both therefore
+   * surface as `CDP <method> 没有响应` — a message that blames the command, sends
+   * the caller looking at selectors, and says nothing about the page waiting on a
+   * `confirm()`. Rewriting the error here is what turns a 30-second mystery into
+   * one instruction: read the dialog, answer it, retry.
+   *
+   * Only wraps commands that a dialog can block. `Page.handleJavaScriptDialog`
+   * itself is deliberately not wrapped — it is the way out.
+   */
+  private async withDialogHint<T>(tab: TabRecord, run: () => Promise<T>): Promise<T> {
+    /*
+     * Refuse before sending, not after the ceiling.
+     *
+     * Checking up front is the difference between an error in milliseconds and a
+     * 30-second timeout followed by an error: while a dialog is up no command
+     * reaches the page at all, so sending one can only wait. The record is
+     * authoritative — it is filled from the browser's own event, and nothing
+     * clears it except answering the dialog.
+     */
+    if (tab.dialog) this.throwIfDialogOpen(tab);
+    try {
+      return await run();
+    } catch (error) {
+      // A dialog can open *during* the command — a click that triggers a confirm
+      // is exactly that. The event fills the record, so by the time the command
+      // stalls it is already there.
+      if (!tab.dialog) throw error;
+      this.throwIfDialogOpen(tab, error);
+    }
+  }
+
+  /** The one message for "a dialog is in the way"; always throws. */
+  private throwIfDialogOpen(tab: TabRecord, cause?: unknown): never {
+    const dialog = tab.dialog;
+    if (!dialog) throw cause instanceof Error ? cause : new Error(String(cause));
+    const message = dialog.message.replace(/\s+/g, " ").trim().slice(0, 120);
+    throw new Error(
+      `页面被一个 ${dialog.type} 弹窗挡住，这条命令没有做完：「${message}」。` +
+        `用 read_browser_dialog 看它，用 handle_browser_dialog 回答（accept: true 为确定），然后再重试。`,
+    );
   }
 
   /**
@@ -3742,7 +4404,17 @@ export class EmbeddedBrowser {
           : buildWaitExpression({ ...input, timeoutMs: remaining });
       try {
         const result = await Promise.race([
-          tab.cdp.evaluate<WaitResult>(expression, { awaitPromise: true }),
+          /*
+           * The command's own ceiling is raised to the poll's deadline, not left
+           * at the default 30 seconds. The page-side loop already stops at
+           * `remaining`, so the only thing a lower transport ceiling does is
+           * pre-empt it — and the caller then gets `CDP Runtime.evaluate 没有响应
+           * （超过 30000ms）` from a wait that was given ten minutes to run.
+           */
+          tab.cdp.evaluate<WaitResult>(expression, {
+            awaitPromise: true,
+            timeoutMs: remaining + 2_000,
+          }),
           new Promise<WaitResult>((resolve) =>
             setTimeout(
               () =>
@@ -3870,6 +4542,15 @@ export class EmbeddedBrowser {
     const started = Date.now();
     const results: FlowStepResult[] = [];
     const vars = { ...options.vars };
+    /**
+     * Every raw command this run used.
+     *
+     * Reported at the end because the count is the signal: a flow that needs
+     * more than two raw commands is a flow where an action is missing from the
+     * wrappers, and the caller should hear that from the result rather than from
+     * a reviewer reading the steps.
+     */
+    const rawCdpSteps: string[] = [];
 
     for (let index = 0; index < steps.length; index += 1) {
       if (Date.now() - started > options.timeoutMs) {
@@ -3911,29 +4592,22 @@ export class EmbeddedBrowser {
             break;
           }
           case "fill": {
-            const focus = await tab.cdp.evaluate<{
-              ok: boolean;
-              reason?: string;
-              inputType?: string;
-            }>(buildFocusExpression(target));
-            if (!focus.ok) throw new Error(`无法输入：${focus.reason ?? "unknown"}`);
-            // Some frameworks clear on focus; select-then-insert replaces the
-            // old value without leaving a trailing fragment behind. The pointer
-            // click inside `typeInto` is what makes a guest accept the input.
-            await this.typeInto(tab, target, step.value ?? "", { clear: true });
-            detail = focus.inputType === "password" ? "[redacted]" : step.value;
+            // Same reasoning as `click`: `type` already resolves the field,
+            // reports a password input for redaction, and does the
+            // pointer-then-select-then-insert dance a guest needs. The copy that
+            // was here duplicated all of it, minus the redaction.
+            const typed = await this.type(tabId, target, step.value ?? "", { clear: true });
+            detail = typed.secret ? "[redacted]" : step.value;
             break;
           }
           case "click": {
-            const point = await tab.cdp.elementPoint(buildElementPointExpression(target));
-            if (!point.ok || point.x === undefined || point.y === undefined) {
-              throw new Error(`无法点击：${point.reason ?? "unknown"}`);
-            }
-            await tab.cdp.clickAt(point.x, point.y);
-            // Same read-back as `click`; it also clears the marker the point
-            // lookup left on the element.
-            await tab.cdp.evaluate(buildClickHitExpression(point.x, point.y)).catch(() => {});
-            detail = point.text;
+            // The tool's own `click`, not a second copy of it: that one reads the
+            // hit back and reports `onTarget`, which is how a flow tells "the
+            // page ignored me" from "an overlay ate the click". The copy that
+            // used to live here dispatched the same three events and then threw
+            // the read-back away, so a flow could only ever say "clicked".
+            const clicked = await this.click(tabId, target);
+            detail = clicked.text;
             break;
           }
           case "select": {
@@ -3966,13 +4640,36 @@ export class EmbeddedBrowser {
             break;
           }
           case "wait": {
+            /*
+             * A wait may not outlive the flow's own budget.
+             *
+             * The check at the top of the loop only runs *between* steps, so a
+             * 30-second wait inside a flow given one second waited the full 30 —
+             * and the caller then saw "wait timed out" when what had actually
+             * happened is that the whole run was out of time. The earlier of the
+             * two budgets is the honest one.
+             */
+            const remaining = Math.max(200, options.timeoutMs - (Date.now() - started));
+            const stepBudget = step.timeoutMs ?? 5000;
             const outcome = await this.wait(tabId, {
               condition: step.condition ?? "visible",
               ...(step.condition === "text" || step.condition === "url" ? {} : { target }),
               ...(step.expect ? { text: step.expect } : {}),
-              timeoutMs: step.timeoutMs ?? 5000,
+              timeoutMs: Math.min(stepBudget, remaining),
             });
             if (!outcome.ok && !step.optional) {
+              // Blame the flow budget when that is what ran out: the difference
+              // matters — "this condition never held" is a step bug, "you did not
+              // give the run enough time" is a call-site one.
+              if (remaining < stepBudget) {
+                return {
+                  ok: false,
+                  failedAt: index,
+                  reason: `流程超过 ${Math.round(options.timeoutMs / 1000)} 秒仍未跑完`,
+                  steps: results,
+                  vars,
+                };
+              }
               throw new Error(`等待超时：${outcome.reason ?? "unknown"}`);
             }
             detail = outcome.ok ? `等了 ${outcome.waitedMs}ms` : "超时，按可选项继续";
@@ -3987,6 +4684,31 @@ export class EmbeddedBrowser {
             if (!read.ok) throw new Error(`无法读取：${read.reason ?? "unknown"}`);
             if (step.as) vars[step.as] = read.value ?? "";
             detail = step.as ? `${step.as} = ${read.value}` : read.value;
+            break;
+          }
+          case "cdp": {
+            /*
+             * The escape hatch, checked before anything is sent.
+             *
+             * The tier list decides whether this command may run at all: the
+             * allowed tier acts on this page the way a person would, the optional
+             * tier sits behind a setting, and the forbidden tier can reach another
+             * identity's partition — the one thing this app exists to keep
+             * separate. See `core/cdp/flow-whitelist.ts`.
+             */
+            const method = (step.method ?? "").trim();
+            const verdict = checkCdpCommand(method, {
+              gatedAllowed: this.options.flowCdpExtended?.() === true,
+            });
+            if (!verdict.ok) throw new Error(verdict.reason);
+            const response = await tab.cdp.send<unknown>(method, step.params ?? {}, {
+              timeoutMs: step.timeoutMs ?? 30_000,
+            });
+            rawCdpSteps.push(method);
+            // The reply is summarised, not returned whole: a `Runtime.evaluate`
+            // result carries a remote object id that means nothing outside this
+            // call, and printing it costs tokens without answering anything.
+            detail = `${method} ${summarizeCdpResult(response)}`;
             break;
           }
           default:
@@ -4018,7 +4740,17 @@ export class EmbeddedBrowser {
       }
     }
     this.emitState();
-    return { ok: true, steps: results, vars };
+    return {
+      ok: true,
+      steps: results,
+      vars,
+      ...(rawCdpSteps.length > 0 ? { rawCdp: rawCdpSteps } : {}),
+      ...(rawCdpSteps.length > 2
+        ? {
+            note: `这一趟用了 ${rawCdpSteps.length} 次原始 CDP 命令。超过两次通常说明缺一个封装动作，把常见用法做成动作会稳得多`,
+          }
+        : {}),
+    };
   }
 
   /** The element target of a step, or undefined for steps that act on the page. */
@@ -4186,22 +4918,63 @@ export class EmbeddedBrowser {
       quality?: number;
       inline?: boolean;
       timeoutMs?: number;
+      target?: TargetInput;
     } = {},
   ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }> {
     const tab = this.requireTab(tabId);
+    /*
+     * An element target becomes a clip rectangle in the page.
+     *
+     * Resolved before the capture path is chosen, so a target that is not there
+     * fails here with a reason — rather than producing a screenshot of the whole
+     * viewport that looks like the answer. The rectangle is intersected with the
+     * viewport because `clip` past the edge yields transparent pixels, not an
+     * error.
+     */
+    let clip: { x: number; y: number; width: number; height: number; scale?: number } | undefined;
+    if (options.target) {
+      const spec = options.target;
+      const box = await this.withDialogHint(tab, () =>
+        tab.cdp.evaluate<{
+          clip: { x: number; y: number; width: number; height: number } | null;
+          devicePixelRatio: number;
+        }>(buildElementRectExpression(spec)),
+      );
+      // A null answer means the element is not on screen *or* not in the page;
+      // the two are told apart here so the message says which.
+      if (!box) throw new Error(`找不到要截取的元素：${describeTarget(spec)}`);
+      if (!box.clip) {
+        throw new Error(`元素不在可视区域内，无法截取：${describeTarget(spec)}`);
+      }
+      /*
+       * `scale` is the reciprocal of the device pixel ratio, and it is not
+       * cosmetic: with `scale: 1` Chromium emits one image pixel per *device*
+       * pixel, so a 200×80 CSS box came back as 300×120 on a 1.5× display. The
+       * caller asked for the element's size, so that is what it gets.
+       */
+      clip = {
+        ...box.clip,
+        scale: 1 / (box.devicePixelRatio > 0 ? box.devicePixelRatio : 1),
+      };
+    }
     // A page the user switched away from, or one in a minimised window, has no
     // compositor frames: the CDP path would stall until its timeout, while the
     // renderer still paints into an offscreen surface (measured: 41ms and a full
     // image against a 5s timeout). Decide before priming — priming captures the
     // *host*, which is exactly the thing that never answers in that state.
-    const preferRenderer = !this.isOnScreen(tab);
+    //
+    // A clip makes this moot: the executor forces the compositor path for a
+    // clipped capture, because the renderer path cannot take a rectangle.
+    const preferRenderer = !this.isOnScreen(tab) && !clip;
     if (!preferRenderer) {
       // The embedder has to have painted before its guest can.
       await this.options.guests?.primeForCapture?.();
     }
     const buffer = await tab.cdp.screenshot({
-      ...options,
+      format: options.format,
+      quality: options.quality,
       preferRenderer,
+      ...(clip ? { clip } : {}),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     });
     mkdirSync(this.options.shotDir, { recursive: true });
@@ -5500,4 +6273,31 @@ export class EmbeddedBrowser {
   /** Per-slot label height, exported so the chrome and the manager agree. */
   static readonly slotHeaderHeight = EMBEDDED_SLOT_HEADER;
 
+}
+
+/**
+ * One line describing a raw CDP reply.
+ *
+ * The point is to be useful in a flow's step list without dumping a protocol
+ * object. A `Runtime.evaluate` reply is reduced to the value it produced (the
+ * remote object id is meaningless outside the call), an empty reply is "完成",
+ * and anything else falls back to a bounded JSON preview.
+ */
+function summarizeCdpResult(response: unknown): string {
+  if (response === undefined || response === null) return "完成";
+  if (typeof response === "string" || typeof response === "number" || typeof response === "boolean") {
+    return String(response).slice(0, 200);
+  }
+  const record = response as Record<string, unknown>;
+  const evaluated = record["result"];
+  if (evaluated && typeof evaluated === "object") {
+    const value = (evaluated as Record<string, unknown>)["value"];
+    if (value !== undefined) return String(value).slice(0, 200);
+  }
+  try {
+    const text = JSON.stringify(response);
+    return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  } catch {
+    return "完成";
+  }
 }

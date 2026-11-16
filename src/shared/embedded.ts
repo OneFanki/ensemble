@@ -106,6 +106,19 @@ export interface EmbeddedTab {
    */
   sleeping?: boolean;
   /**
+   * JavaScript dialog this page is blocked on, when one is up.
+   *
+   * While it is set the page answers nothing — no DOM read, no click, no
+   * screenshot — so it is shown in the chrome rather than left to look like a
+   * hung page. A person sees what the page is asking; an AI reads the same fact
+   * from `read_browser_dialog` rather than guessing from timeouts.
+   */
+  dialog?: {
+    type: "alert" | "confirm" | "prompt" | "beforeunload";
+    message: string;
+    defaultPrompt?: string;
+  };
+  /**
    * Per-page override of the background-sleep policy.
    *
    * Absent means "follow the default": a page that is off stage sleeps after an

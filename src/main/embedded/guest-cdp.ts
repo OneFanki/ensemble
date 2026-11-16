@@ -1,6 +1,6 @@
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
 import { withDeadline } from "@shared/async";
-import { KEY_TABLE, type CdpExecutor } from "./cdp";
+import { KEY_TABLE, MODIFIER_KEYS, type CdpEventListener, type CdpExecutor } from "./cdp";
 
 /**
  * A page's CDP surface when the page lives in a `<webview>`.
@@ -42,6 +42,15 @@ export interface GuestCdpTarget {
   has(guestId: string): boolean;
   /** True while a command against this guest is waiting for its reply. */
   busy(guestId: string): boolean;
+  /**
+   * Subscribes to a guest's CDP events.
+   *
+   * Optional: a target that cannot expose events simply never delivers one, and
+   * the feature that wanted them (dialog tracking) sees nothing instead of
+   * crashing. The listener survives session reopens because it lives on the
+   * guest's executor, not on the session.
+   */
+  onEvent?(listener: CdpEventListener): () => void;
   /** Resolves once the page's node has a real box (or the wait times out). */
   waitLaidOut(timeoutMs?: number): Promise<void>;
   /**
@@ -235,6 +244,7 @@ export class GuestCdp implements CdpExecutor {
       quality?: number;
       preferRenderer?: boolean;
       timeoutMs?: number;
+      clip?: { x: number; y: number; width: number; height: number; scale?: number };
     } = {},
   ): Promise<Buffer> {
     // The renderer capture path never sends a CDP command, so the activity mark
@@ -245,6 +255,9 @@ export class GuestCdp implements CdpExecutor {
     const params = {
       format,
       ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
+      ...(options.clip
+        ? { clip: { ...options.clip, scale: options.clip.scale ?? 1 } }
+        : {}),
     };
     const fromRenderer = async (): Promise<Buffer> => {
       const contents = this.guestContents();
@@ -256,7 +269,8 @@ export class GuestCdp implements CdpExecutor {
       if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
       return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
     };
-    if (options.preferRenderer) {
+    // A clip forces the compositor: `capturePage` has no rectangle to take.
+    if (options.preferRenderer && !options.clip) {
       // Present for the box, not for the frames: `capturePage` needs the node
       // laid out, and the caller's reason for taking this path is that the node
       // has no usable box right now. The capture happens *inside* `presented` —
@@ -282,6 +296,11 @@ export class GuestCdp implements CdpExecutor {
         return Buffer.from(result.data, "base64");
       });
     } catch (error) {
+      /*
+       * The renderer fallback is only for the unclipped case: a clipped capture
+       * that fell back would hand back the whole viewport and look like success.
+       */
+      if (options.clip) throw error;
       // The window can stop painting between the caller's check and this command
       // — minimised mid-flight, moved to another display. Falling back here turns
       // a failed screenshot into a slightly slower one.
@@ -320,6 +339,91 @@ export class GuestCdp implements CdpExecutor {
       });
     });
     this.pointerSeen = true;
+  }
+
+  /**
+   * Moves the pointer over an element, without pressing.
+   *
+   * It goes through `presented()` for the same reason a click does: a page that
+   * is parked off-window is not being hit-tested, so a hover sent to it would
+   * land nowhere and every hover-driven menu would silently refuse to open.
+   *
+   * `pointerSeen` is set here too. On a guest the input route opens on the first
+   * pointer event of any kind, so a hover is enough to make a later `type` land —
+   * and a flow that hovers a field before filling it depends on that.
+   */
+  async hoverAt(x: number, y: number): Promise<void> {
+    await this.presented(async () => {
+      await this.pointerMove(x, y);
+    });
+    this.pointerSeen = true;
+  }
+
+  /**
+   * Scrolls whatever sits under the point.
+   *
+   * Presented like the other pointer work: `mouseWheel` is hit-tested against the
+   * page under the coordinates, and a parked page has no hit-test target.
+   */
+  async scrollAt(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    await this.presented(async () => {
+      await this.pointerMove(x, y);
+      await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY });
+    });
+    this.pointerSeen = true;
+  }
+
+  /**
+   * A key with modifiers, in the order a person presses it.
+   *
+   * `ensureInputFocus` first: a guest drops every key event until it has received
+   * a real pointer event, and Ctrl+A on a field that never saw the pointer is a
+   * shortcut the page never receives.
+   */
+  async pressWithModifiers(
+    key: string,
+    code: string,
+    keyCode: number,
+    modifiers: number,
+  ): Promise<void> {
+    await this.ensureInputFocus();
+    const held = MODIFIER_KEYS.filter((entry) => (modifiers & entry.mask) !== 0);
+    for (const modifier of held) {
+      await this.send("Input.dispatchKeyEvent", {
+        type: "rawKeyDown",
+        key: modifier.key,
+        code: modifier.code,
+        windowsVirtualKeyCode: modifier.keyCode,
+        nativeVirtualKeyCode: modifier.keyCode,
+        modifiers,
+      });
+    }
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers,
+    });
+    await this.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      modifiers,
+    });
+    for (const modifier of [...held].reverse()) {
+      await this.send("Input.dispatchKeyEvent", {
+        type: "keyUp",
+        key: modifier.key,
+        code: modifier.code,
+        windowsVirtualKeyCode: modifier.keyCode,
+        nativeVirtualKeyCode: modifier.keyCode,
+        modifiers: modifiers & ~modifier.mask,
+      });
+    }
   }
 
   /**
@@ -442,6 +546,107 @@ export class GuestCdp implements CdpExecutor {
       windowsVirtualKeyCode: key.keyCode,
       nativeVirtualKeyCode: key.keyCode,
     });
+  }
+
+  /**
+   * Puts files into a file input.
+   *
+   * Not wrapped in `presented()`: `DOM.setFileInputFiles` works on the node, not
+   * on a point, so the page does not have to be on screen for it — and unlike a
+   * click there is no hit testing involved.
+   *
+   * The node is resolved per command because `Runtime` object ids die with their
+   * execution context: an id from an earlier call is invalid after a navigation,
+   * and a flow that fills a form and uploads a file is exactly that sequence.
+   */
+  async setFiles(selector: string, paths: string[]): Promise<void> {
+    const response = await this.send<{ result?: { objectId?: string } }>("Runtime.evaluate", {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+    });
+    const objectId = response?.result?.objectId;
+    if (!objectId) throw new Error(`找不到文件输入框：${selector}`);
+    // `backendNodeId` rather than `nodeId`: the latter needs `DOM.enable` plus a
+    // document push, and this path deliberately enables nothing extra.
+    const node = await this.send<{ node?: { backendNodeId?: number } }>("DOM.describeNode", {
+      objectId,
+    });
+    const backendNodeId = node?.node?.backendNodeId;
+    if (!backendNodeId) throw new Error(`找不到文件输入框：${selector}`);
+    await this.send("DOM.setFileInputFiles", { files: paths, backendNodeId });
+  }
+
+  /**
+   * Drags between two points.
+   *
+   * Presented like the other pointer work: every move is hit-tested against the
+   * page under the coordinates, and a parked page has no target to drag over.
+   */
+  async dragFromTo(from: { x: number; y: number }, to: { x: number; y: number }): Promise<void> {
+    await this.presented(async () => {
+      await this.pointerMove(from.x, from.y);
+      await this.send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: from.x,
+        y: from.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      const steps = 6;
+      for (let step = 1; step <= steps; step += 1) {
+        const x = Math.round(from.x + ((to.x - from.x) * step) / steps);
+        const y = Math.round(from.y + ((to.y - from.y) * step) / steps);
+        await this.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x,
+          y,
+          button: "left",
+          buttons: 1,
+        });
+      }
+      await this.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: to.x,
+        y: to.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+    });
+    this.pointerSeen = true;
+  }
+
+  /**
+   * Answers the page's open JavaScript dialog.
+   *
+   * Not routed through `presented()`: the dialog is browser chrome, so the page
+   * does not have to be painted for this to work — and presenting a page that is
+   * blocked on a dialog is exactly the command that would hang.
+   */
+  async handleDialog(accept: boolean, promptText?: string): Promise<void> {
+    await this.send(
+      "Page.handleJavaScriptDialog",
+      {
+        accept,
+        ...(promptText === undefined ? {} : { promptText }),
+      },
+      // Shorter than the default ceiling: the command that opened the dialog is
+      // still queued ahead of this one, and an unbounded wait would report
+      // success long after nothing happened.
+      { timeoutMs: 5_000 },
+    );
+  }
+
+  /**
+   * Subscribes to this page's CDP events.
+   *
+   * Kept in this class rather than forwarded on demand: routing it through
+   * `target.send` would create a command per event and count it against the
+   * session, and the bus is per guest — which is what a listener actually wants,
+   * since the guest is the thing that emits.
+   */
+  onEvent(listener: CdpEventListener): () => void {
+    return this.target.onEvent?.(listener) ?? (() => undefined);
   }
 }
 

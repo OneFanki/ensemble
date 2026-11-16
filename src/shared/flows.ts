@@ -32,6 +32,17 @@
 export const WAIT_CONDITIONS = ["visible", "hidden", "text", "url", "value", "network-idle"] as const;
 export type WaitCondition = (typeof WAIT_CONDITIONS)[number];
 
+/**
+ * `cdp` is the escape hatch, and it is the only action that runs a command
+ * nobody wrapped.
+ *
+ * Everything else here goes through an input pipeline or a purpose-built
+ * helper, which is what makes "the page saw a real click" true. A raw command
+ * can bypass that, so it is gated by a tier list (`core/cdp/flow-whitelist.ts`)
+ * and meant for the cases the wrappers genuinely cannot express — setting a file
+ * input, answering a dialog. Using it more than twice in one flow is the signal
+ * that an action is missing from the wrappers.
+ */
 export const FLOW_ACTIONS = [
   "navigate",
   "fill",
@@ -41,6 +52,7 @@ export const FLOW_ACTIONS = [
   "login",
   "wait",
   "read",
+  "cdp",
 ] as const;
 export type FlowAction = (typeof FLOW_ACTIONS)[number];
 
@@ -75,6 +87,16 @@ export interface FlowStep extends FlowTarget {
   optional?: boolean;
   /** Variable name a `read` step stores its result under. */
   as?: string;
+  /**
+   * CDP method name for a `cdp` step, e.g. `DOM.setFileInputFiles`.
+   *
+   * Checked against the tier list at run time, not at save time: the setting
+   * that unlocks the optional tier can change between the two, and a flow saved
+   * while it was on must still fail honestly when it is off.
+   */
+  method?: string;
+  /** Parameters passed through verbatim. Not interpolated into numbers. */
+  params?: Record<string, unknown>;
 }
 
 export interface FlowParam {
@@ -200,6 +222,14 @@ export function validateStep(step: FlowStep, index: number): string[] {
       else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(step.as))
         problems.push(`${at}（read）的 as 只能是字母、数字与下划线，且不能以数字开头`);
       break;
+    case "cdp":
+      // The tier is deliberately not checked here: save-time validation would
+      // pass for a flow that the current setting cannot run, which is worse than
+      // failing at run time with the reason.
+      if (!step.method?.trim()) problems.push(`${at}（cdp）需要 method（CDP 命令名）`);
+      else if (!/^[A-Z][A-Za-z]+\.[A-Za-z]+$/.test(step.method.trim()))
+        problems.push(`${at}（cdp）的 method 要写成 域.方法，例如 DOM.setFileInputFiles`);
+      break;
     default:
       problems.push(`${at} 的动作 ${String(step.action)} 不认识`);
   }
@@ -308,13 +338,41 @@ export function summarizeStep(step: FlowStep): StepSummary {
       // The arrow matters: the value leaves the page and lands in a variable,
       // and a bare name beside "read" looks like the variable is the source.
       return { action: step.action, target, detail: step.as ? `→ ${step.as}` : undefined };
+    case "cdp":
+      return { action: step.action, target: step.method ?? "", detail: "原始 CDP" };
     default:
       return { action: step.action, target };
   }
 }
 
-/** Seconds a flow may run for before the executor gives up. */
-export const FLOW_TIMEOUT_MS = 120_000;
+/**
+ * How long a flow may run before the executor gives up, when the caller says
+ * nothing.
+ *
+ * The default stays at two minutes because that covers the ordinary
+ * create-an-account flow. It is no longer a *ceiling*: a flow that uploads a
+ * large file or imports a batch legitimately runs longer, and the old hardcoded
+ * value made those fail while the work carried on in the background — the caller
+ * got a timeout for something that had actually succeeded.
+ */
+export const FLOW_TIMEOUT_DEFAULT_MS = 120_000;
+
+/**
+ * The longest a caller may ask for.
+ *
+ * Ten minutes: past this a flow is a batch job, and a tool call that blocks for
+ * that long is the wrong shape — the caller should chunk it or watch with
+ * `wait_browser`. Bounded rather than unbounded so a typo in `timeoutMs` cannot
+ * hold a tab for an hour.
+ */
+export const FLOW_TIMEOUT_MAX_MS = 600_000;
+
+/** Clamps a caller's request into the supported range. */
+export function clampFlowTimeout(requested: unknown): number {
+  const value = Number(requested);
+  if (!Number.isFinite(value) || value <= 0) return FLOW_TIMEOUT_DEFAULT_MS;
+  return Math.min(Math.max(Math.trunc(value), 1_000), FLOW_TIMEOUT_MAX_MS);
+}
 
 /** One step's outcome, as reported back to the UI and to an AI caller. */
 export interface FlowStepResult {
@@ -335,4 +393,14 @@ export interface FlowRunResult {
   steps: FlowStepResult[];
   /** Variables captured by `read` steps, so an AI can reuse them (e.g. a new id). */
   vars?: Record<string, string>;
+  /**
+   * Every raw CDP command the run issued, in order.
+   *
+   * Present only when a `cdp` step ran. The count is the useful part: more than
+   * two almost always means an action is missing from the wrappers, and `note`
+   * says so rather than leaving the caller to notice.
+   */
+  rawCdp?: string[];
+  /** A one-line remark about the run as a whole; currently only that count. */
+  note?: string;
 }

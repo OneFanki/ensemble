@@ -23,7 +23,14 @@ import {
   VIEWPORT_MAX_WIDTH,
 } from "@shared/embedded";
 import type { Flow, FlowRunResult, FlowStep } from "@shared/flows";
-import { resolveParams } from "@shared/flows";
+import {
+  FLOW_ACTIONS,
+  FLOW_TIMEOUT_DEFAULT_MS,
+  FLOW_TIMEOUT_MAX_MS,
+  WAIT_CONDITIONS,
+  clampFlowTimeout,
+  resolveParams,
+} from "@shared/flows";
 import { LOCALE_SETTINGS } from "@shared/locale";
 import {
   flowDraftSchema,
@@ -248,10 +255,60 @@ export interface EmbeddedSurface {
     muted?: boolean;
   }): Promise<unknown>;
   navigate(tabId: string, url: string): Promise<unknown>;
+  /** History navigation; a no-op when there is nothing to go back or forward to. */
+  back(tabId: string): unknown;
+  forward(tabId: string): unknown;
+  reload(tabId: string, options?: { ignoreCache?: boolean }): unknown;
   closeTab(tabId: string): unknown;
   activate(tabId: string): unknown;
   snapshotDom(tabId: string, options?: { maxNodes?: number }): Promise<unknown>;
   click(tabId: string, target: ElementTarget | string): Promise<unknown>;
+  /** Moves the pointer over a target without pressing; opens hover-driven UI. */
+  hover(tabId: string, target: ElementTarget | string): Promise<unknown>;
+  /**
+   * Scrolls the page, or the container a target sits in.
+   *
+   * `moved` says whether the position actually changed: a page already at its
+   * end reports false, which is the difference between "nothing to scroll" and
+   * "the scroll did not work".
+   */
+  scroll(
+    tabId: string,
+    options?: { target?: ElementTarget | string; deltaX?: number; deltaY?: number },
+  ): Promise<unknown>;
+  /** Presses a key combination written as `"Control+a"`; mask is derived here. */
+  pressKeys(tabId: string, keys: string): Promise<unknown>;
+  /**
+   * The JavaScript dialog this page is blocked on, if any.
+   *
+   * A read, and it has to be a separate tool: while a dialog is up the page
+   * answers no script, so any tool that tried to detect one by evaluating in the
+   * page would time out instead. The answer comes from main's own event record.
+   */
+  dialogStatus(tabId: string): {
+    dialog: { type: string; message: string; defaultPrompt?: string; url?: string; msOpen: number } | null;
+  };
+  /** Answers the page's dialog; `accept: false` dismisses it. */
+  handleDialog(
+    tabId: string,
+    options: { accept: boolean; promptText?: string },
+  ): Promise<unknown>;
+  /**
+   * Puts files into a file input.
+   *
+   * Absolute paths on the machine running Ensemble. The browser reads them; the
+   * page only ever receives the file names, so this grants the page nothing it
+   * could use to read the filesystem.
+   */
+  setFiles(tabId: string, target: ElementTarget | string, paths: string[]): Promise<unknown>;
+  /** Drags one element onto another with real pointer moves in between. */
+  drag(tabId: string, from: ElementTarget | string, to: ElementTarget | string): Promise<unknown>;
+  /** Sets a checkbox or radio to a state, clicking only when it differs. */
+  setChecked(tabId: string, target: ElementTarget | string, checked: boolean): Promise<unknown>;
+  /** Role, name, text, state, attributes and value of one element. */
+  elementInfo(tabId: string, target: ElementTarget | string): Promise<unknown>;
+  /** Reads attributes, or the element's text/value when no name is given. */
+  attributes(tabId: string, target: ElementTarget | string, names?: string[]): Promise<unknown>;
   type(
     tabId: string,
     target: ElementTarget | string,
@@ -287,6 +344,15 @@ export interface EmbeddedSurface {
       quality?: number;
       inline?: boolean;
       timeoutMs?: number;
+      /**
+       * Element to capture instead of the viewport.
+       *
+       * Resolved to a clip rectangle in the page, because a full-page capture
+       * with the caller cropping it afterwards needs an image library the caller
+       * may not have — and the interesting rectangle is usually a small part of a
+       * tall page.
+       */
+      target?: ElementTarget | string;
     },
   ): Promise<{ path: string; bytes: number; data?: string; mimeType?: string }>;
   visibility(tabId: string, target: ElementTarget | string): Promise<unknown>;
@@ -535,6 +601,30 @@ const writableSettingsProps = (): Record<string, unknown> => ({
   proxyUrl: string("代理地址，例如 http://127.0.0.1:7890；仅 manual 模式生效"),
   proxyBypass: string("跳过代理的主机列表（逗号分隔）"),
 });
+
+/**
+ * Builds a target from prefixed keys, for tools that take two of them.
+ *
+ * drag needs a start and an end, so its arguments cannot be the unprefixed
+ * selector / text that every other tool uses. Rather than teach targetFrom about
+ * every multi-target tool, this reads the prefixed pair and produces the same
+ * shape.
+ */
+function prefixedTarget(
+  args: Record<string, unknown>,
+  prefix: "from" | "to",
+  what: string,
+): ElementTarget {
+  const selectorKey = prefix + "Selector";
+  const textKey = prefix + "Text";
+  const selector = typeof args[selectorKey] === "string" ? (args[selectorKey] as string).trim() : "";
+  const text = typeof args[textKey] === "string" ? (args[textKey] as string).trim() : "";
+  if (!selector && !text) throw new Error(what + "需要 " + selectorKey + " 或 " + textKey);
+  return {
+    ...(selector ? { selector } : {}),
+    ...(text ? { text } : {}),
+  };
+}
 
 /** Builds the element target from tool arguments, rejecting an empty one. */
 function targetFrom(args: Record<string, unknown>, options: { withText: boolean }): ElementTarget {
@@ -2197,7 +2287,7 @@ export class McpServer {
       {
         name: "save_flow",
         description:
-          "保存一个流程：一串在某个站点里可重复执行的步骤。步骤是声明式的，不是任意脚本——动作只有 navigate / fill / click / select / press / login / wait / read。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
+          "保存一个流程：一串在某个站点里可重复执行的步骤。步骤是声明式的，不是任意脚本。封装动作为主：navigate / fill / click / select / press / login / wait / read；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨身份与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
         kind: "write",
         inputSchema: object(
           {
@@ -2242,13 +2332,18 @@ export class McpServer {
                 ),
                 condition: {
                   type: "string",
-                  enum: ["visible", "hidden", "text", "url", "value"],
+                  enum: [...WAIT_CONDITIONS],
                   description: "wait 等什么",
                 },
                 expect: string("wait 要比对的文字（text / url / value）"),
                 timeoutMs: integer("wait 最多等多久，默认 5000"),
                 optional: { type: "boolean", description: "等待超时也继续" },
                 as: string("read 把结果存到的变量名"),
+                method: string("cdp 步骤的 CDP 命令名，例如 DOM.setFileInputFiles"),
+                params: {
+                  type: "object",
+                  description: "cdp 步骤要传给协议命令的参数，原样透传",
+                },
               }),
             },
           },
@@ -2337,6 +2432,9 @@ export class McpServer {
               description: "参数值，键是流程声明的参数名",
               additionalProperties: { type: "string" },
             },
+            timeoutMs: integer(
+              `整趟流程最多等多久（毫秒），默认 ${FLOW_TIMEOUT_DEFAULT_MS}，最大 ${FLOW_TIMEOUT_MAX_MS}。慢操作（大文件上传、批量导入）要显式给大一点：超时只是不再等待，页面上的操作可能仍在继续`,
+            ),
           },
           ["id"],
         ),
@@ -2382,7 +2480,10 @@ export class McpServer {
           const run = await embeddedSurface.runFlow(tabId, flow.steps, {
             baseUrl: site.baseUrl,
             vars: values,
-            timeoutMs: 120_000,
+            // The caller's budget, clamped. It used to be a hardcoded two
+            // minutes here, which made every slow flow fail while the work it
+            // started carried on in the background.
+            timeoutMs: clampFlowTimeout(args["timeoutMs"]),
           });
           return {
             flowId: flow.id,
@@ -3087,6 +3188,46 @@ export class McpServer {
         },
       },
       {
+        name: "go_back_browser_tab",
+        description:
+          "让标签页后退一步，相当于浏览器的后退按钮。没有可后退的历史时什么也不发生；想确认到底动没动，用 list_browser_tabs 看地址，或直接读页面当前地址。",
+        kind: "run",
+        inputSchema: object({ tabId: tabIdProp() }),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          surface().back(tabId(args));
+          return { ok: true };
+        },
+      },
+      {
+        name: "go_forward_browser_tab",
+        description:
+          "让标签页前进一步，相当于浏览器的前进按钮。没有可前进的历史时什么也不发生。",
+        kind: "run",
+        inputSchema: object({ tabId: tabIdProp() }),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          surface().forward(tabId(args));
+          return { ok: true };
+        },
+      },
+      {
+        name: "reload_browser_tab",
+        description:
+          "重新加载标签页。ignoreCache: true 相当于 Ctrl+Shift+R，绕过 HTTP 缓存——前端改了却没生效、或者要确认服务端返回的是最新静态资源时用它。",
+        kind: "run",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ignoreCache: boolean("是否绕过 HTTP 缓存重新加载，默认否"),
+        }),
+        pageTarget: (args) => tabId(args),
+        run: (args) => {
+          const id = tabId(args);
+          surface().reload(id, { ignoreCache: args["ignoreCache"] === true });
+          return { ok: true };
+        },
+      },
+      {
         name: "read_browser_page",
         description:
           "读取标签页当前渲染出来的内容：可见元素的角色、可访问名称、稳定选择器、位置，以及页面地址和标题。隐藏元素不包含在内，所以这就是「这个账号实际能看到什么」。表单控件的 field 是它旁边那行标签文字，可直接当作其他工具定位用的 label。",
@@ -3179,6 +3320,203 @@ export class McpServer {
         run: (args) => {
           const target = targetFrom(args, { withText: true });
           return surface().click(tabId(args), target);
+        },
+      },
+      {
+        name: "hover_browser_element",
+        description:
+          "把鼠标移到元素上但不点击。用于打开只在悬停时出现的东西：下拉菜单、tooltip、行内操作按钮、hover 才展开的子菜单。发的是真实鼠标移动事件，所以页面的 mouseenter / mouseover 与 CSS :hover 都会生效。返回值里带上找到的元素，可以据此确认悬停的是不是想要的那个。",
+        kind: "run",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ...targetProps({ text: string("要悬停的元素上的文字") }),
+        }),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          return surface().hover(tabId(args), target);
+        },
+      },
+      {
+        name: "scroll_browser_page",
+        description:
+          "滚动页面或某个容器。给 target 时滚轮落在那个元素中心，所以嵌套的滚动容器（虚拟列表、弹窗正文）会滚动而不是整个页面；不给 target 则滚动整个视口。deltaY 正数向下、负数向上，单位是像素；一屏大约是 500-800。返回里的 moved 说明位置真的变了——已经到底再滚就是 false，此时不该继续等新内容出现。",
+        kind: "run",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ...targetProps({ text: string("要滚动其容器的元素上的文字；省略则滚动整个页面") }),
+          deltaX: integer("横向滚动像素，正数向右"),
+          deltaY: integer("纵向滚动像素，正数向下，一屏约 500-800"),
+        }),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          const dx = Number(args["deltaX"]);
+          const dy = Number(args["deltaY"]);
+          const hasTarget = Boolean(
+            args["selector"] || args["label"] || args["text"] || args["role"],
+          );
+          const target = hasTarget ? targetFrom(args, { withText: true }) : undefined;
+          return surface().scroll(tabId(args), {
+            ...(target ? { target } : {}),
+            ...(Number.isFinite(dx) ? { deltaX: Math.trunc(dx) } : {}),
+            ...(Number.isFinite(dy) ? { deltaY: Math.trunc(dy) } : {}),
+          });
+        },
+      },
+      {
+        name: "press_browser_keys",
+        description:
+          "按一个组合键或快捷键。写法跟快捷键一样：Control+a 全选、Control+Shift+s、Meta+Enter、Enter 单独按。修饰键放在前面用 + 连接，最后一段是主键。发送的是真实键盘事件，所以页面的 keydown 处理器、框架的快捷键绑定和浏览器自身的编辑命令都会响应。单个按键用 press（在流程里）或 type_browser_text 的 submit。",
+        kind: "run",
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            keys: string("按键组合，例如 Control+a、Shift+Tab、Meta+Enter"),
+          },
+          ["keys"],
+        ),
+        inputTarget: (args) => tabId(args),
+        run: (args) => surface().pressKeys(tabId(args), String(args["keys"] ?? "")),
+      },
+      {
+        name: "read_browser_dialog",
+        description:
+          "读当前挡在页面上的 JavaScript 弹窗（alert / confirm / prompt / beforeunload）。弹窗打开期间页面是阻塞的：读 DOM、点击、截图全部不返回，所以「点了没反应、读页面超时」在这时就是有弹窗，而不是页面坏了。这个工具从主进程的事件记录回答，不走页面脚本，因此在弹窗打开时仍然可用。没有弹窗时返回 dialog: null。",
+        kind: "read",
+        inputSchema: object({ tabId: tabIdProp() }),
+        run: (args) => surface().dialogStatus(tabId(args)),
+      },
+      {
+        name: "handle_browser_dialog",
+        description:
+          "回答挡在页面上的 JavaScript 弹窗，把页面解开。accept: true 是「确定」（confirm 返回 true、alert 关闭），false 是「取消」（confirm 返回 false）。prompt 用 promptText 填内容，省略则保留输入框里的默认值。必须先用 read_browser_dialog 确认弹窗的类型与内容——对一个 confirm 点错方向可能删掉数据。没有弹窗可处理时返回 handled: false，不报错。",
+        kind: "run",
+        inputTarget: (args) => tabId(args),
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            accept: {
+              type: "boolean",
+              description: "true 为确定，false 为取消。省略等同 true",
+            },
+            promptText: string("prompt 弹窗要填入的内容；省略则用默认值"),
+          },
+          [],
+        ),
+        run: (args) => {
+          const promptText = args["promptText"];
+          const accept = args["accept"] !== false;
+          return surface().handleDialog(tabId(args), {
+            accept,
+            ...(typeof promptText === "string" ? { promptText } : {}),
+          });
+        },
+      },
+      {
+        name: "upload_browser_files",
+        description:
+          "把本机文件塞进页面的文件输入框，等价于用户点了「选择文件」并选好。files 是绝对路径，多个文件要在同一个数组里一次给——分多次调用只有最后一次生效，因为每次都会替换输入框的内容。返回的 count 是实际放进去的数量，multiple 说明这个输入框收不收多个。只能收一个却给了多个会直接报错，不会静默截断（截断会让调用方以为上传成功了）。目标是隐藏的 file input 时可以给它旁边的按钮文字，工具会顺着找到那个 input。",
+        kind: "run",
+        inputTarget: (args) => tabId(args),
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            ...targetProps({ text: string("文件框旁边的按钮或标签上的文字") }),
+            files: {
+              type: "array",
+              items: { type: "string" },
+              description: "要上传的文件绝对路径，按选择顺序排列",
+            },
+          },
+          ["files"],
+        ),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          const files = Array.isArray(args["files"])
+            ? (args["files"] as unknown[]).filter((item): item is string => typeof item === "string")
+            : [];
+          return surface().setFiles(tabId(args), target, files);
+        },
+      },
+      {
+        name: "drag_browser_element",
+        description:
+          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个。",
+        kind: "run",
+        inputTarget: (args) => tabId(args),
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            fromSelector: string("起点元素的 CSS 选择器"),
+            fromText: string("起点元素上的文字"),
+            toSelector: string("终点元素的 CSS 选择器"),
+            toText: string("终点元素上的文字"),
+          },
+          [],
+        ),
+        run: (args) => {
+          // Both ends are built from their own prefixed keys; targetFrom reads the
+          // unprefixed ones, so it would see an empty target and refuse.
+          const from = prefixedTarget(args, "from", "起点");
+          const to = prefixedTarget(args, "to", "终点");
+          return surface().drag(tabId(args), from, to);
+        },
+      },
+      {
+        name: "set_browser_checkbox",
+        description:
+          "把复选框或单选框设成指定状态。checked: true 为勾上，false 为取消。幂等：已经在目标状态时什么也不点，所以重复调用不会把勾好的又取消掉。返回的 changed 说明这次是否真的点了；stuckAt 出现表示点了但状态没变（外层 label 被禁用、或有处理器拦了默认行为），此时重试也没用。",
+        kind: "run",
+        inputTarget: (args) => tabId(args),
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            ...targetProps({ text: string("复选框或单选框旁的标签文字") }),
+            checked: { type: "boolean", description: "true 为勾上，false 为取消" },
+          },
+          ["checked"],
+        ),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          return surface().setChecked(tabId(args), target, args["checked"] === true);
+        },
+      },
+      {
+        name: "read_browser_element",
+        description:
+          "读一个元素的全部已知信息：角色、可访问名称、文字、稳定选择器、位置、是否可见/可用/聚焦，以及 value、aria-*、data-*、type、name、href 这些能据以决策的属性。用于「这个按钮现在是不是禁用」「这个链接指向哪」「这个输入框里是什么」这类问题——比 read_browser_page 精确，比 evaluate_browser_page 稳定（不用写 DOM 代码，页面改结构后断言不会失效）。找不到元素会报错，并说明是选择器无效还是真的不存在。",
+        kind: "read",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ...targetProps({ text: string("元素上的文字") }),
+        }),
+        pageTarget: (args) => tabId(args),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          return surface().elementInfo(tabId(args), target);
+        },
+      },
+      {
+        name: "read_browser_attribute",
+        description:
+          "读元素的属性，或者（不给 name 时）读它的文字/当前值。names 传属性名数组，例如 [\"href\", \"aria-disabled\"]；属性不存在时返回 null，与「元素不存在」区分开——后者会报错。不给 names 时：输入框返回 value，其他元素返回可见文字。这是轮询某个状态变化最便宜的方式（比 read_browser_element 少传很多字段）。",
+        kind: "read",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ...targetProps({ text: string("元素上的文字") }),
+          names: {
+            type: "array",
+            items: { type: "string" },
+            description: "要读的属性名；省略则读文字或当前值",
+          },
+        }),
+        pageTarget: (args) => tabId(args),
+        run: (args) => {
+          const target = targetFrom(args, { withText: true });
+          const names = Array.isArray(args["names"])
+            ? (args["names"] as unknown[]).filter((item): item is string => typeof item === "string")
+            : undefined;
+          return surface().attributes(tabId(args), target, names);
         },
       },
       {
@@ -3329,13 +3667,16 @@ export class McpServer {
       {
         name: "screenshot_browser_tab",
         description:
-          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。窗口最小化时也能拿到画面；完全隐藏的窗口不行。timeoutMs 是等画面的上限（默认 15000）：超时会返回 page-busy 而不是报错——页面可能正忙、被节流或完全不显示。",
+          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。给 selector / elementText / role 时只截那个元素——截图会自动裁到元素范围，元素在视口外会先报错而不是给你一张整页图。窗口最小化时也能拿到画面；完全隐藏的窗口不行。timeoutMs 是等画面的上限（默认 15000）：超时会返回 page-busy 而不是报错——页面可能正忙、被节流或完全不显示。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           format: { type: "string", enum: ["png", "jpeg"], description: "默认 png" },
           inline: boolean("是否把图像随结果返回，默认否；远程客户端需要它才能看到画面"),
           timeoutMs: integer("等画面的上限，默认 15000，最大 60000。超时返回 page-busy"),
+          selector: string("只截这个元素；省略则截整个视口"),
+          elementText: string("要截的元素的文字；与 selector 二选一"),
+          role: { type: "string", description: "ARIA role，用于收窄要截的元素" },
         }),
         pageTarget: (args) => tabId(args),
         run: async (args) => {
@@ -3344,6 +3685,13 @@ export class McpServer {
             Number.isFinite(timeout) && timeout > 0
               ? Math.min(Math.max(Math.trunc(timeout), 1_000), 60_000)
               : undefined;
+          // A target is optional here, unlike the action tools: "no target" is a
+          // legitimate request for the whole viewport, so the empty target that
+          // `targetFrom` refuses has to be allowed through.
+          const hasTarget = Boolean(
+            args["selector"] || args["elementText"] || args["role"],
+          );
+          const target = hasTarget ? targetFrom(args, { withText: false }) : undefined;
           try {
             return await surface().screenshot(tabId(args), {
               format: args["format"] === "jpeg" ? "jpeg" : "png",
@@ -3352,6 +3700,7 @@ export class McpServer {
               // in a log.
               ...(args["inline"] === true ? { inline: true } : {}),
               ...(timeoutMs === undefined ? {} : { timeoutMs }),
+              ...(target ? { target } : {}),
             });
           } catch (error) {
             /*

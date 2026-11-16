@@ -453,6 +453,14 @@ export class BrowserGuestManager {
         this.evaluate(guestId, expression, options ?? {}),
       has: (guestId) => this.has(guestId),
       busy: (guestId) => this.busy(guestId),
+      // Forwarded to the guest's executor: the per-guest event bus is what makes
+      // a dialog tracker survive a session reopen, since the listener is attached
+      // to the target rather than to a session that comes and goes.
+      onEvent: (listener) => {
+        const guestId = this.guestIdFor(tabId);
+        const record = guestId ? this.guests.get(guestId) : undefined;
+        return record?.cdp.onEvent(listener) ?? (() => undefined);
+      },
       waitLaidOut: (timeoutMs) => this.waitLaidOut(tabId, timeoutMs),
       contents: (guestId) => {
         const record = this.guests.get(guestId);

@@ -32,7 +32,13 @@ import {
   VIEWPORT_MAX_WIDTH,
   VIEWPORT_MIN,
 } from "@shared/embedded";
-import { FLOW_TIMEOUT_MS, type Flow, type FlowDraft, resolveParams } from "@shared/flows";
+import {
+  FLOW_TIMEOUT_DEFAULT_MS,
+  clampFlowTimeout,
+  type Flow,
+  type FlowDraft,
+  resolveParams,
+} from "@shared/flows";
 import { localeTag, resolveLocale } from "@shared/locale";
 import {
   CONNECTIVITY_PROBES,
@@ -165,6 +171,18 @@ const sleepMsFromEnv = (name: string): number | undefined => {
 };
 const sleepGraceMs = sleepMsFromEnv("ENSEMBLE_SLEEP_GRACE_MS");
 const sleepSweepMs = sleepMsFromEnv("ENSEMBLE_SLEEP_SWEEP_MS");
+
+/**
+ * Shortens the dialog auto-dismiss wait, for an e2e.
+ *
+ * A separate knob from the sleep timings above because those are gated on
+ * `ENSEMBLE_SLEEP_TEST`: a suite that only wants to prove "an unanswered dialog
+ * goes away" should not have to turn page-freezing on to do it.
+ */
+const dialogAutoDismissMs = (() => {
+  const value = Number(process.env["ENSEMBLE_DIALOG_AUTO_DISMISS_MS"]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+})();
 
 // Lets an end-to-end check run against a throwaway workspace instead of the
 // user's real one. Must happen before app ready: Electron derives session and
@@ -665,10 +683,16 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     ...(headless && !sleepTest ? {} : { aiIdleFreeze: true }),
     ...(sleepGraceMs ? { sleepGraceMs } : {}),
     ...(sleepSweepMs ? { sleepSweepMs } : {}),
+    ...(dialogAutoDismissMs ? { dialogAutoDismissMs } : {}),
     // Read lazily: pages are opened long after the browser is constructed, and
     // the settings may have changed since. Tabs already open keep the proxy they
     // loaded with until they reload, which is how a browser behaves.
     proxy: () => settingsCache ?? (service?.settingsSnapshot() ?? DEFAULT_SETTINGS),
+    // Read per run, like the proxy setting: a flow runs long after construction,
+    // and turning the switch off has to take effect on the next flow rather than
+    // on the next launch.
+    flowCdpExtended: () =>
+      (settingsCache ?? service?.settingsSnapshot() ?? DEFAULT_SETTINGS).flowCdpExtended === true,
     // Downloads are session state, so every partition the surface configures
     // has to be handed to the manager — a missed one downloads invisibly.
     onSessionReady: (ses) => downloads.attach(ses),
@@ -3100,6 +3124,8 @@ function registerIpc(workspace: WorkspaceService): void {
       identityId?: string;
       params?: Record<string, string>;
       tabId?: string;
+      /** How long the run may take; clamped to the supported range. */
+      timeoutMs?: number;
     }): Promise<FlowRunOutcome> => {
       const flow = workspace.snapshot().flows.find((item) => item.id === String(input?.flowId));
       if (!flow) throw new Error("流程不存在");
@@ -3110,7 +3136,7 @@ function registerIpc(workspace: WorkspaceService): void {
       const run = await ensureEmbeddedBrowser().runFlow(opened.tabId, flow.steps, {
         baseUrl: site.baseUrl,
         vars: values,
-        timeoutMs: FLOW_TIMEOUT_MS,
+        timeoutMs: clampFlowTimeout(input?.timeoutMs ?? FLOW_TIMEOUT_DEFAULT_MS),
       });
       return {
         tabId: opened.tabId,
@@ -4500,6 +4526,12 @@ if (!gotLock) {
           return created;
         },
         navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),
+        back: (tabId) => ensureEmbeddedBrowser().back(tabId),
+        forward: (tabId) => ensureEmbeddedBrowser().forward(tabId),
+        reload: (tabId, options) =>
+          options?.ignoreCache
+            ? ensureEmbeddedBrowser().hardReload(tabId)
+            : ensureEmbeddedBrowser().reload(tabId),
         // Facts for the per-origin AI gate. Passed as a function so the MCP
         // server never holds a tab reference of its own.
         aiPageContext: (tabId) => ensureEmbeddedBrowser().aiPageContext(tabId),
@@ -4509,6 +4541,18 @@ if (!gotLock) {
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),
         click: (tabId, target) => ensureEmbeddedBrowser().click(tabId, target),
+        hover: (tabId, target) => ensureEmbeddedBrowser().hover(tabId, target),
+        scroll: (tabId, options) => ensureEmbeddedBrowser().scroll(tabId, options),
+        pressKeys: (tabId, keys) => ensureEmbeddedBrowser().pressKeys(tabId, keys),
+        dialogStatus: (tabId) => ensureEmbeddedBrowser().dialogStatus(tabId),
+        handleDialog: (tabId, options) => ensureEmbeddedBrowser().handleDialog(tabId, options),
+        setFiles: (tabId, target, paths) => ensureEmbeddedBrowser().setFiles(tabId, target, paths),
+        drag: (tabId, from, to) => ensureEmbeddedBrowser().drag(tabId, from, to),
+        setChecked: (tabId, target, checked) =>
+          ensureEmbeddedBrowser().setChecked(tabId, target, checked),
+        elementInfo: (tabId, target) => ensureEmbeddedBrowser().elementInfo(tabId, target),
+        attributes: (tabId, target, names) =>
+          ensureEmbeddedBrowser().attributes(tabId, target, names),
         type: (tabId, target, text, options) =>
           ensureEmbeddedBrowser().type(tabId, target, text, options),
         fillForm: (tabId, fields) => ensureEmbeddedBrowser().fillForm(tabId, fields),

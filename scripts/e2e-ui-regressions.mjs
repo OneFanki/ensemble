@@ -317,7 +317,25 @@ try {
   if (!target) throw new Error("no renderer target");
 
   const client = await connect(target.webSocketDebuggerUrl);
-  await wait(3000);
+  /*
+   * Wait for the surface rather than sleeping a fixed 3s and hoping.
+   *
+   * A cold start renders the shell, the blank page's new-tab surface and (on a
+   * fresh profile) the guide. Measured: they land together anywhere between 1.3
+   * and 1.8 seconds on this machine, so a hard 3-second sample had ~1.2s of slack
+   * and failed intermittently on a slower run. A poll removes the guess: it
+   * returns as soon as the surface exists and still reports a miss after the
+   * deadline, which is the failure this check is actually about.
+   */
+  await waitFor(
+    client,
+    `Boolean(document.querySelector('.stage .blank-slot .new-tab'))`,
+    8000,
+  );
+  // One settle frame after the surface exists: the blank page draws its search
+  // box and bookmark bar in a follow-up render, and the rest of the suite reads
+  // the shell from this state.
+  await wait(400);
 
   // --- Empty stage ---------------------------------------------------------
   // Startup opens one blank page, so the first thing on the stage is the search

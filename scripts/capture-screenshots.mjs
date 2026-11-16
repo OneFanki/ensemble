@@ -557,13 +557,118 @@ const SHOTS = [
     clicks: ["[data-app-menu]"],
   },
   {
-    // The guide's first screen. It is what a new user actually sees, so it
-    // belongs in the README next to the workbench shot rather than being
-    // described in prose.
+    // The guide's first page. It is what a new user actually sees, so it belongs
+    // in the README next to the workbench shot rather than being described in
+    // prose. Shipped in both languages: each README shows the guide in its own
+    // language, and the copy here is long enough that a mismatched one would be
+    // obvious.
     name: "guide",
     locale: "zh",
     view: "browser",
     clicks: ["[data-app-menu]", '[data-menu-item="guide"]'],
+    // The isolation scene's last fence lands at 0.58s + 1.2s; wait past that so
+    // the shot shows three drawn fences rather than one drawn and two pending.
+    settleMs: 2200,
+  },
+  {
+    name: "guide-en",
+    locale: "en",
+    view: "browser",
+    clicks: ["[data-app-menu]", '[data-menu-item="guide"]'],
+    settleMs: 2200,
+  },
+  {
+    // Two middle pages, because one screenshot cannot show that the guide is a
+    // sequence. The AI page states what the assistant actually does; the
+    // headless page states the thing people do not expect, so both earn a slot.
+    name: "guide-ai",
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="mcp"]',
+    ],
+    settleMs: 2000,
+  },
+  {
+    name: "guide-headless",
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="headless"]',
+    ],
+    // The fold takes 1.5s to run and 0.7s to start; the shot should show the
+    // uncovered trace with the tray dot lit, which is the capability.
+    settleMs: 2800,
+  },
+  {
+    // Audits the pages the README does not ship. They are still part of the
+    // tour, and a page whose diagram is misaligned would be a shipped defect
+    // nobody looked at — these shots exist to be inspected, not published.
+    name: "guide-twoSystems",
+    audit: true,
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="twoSystems"]',
+    ],
+    settleMs: 2000,
+  },
+  {
+    name: "guide-compare",
+    audit: true,
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="compare"]',
+    ],
+    settleMs: 2000,
+  },
+  {
+    name: "guide-aiActs",
+    audit: true,
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="aiActs"]',
+    ],
+    // The acts scene loops on a 9s cycle; 3s lands inside the second beat
+    // (act), which is the one with a visible cursor.
+    settleMs: 3400,
+  },
+  {
+    name: "guide-devtools",
+    audit: true,
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="devtools"]',
+    ],
+    // The last chart finishes at 1.64s + 0.7s; past 2.6s the page is at rest.
+    settleMs: 2800,
+  },
+  {
+    name: "guide-reopen",
+    audit: true,
+    locale: "zh",
+    view: "browser",
+    clicks: [
+      "[data-app-menu]",
+      '[data-menu-item="guide"]',
+      '[data-guide-dot="reopen"]',
+    ],
+    settleMs: 2000,
   },
   {
     // The device tab: a phone-sized page in the same dock the front-end uses.
@@ -1304,8 +1409,14 @@ async function capture(shot) {
       await client.evaluate(
         `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) el.click(); return Boolean(el); })()`,
       );
-      await wait(700);
+      await wait(shot.clickWaitMs ?? 700);
     }
+
+    // A diagram that animates in has to be allowed to finish before the shutter,
+    // or the README ships a picture of the illustration half-built. The guide's
+    // scenes hold their final frame, so this is a wait for the entrance, not for
+    // a moving target.
+    if (shot.settleMs) await wait(shot.settleMs);
 
     if (shot.script) {
       await client.evaluate(shot.script);
@@ -1363,7 +1474,12 @@ if (!existsSync("out/main/index.js")) {
 
 await mkdir(OUTPUT_DIR, { recursive: true });
 for (const shot of SHOTS) {
-  if (only && shot.name !== only) continue;
+  // Prefix match, so `--only guide` refreshes every guide shot in one run. An
+  // exact name still selects exactly one, which is what the common case wants.
+  // `audit` shots are layout checks for pages the README does not publish; a
+  // full run skips them so `docs/screenshots/` only holds images that are used.
+  if (shot.audit && !only) continue;
+  if (only && shot.name !== only && !shot.name.startsWith(`${only}-`)) continue;
   await capture(shot);
 }
 demoPage.close();

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CollectionView, Identity, RoleColor } from "@shared/types";
+import type { Identity, RoleColor } from "@shared/types";
 import {
   Check,
   CheckSquare,
@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RotateCcw,
   Search,
   Square,
   Users,
@@ -23,7 +24,6 @@ import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
-import CollectionViewToggle from "./ui/CollectionViewToggle.vue";
 import EmptyState from "./ui/EmptyState.vue";
 import FormField from "./ui/FormField.vue";
 import IconButton from "./ui/IconButton.vue";
@@ -45,12 +45,6 @@ const embedded = useEmbeddedStore();
 const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
-/** The page's chosen density; the default is the compact one. */
-const viewMode = computed<CollectionView>(() => store.settings.identitiesView ?? "list");
-
-async function setView(next: CollectionView): Promise<void> {
-  await store.saveSettings({ identitiesView: next });
-}
 /**
  * Selection mode. The cards are buttons that launch (or open) on click, so
  * launching a handful one by one means every new browser window covers the next
@@ -346,21 +340,25 @@ async function launch(identity: Identity) {
 }
 
 /**
- * What a click on the card body does.
+ * What a click on the row body does.
  *
- * Three different meanings in one surface, in the order the page grew them:
- * selecting (the card is a checkbox), already running (raise that window), and
- * otherwise open the account form. Launching has its own control, so a click no
- * longer has to guess between "open" and "edit".
+ * Two meanings, chosen by what the row itself is: in selection mode it is a
+ * checkbox, and otherwise it launches. It used to open the account form when the
+ * account was not running — which put a low-frequency action (editing a saved
+ * account) behind the row's only large target and pushed the frequent one
+ * (opening the page) onto a small control at the far right. A list of accounts
+ * exists to open them; editing is a maintenance act with its own pencil.
+ *
+ * A running account raises its window instead of opening a second page: there is
+ * one page per account in the built-in surface, and asking for it again means
+ * "bring me the one I have".
  */
 function onCardClick(identity: Identity): void {
   if (selecting.value) {
     toggleSelected(identity.id);
-  } else if (store.instanceFor(identity.id)) {
-    launch(identity);
-  } else {
-    emit("editIdentity", identity.id);
+    return;
   }
+  launch(identity);
 }
 
 /**
@@ -510,7 +508,6 @@ function extraFacts(identity: Identity): string[] {
         :all-collapsed="allCollapsed"
         @toggle="groupCollapse.toggleAll(groupKeys)"
       />
-      <CollectionViewToggle :model-value="viewMode" @update:model-value="setView" />
       <AppButton class="health" @click="emit('sessionHealth')">
         <HeartPulse :size="13" />
         {{ $t("app.sessionHealth") }}
@@ -657,7 +654,7 @@ function extraFacts(identity: Identity): string[] {
     </Modal>
 
     <div class="page-body">
-      <div class="cards" :class="`view-${viewMode}`">
+      <div class="cards">
       <!-- Grouped by site; a view may span sites, so the account page no longer
            hides everything outside one global "current site". -->
       <template v-for="group in groups" :key="group.siteId">
@@ -691,7 +688,6 @@ function extraFacts(identity: Identity): string[] {
                the local table. A single header above the page would sit apart
                from every group but the first. -->
           <div
-            v-if="viewMode === 'table'"
             class="id-table-head"
             :class="{ picking: selecting }"
             aria-hidden="true"
@@ -713,13 +709,14 @@ function extraFacts(identity: Identity): string[] {
             mode.
           -->
           <div
-            v-for="identity in group.people"
+            v-for="(identity, index) in group.people"
             :key="identity.id"
             class="id-card"
             :class="{
               running: Boolean(store.instanceFor(identity.id)),
               picking: selecting,
               picked: selected.has(identity.id),
+              last: index === group.people.length - 1,
             }"
             :style="{ '--role': roleVar(identity.color) }"
             role="button"
@@ -782,28 +779,28 @@ function extraFacts(identity: Identity): string[] {
             <!--
               The row's actions, in two groups.
 
-              Left: what you do to this account's session — launch (or raise, then
-              stop), relogin, check. Right: the management actions, as icon
-              buttons, because "编辑" as a text link sat at the same visual weight
-              as "重新登录" while doing something of a different kind. Icons on the
-              right edge also make every row's actions end at the same place,
-              which is what lets the list be scanned vertically.
+              One row, five actions, one visual form: all of them are icon buttons
+              with a tooltip. Mixed text and glyphs in the same cluster read as
+              debris — three words at one weight beside a lone pencil — and a
+              text action is also twice as wide as it needs to be for a verb the
+              user learns once. Icons also let every row's actions end at the same
+              right edge, which is what makes the column scannable.
             -->
             <div v-if="!selecting" class="card-actions">
               <span class="card-session">
                 <template v-if="store.instanceFor(identity.id)">
-                  <button type="button" class="card-link launch" @click.stop="launch(identity)">
-                    <Play :size="10" />
-                    {{ $t("app.switchTo") }}
-                  </button>
-                  <button
-                    type="button"
-                    class="card-link"
+                  <IconButton
+                    :ariaLabel="$t('app.switchTo')"
+                    @click.stop="launch(identity)"
+                  >
+                    <Play :size="12" />
+                  </IconButton>
+                  <IconButton
+                    :ariaLabel="$t('app.stop')"
                     @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)"
                   >
-                    <Square :size="9" />
-                    {{ $t("app.stop") }}
-                  </button>
+                    <Square :size="11" />
+                  </IconButton>
                 </template>
                 <!-- The plain click is the built-in surface; the arrow lists every
                      browser the app found, so the fidelity check is a decision made
@@ -816,12 +813,18 @@ function extraFacts(identity: Identity): string[] {
                   @launch="launch(identity)"
                   @launch-external="launchExternal(identity, $event)"
                 />
-                <button type="button" class="card-link" @click.stop="relogin(identity)">
-                  {{ $t("app.relaunch") }}
-                </button>
-                <button type="button" class="card-link" @click.stop="checkAuth(identity)">
-                  {{ $t("app.checkAuth") }}
-                </button>
+                <IconButton
+                  :ariaLabel="$t('app.relaunch')"
+                  @click.stop="relogin(identity)"
+                >
+                  <RotateCcw :size="12" />
+                </IconButton>
+                <IconButton
+                  :ariaLabel="$t('app.checkAuth')"
+                  @click.stop="checkAuth(identity)"
+                >
+                  <HeartPulse :size="12" />
+                </IconButton>
               </span>
               <span class="card-manage">
                 <IconButton
@@ -990,15 +993,41 @@ function extraFacts(identity: Identity): string[] {
   /* One template for the rows and the per-group table header: a column stays a
      column across rows. The flexible tracks are `fr` rather than `auto`, so one
      long role label cannot widen the role column of only its own row. */
-  --id-cols: minmax(0, 1.1fr) minmax(0, 0.8fr) 92px minmax(190px, 1.5fr);
+  /* The actions column held five controls, three of them text links, which is why
+     it needed 190px. They are icon buttons now, so the column only has to fit
+     five 26px targets and their gaps — the width freed up goes to the columns a
+     reader actually scans. */
+  --id-cols: minmax(0, 1.1fr) minmax(0, 0.8fr) 92px 168px;
   display: flex;
   flex-direction: column;
   /* Grow to the body's height so a short list still starts at the top and the
      empty state (below) has a full-height box to centre itself in. */
   flex: 1 1 auto;
-  gap: 6px;
+  /* Rows are joined into one block, so no gap: the header is the top cap and each
+     row keeps only its side and bottom rules. Groups still need air between them,
+     which the group header carries. */
+  gap: 0;
   min-width: 0;
   padding: 1px 2px 2px 1px;
+}
+
+.cards > .group-head {
+  margin-top: 18px;
+}
+
+.cards > .group-head:first-child {
+  margin-top: 0;
+}
+
+/* The group header's hairline is its own bottom edge — useful when the group is
+   folded and the label is the last thing in it. Above a table it is not: the
+   table's cap is already a full border a few pixels lower, and two hairlines that
+   close together read as one doubled rule, which is what made the group and the
+   table look glued together. The cap is the separator; the group label just gets
+   room above it. */
+.cards > .group-head:has(+ .id-table-head) {
+  border-bottom-color: transparent;
+  padding-bottom: 10px;
 }
 
 .id-table-head {
@@ -1013,21 +1042,6 @@ function extraFacts(identity: Identity): string[] {
   color: var(--faint);
   font-size: 10px;
   letter-spacing: 0.04em;
-}
-
-/* Table mode joins the rows into one block; the gap that separates list rows
-   would otherwise break every row out of the table. Groups still need air
-   between them, so the spacing moves to the group header. */
-.cards.view-table {
-  gap: 0;
-}
-
-.cards.view-table > .group-head {
-  margin-top: 18px;
-}
-
-.cards.view-table > .group-head:first-child {
-  margin-top: 0;
 }
 
 .id-table-head.picking {
@@ -1141,12 +1155,22 @@ function extraFacts(identity: Identity): string[] {
   min-height: 46px;
   padding: 7px 10px 7px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  /* Joined rows: the header is the cap, the last row is the foot, and every row
+     between keeps only its side and bottom rules. */
+  border-top: 0;
+  border-radius: 0;
   /* One flat surface. A border and the identity's own left rule are enough to
      separate a row from the page. */
   background: var(--surface);
   overflow: hidden;
   transition: border-color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out);
+}
+
+/* The table's foot: the last row of a group's block. Every row is a sibling of
+   the group's header (the `template v-for` adds no wrapper), so "last in this
+   group" is not something `nth-*` can express across groups — the class says it. */
+.id-card.last {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .id-card.picking {
@@ -1381,7 +1405,10 @@ function extraFacts(identity: Identity): string[] {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  /* The wider space is between the two groups, not between neighbours inside
+     one: session actions are things you do to a running page, the pencil edits
+     the account. A uniform gap made the cluster read as five equal verbs. */
+  gap: 10px;
   min-width: 0;
   overflow: hidden;
   font-size: 11px;
@@ -1391,9 +1418,14 @@ function extraFacts(identity: Identity): string[] {
 .card-session {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
-  flex: 1 1 auto;
+  /* Not `flex: 1 1 auto`. That let the session group absorb every spare pixel of
+     the actions column, so its actions sat at the left edge of a wide gap while
+     the edit icon sat alone at the right edge — the row read as "three links …
+     a distant pencil". The column is right-aligned; this group should only be as
+     wide as what it holds. */
+  flex: 0 0 auto;
   overflow: hidden;
 }
 
@@ -1401,37 +1433,6 @@ function extraFacts(identity: Identity): string[] {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-}
-
-/*
- * A text action inside the card.
- *
- * A plain `<button>` rather than a `<span>`: the card is a `role="button"` div
- * now, so anything clickable inside it must be a real control — a span with a
- * click handler is unreachable by keyboard and invisible to a screen reader.
- * The button is stripped back to look like the link it replaced.
- */
-.card-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  color: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.card-link:hover {
-  color: var(--text);
-}
-
-.card-link.launch {
-  color: color-mix(in srgb, var(--role) 76%, var(--text));
 }
 
 /* Dialog footer layout. Scoped styles do not reach Modal's own slots, so the

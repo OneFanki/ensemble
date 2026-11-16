@@ -131,6 +131,8 @@ export const messages = {
       authProxyTitle: "代理要求登录",
       actionWait: "等待",
       actionRead: "读取",
+      // 逃生口：只有封装动作表达不了的命令才该出现在流程里，所以标签直接这么写。
+      actionCdp: "原始 CDP",
       flowNoSite: "先在站点页建一个站点，流程要挂在站点上。",
       flowParamRequiredShort: "必填",
       flowAddParamFirst: "先加参数，再在步骤里用 {'{{'}变量名{'}}'} 引用",
@@ -436,6 +438,9 @@ export const messages = {
         "外部模式启动时用哪个浏览器。内置模式不经过它。\n单个账号仍可在自己的设置里覆盖这一项。",
       engineBlockedSuffix: "（不可用）",
       engineExternalSuffix: "（仅外部模式）",
+      // 流程的原始 CDP 步骤：说明只讲「开了会怎样」。
+      flowCdpSetting: "流程可用网络与设备命令",
+      flowCdpNote: "让流程里的原始 CDP 步骤能改网络与设备模拟。跨身份的访问始终不可用",
       autoSubmitLabel: "填完后自动登录",
       autoSubmitNote: "自动提交会去点登录按钮本身（不是只提交表单），双因素验证码仍需手动完成。",
       autoSubmitFollowGlobal: "跟随全局设置",
@@ -515,10 +520,7 @@ export const messages = {
       defaultPassword: "默认密码",
       passwordSet: "已设置",
 
-      // Collection layouts: sites and accounts
-      collectionView: "显示方式",
-      collectionViewList: "列表",
-      collectionViewTable: "表格",
+      // Collection tables: sites and accounts
       columnAddress: "地址",
       columnAccountsViews: "账号与视图",
       columnAccount: "账号",
@@ -1312,6 +1314,7 @@ export const messages = {
       authProxyTitle: "The proxy requires a sign-in",
       actionWait: "Wait",
       actionRead: "Read",
+      actionCdp: "Raw CDP",
       flowNoSite: "Create a site first — a flow has to belong to one.",
       flowParamRequiredShort: "required",
       flowAddParamFirst: "Add a parameter first, then reference it as {'{{'}name{'}}'} in steps",
@@ -1633,6 +1636,8 @@ export const messages = {
         "Which browser external launches use. The built-in surface does not go through it.\nA single identity can still override this in its own settings.",
       engineBlockedSuffix: " (unavailable)",
       engineExternalSuffix: " (external only)",
+      flowCdpSetting: "Flows may use network and device commands",
+      flowCdpNote: "Lets a flow's raw CDP step change network and device emulation. Cross-identity access stays unavailable",
       autoSubmitLabel: "Sign in automatically after filling",
       autoSubmitNote: "自动提交会去点登录按钮本身（不是只提交表单），双因素验证码仍需手动完成。",
       autoSubmitFollowGlobal: "Follow the global setting",
@@ -1716,10 +1721,7 @@ export const messages = {
       defaultPassword: "Default password",
       passwordSet: "Set",
 
-      // Collection layouts: sites and accounts
-      collectionView: "Layout",
-      collectionViewList: "List",
-      collectionViewTable: "Table",
+      // Collection tables: sites and accounts
       columnAddress: "Address",
       columnAccountsViews: "Accounts & views",
       columnAccount: "Account",

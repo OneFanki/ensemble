@@ -305,21 +305,54 @@ function chooseExternal(engineId: string): void {
 /* Dense: what a table row can afford. Same two halves, half the height.
    The icon half is a square so the glyph sits centred rather than in a letterbox
    — an icon-only control padded like a labelled one reads as a button with its
-   text missing, which is exactly how it looked. */
+   text missing, which is exactly how it looked.
+
+   The height is stated on the outer box and the halves fill it, rather than
+   stated on the halves and left to the border to add up. The compact split ends
+   up beside `IconButton`s (24px) in every row that uses it, so the two have to
+   match exactly — and "22px content inside a 1px border" measured 23px, which is
+   the one thing a row of same-sized controls cannot tolerate.
+
+   ## Why the dense variant is filled, not outlined
+
+   An outlined box on a table row is a box drawn around nothing: its border is
+   the only thing separating it from the row's own surface, so it reads as a
+   placeholder — the empty control a form leaves before its label loads — rather
+   than as the one thing in the row you press. Every other row action is a bare
+   glyph that only shows a background under the pointer. Giving the launch the
+   row's recessed surface (`--field`, the same step every input uses) makes it
+   read as a control with a body, and it is also the truthful signal: launching
+   is the frequent action, editing is not.
+
+   The arrow keeps the same body and is divided by the seam rather than a border,
+   so the pair still reads as one control with two levels of specificity. */
 .launch-split.compact {
   border-radius: var(--radius-sm);
+  height: 24px;
+  border-color: transparent;
+  background: var(--field);
 }
 
 .launch-split.compact .launch-main {
   padding: 0;
-  width: 22px;
-  height: 20px;
+  width: 24px;
+  height: 100%;
   justify-content: center;
+  color: var(--text-secondary);
+}
+
+.launch-split.compact .launch-main:hover:not(:disabled) {
+  background: var(--field-hover);
 }
 
 .launch-split.compact .launch-arrow {
-  width: 15px;
-  height: 20px;
+  width: 16px;
+  height: 100%;
+  border-left-color: color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.launch-split.compact .launch-arrow:hover:not(:disabled) {
+  background: var(--field-hover);
 }
 
 .launch-panel {

@@ -466,9 +466,6 @@ export interface BrowserProfile {
 
 export type BrowserProfileRetention = "persist" | "ephemeral";
 
-/** Density the Sites and Identities pages use to list their rows. */
-export type CollectionView = "list" | "table";
-
 export interface AppSettings {
   theme: "dark" | "light" | "system";
   /** UI language; `"system"` follows the OS. See {@link LocaleSetting}. */
@@ -607,15 +604,17 @@ export interface AppSettings {
    */
   browserViewport: EmbeddedViewport | null;
   /**
-   * How the Sites page lays its rows out.
+   * Whether a flow's raw `cdp` step may use the optional tier.
    *
-   * A site is a name, an address and two counts; a list reads that as one line
-   * per site, while a table keeps the columns aligned for scanning. Neither is
-   * right for everyone, so the choice is a setting rather than a default.
+   * The optional tier is `Network.*`, `Fetch.*`, `Emulation.*`,
+   * `Performance.*` — each one changes how a page behaves or reads its traffic.
+   * Off by default: a flow saved by somebody who turned this on has to fail with
+   * a reason when it is off, not silently do something else.
+   *
+   * The forbidden tier is not affected by this switch. Crossing into another
+   * identity's partition is not a preference.
    */
-  sitesView: CollectionView;
-  /** How the Identities page lays its rows out; see {@link sitesView}. */
-  identitiesView: CollectionView;
+  flowCdpExtended: boolean;
   /**
    * How far back the performance monitor's chart reaches, in milliseconds.
    *
@@ -895,8 +894,7 @@ export type SettingsPatch = Partial<
     | "autoSubmitLogin"
     | "browserZoom"
     | "browserViewport"
-    | "sitesView"
-    | "identitiesView"
+    | "flowCdpExtended"
     | "perfWindowMs"
     | "perfSampleIntervalMs"
     | "searchEngineId"

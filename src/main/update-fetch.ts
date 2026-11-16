@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { net } from "electron";
+import { toResponseHeaders } from "@core/update/headers";
 import { isTrustedUpdateUrl } from "@shared/update";
 
 /**
@@ -74,10 +75,7 @@ export function createTrustedUpdateFetch(): typeof fetch {
         const body = Readable.toWeb(
           response as unknown as Readable,
         ) as unknown as ReadableStream<Uint8Array>;
-        const responseHeaders = new Headers();
-        for (const [name, values] of Object.entries(response.headers)) {
-          for (const value of values) responseHeaders.append(name, value);
-        }
+        const responseHeaders = toResponseHeaders(response.headers);
         const result = new Response(response.statusCode === 204 ? null : body, {
           status: response.statusCode,
           statusText: response.statusMessage,

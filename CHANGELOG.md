@@ -3,7 +3,75 @@
 每个版本的更新内容写在这里，GitHub Release 的正文由 `.github/workflows/release.yml`
 按版本号从这个文件抽取，所以发版时只需要改 `package.json` 和这里。
 
-- 准备发版时，把 `
+- 准备发版时，把 `package.json` 的 `version` 改掉，并在本文件顶部加一节 `## [x.y.z] - YYYY-MM-DD`；`scripts/release-notes.mjs` 会按版本号抽出这一节当作 Release 正文。
+
+## [2.2.3] - 2026-11-16
+
+补齐 AI 操作页面缺失的动作，修掉几处会让页面「看起来死了」的阻塞，并把流程的原始
+CDP 步骤做成有档位判定的逃生口。
+
+### 中文
+
+#### 新增
+
+- **补齐动作缺口**：悬停、滚动、组合键、前进/后退/刷新、JS 弹窗的读与答、文件上传、拖拽、复选框设值、元素信息读取、元素裁剪截图。每一项都配了 e2e，断言的是「页面真的变了」而不是「工具返回了 ok」。
+- **流程的原始 CDP 步骤**：`cdp` 步骤可以跑协议层命令，但要先过三档白名单——只作用于当前页面的默认开放，改网络与设备模拟的需要在设置里开启，跨身份与影响整个进程的一律拒绝且不可解锁。一趟流程用超过两次会提示可能缺一个封装动作。
+- **`run_flow` 的 `timeoutMs`**：默认 120 秒、上限 10 分钟，由调用方指定。
+
+#### 修复
+
+- **一次 `confirm()` 让页面「死了」30 秒**。JS 弹窗打开期间页面完全阻塞，触发它的那条输入命令永远不会返回，之后的读页面全部超时——调用方看到的是「点了没反应、选择器写错了」。现在弹窗一出现就被记账，页面动作在发命令前就报错并点名弹窗类型与内容；无人回答时 30 秒自动取消。
+- **流程超时被写死**。`run_flow` 之前无论调用方怎么给都用两分钟，慢操作必然失败而工作仍在后台跑；`wait` 步骤还会用一个 30 秒的等待吃掉整个流程预算，然后把错误报成「条件没满足」。
+- **元素截图按设备像素而不是 CSS 像素输出**。1.5 倍屏上 200×80 的元素截出来是 300×120。
+
+#### 优化
+
+- **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
+- **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
+- **站点页与账号页的表头/分组分割线不再叠在一起**。
+
+### English
+
+Fills the gaps in what an AI can do to a page, fixes several ways a page could look
+dead, and turns a flow's raw CDP step into a tiered escape hatch.
+
+#### Added
+
+- **The missing actions**: hover, scroll, key combinations, back/forward/reload, reading and answering JS dialogs, file upload, drag, setting a checkbox, element info, and element-clipped screenshots. Each has an e2e that asserts the *page* changed rather than the tool returning `ok`.
+- **A flow's raw CDP step**: a `cdp` step can run protocol commands, but only through a three-tier list — commands that act on the current page are open, network and device emulation need a setting, and anything that crosses identities or affects the whole process is refused and cannot be unlocked. More than two raw commands in one flow produces a note that an action is probably missing.
+- **`run_flow`'s `timeoutMs`**: defaults to two minutes, capped at ten, chosen by the caller.
+
+#### Fixed
+
+- **One `confirm()` could freeze a page for 30 seconds.** While a JS dialog is up the page is fully blocked: the input command that opened it never returns, and every later read times out — so the caller saw "the click did nothing, the selector must be wrong". The dialog is now recorded the moment it opens, page actions refuse up front and name its type and message, and an unanswered dialog is dismissed after 30 seconds.
+- **The flow timeout was hardcoded.** `run_flow` used two minutes regardless of what the caller asked, so slow operations always failed while the work carried on in the background. A `wait` step could also eat the whole flow budget and then report "the condition never held".
+- **Element screenshots came out in device pixels.** A 200×80 element produced a 300×120 image on a 1.5× display.
+
+#### Improved
+
+- **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
+- **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.
+- **The sites and identities tables no longer stack their header rule on a group rule.**
+
+## [2.2.2] - 2026-11-16
+
+站点页与账号页收成一套表格，并修掉操作列的宽间隔与图文混杂。
+
+### 中文
+
+#### 优化
+
+- **「列表 / 表格」两态合并为表格**。两者共用同一份行标记、同一条网格线，差别只有 6px 行距和一行列头——不是两种视图，是同一个表格少画一行字。切换按钮与两项设置随之删除；页面现在无条件按表格排：每组的列头是顶盖，组内最后一行是桌脚，中间的行只保留侧边与下边框。
+- **操作列不再又宽又乱**。账号行的三个文字动作与站点行的「新建身份」都改成了图标按钮，同一簇里不再混两种宽度和两种字号；紧凑启动控件从 22px 提到 24px，与 `IconButton` 等高，整簇贴齐列尾。原先账号行的操作组会吸收列内所有空余宽度，于是三个动作贴左、铅笔孤零零贴右——现在整簇是一个右对齐的簇。腾出来的宽度还给了地址、角色与状态这些要读的列。
+
+### English
+
+The sites and identities pages collapse into one table, and the actions column loses its wide gaps and mixed text-plus-icon clutter.
+
+#### Improved
+
+- **The list / table toggle is gone; the table stays**. Both modes shared the same row markup and the same grid line — the only differences were a 6px gap and a header row. That is not two views, it is one table with a line of text left out. The toggle and its two settings keys are removed, and the layout is now unconditional: each group's header is the cap, its last row is the foot, and the rows between keep only their side and bottom rules.
+- **The actions column is no longer wide and ragged**. The three text actions on an account row and the "new identity" button on a site row are icon buttons now, so no cluster mixes two widths and two type sizes. The compact launch control went from 22px to 24px to match `IconButton`, and each cluster is pinned to the right edge of its column. The old session group absorbed every spare pixel of the column, which put three actions at the left and a lone pencil at the right; there is one right-aligned cluster now. The width that freed up went back to the columns people actually read — address, role, status.
 
 ## [2.2.1] - 2026-11-16
 

@@ -54,6 +54,14 @@ pnpm dist             # 打包三平台产物到 release/
 17. **MCP 工具永远不返回明文密码。** 可以写密码（`password` 参数进加密凭据库），但不得提供读密码、复制密码或任何回显明文的工具与字段。删除类工具必须要求 `confirm: true`；启动类只受「运行」权限控制，不得按环境名字或其它启发式额外加确认。
 18. **MCP 端点只绑 `127.0.0.1`，并且必须校验 Bearer Token、`Host` 与 `Origin`。** 新增工具时按 read / write / run / danger 定档，权限开关在设置页控制；审计日志写入前对 `password|passphrase|token|secret` 递归脱敏。
 19. **退出顺序固定**：先停 MCP → 销毁托盘 → 回收浏览器。由 `tests/contracts/tray-mcp-lifecycle.test.ts` 守护，禁止在 `before-quit` 里提前置 `quitting` 绕过。
+20. **本仓库是公开仓库，任何地方都不得出现开发者私有业务的内容。** 包括代码、注释、文档、测试数据、截图、commit message、CHANGELOG。
+    - **禁止出现的**：私有产品名、公司名、内部系统代号、真实客户或同事姓名、内网地址与主机名、真实的账号密码与 Token、私有业务术语（某个内部模块的专有叫法）。
+    - **判断标准**：换一个从没接触过这些项目的人来看，这段内容是否**只有在知道那件事的前提下才成立**。是，就属于要脱敏的内容。
+    - **正确做法**：把学到的东西写成**通用情形**。「某个三字段登录（租户名/用户名/密码）的后台」而不是「某某系统的登录」；「被测服务端」而不是「某某服务的后端」。通用写法信息量不减，反而更容易被后来的人用上。
+    - **不要试图用拼接字符串、编码、缩写等方式把私有名词藏起来**——那只是让检查失效，同时让泄漏更难被发现。
+21. **提交前必须对照本文件与相关规范做一次自查。** 检查项至少包括：私有业务内容（第 20 条）、凭据与密码（第 4、17 条）、身份隔离（第 3 条）、界面文案（第 13–15 条）、`git add` 范围（本文件 Git 规范）。
+    - 发现违规时**终止提交**，把命中的文件、行号与原因告诉用户，等用户决定怎么处理。
+    - 不因为「只是注释」「只是测试数据」「马上会改」而放行。
 ## 质量要求
 
 - TypeScript 保持 strict，不用 `any` 绕过类型（第三方边界处允许 `any`，但必须局部收口）。
@@ -68,7 +76,8 @@ pnpm dist             # 打包三平台产物到 release/
 ## Git 规范
 
 - 未得到当次明确指令，不提交、不推送；提交与推送是两个独立授权。
-- 提交格式 `type(scope): 中文描述`，`type` 只用 feat/fix/refactor/docs/test/chore，`scope` 必填（core/main/renderer/preload/docs/build/root），header ≤ 100 字符。
+- **提交前自查，违规就停下。** 按强制约束第 21 条逐项对照本文件；发现私有业务内容、明文凭据或越界的 `git add` 时终止提交并报告，不自行判断「这条不算」。
+- 提交格式 `type(scope): 中文描述`，`type` 只用 feat/fix/refactor/docs/test/chore，`scope` 必填（core/main/renderer/preload/docs/build/root），header ≤ 100 字符。commit message 同样适用第 20 条。
 - 多 AI 并发是常态：`git add` / `git commit` 只包含当前任务文件，禁止 `git add -A`、`git add .`、`git commit -a`。
 - 禁止对全项目执行自动修复（`lint --fix`、`format --write`）；检查只针对本次改动文件。
 
@@ -80,6 +89,8 @@ pnpm dist             # 打包三平台产物到 release/
 | 改动浏览器启动、CDP、窗口定位 | `docs/engineering/cdp-playbook.md` |
 | 改动凭据、自动填充、启动与 MCP 权限 | `docs/architecture.md` 的安全边界一节 |
 | 增删 MCP 工具、改动 AI 调用的时限或返回形状 | `docs/engineering/ai-tools.md`（契约测试会检查工具集合一致） |
+| 新增浏览器动作（点击/滚轮/拖拽/上传/弹窗等） | `docs/engineering/browser-action-coverage.md`（先查清单里是否已有、是否标了不做） |
+| 接手正在推进的功能改造 | `docs/plans/`（已决定要做的事项、顺序与验收；做完就移出） |
 | 遇到报错或反常行为 | `docs/engineering/踩坑库.md` |
 | 做架构取舍 | `docs/architecture/adr/` 现有决策，先看是否已被否 |
 | 打包、发布、升级 Electron | `docs/engineering/release.md` |
@@ -93,6 +104,8 @@ pnpm dist             # 打包三平台产物到 release/
 | 当前架构与数据模型 | `docs/architecture.md` |
 | 架构决策记录 | `docs/architecture/adr/` |
 | 工程规范与操作手册 | `docs/engineering/` |
+| 已决定的改造计划（有顺序与验收，做完移出） | `docs/plans/` |
+| 方向判断（未必会做） | `docs/roadmap.md` |
 | AI 工具能力矩阵（档位 / 闸门 / 时限 / 返回形状） | `docs/engineering/ai-tools.md` |
 | 经验型踩坑 | `docs/engineering/踩坑库.md` |
 | 用户可见说明 | `README.md` |

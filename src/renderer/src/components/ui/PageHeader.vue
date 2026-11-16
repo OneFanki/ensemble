@@ -10,17 +10,25 @@
  *
  * The title is `h1` so a page still has a heading; the console's own navigation
  * says which section, and this says what the page is called.
+ *
+ * **A title, and nothing under it.** There used to be a `note` prop, and every
+ * page that had one filled it with a sentence restating the title — "AI 记录 /
+ * AI 在页面上的操作". A paraphrase under a heading is a second line to read on
+ * every visit that answers nothing the heading did not. The prop is gone rather
+ * than merely unused, so the next page cannot reach for it.
+ *
+ * What survives is the `#note` slot, for figures: the identities page puts
+ * "12 账号 · 3 运行中" there, which is a live count that exists nowhere else on
+ * the screen. A number is information; a sentence about the title is not.
  */
 defineProps<{
   title: string;
-  /** One line under the title: what this page is for. */
-  note?: string;
   /**
-   * Render the note in the monospace face.
+   * Render the slot in the monospace face.
    *
-   * For notes that are live numbers rather than prose ("12 accounts · 3 running"):
-   * digits line up with the rest of the technical data, and the style follows
-   * from what the text *is* instead of being passed in as a class.
+   * For notes that are live numbers rather than prose: digits line up with the
+   * rest of the technical data, and the style follows from what the text *is*
+   * instead of being passed in as a class.
    */
   numeric?: boolean;
 }>();
@@ -30,8 +38,8 @@ defineProps<{
   <header class="page-head">
     <div class="page-head-copy">
       <h1>{{ title }}</h1>
-      <p v-if="note || $slots.note" class="page-head-note" :class="{ mono: numeric }">
-        <slot name="note">{{ note }}</slot>
+      <p v-if="$slots.note" class="page-head-note" :class="{ mono: numeric }">
+        <slot name="note" />
       </p>
     </div>
     <!-- Actions are opt-in and sit at the far right, aligned to the title's

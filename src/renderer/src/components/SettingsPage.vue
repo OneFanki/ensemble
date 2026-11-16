@@ -1252,7 +1252,15 @@ async function submitMaster() {
             </div>
 
             <div v-if="mcp" class="mcp-endpoint">
-              <p class="conn-title">{{ $t("app.mcpConnTitle") }}</p>
+              <!-- The same subsection heading as the policy block above: both
+                   divide the "AI 接入" card, so they speak the same way. This one
+                   used to be a bare `<p class="conn-title">` with no rule of its
+                   own anywhere in the file — it rendered at the browser's default
+                   paragraph weight, which put a bold line between the shared
+                   `.fineprint` note above it and the `.fineprint` note below. -->
+              <div class="ai-policy-head">
+                <span>{{ $t("app.mcpConnTitle") }}</span>
+              </div>
               <dl class="conn">
                 <div>
                   <dt>{{ $t("app.mcpFieldUrl") }}</dt>
@@ -1410,15 +1418,35 @@ async function submitMaster() {
   padding: var(--space-6) 0 0 0;
 }
 
-/* Padding is on the body, not on the tab column: the column's own background
-   has to run edge to edge against the title bar above it. */
+/* The column is the window's frame surface — the band the workbench sidebar
+   occupies — running edge to edge and flush with the title bar above it.
+ *
+ * That surface is what the selected row lifts off. `.tab.active` is painted in
+ * `--chrome`, one step lighter than the frame in both themes, and the row only
+ * reads as raised while it sits on the frame. On `--content` it had nothing to
+ * lift off, and on light the two are the same #ffffff, so the current section
+ * was invisible.
+ *
+ * The page's insets are cancelled here and handed back as this column's own
+ * padding: the band reaches the window edges (the same 24px/28px `.settings-head`
+ * cancels at the top), the tab rows stay exactly where they were, and the frame
+ * meets the header above and the window below with no strip of content colour
+ * between them.
+ *
+ * The right padding is the row's other wall. The rows used to stop flush against
+ * the band's edge — 28px of breathing room on the left, none on the right — so
+ * the selected row ran straight into the content pane and had no right edge to
+ * speak of; on light that edge is white against white. A band needs an inset on
+ * both sides or it reads as part of what is beside it. */
 .settings-nav {
   flex: 0 0 auto;
-  width: 164px;
+  width: calc(164px + 28px + 12px);
+  margin: calc(-1 * var(--space-6)) 0 -24px -28px;
+  padding: calc(var(--space-6) + var(--space-1)) 12px 24px 28px;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding-top: var(--space-1);
+  background: var(--frame);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -1458,9 +1486,20 @@ async function submitMaster() {
 }
 
 /*
- * The selected row is a filled surface, the same one the app's own navigation
- * uses for its current item — settings is part of the same window even while it
- * covers it.
+ * The selected row is a filled surface, the same relationship the app's own
+ * navigation uses for its current item — settings is part of the same window
+ * even while it covers it. It takes `--selected-on-frame` rather than
+ * `--chrome`: both are "a step off the band", but the table of contents is a
+ * narrower band with five unselected siblings in it, where the plain chrome step
+ * (1.19:1 on dark) reads as slightly different grey rather than as the current
+ * section. See the token's note.
+ *
+ * It only reads as a row while the band has an inset on *both* sides. The rows
+ * used to stop flush against the band's edge — 28px of air on the left, none on
+ * the right — so the fill ran straight into the content pane; on light, where
+ * the fill and the pane are both white, the two joined into one white shape and
+ * the current section looked like a notch cut into the pane. The band's right
+ * padding is the other half of that fix.
  *
  * The icon takes the row's own text colour, not the accent. The sidebar's items
  * work the same way: a row that is on says so with its background, and tinting
@@ -1468,7 +1507,7 @@ async function submitMaster() {
  * not share. Two cues for one state is what made the row look busy.
  */
 .tab.active {
-  background: var(--chrome);
+  background: var(--selected-on-frame);
   color: var(--text);
 }
 

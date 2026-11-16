@@ -42,10 +42,12 @@ defineProps<{
   border-top: 1px solid var(--line-soft);
 }
 
-/* The first row follows the card's own heading, which already separates it. */
+/* The first row follows the card's own heading, which now draws the seam. The
+   border would print a second line 25px under the first one; the padding stays
+   so the label is not glued to it. */
 .setting-row:first-of-type {
   border-top: 0;
-  padding-top: 4px;
+  padding-top: 10px;
 }
 
 /*

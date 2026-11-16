@@ -395,11 +395,21 @@ function startResize(event: PointerEvent): void {
  * Instances can be many and destinations are few, so the two do not deserve the
  * same share of the column: the dock takes what is left, and the navigation is
  * capped rather than allowed to push the dock to nothing on a short window.
+ *
+ * `overflow-x: hidden` is deliberate, not a leftover. Only `overflow-y` was set,
+ * and CSS promotes a `visible` axis to `auto` as soon as the other one is a
+ * scroller — so the column had a horizontal scroller nobody asked for. In the
+ * collapsed rail it fired constantly: the items are exactly 34px, the scroller's
+ * content box is exactly 34px, and a fractional rounding or a thin vertical
+ * scrollbar taking its gutter left `scrollWidth` one pixel over `clientWidth`.
+ * One pixel is enough to paint a scrollbar across the bottom of the rail, which
+ * is the "grey lumps" strip the collapsed column showed.
  */
 .sidebar-nav {
   flex: 0 1 auto;
   min-height: 0;
   max-height: 52%;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
   display: flex;
@@ -541,6 +551,16 @@ function startResize(event: PointerEvent): void {
   align-items: center;
 }
 
+/*
+ * The items are 34px in a 34px scroller.
+ *
+ * `align-self: stretch` is not the fix here: the column is `align-items:
+ * center`, so stretching sizes the item from the *content box*, and once a
+ * vertical scrollbar takes its gutter that box is narrower than 34 — the rail
+ * collapsed to 14px tiles. The item keeps its own width; `overflow-x: hidden`
+ * on the scroller is what stops a one-pixel rounding from painting a bar, and
+ * the exact-fit numbers below are why there is nothing to scroll anyway.
+ */
 .sidebar.collapsed .nav-item {
   justify-content: center;
   width: 34px;

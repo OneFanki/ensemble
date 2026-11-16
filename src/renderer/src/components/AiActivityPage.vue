@@ -92,7 +92,7 @@ async function clearAll(): Promise<void> {
 
 <template>
   <section class="page">
-    <PageHeader :title="$t('app.aiActivityTitle')" :note="$t('app.aiActivityNote')" numeric>
+    <PageHeader :title="$t('app.aiActivityTitle')">
       <template #actions>
         <GroupCollapseAll
           v-if="groups.length"

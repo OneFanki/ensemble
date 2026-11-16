@@ -3,75 +3,147 @@ import type { AppSettings } from "@shared/types";
 /**
  * The in-app guide: what this app is for, and the shortest path to using it.
  *
- * This is both the first-run screen and the handbook. It is a page of its own:
- * a few short sentences and one diagram of the minimum path, readable in a
- * minute, and possible to come back to without walking through anything.
+ * This is both the first-run experience and the handbook. It is a sequence of
+ * pages, each one a full-width panel with a looping diagram on the left and a
+ * few sentences on the right. The shape is deliberate: the previous version was
+ * a two-column dialog with a table of contents, which read as documentation —
+ * correct, but dull, and it made the product look smaller than it is. A person
+ * opening this app for the first time is deciding whether it is worth their
+ * afternoon; a page that looks like a settings screen answers "no".
  *
- * It replaced a spotlight tour that pointed at live controls. That shape failed
- * twice: the controls it pointed at kept moving, and a sequence of callouts
- * teaches where a button is without ever saying what the product is for. One
- * page answers both, and there is only one introduction to keep current.
+ * ## Order of the story
  *
- * ## Why the first screen is only two things
+ * The order is the order a new user needs it, which is not the order of the
+ * feature list:
  *
- * The core path and the AI path are the two things that decide whether the app
- * makes sense at all: without the first, nothing can be tried; without the
- * second, a user does by hand what the product exists to automate. Everything
- * else (what a view is for, tags, flows, the run dock) is optional and lives
- * behind the section list, because a wall of features on first open reads as
- * "this is complicated" rather than "this is capable".
+ * 1. **It is a browser.** Not a dashboard, not a test runner. That has to land
+ *    first or everything after it sounds like a special-purpose tool.
+ * 2. **Every tab is isolated, so several accounts can be present at once.** This
+ *    is the one idea the whole product rests on.
+ * 3. **Two separable systems: profiles/bookmarks, and sites/identities.** People
+ *    confuse them on their own; naming both here saves the confusion later.
+ * 4. **Side-by-side comparison of one system across roles.** Why isolation
+ *    matters — the thing you actually came to do.
+ * 5. **The AI connects over MCP** and drives these pages.
+ * 6. **What the AI can do**, including the part people do not expect: it keeps
+ *    working with the UI shut.
+ * 7. **Developer tools**: device emulation and the performance monitor.
+ * 8. **Where to find this again.**
+ *
+ * An earlier version led with "create a site, add accounts, launch". That is the
+ * setup cost of the product, not its purpose, and it made the app look like a
+ * multi-account browser with an assistant bolted on.
+ *
+ * ## Text budget
+ *
+ * A page gets a headline, one paragraph, and at most three short bullets. If a
+ * page needs more than that, the feature belongs in the section list at the end
+ * rather than in the sequence — the sequence is read once, standing up, and
+ * anything longer gets skipped.
  */
 /**
  * Bumped when the guide's content changes enough that someone who already read
  * the old one should see this one.
  *
- * 2: the first screen now opens with what the window *is* — the workbench on the
- * left, the stage on the right — and only then explains the three steps. The old
- * screen started at "add a site", which is the third thing a newcomer needs.
+ * 2: the first screen opened with what the window *is*, then the three steps.
+ * 3: the guide led with the AI instead of the manual path; added what the AI can
+ *    observe, its activity record, and the two browser surfaces.
+ * 4: the whole thing became a paginated tour with a looping diagram per page,
+ *    and the order now starts from "it is a browser" / "every tab is isolated"
+ *    rather than from site setup. Adds the headless-AI page and the developer
+ *    tools page.
  */
-export const GUIDE_VERSION = 2;
+export const GUIDE_VERSION = 4;
 
-/** One section of the guide; `core` sections are shown on the first screen. */
-export interface GuideSection {
-  id: "path" | "ai" | "views" | "tabs" | "tags" | "flows" | "browser";
-  /** Grouping in the side list; only "core" is open by default. */
-  group: "core" | "optional";
+/** Which diagram a page draws. One component per id, resolved in the dialog. */
+export type GuideScene =
+  | "isolation"
+  | "twoSystems"
+  | "compare"
+  | "mcp"
+  | "aiActs"
+  | "headless"
+  | "devtools"
+  | "reopen";
+
+/** One page of the tour. */
+export interface GuidePage {
+  id: GuideScene;
   titleKey: string;
   bodyKey: string;
+  /**
+   * Short bullets shown under the paragraph. Optional: a page whose idea is one
+   * sentence should not be padded to three.
+   */
+  bullets?: Array<{ titleKey: string; hintKey?: string }>;
 }
 
-/**
- * The minimum path, as steps rather than prose.
- *
- * Rendered as a numbered diagram, so this list is the diagram's data — one entry
- * per box. Kept to three because a fourth step turns "the shortest path" into a
- * procedure, and the whole point is that it can be memorised.
- */
-export interface GuidePathStep {
-  /** Title the user sees in the box. */
-  titleKey: string;
-  /** One line under it. */
-  hintKey: string;
-}
-
-export const GUIDE_PATH_STEPS: GuidePathStep[] = [
-  { titleKey: "app.guideStepSite", hintKey: "app.guideStepSiteHint" },
-  { titleKey: "app.guideStepAccount", hintKey: "app.guideStepAccountHint" },
-  { titleKey: "app.guideStepLaunch", hintKey: "app.guideStepLaunchHint" },
-];
-
-export const GUIDE_SECTIONS: GuideSection[] = [
-  { id: "path", group: "core", titleKey: "app.guidePathTitle", bodyKey: "app.guidePathBody" },
-  { id: "ai", group: "core", titleKey: "app.guideAiTitle", bodyKey: "app.guideAiBody" },
-  { id: "views", group: "optional", titleKey: "app.guideViewsTitle", bodyKey: "app.guideViewsBody" },
-  { id: "tabs", group: "optional", titleKey: "app.guideTabsTitle", bodyKey: "app.guideTabsBody" },
-  { id: "tags", group: "optional", titleKey: "app.guideTagsTitle", bodyKey: "app.guideTagsBody" },
-  { id: "flows", group: "optional", titleKey: "app.guideFlowsTitle", bodyKey: "app.guideFlowsBody" },
+export const GUIDE_PAGES: GuidePage[] = [
   {
-    id: "browser",
-    group: "optional",
-    titleKey: "app.guideBrowserTitle",
-    bodyKey: "app.guideBrowserBody",
+    id: "isolation",
+    titleKey: "app.guidePageIsolationTitle",
+    bodyKey: "app.guidePageIsolationBody",
+    bullets: [
+      { titleKey: "app.guidePageIsolationBullet1" },
+      { titleKey: "app.guidePageIsolationBullet2" },
+    ],
+  },
+  {
+    id: "twoSystems",
+    titleKey: "app.guidePageSystemsTitle",
+    bodyKey: "app.guidePageSystemsBody",
+    bullets: [
+      { titleKey: "app.guidePageSystemsBullet1" },
+      { titleKey: "app.guidePageSystemsBullet2" },
+    ],
+  },
+  {
+    id: "compare",
+    titleKey: "app.guidePageCompareTitle",
+    bodyKey: "app.guidePageCompareBody",
+    bullets: [{ titleKey: "app.guidePageCompareBullet1" }],
+  },
+  {
+    id: "mcp",
+    titleKey: "app.guidePageMcpTitle",
+    bodyKey: "app.guidePageMcpBody",
+    bullets: [
+      { titleKey: "app.guidePageMcpBullet1" },
+      { titleKey: "app.guidePageMcpBullet2" },
+    ],
+  },
+  {
+    id: "aiActs",
+    titleKey: "app.guidePageActsTitle",
+    bodyKey: "app.guidePageActsBody",
+    bullets: [
+      { titleKey: "app.guidePageActsBullet1" },
+      { titleKey: "app.guidePageActsBullet2" },
+      { titleKey: "app.guidePageActsBullet3" },
+    ],
+  },
+  {
+    id: "headless",
+    titleKey: "app.guidePageHeadlessTitle",
+    bodyKey: "app.guidePageHeadlessBody",
+    bullets: [
+      { titleKey: "app.guidePageHeadlessBullet1" },
+      { titleKey: "app.guidePageHeadlessBullet2" },
+    ],
+  },
+  {
+    id: "devtools",
+    titleKey: "app.guidePageDevtoolsTitle",
+    bodyKey: "app.guidePageDevtoolsBody",
+    bullets: [
+      { titleKey: "app.guidePageDevtoolsBullet1" },
+      { titleKey: "app.guidePageDevtoolsBullet2" },
+    ],
+  },
+  {
+    id: "reopen",
+    titleKey: "app.guidePageReopenTitle",
+    bodyKey: "app.guidePageReopenBody",
   },
 ];
 

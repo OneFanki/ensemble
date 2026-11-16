@@ -45,6 +45,22 @@
    */
   --selected: #2f353d;
   --selected-strong: #3a4048;
+  /*
+   * Selection on the *frame* band, where `--chrome` is the neighbouring step.
+   *
+   * Settings' tab column is frame-coloured, and its current row is filled with
+   * the surface a raised row wears. `--chrome` is that surface, but it is only
+   * 1.19:1 over the frame here — one shade, readable in the sidebar (a wide
+   * column beside an empty pane) and flat in a 192px band that also holds five
+   * unselected siblings. This token is the same surface one step further out, so
+   * a selected row on the frame reads as raised rather than as slightly
+   * different grey. Light does not need it: white over the light frame is
+   * already the strongest step the palette has, and anything darker would read
+   * as a hole instead. Kept separate from `--selected` because that one is used
+   * *on* the chrome (dock rows, message rows), where going further would invert
+   * the relationship.
+   */
+  --selected-on-frame: #333941;
 
   /*
    * Segmented controls: an inset track with the chosen chip raised inside it.
@@ -258,6 +274,9 @@
    */
   --selected: #eef1f4;
   --selected-strong: #e2e7ec;
+  /* See the dark theme's note. White is already the strongest step up from the
+     light frame, so the frame variant is the plain surface colour. */
+  --selected-on-frame: var(--chrome);
 
   /* See the dark theme's note. On light the track sinks to the field colour and
      the chip comes back up to the card, so a two-pixel-thin selection reads

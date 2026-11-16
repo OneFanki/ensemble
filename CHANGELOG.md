@@ -5,6 +5,26 @@
 
 - 准备发版时，把 `
 
+## [2.2.1] - 2026-11-16
+
+修掉 2.2.0 的内置更新器：从 2.1.0 升级会卡住，且下载进度一直是 0。**2.2.0 的用户需要手动下载这个版本**，因为卡住的那次升级没有把应用换掉。
+
+### 中文
+
+#### 修复
+
+- **内置更新器的进度条不再一直是 0**。Electron `net.request` 的响应头类型写的是字符串数组，但运行时单值头其实是普通字符串；代码按数组遍历，`content-length` 被拆成了 `"1, 0, 4, 1, 7, …"`，`Number()` 得到 `NaN`，下载器以为服务端没给总大小。下载本身一直在正常进行，所以看起来是「进度不动，然后突然可以安装了」。
+- **从 2.1.0 升级不再卡在 cmd 窗口**。安装脚本用 `tasklist … | find "PID"` 判断应用是否退出，这条判断在装了 Git for Windows 的机器上会拿到 MSYS 的 `find`：它把 PID 当文件名，拿不到输入时还会阻塞在读 stdin——那个 cmd 窗口就是这么挂住的。同一段脚本里的 `timeout /t 1` 也被解析成 Unix 的 `timeout`，报参数错误后立即返回，于是循环空转。现在 `tasklist.exe` 与 `timeout.exe` 都用 `%SystemRoot%\System32\` 绝对路径调用，退出判断改为读输出第 2 列与目标 PID 精确比对——不再依赖 PATH，不再依赖系统语言，也不再用 `tasklist` 的退出码（它带 `/Filter` 时无论是否匹配都返回 0）。
+
+### English
+
+Fixes the built-in updater in 2.2.0: upgrading from 2.1.0 stalled, and the download progress never moved. **Anyone on 2.2.0 has to download this release by hand** — the stalled upgrade never replaced the app.
+
+#### Fixed
+
+- **The updater's progress bar no longer sits at 0%**. Electron's `net.request` types its response headers as arrays of strings, but a single-valued header is a plain string at runtime. The code iterated it as an array, so `content-length` became `"1, 0, 4, 1, 7, …"`, `Number()` produced `NaN`, and the downloader concluded the server had sent no total size. The download itself was fine the whole time, which is why it looked like "no progress, then suddenly ready to install".
+- **Upgrading from 2.1.0 no longer wedges a cmd window**. The install script decided whether the app had exited with `tasklist … | find "PID"`. On a machine with Git for Windows that resolves to the MSYS `find`, which reads the PID as a file name and blocks on stdin when it gets no input — that is the window that hung. The same script's `timeout /t 1` resolved to the Unix `timeout`, failed on the interval, and returned immediately, spinning the loop. `tasklist.exe` and `timeout.exe` are now called by absolute path under `%SystemRoot%\System32\`, and the check compares the target PID against column 2 of the output — no PATH, no locale, and no reliance on `tasklist`'s exit code, which returns 0 with a filter whether or not anything matched.
+
 ## [2.2.0] - 2026-11-16
 
 这个版本的重心是两件事：**档案**与 **AI 权限**。浏览器不再必须先绑一个账号；AI 在真实登录态页面上的操作范围，第一次有了四档可调的边界。另外使用指南整个重做成了八页的引导，浅色主题也重新配色。

@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -152,45 +153,6 @@ async function call(name, args = {}) {
   return text ? JSON.parse(text) : undefined;
 }
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const done = pending.get(message.id);
-    if (done) {
-      pending.delete(message.id);
-      done(message);
-    }
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const message = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-        includeCommandLineAPI: true,
-      });
-      if (message.result?.exceptionDetails) {
-        throw new Error(message.result.exceptionDetails.exception?.description);
-      }
-      return message.result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 async function findTarget(port, predicate, attempts = 80) {
   for (let i = 0; i < attempts; i += 1) {
     await wait(250);
@@ -208,7 +170,7 @@ async function findTarget(port, predicate, attempts = 80) {
 try {
   const mainTarget = await findTarget(INSPECT_PORT, () => true, 60);
   if (!mainTarget) throw new Error(`no main inspector\n${appLog.slice(-800)}`);
-  const main = await connect(mainTarget.webSocketDebuggerUrl);
+  const main = await connectToWindow(mainTarget.webSocketDebuggerUrl);
 
   // Wait for the MCP endpoint, which is the surface this suite drives.
   let ready = false;

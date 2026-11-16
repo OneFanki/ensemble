@@ -14,6 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-firstrun-"));
 const uuid = (index) =>
@@ -70,43 +71,6 @@ let appLog = "";
 app.stdout.on("data", (chunk) => (appLog += chunk));
 app.stderr.on("data", (chunk) => (appLog += chunk));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(JSON.stringify(result.exceptionDetails).slice(0, 800));
-      }
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok });
@@ -124,64 +88,69 @@ async function waitFor(client, expression, timeout = 6000) {
 
 let client;
 try {
-  let target;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await wait(250);
-    try {
-      const port = await waitForDebugPort(userData);
-      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      target = list.find(
-        (item) =>
-          item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
-      );
-      if (target) break;
-    } catch {
-      // The window has not opened its debugging port yet.
-    }
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch (error) {
+    // The app's own log is the only thing that explains a window that
+    // never came up; without it this reads as "the debug port was slow".
+    check("app window appeared", false, appLog.slice(-600));
+    throw error;
   }
-  check("app window appeared", Boolean(target), target ? undefined : appLog.slice(-600));
-  if (!target) throw new Error("no renderer target");
-  client = await connect(target.webSocketDebuggerUrl);
+  check("app window appeared", true);
   await wait(3200);
 
   // --- The guide introduces the app on its own -----------------------------
+  //
+  // The guide is a paginated tour: eight pages, each one a diagram beside a
+  // headline, a paragraph and at most three bullets. What a first run has to get
+  // right is that the tour opens by itself, that it starts on the first page
+  // rather than somewhere in the middle, and that every page is reachable.
   const firstRun = await waitFor(client, `Boolean(document.querySelector('.guide-backdrop'))`).then(
     () =>
       client.evaluate(`(() => {
         const dialog = document.querySelector('.guide-backdrop');
-        const layout = dialog?.querySelector('.diagram.workbench');
-        const path = dialog?.querySelector('ol.path');
+        const tour = dialog?.querySelector('.guide');
         return {
           open: Boolean(dialog),
-          title: dialog?.querySelector('.guide-title')?.textContent?.trim() ?? '',
-          // The first screen explains the window before it asks for anything.
-          hasLayout: Boolean(layout),
-          hasPath: Boolean(path),
-          layoutFirst:
-            Boolean(layout && path) &&
-            (layout.compareDocumentPosition(path) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
-          sections: dialog?.querySelectorAll('.guide-nav .nav-entry').length ?? 0,
+          // The page id, not its translated title: the assertion should not break
+          // when copy is rewritten, only when the order or the set of pages is.
+          page: tour?.getAttribute('data-guide-page') ?? '',
+          title: dialog?.querySelector('.copy-title')?.textContent?.trim() ?? '',
+          hasDiagram: Boolean(dialog?.querySelector('.guide-visual svg, .guide-visual .scene')),
+          hasBody: (dialog?.querySelector('.copy-body')?.textContent?.trim().length ?? 0) > 0,
+          dots: dialog?.querySelectorAll('.dots [data-guide-dot]').length ?? 0,
+          firstDotOn: dialog?.querySelector('.dots .dot.on')?.getAttribute('data-guide-dot') ?? '',
+          hasNext: Boolean(dialog?.querySelector('[data-guide-next]')),
+          hasClose: Boolean(dialog?.querySelector('.guide-skip')),
         };
       })()`),
   );
   check(
-    "a fresh install opens the guide by itself",
-    firstRun?.open === true && firstRun?.title.length > 0 && firstRun?.sections >= 3,
+    "a fresh install opens the guide by itself, on its first page",
+    firstRun?.open === true &&
+      firstRun?.page.length > 0 &&
+      firstRun?.title.length > 0 &&
+      firstRun?.hasBody === true &&
+      firstRun?.hasNext === true &&
+      firstRun?.hasClose === true,
     firstRun,
   );
-  // The screen has to answer "what am I looking at" before "what do I do".
-  // Opening with the three steps asked a newcomer to create a site while having
-  // no idea what the left column or the stage were.
+  // Every page is a target, and the tour starts at the first one. Eight pages is
+  // the whole tour; a count that drifted from `GUIDE_PAGES` would mean the dots
+  // and the sequence had gone out of step.
   check(
-    "the guide explains the window layout before the three steps",
-    firstRun?.hasLayout === true && firstRun?.hasPath === true && firstRun?.layoutFirst === true,
+    "the tour offers every page as a target and starts at the first",
+    firstRun?.dots >= 3 &&
+      firstRun?.firstDotOn === firstRun?.page &&
+      firstRun?.hasDiagram === true,
     firstRun,
   );
 
   // Opening it counts as reading it: closing and reopening the app must not
   // show it again.
   await client.evaluate(`(() => {
-    document.querySelector('.guide-close')?.click();
+    document.querySelector('.guide-skip')?.click();
     return true;
   })()`);
   await wait(400);

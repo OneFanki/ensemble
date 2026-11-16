@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-boot-"));
 mkdirSync(join(userData, "profiles"), { recursive: true });
@@ -55,40 +56,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((resolvePromise) => socket.addEventListener("open", resolvePromise));
-  return {
-    send(method, params = {}) {
-      return new Promise((resolvePromise) => {
-        const id = ++nextId;
-        pending.set(id, resolvePromise);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 const SAMPLE = `(() => {
   const boot = document.querySelector('.boot');
   const shell = document.querySelector('.app-shell > .shell');
@@ -117,25 +84,16 @@ function check(label, ok, detail) {
 let code = 0;
 try {
   const port = await waitForDebugPort(userData);
-  let target;
-  for (let attempt = 0; attempt < 200 && !target; attempt += 1) {
-    await wait(50);
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      target = list.find(
-        (item) =>
-          item.type === "page" &&
-          !item.url.startsWith("devtools") &&
-          item.url.includes("index.html") &&
-          !item.url.includes("#"),
-      );
-    } catch {
-      // The window has not opened its debugging port yet.
-    }
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch (error) {
+    // The app's own log is the only thing that explains a window that
+    // never came up; without it this reads as "the debug port was slow".
+    check("app window appeared", false, appLog.slice(-600));
+    throw error;
   }
-  if (!target) throw new Error("the app window never appeared");
-
-  const client = await connect(target.webSocketDebuggerUrl);
+  check("app window appeared", true);
   // Sample as soon as the splash exists. It stays for at least half a second,
   // which is the window this check has to observe.
   let early = null;
@@ -145,10 +103,14 @@ try {
     await wait(50);
   }
   check(
+    // Within a pixel, not exactly equal: `innerHeight` is an integer while
+    // `getBoundingClientRect().height` is whatever the CSS resolution produced
+    // (861.33 on this machine). Comparing them with `===` fails for a reason that
+    // has nothing to do with the splash being the wrong size.
     "the splash is an overlay covering the whole window",
     early?.boot?.position === "absolute" &&
-      early?.boot?.rect?.width === early?.viewport?.width &&
-      early?.boot?.rect?.height === early?.viewport?.height,
+      Math.abs(Number(early?.boot?.rect?.width) - Number(early?.viewport?.width)) <= 1 &&
+      Math.abs(Number(early?.boot?.rect?.height) - Number(early?.viewport?.height)) <= 1,
     early?.boot,
   );
   check(

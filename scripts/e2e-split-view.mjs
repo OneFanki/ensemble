@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const DEBUG_PORT = "0";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-split-"));
@@ -116,43 +117,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
-      }
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok });
@@ -160,24 +124,16 @@ function check(name, ok, detail) {
 }
 
 try {
-  let target;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await wait(250);
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-      target = list.find(
-        (item) =>
-          item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
-      );
-      if (target) break;
-    } catch {
-      // The window has not opened its debugging port yet.
-    }
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch (error) {
+    // The app's own log is the only thing that explains a window that
+    // never came up; without it this reads as "the debug port was slow".
+    check("app window appeared", false, appLog.slice(-600));
+    throw error;
   }
-  check("app window appeared", Boolean(target), target ? undefined : appLog.slice(-600));
-  if (!target) throw new Error("no renderer target");
-
-  const client = await connect(target.webSocketDebuggerUrl);
+  check("app window appeared", true);
   await wait(3000);
 
   const opened = await client.evaluate(`(async () => {

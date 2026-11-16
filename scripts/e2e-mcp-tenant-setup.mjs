@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -182,43 +183,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
-      }
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 let seq = 0;
 async function call(name, args = {}) {
   const response = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
@@ -283,7 +247,7 @@ try {
   );
   check("app window appeared", Boolean(renderer), renderer ? undefined : appLog.slice(-600));
   if (!renderer) throw new Error("no renderer target");
-  const client = await connect(renderer.webSocketDebuggerUrl);
+  const client = await connectToWindow(renderer.webSocketDebuggerUrl);
   await client.evaluate(`(() => {
     window.__captures = [];
     window.__autoFills = [];

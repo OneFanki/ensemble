@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -138,43 +139,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
-      }
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok });
@@ -233,7 +197,7 @@ async function connectRenderer() {
           item.url.includes("index.html") &&
           !item.url.startsWith("devtools"),
       );
-      if (target) return connect(target.webSocketDebuggerUrl);
+      if (target) return connectToWindow(target.webSocketDebuggerUrl);
     } catch {
       // the window has not opened its debugging port yet
     }
@@ -285,7 +249,7 @@ try {
         (item.type === "page" || item.type === "webview" || item.type === "iframe") &&
         item.url.startsWith(`${ORIGIN}/`),
     );
-    return target ? connect(target.webSocketDebuggerUrl) : undefined;
+    return target ? connectToWindow(target.webSocketDebuggerUrl) : undefined;
   }
 
   // --- A daily-profile page, opened the way a person opens one ---

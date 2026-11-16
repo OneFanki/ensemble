@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-views-"));
 const now = new Date().toISOString();
@@ -120,43 +121,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++nextId;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
-      }
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
-  };
-}
-
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok });
@@ -179,22 +143,6 @@ function readSettings() {
   } catch {
     return {};
   }
-}
-
-/** The two values under test, for readable failure output. */
-function viewSettings() {
-  const settings = readSettings();
-  return { sitesView: settings.sitesView, identitiesView: settings.identitiesView };
-}
-
-/** Polls the file rather than the renderer: the setting must actually persist. */
-async function waitForStoredSetting(key, value, timeout = 5000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    if (readSettings()[key] === value) return true;
-    await wait(150);
-  }
-  return false;
 }
 
 async function go(client, view) {
@@ -251,45 +199,95 @@ function alignmentScript(rowSelector, headerSelector) {
   })()`;
 }
 
-try {
-  let target;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await wait(250);
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-      target = list.find(
-        (item) =>
-          item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
-      );
-      if (target) break;
-    } catch {
-      // The window has not opened its debugging port yet.
+/**
+ * What the actions column of every row in a table looks like.
+ *
+ * The complaint this guards against was visual, so the measurements are: how
+ * many controls, whether any of them carries a word, whether they are all the
+ * same height, and whether every row's cluster ends on the same pixel. A row
+ * whose cluster stops short of the others' right edge is the "distant pencil"
+ * shape — a group that absorbed the column's spare width instead of being
+ * pushed right.
+ */
+function actionsScript(rowSelector, actionsSelector) {
+  return `(() => {
+    const rows = [...document.querySelectorAll(${JSON.stringify(rowSelector)})];
+    const columns = rows.map((row) => row.querySelector(${JSON.stringify(actionsSelector)}));
+    if (columns.some((column) => !column)) {
+      return { rows: rows.length, missing: columns.filter((column) => !column).length };
     }
-  }
-  check("app window appeared", Boolean(target), target ? undefined : appLog.slice(-600));
-  if (!target) throw new Error("no renderer target");
+    // Buttons inside a split control are one decision, so count the outer
+    // controls: icon buttons, split controls, and anything else clickable that
+    // is not inside one of those.
+    const outerControls = (column) =>
+      [...column.querySelectorAll('button, .launch-split')].filter(
+        (node) => !node.parentElement?.closest('button, .launch-split'),
+      );
+    const clusters = columns.map((column) =>
+      outerControls(column).map((node) => {
+        const rect = node.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          right: Math.round(rect.right),
+          // A control with visible text is a worded button; the split control's
+          // halves have no text in the compact variant.
+          worded: node.textContent.trim().length > 0,
+        };
+      }),
+    );
+    const rights = clusters.map((controls) => Math.max(...controls.map((control) => control.right)));
+    return {
+      rows: rows.length,
+      counts: clusters.map((controls) => controls.length),
+      worded: clusters.flat().filter((control) => control.worded).length,
+      heights: [...new Set(clusters.flat().map((control) => control.height))].sort((a, b) => a - b),
+      rightEdges: rights,
+      // How much of the column sits left of the cluster. A right-aligned cluster
+      // in a column that is only as wide as its contents leaves a small gap;
+      // a cluster floating in a wide column leaves a large one.
+      leftGaps: columns.map((column) => {
+        const cluster = outerControls(column);
+        if (!cluster.length) return null;
+        const first = Math.round(cluster[0].getBoundingClientRect().left);
+        return first - Math.round(column.getBoundingClientRect().left);
+      }),
+    };
+  })()`;
+}
 
-  const client = await connect(target.webSocketDebuggerUrl);
+try {
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch (error) {
+    // The app's own log is the only thing that explains a window that
+    // never came up; without it this reads as "the debug port was slow".
+    check("app window appeared", false, appLog.slice(-600));
+    throw error;
+  }
+  check("app window appeared", true);
   await wait(3000);
 
-  // --- Sites: the default is the list --------------------------------------
+  // --- Sites: one table, always -------------------------------------------
   await go(client, "sites");
   check(
     "the sites page rendered both seeded rows",
     await waitFor(client, `document.querySelectorAll('.sites .env-card').length === 2`),
   );
-  const sitesList = await client.evaluate(`(async () => {
-    const snapshot = await window.ensemble.getWorkspace();
+  const sitesTable = await client.evaluate(`(() => {
+    const heads = [...document.querySelectorAll('.sites .env-table-head')];
     const rows = [...document.querySelectorAll('.sites .env-card')];
-    const list = document.querySelector('.sites [data-collection-view="list"]');
-    const table = document.querySelector('.sites [data-collection-view="table"]');
     return {
-      stored: snapshot.settings.sitesView,
+      heads: heads.length,
+      labels: heads[0]
+        ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
+        : [],
+      // No view switch survives on the page, and no mode class either: the table
+      // is the layout, not one of two.
       toggle: Boolean(document.querySelector('.sites [data-view-toggle]')),
-      listActive: list?.getAttribute('aria-pressed') === 'true' && list.classList.contains('active'),
-      tableActive: table?.getAttribute('aria-pressed') === 'true',
-      header: Boolean(document.querySelector('.sites .env-table-head')),
-      mode: document.querySelector('.sites .env-grid')?.classList.contains('view-list') ?? false,
+      modeClass:
+        document.querySelector('.sites .env-grid')?.className.match(/view-(list|table)/)?.[0] ?? null,
       // One row: grip, name, address, facts, actions, all on the same line.
       cells: rows.map((row) => row.children.length),
       singleLine: rows.every((row) => {
@@ -303,57 +301,21 @@ try {
     };
   })()`);
   check(
-    "a fresh workspace opens the sites page in list mode",
-    sitesList?.stored === "list" &&
-      sitesList?.toggle === true &&
-      sitesList?.listActive === true &&
-      sitesList?.tableActive === false &&
-      sitesList?.header === false &&
-      sitesList?.mode === true,
-    sitesList,
+    "the sites page draws one header row per group, with no view switch",
+    sitesTable?.heads === 2 &&
+      JSON.stringify(sitesTable?.labels) === JSON.stringify(["站点", "地址", "账号与视图", "操作"]) &&
+      sitesTable?.toggle === false &&
+      sitesTable?.modeClass === null,
+    sitesTable,
   );
   check(
     "site rows are one horizontal line with the drag grip",
-    Array.isArray(sitesList?.cells) &&
-      sitesList.cells.length === 2 &&
-      sitesList.cells.every((count) => count === 5) &&
-      sitesList.singleLine === true &&
-      sitesList.dragHook === true,
-    sitesList,
-  );
-
-  // --- Sites: table mode adds a header per group and persists --------------
-  await client.evaluate(
-    `document.querySelector('.sites [data-collection-view="table"]')?.click()`,
-  );
-  const sitesTable = await waitFor(
-    client,
-    `document.querySelectorAll('.sites .env-table-head').length === 2`,
-  );
-  const sitesTableState = await client.evaluate(`(() => {
-    const heads = [...document.querySelectorAll('.sites .env-table-head')];
-    const labels = heads[0]
-      ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
-      : [];
-    return {
-      heads: heads.length,
-      labels,
-      mode: document.querySelector('.sites .env-grid')?.classList.contains('view-table') ?? false,
-      tableActive:
-        document.querySelector('.sites [data-collection-view="table"]')?.getAttribute('aria-pressed') === 'true',
-      listActive:
-        document.querySelector('.sites [data-collection-view="list"]')?.getAttribute('aria-pressed') === 'true',
-    };
-  })()`);
-  check(
-    "switching sites to table draws one header row per group",
-    sitesTable === true &&
-      sitesTableState?.heads === 2 &&
-      JSON.stringify(sitesTableState?.labels) === JSON.stringify(["站点", "地址", "账号与视图", "操作"]) &&
-      sitesTableState?.mode === true &&
-      sitesTableState?.tableActive === true &&
-      sitesTableState?.listActive === false,
-    sitesTableState,
+    Array.isArray(sitesTable?.cells) &&
+      sitesTable.cells.length === 2 &&
+      sitesTable.cells.every((count) => count === 5) &&
+      sitesTable.singleLine === true &&
+      sitesTable.dragHook === true,
+    sitesTable,
   );
   const sitesAlignment = await client.evaluate(
     alignmentScript(".sites .env-card", ".sites .env-table-head"),
@@ -368,36 +330,36 @@ try {
       sitesAlignment?.singleLine === true,
     sitesAlignment,
   );
+
+  const sitesActions = await client.evaluate(actionsScript(".sites .env-card", ".card-actions"));
   check(
-    "the sites table choice lands in settings.json",
-    (await waitForStoredSetting("sitesView", "table")) === true,
-    viewSettings(),
+    "every site row's actions are icons of one size, ending on one right edge",
+    sitesActions?.rows === 2 &&
+      Array.isArray(sitesActions?.counts) &&
+      sitesActions.counts.every((count) => count === 4) &&
+      sitesActions.worded === 0 &&
+      sitesActions.heights?.length === 1 &&
+      new Set(sitesActions.rightEdges).size === 1,
+    sitesActions,
   );
 
-  // The choice is a stored setting: leaving the page and coming back must keep it.
-  await go(client, "identities");
-  await go(client, "sites");
-  check(
-    "the sites table survives leaving and reopening the page",
-    (await waitFor(client, `document.querySelectorAll('.sites .env-table-head').length === 2`)) === true,
-  );
-
-  // --- Identities: default list, then table --------------------------------
+  // --- Identities: the same table shape ------------------------------------
   await go(client, "identities");
   check(
     "the identities page rendered the seeded accounts",
     await waitFor(client, `document.querySelectorAll('.identities .id-card').length === 3`),
   );
-  const identitiesList = await client.evaluate(`(async () => {
-    const snapshot = await window.ensemble.getWorkspace();
+  const identitiesTable = await client.evaluate(`(() => {
+    const heads = [...document.querySelectorAll('.identities .id-table-head')];
     const rows = [...document.querySelectorAll('.identities .id-card')];
     return {
-      stored: snapshot.settings.identitiesView,
+      heads: heads.length,
+      labels: heads[0]
+        ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
+        : [],
       toggle: Boolean(document.querySelector('.identities [data-view-toggle]')),
-      listActive:
-        document.querySelector('.identities [data-collection-view="list"]')?.getAttribute('aria-pressed') === 'true',
-      header: Boolean(document.querySelector('.identities .id-table-head')),
-      mode: document.querySelector('.identities .cards')?.classList.contains('view-list') ?? false,
+      modeClass:
+        document.querySelector('.identities .cards')?.className.match(/view-(list|table)/)?.[0] ?? null,
       cells: rows.map((row) => row.children.length),
       singleLine: rows.every((row) => {
         const centers = [...row.children].map((cell) => {
@@ -410,63 +372,30 @@ try {
       actionsCell: Boolean(rows[0]?.querySelector('.card-actions')),
       statusCell: Boolean(rows[0]?.querySelector('.state')),
       editHook: Boolean(rows[0]?.querySelector('[data-edit-identity]')),
-      pickHooks: Boolean(
-        document.querySelector('.identities [data-batch-select]'),
-      ),
+      pickHooks: Boolean(document.querySelector('.identities [data-batch-select]')),
     };
   })()`);
   check(
-    "a fresh workspace opens the identities page in list mode",
-    identitiesList?.stored === "list" &&
-      identitiesList?.toggle === true &&
-      identitiesList?.listActive === true &&
-      identitiesList?.header === false &&
-      identitiesList?.mode === true,
-    identitiesList,
+    "the identities page draws one header row per group, with no view switch",
+    identitiesTable?.heads === 2 &&
+      JSON.stringify(identitiesTable?.labels) ===
+        JSON.stringify(["账号", "角色与密码", "状态", "操作"]) &&
+      identitiesTable?.toggle === false &&
+      identitiesTable?.modeClass === null,
+    identitiesTable,
   );
   check(
     "account rows are one horizontal line with the existing hooks",
-    Array.isArray(identitiesList?.cells) &&
-      identitiesList.cells.length === 3 &&
-      identitiesList.cells.every((count) => count === 4) &&
-      identitiesList.singleLine === true &&
-      identitiesList.accountCell === true &&
-      identitiesList.actionsCell === true &&
-      identitiesList.statusCell === true &&
-      identitiesList.editHook === true &&
-      identitiesList.pickHooks === true,
-    identitiesList,
-  );
-
-  await client.evaluate(
-    `document.querySelector('.identities [data-collection-view="table"]')?.click()`,
-  );
-  const identitiesTable = await waitFor(
-    client,
-    `document.querySelectorAll('.identities .id-table-head').length === 2`,
-  );
-  const identitiesTableState = await client.evaluate(`(() => {
-    const heads = [...document.querySelectorAll('.identities .id-table-head')];
-    const labels = heads[0]
-      ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
-      : [];
-    return {
-      heads: heads.length,
-      labels,
-      mode: document.querySelector('.identities .cards')?.classList.contains('view-table') ?? false,
-      tableActive:
-        document.querySelector('.identities [data-collection-view="table"]')?.getAttribute('aria-pressed') === 'true',
-    };
-  })()`);
-  check(
-    "switching identities to table draws one header row per group",
-    identitiesTable === true &&
-      identitiesTableState?.heads === 2 &&
-      JSON.stringify(identitiesTableState?.labels) ===
-        JSON.stringify(["账号", "角色与密码", "状态", "操作"]) &&
-      identitiesTableState?.mode === true &&
-      identitiesTableState?.tableActive === true,
-    identitiesTableState,
+    Array.isArray(identitiesTable?.cells) &&
+      identitiesTable.cells.length === 3 &&
+      identitiesTable.cells.every((count) => count === 4) &&
+      identitiesTable.singleLine === true &&
+      identitiesTable.accountCell === true &&
+      identitiesTable.actionsCell === true &&
+      identitiesTable.statusCell === true &&
+      identitiesTable.editHook === true &&
+      identitiesTable.pickHooks === true,
+    identitiesTable,
   );
   const identitiesAlignment = await client.evaluate(
     alignmentScript(".identities .id-card", ".identities .id-table-head"),
@@ -481,48 +410,69 @@ try {
       identitiesAlignment?.singleLine === true,
     identitiesAlignment,
   );
+
+  const identitiesActions = await client.evaluate(
+    actionsScript(".identities .id-card", ".card-actions"),
+  );
   check(
-    "the identities table choice lands in settings.json",
-    (await waitForStoredSetting("identitiesView", "table")) === true,
-    viewSettings(),
+    "every account row's actions are icons of one size, ending on one right edge",
+    identitiesActions?.rows === 3 &&
+      Array.isArray(identitiesActions?.counts) &&
+      identitiesActions.counts.every((count) => count === 4) &&
+      identitiesActions.worded === 0 &&
+      identitiesActions.heights?.length === 1 &&
+      new Set(identitiesActions.rightEdges).size === 1,
+    identitiesActions,
   );
 
-  // --- Back to list on both pages -----------------------------------------
-  await client.evaluate(
-    `document.querySelector('.identities [data-collection-view="list"]')?.click()`,
-  );
-  const identitiesBack = await waitFor(
-    client,
-    `!document.querySelector('.identities .id-table-head') && document.querySelector('.identities .cards')?.classList.contains('view-list')`,
-  );
+  // --- Table caps and feet -------------------------------------------------
+  // A joined table has one cap (the header) and one foot per group. Rows keep
+  // only their side and bottom rules; a row that still rounds its own corners
+  // reads as a stack of cards with no gaps.
+  const tableShape = await client.evaluate(`(() => {
+    const rows = [...document.querySelectorAll('.identities .id-card')];
+    const heads = [...document.querySelectorAll('.identities .id-table-head')];
+    const radius = (node) => getComputedStyle(node).borderTopLeftRadius;
+    return {
+      rowRadii: [...new Set(rows.map(radius))],
+      headRadii: [...new Set(heads.map(radius))],
+      lastRowRadii: rows
+        .filter((row) => row.classList.contains('last'))
+        .map((node) => getComputedStyle(node).borderBottomLeftRadius),
+      lastRows: rows.filter((row) => row.classList.contains('last')).length,
+      groups: heads.length,
+    };
+  })()`);
   check(
-    "switching identities back to list removes the table header",
-    identitiesBack === true &&
-      (await client.evaluate(`document.querySelectorAll('.identities .id-card').length`)) === 3,
-  );
-  check(
-    "the identities list choice lands in settings.json",
-    (await waitForStoredSetting("identitiesView", "list")) === true,
-    viewSettings(),
+    "the table is capped by its header and footed by each group's last row",
+    tableShape?.headRadii?.length === 1 &&
+      tableShape.headRadii[0] !== "0px" &&
+      tableShape.rowRadii?.length === 1 &&
+      tableShape.rowRadii[0] === "0px" &&
+      tableShape.lastRows === tableShape.groups &&
+      tableShape.lastRowRadii.every((value) => value !== "0px"),
+    tableShape,
   );
 
-  await go(client, "sites");
-  await client.evaluate(
-    `document.querySelector('.sites [data-collection-view="list"]')?.click()`,
-  );
-  const sitesBack = await waitFor(
+  // --- Selection mode still fits the table ---------------------------------
+  // The row grows a leading checkbox column; the header has to grow it too, or
+  // every label slides one column left of the values under it.
+  await client.evaluate(`document.querySelector('.identities [data-batch-select]')?.click()`);
+  const picking = await waitFor(
     client,
-    `!document.querySelector('.sites .env-table-head') && document.querySelector('.sites .env-grid')?.classList.contains('view-list')`,
+    `document.querySelectorAll('.identities .id-table-head.picking').length === 2`,
+  );
+  const pickingAlignment = await client.evaluate(
+    alignmentScript(".identities .id-card.picking", ".identities .id-table-head.picking"),
   );
   check(
-    "switching sites back to list removes the table header",
-    sitesBack === true &&
-      (await client.evaluate(`document.querySelectorAll('.sites .env-card').length`)) === 2,
-  );
-  check(
-    "the sites list choice lands in settings.json",
-    (await waitForStoredSetting("sitesView", "list")) === true,
-    viewSettings(),
+    "selection mode adds the checkbox column to rows and header alike",
+    picking === true &&
+      pickingAlignment?.columns === 5 &&
+      pickingAlignment?.headers === 5 &&
+      pickingAlignment?.headerAligned === true &&
+      pickingAlignment?.uniform === true,
+    pickingAlignment,
   );
 
   client.close();

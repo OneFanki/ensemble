@@ -21,6 +21,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-panels-"));
@@ -117,39 +118,6 @@ app.stdout.on("data", (c) => (appLog += c));
 app.stderr.on("data", (c) => (appLog += c));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let next = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((done) => socket.addEventListener("open", done));
-  return {
-    send(method, params = {}) {
-      return new Promise((done) => {
-        const id = ++next;
-        pending.set(id, done);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression, returnByValue: true, awaitPromise: true,
-      });
-      if (result?.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
-      }
-      return result?.result?.value;
-    },
-    close() { socket.close(); },
-  };
-}
-
 const results = [];
 function check(name, ok, detail) {
   results.push({ name, ok });
@@ -168,7 +136,7 @@ async function pageTarget() {
 async function probe() {
   const target = await pageTarget();
   if (!target) return null;
-  const c = await connect(target.webSocketDebuggerUrl);
+  const c = await connectToWindow(target.webSocketDebuggerUrl);
   try {
     return await c.evaluate("window.__probe ? window.__probe() : null");
   } finally {
@@ -177,24 +145,16 @@ async function probe() {
 }
 
 try {
-  let target;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await wait(250);
-    try {
-      const list = await (
-        await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)
-      ).json();
-      target = list.find(
-        (item) => item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
-      );
-      if (target) break;
-    } catch {
-      // The window has not opened its debugging port yet.
-    }
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch (error) {
+    // The app's own log is the only thing that explains a window that
+    // never came up; without it this reads as "the debug port was slow".
+    check("app window appeared", false, appLog.slice(-600));
+    throw error;
   }
-  check("app window appeared", Boolean(target), target ? undefined : appLog.slice(-600));
-  if (!target) throw new Error("no renderer target");
-  const client = await connect(target.webSocketDebuggerUrl);
+  check("app window appeared", true);
   await wait(3000);
 
   const opened = await client.evaluate(
@@ -256,7 +216,7 @@ try {
     const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     const target = list.find((item) => item.url.startsWith("devtools://"));
     if (!target) return null;
-    const c = await connect(target.webSocketDebuggerUrl);
+    const c = await connectToWindow(target.webSocketDebuggerUrl);
     try {
       return await c.evaluate(`(() => {
         const labels = [];
@@ -477,7 +437,7 @@ try {
   const touchDelivered = await (async () => {
     const pageTargetNow = await pageTarget();
     if (!pageTargetNow) return null;
-    const c = await connect(pageTargetNow.webSocketDebuggerUrl);
+    const c = await connectToWindow(pageTargetNow.webSocketDebuggerUrl);
     try {
       await c.send("Input.dispatchTouchEvent", {
         type: "touchStart", touchPoints: [{ x: 60, y: 60 }],
@@ -501,7 +461,7 @@ try {
   const touchCursor = await (async () => {
     const pageTargetNow = await pageTarget();
     if (!pageTargetNow) return null;
-    const c = await connect(pageTargetNow.webSocketDebuggerUrl);
+    const c = await connectToWindow(pageTargetNow.webSocketDebuggerUrl);
     try {
       return await c.evaluate(`({
         dot: Boolean(document.getElementById('__ensemble_touch_dot')),
@@ -533,7 +493,7 @@ try {
   // --- Survives navigation -------------------------------------------------
   await (async () => {
     const pageTargetNow = await pageTarget();
-    const c = await connect(pageTargetNow.webSocketDebuggerUrl);
+    const c = await connectToWindow(pageTargetNow.webSocketDebuggerUrl);
     try {
       await c.evaluate("document.getElementById('next').click()");
     } finally {

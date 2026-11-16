@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -125,46 +126,6 @@ app.stderr.on("data", (chunk) => (appLog += chunk));
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data));
-    if (message.id !== undefined && pending.has(message.id)) {
-      const { resolvePromise, reject } = pending.get(message.id);
-      pending.delete(message.id);
-      if (message.error) reject(new Error(message.error.message));
-      else resolvePromise(message.result);
-    }
-  });
-  await new Promise((done, fail) => {
-    socket.addEventListener("open", done, { once: true });
-    socket.addEventListener("error", fail, { once: true });
-  });
-  const send = (method, params) =>
-    new Promise((resolvePromise, reject) => {
-      nextId += 1;
-      pending.set(nextId, { resolvePromise, reject });
-      socket.send(JSON.stringify({ id: nextId, method, params }));
-    });
-  await send("Runtime.enable", {});
-  return {
-    evaluate: async (expression) => {
-      const result = await send("Runtime.evaluate", {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.text ?? "evaluation failed");
-      }
-      return result.result.value;
-    },
-    close: () => socket.close(),
-  };
-}
-
 let passed = 0;
 let failed = 0;
 function check(name, ok, detail) {
@@ -244,7 +205,7 @@ async function connectRenderer() {
           !item.url.startsWith("devtools") &&
           !item.url.includes("approval"),
       );
-      if (target) return connect(target.webSocketDebuggerUrl);
+      if (target) return connectToWindow(target.webSocketDebuggerUrl);
     } catch {
       // the window is still opening its debugging port
     }
@@ -262,7 +223,7 @@ async function approvalWindow() {
   const target = (await debugTargets()).find(
     (item) => item.type === "page" && item.url.includes("approval"),
   );
-  return target ? connect(target.webSocketDebuggerUrl) : undefined;
+  return target ? connectToWindow(target.webSocketDebuggerUrl) : undefined;
 }
 
 /** Clicks one of the card's four answers, once the card has actually rendered. */
@@ -339,7 +300,7 @@ async function hits() {
         item.url.startsWith(`${ORIGIN}/`),
     );
     if (target) {
-      const pageClient = await connect(target.webSocketDebuggerUrl);
+      const pageClient = await connectToWindow(target.webSocketDebuggerUrl);
       const value = await pageClient.evaluate(
         `Number(document.getElementById('hits')?.textContent ?? -1)`,
       );

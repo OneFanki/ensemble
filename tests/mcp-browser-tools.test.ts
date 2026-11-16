@@ -89,6 +89,15 @@ function fakeSurface(): EmbeddedSurface {
         origin,
       };
     },
+    back: (tabId) => {
+      calls.push({ method: "back", args: [tabId] });
+    },
+    forward: (tabId) => {
+      calls.push({ method: "forward", args: [tabId] });
+    },
+    reload: (tabId, options) => {
+      calls.push({ method: "reload", args: [tabId, options] });
+    },
     navigate: async (tabId, url) => {
       calls.push({ method: "navigate", args: [tabId, url] });
       tabs = tabs.map((tab) => (tab.id === tabId ? { ...tab, url } : tab));
@@ -126,6 +135,46 @@ function fakeSurface(): EmbeddedSurface {
     click: async (tabId, target) => {
       calls.push({ method: "click", args: [tabId, target] });
       return { ok: true };
+    },
+    hover: async (tabId, target) => {
+      calls.push({ method: "hover", args: [tabId, target] });
+      return { ok: true };
+    },
+    scroll: async (tabId, options) => {
+      calls.push({ method: "scroll", args: [tabId, options] });
+      return { ok: true, scrolled: { x: 0, y: 0 }, moved: true };
+    },
+    pressKeys: async (tabId, keys) => {
+      calls.push({ method: "pressKeys", args: [tabId, keys] });
+      return { ok: true, keys, modifiers: 0 };
+    },
+    dialogStatus: (tabId) => {
+      calls.push({ method: "dialogStatus", args: [tabId] });
+      return { dialog: null };
+    },
+    handleDialog: async (tabId, options) => {
+      calls.push({ method: "handleDialog", args: [tabId, options] });
+      return { ok: true, handled: true };
+    },
+    setFiles: async (tabId, target, paths) => {
+      calls.push({ method: "setFiles", args: [tabId, target, paths] });
+      return { ok: true, count: paths.length, multiple: true };
+    },
+    drag: async (tabId, from, to) => {
+      calls.push({ method: "drag", args: [tabId, from, to] });
+      return { ok: true };
+    },
+    setChecked: async (tabId, target, checked) => {
+      calls.push({ method: "setChecked", args: [tabId, target, checked] });
+      return { ok: true, checked, changed: true };
+    },
+    elementInfo: async (tabId, target) => {
+      calls.push({ method: "elementInfo", args: [tabId, target] });
+      return { ok: true, tag: "button" };
+    },
+    attributes: async (tabId, target, names) => {
+      calls.push({ method: "attributes", args: [tabId, target, names] });
+      return { ok: true, attributes: {} };
     },
     type: async (tabId, target, text, options) => {
       calls.push({ method: "type", args: [tabId, target, text, options] });

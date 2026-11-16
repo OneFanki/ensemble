@@ -70,6 +70,15 @@ function surfaceFor(tab: { identityId?: string; clean?: boolean; url: string }) 
       };
     },
     createTab: async () => ({ id: "tab-1" }),
+    back: () => {
+      touched.push("back");
+    },
+    forward: () => {
+      touched.push("forward");
+    },
+    reload: () => {
+      touched.push("reload");
+    },
     navigate: async (_id, url) => {
       touched.push(`navigate:${url}`);
       tab.url = url;
@@ -81,6 +90,37 @@ function surfaceFor(tab: { identityId?: string; clean?: boolean; url: string }) 
     click: async () => {
       touched.push("click");
       return { ok: true };
+    },
+    hover: async () => {
+      touched.push("hover");
+      return { ok: true };
+    },
+    scroll: async () => {
+      touched.push("scroll");
+      return { ok: true };
+    },
+    pressKeys: async () => {
+      touched.push("pressKeys");
+      return { ok: true };
+    },
+    dialogStatus: () => ({ dialog: null }),
+    setFiles: async () => {
+      touched.push("setFiles");
+      return { ok: true, count: 1, multiple: false };
+    },
+    drag: async () => {
+      touched.push("drag");
+      return { ok: true };
+    },
+    setChecked: async () => {
+      touched.push("setChecked");
+      return { ok: true, checked: true, changed: false };
+    },
+    elementInfo: async () => ({ ok: true, tag: "div" }),
+    attributes: async () => ({ ok: true, attributes: {} }),
+    handleDialog: async () => {
+      touched.push("handleDialog");
+      return { ok: true, handled: true };
     },
     type: async () => {
       touched.push("type");

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const dir = join(process.cwd(), "src/renderer/src/components");
@@ -16,7 +16,10 @@ function walk(path: string): string[] {
 }
 
 const components = walk(dir).map((path) => ({
-  name: path.slice(path.lastIndexOf("\\") + 1),
+  // `basename`, not a hand-rolled split: a hard-coded "\\" returns -1 on Linux,
+  // which silently turns the whole absolute path into the component name and
+  // makes every allow-list lookup below miss.
+  name: basename(path),
   text: readFileSync(path, "utf8"),
 }));
 

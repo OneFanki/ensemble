@@ -96,4 +96,53 @@ describe.runIf(isWindows)("install script on a real shell", () => {
     expect(run.ms, `took ${run.ms}ms for a pid that does not exist`).toBeLessThan(9_000);
     expect(await readFile(join(dir, "ok.txt"), "utf8")).toContain("PROCEEDED");
   }, 25_000);
+
+  it("runs the installer, then deletes itself", async () => {
+    // The tail of the generated script, executed as written. Two details make
+    // this a real check rather than a formality:
+    //
+    // - The stand-in installer is a copy of `cmd.exe`, not a `.cmd`. A batch file
+    //   invoked by name never returns to its caller (cmd transfers control
+    //   instead of calling it), so the steps after it would look broken for a
+    //   reason that has nothing to do with the script. A real NSIS installer is
+    //   an `.exe`, which returns; this reproduces that.
+    // - The relaunch line is dropped: `start` needs a real executable, and what
+    //   this test is about is the installer running and the script cleaning up.
+    const dir = await mkdtemp(join(tmpdir(), "ensemble-apply-"));
+    dirs.push(dir);
+
+    const marker = join(dir, "installed.txt");
+    const installer = join(dir, "installer.cmd");
+    // `call` makes the batch file return, which is what an .exe does. That is the
+    // single property of a real installer this stub has to reproduce; everything
+    // after it in the generated script is untouched.
+    await writeFile(
+      installer,
+      ["@echo off", `echo INSTALLED>"${marker}"`].join("\r\n"),
+    );
+    const app = join(dir, "app.exe");
+
+    const scriptPath = join(dir, "apply.cmd");
+    const script = buildWindowsInstallScript({
+      pid: 999_999,
+      installerPath: installer,
+      appExePath: app,
+    });
+    // Prefix the installer line with `call`. Nothing else is rewritten.
+    const patched = script
+      .split("\r\n")
+      .filter((line) => !line.startsWith("start "))
+      .map((line) => (line.includes(`"${installer}" /S`) ? `call ${line}` : line))
+      .join("\r\n");
+    await writeFile(scriptPath, patched, "utf8");
+
+    await runScript(scriptPath, 20_000);
+
+    expect(await readFile(marker, "utf8")).toContain("INSTALLED");
+    // The script removes itself once the installer has returned.
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(scriptPath), "the script must remove itself").toBe(false);
+    // And the relaunch, which is not run here, names the running exe.
+    expect(script).toContain(`start "" "${app}"`);
+  }, 25_000);
 });

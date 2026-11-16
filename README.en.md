@@ -110,7 +110,7 @@ With no view open, startup lands on one blank page whose surface is a search box
   <img src="docs/screenshots/flat-strip.png" alt="No view open, and the stage still shows its page strip" width="900" />
 </p>
 
-The identities page is where most of the day is spent: one row per identity with its role, login, session status and running state; both sites and identities offer a list / table toggle in the page header, and the choice is kept in settings across restarts. Clicking a row opens a page in the default tab group of the built-in surface — it never rearranges the view that happens to be on stage. To put a page into a view, drag the tab there or use the view's own “+”. Launching a batch is the one exception: it opens its own view in the default layout, because a batch is about seeing several at once.
+The identities page is where most of the day is spent: one row per identity with its role, login, session status and running state. Both sites and identities are tables — each group carries a column header that shares its widths with the rows, so address, role, status and actions stay in their own columns, and every row's actions are icon buttons aligned to the column's right edge. Clicking a row opens a page in the default tab group of the built-in surface — it never rearranges the view that happens to be on stage. To put a page into a view, drag the tab there or use the view's own “+”. Launching a batch is the one exception: it opens its own view in the default layout, because a batch is about seeing several at once.
 
 <p align="center">
   <img src="docs/screenshots/identities-en.png" alt="Identity list" width="900" />

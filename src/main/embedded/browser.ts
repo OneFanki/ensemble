@@ -4198,19 +4198,27 @@ export class EmbeddedBrowser {
    * 用页面自己的定时器：循环停摆时那个 Promise 永不 resolve，`awaitPromise`
    * 的求值也就等不到回应——本地计时器到点即判死。
    *
-   * 走 `evaluate` 而不是裸 send，是为了顺带把页面呈现出来：后台页面的定时器
-   * 被钳到 ~1s，不呈现就会把「被节流」误报成「已阻塞」。
+   * 预算取 2.5s，覆盖两类场景。真阻塞：循环停摆的定时器**永不**跑，预算
+   * 多长都抓得住，放宽只是晚一点报。宿主节流：最小化的窗口把页内定时器钳
+   * 到 ~1s（实测），后台与被遮挡窗口有同类钳制——预算必须容纳钳制值，健康
+   * 页面才不会在最小化下被误判。按窗口状态动态选预算覆盖不全（节流场景不止
+   * 最小化一种），固定预算语义也更诚实：它就是给页面事件循环的宽限。
+   *
+   * 走 `evaluate` 而不是裸 send，是为了顺带把页面呈现出来：不呈现时页内定时
+   * 器同样被钳，会把「被节流」误报成「已阻塞」。
    */
   private async probeEventLoop(tab: TabRecord): Promise<boolean> {
     const beat = tab.cdp
       .evaluate<unknown>("new Promise((resolve) => { setTimeout(() => resolve(true), 0); })", {
         awaitPromise: true,
-        timeoutMs: 1_200,
+        // 高于本地判活预算：挂死场景必须由下面的 deadline 判死，而不是等
+        // evaluate 自己的超时把结果顶成「快速失败」分支（那不指认阻塞）。
+        timeoutMs: 3_000,
       })
       .then((): "alive" => "alive")
       .catch((): "failed" => "failed");
     const deadline = new Promise<"deadline">((resolve) => {
-      const timer = setTimeout(() => resolve("deadline"), 800);
+      const timer = setTimeout(() => resolve("deadline"), 2_500);
       timer.unref?.();
     });
     const outcome = await Promise.race([beat, deadline]);
@@ -4228,7 +4236,7 @@ export class EmbeddedBrowser {
      * 先探后读。
      *
      * 循环停摆的页面（busy loop）会让读取一直挂到命令上限——先探一次，
-     * 800ms 内就能报出真正的原因，而不是 30 秒后的「CDP 没有响应」。
+     * 2.5s 内就能报出真正的原因，而不是 30 秒后的「CDP 没有响应」。
      * 健康页面只多一次轻量求值；探针失败的那些情况（导航销毁上下文）
      * 不指认阻塞，由后面的正常读取给出自己的错误。
      */

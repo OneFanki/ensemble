@@ -159,13 +159,13 @@ try {
     password: "env-secret-value",
   });
 
+  // 不传 password：继承站点默认密码，后面的 credential fill 断言依赖这一点。
   const admin = await call("create_identity", {
     siteId: site.id,
     name: "管理员 · 主账号",
     username: "admin-user",
     role: "管理员",
     color: "amber",
-    passwordMode: "inherit",
   });
   const member = await call("create_identity", {
     siteId: site.id,
@@ -173,7 +173,6 @@ try {
     username: "member-user",
     role: "成员",
     color: "teal",
-    passwordMode: "inherit",
   });
 
   const adminTab = await call("open_browser_tab", {

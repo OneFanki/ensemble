@@ -1,4 +1,4 @@
-import { deriveSample, peakOf, pushSample, seriesOf } from "@core/cdp/performance";
+import { deriveSample, peakOf, perfWindowSummary, pushSample, seriesOf } from "@core/cdp/performance";
 import type { PerfSample } from "@shared/embedded";
 import {
   DESKTOP_RESOLUTIONS,
@@ -604,5 +604,84 @@ describe("performance summary", () => {
     const summary = perfSummarize([sample(0, 0.4), sample(200, 0.6)], "cpu");
     expect(summary?.avg).toBe(0.5);
     expect(summary?.max).toBe(0.6);
+  });
+});
+
+/**
+ * The dual reading `measure_browser_performance` reports.
+ *
+ * The point of the two windows is honesty about dilution: a 3-second load
+ * inside a 20-second buffer must not average itself into invisibility. These
+ * tests pin the arithmetic that makes each window mean what its field names
+ * say — one origin per window, and "not measured" instead of "zero cost".
+ */
+describe("performance window summary", () => {
+  const sample = (t: number, cpu: number, overrides: Partial<PerfSample> = {}): PerfSample => ({
+    t,
+    at: "",
+    cpu,
+    nodes: 0,
+    listeners: 0,
+    documents: 0,
+    frames: 0,
+    heap: 0,
+    layouts: 0,
+    styleRecalcs: 0,
+    ...overrides,
+  });
+
+  it("shifts maxAt to the window's own origin", () => {
+    // The buffer holds samples at t=400..800 on the sampler clock; the caller
+    // asked about the window starting at t=600. The peak it should hear about
+    // is "500ms into my window", not "800ms since some start it never saw".
+    const history = [sample(400, 1), sample(600, 2), sample(800, 90)];
+    const summary = perfWindowSummary(history, 600);
+    expect(summary.cpu.max).toBe(90);
+    expect(summary.cpu.maxAt).toBe(200);
+  });
+
+  it("offsets from the oldest sample when summarizing the whole buffer", () => {
+    const history = [sample(400, 1), sample(600, 2), sample(800, 90)];
+    const summary = perfWindowSummary(history, 400);
+    expect(summary.cpu.maxAt).toBe(400);
+    expect(summary.cpu.samples).toBe(3);
+  });
+
+  it("averages only what the window holds, not what the buffer holds", () => {
+    // 3 seconds of load followed by 17 seconds of idle: the buffer-wide mean
+    // is diluted, the observation interval's mean is not. This gap is exactly
+    // why the tool reports both.
+    const busy = [sample(0, 80), sample(200, 80), sample(400, 80)];
+    const idle = [
+      sample(600, 0),
+      sample(800, 0),
+      sample(1000, 0),
+      sample(1200, 0),
+      sample(1400, 0),
+      sample(1600, 0),
+      sample(1800, 0),
+      sample(2000, 0),
+    ];
+    const observed = perfWindowSummary(busy, 0);
+    const whole = perfWindowSummary([...busy, ...idle], 0);
+    expect(observed.cpu.avg).toBe(80);
+    expect(whole.cpu.avg).toBeLessThan(25);
+  });
+
+  it("clamps a negative shift instead of reporting a peak before the window", () => {
+    // maxAt below the window origin cannot happen in a real window, but a
+    // caller passing a stale offset must get 0, not a negative timestamp.
+    const history = [sample(100, 50)];
+    const summary = perfWindowSummary(history, 500);
+    expect(summary.cpu.maxAt).toBe(0);
+  });
+
+  it("fills every metric with samples: 0 for an empty window", () => {
+    // "Not measured yet", never "the page was idle": the caller reads the row
+    // count from PERF_METRICS, so every metric needs a row either way.
+    const summary = perfWindowSummary([], 0);
+    for (const metric of PERF_METRICS) {
+      expect(summary[metric].samples).toBe(0);
+    }
   });
 });

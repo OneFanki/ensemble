@@ -78,14 +78,14 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
 | `read_browser_page` | read | — | 只返回可见元素，且只有页面当前渲染出来的那些 | 角色、可访问名称、稳定选择器、位置、表单标签 |
-| `read_browser_console` | read | — | **读完即清空**，回答「上次读取之后发生了什么」；看不到跨域 iframe 的请求 | 报错、console 行、失败请求 |
+| `read_browser_console` | read | — | **读完即清空**，回答「上次读取之后发生了什么」；宿主自身的开发警告（Electron 安全提示等）默认不收录，`includeHost: true` 才返回（`hostHidden` 报本次排除的条数）；看不到跨域 iframe 的请求 | 报错、console 行、失败请求 |
 | `read_browser_requests` | read | — | **只读不清空**：读收集器的滚动窗口（最近 50 条已完成的 fetch/XHR），`read_browser_console` 之后仍能读到同一批。可按 `url`（子串）、`method`、`status` 过滤，`limit` 控制条数。看不到跨域 iframe 的请求 | `{ requests: [{at, method, url, status, ms, failed}], inflight, installed }` |
 | `read_browser_capabilities` | read | — | 纯查询，不触页面。给 `tabId` 时 `capabilities` 逐项实测表面可选方法（`false` ＝ 宿主未实现，对应工具会报「不支持」），`surface` 是表面标识（内置为 `embedded`）；省略 `tabId` 只返回枚举部分 | `surface` + `capabilities` + `waitConditions` / `flowActions` / `flowCdpStep`；省略 `tabId` 时只有枚举 |
 | `wait_browser` | read | — | 条件：`visible` / `hidden` / `text` / `url` / `value` / `network-idle` / `load`（readyState complete）/ `response`（URL 含 `expect` 的响应，可配 `status` 精确匹配；基于滚动窗口 peek，不清空）。`visible` / `hidden` / `value` 可用句柄（`handle`，与定位字段互斥，可配 `nth`；句柄解析一次进轮询，元素被移出 DOM 时报找不到）。`timeoutMs` 默认 5000、上限 60000。超时时 `timedOutAt` 区分 `page`（条件确实没满足）与 `bridge`（页面没按时答复） | `{ ok, waitedMs, timedOut, timedOutAt, reason, matched }` |
 | `check_element_visible` | read | — | 可用句柄（`handle`，与定位字段互斥，可配 `nth`；元素被移出 DOM 时报找不到，用 selector 则返回 `exists: false`） | `{ exists, visible, bounds, selector, name }` |
 | `find_browser_element` | read | — | 定位给 selector / label / text / role 之一，收窄字段可选：`hasText` / `hasNotText`（元素自身文本包含/不包含）、`visible`、`nth`（0 起，负数从尾数）。text / role 匹配可交互元素与有自身文字的可见元素（纯容器不算）。`timeoutMs` 默认 5000、上限 60000，一个匹配都没等到就报错。登记允许多个匹配（count 如实返回）；选择器无效或 nth 越界立即报错 | `{ handleId, count, index, resolved, matches: [{tag, text, visible, rect}] }`；之后 click / hover / type / `set_browser_checkbox` / `read_browser_element` / `wait_browser` / `check_element_visible` 可用 `handle` 复用 |
-| `read_browser_performance` | read | — | 起一个 15 秒后自停的采样器；区间与间隔取自设置 | 逐点样本，`t` 为毫秒偏移 |
-| `measure_browser_performance` | read | — | `durationMs` + `idleMs`；连续读取会继续而非重启 | 每项 `{ avg, max, maxAt, last, samples }` |
+| `read_browser_performance` | read | — | 采样窗口的真实语义：AI 活动（任何作用于该页的工具调用）期间及结束后 15 秒内持续累积，缓冲区保留最近 20 秒、间隔取自设置；更早或无人活动期间没有数据。任何 AI 页面操作都会续期采样器 | 逐点样本，`t` 为毫秒偏移 |
+| `measure_browser_performance` | read | — | `durationMs` + `idleMs`。返回双口径：顶层 `metrics`/`samples`/`from`/`to` 只统计本次观察区间；`recent.metrics` 统计缓冲区全窗口（默认约 20 秒）。`maxAt` 相对各自窗口起点 | 顶层每项 `{ avg, max, maxAt, last, samples }` + `recent: { from, to, samples, metrics }` |
 | `list_browser_init_scripts` | read | — | 只给 id、注册时间与前 120 字预览，不回源码 | `{ scripts: [...] }` |
 | `read_browser_element` | read | — | 一个元素的全貌：角色、名称、文字、选择器、位置、可见/可用/聚焦状态、`attributes` 与 `value`。可用句柄（`handle`，与定位字段互斥，可配 `nth`） | 元素信息对象 |
 | `read_browser_attribute` | read | — | 给 `names` 读指定属性（不存在返回 `null`）；不给则读文字或当前值。轮询状态变化用它，比整份元素信息便宜 | `{ ok, selector, attributes }` 或 `{ ok, selector, value/text }` |

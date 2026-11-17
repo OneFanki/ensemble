@@ -16,6 +16,10 @@
  *   find again.
  * - A handle registered from an ambiguous match set (no narrowing, no nth) must
  *   refuse to act with the "matched N" error instead of guessing.
+ * - The observation tools share the same handle path: `wait_browser` (hidden)
+ *   with the handle resolves once the page hides the element, and
+ *   `check_element_visible` with the handle flips to `visible: false`. Giving
+ *   both a handle and a locator field is refused for these two as well.
  * - A find that never matches must time out into a clear error.
  *
  * The page under test is a local server written for this suite. Everything is
@@ -51,6 +55,8 @@ const LIST_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>句�
   <li><button data-name="C" type="button">删除 C</button><span class="count" id="count-c">0</span></li>
 </ul>
 <button id="reverse" type="button">反转列表</button>
+<p id="hide-target">要被隐藏的说明文字</p>
+<button id="hide" type="button">隐藏目标</button>
 <script>
   function bind() {
     document.querySelectorAll('#list button').forEach((btn) => {
@@ -65,6 +71,11 @@ const LIST_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>句�
     const ul = document.getElementById('list');
     ul.innerHTML = Array.from(ul.children).reverse().map((li) => li.outerHTML).join('');
     bind();
+  });
+  // 隐藏走 CSS（节点留在 DOM 里）：句柄解析要求定位仍能命中，
+  // 「被移出 DOM」在句柄路径下会报找不到，那是另一条语义。
+  document.getElementById('hide').addEventListener('click', () => {
+    document.getElementById('hide-target').style.display = 'none';
   });
 </script>
 </body></html>`;
@@ -299,6 +310,58 @@ try {
     "the single-match handle moved only its own counter",
     afterSingle.c === "3" && afterSingle.a === "0" && afterSingle.b === "0",
     afterSingle,
+  );
+
+  // --- the observation tools accept a handle too ----------------------------
+  const hideTarget = await call("find_browser_element", { tabId, selector: "#hide-target" });
+  check(
+    "find registers a handle for the hideable element",
+    hideTarget.count === 1 && typeof hideTarget.handleId === "string",
+    hideTarget,
+  );
+  const visibleBefore = await call("check_element_visible", { tabId, handle: hideTarget.handleId });
+  check(
+    "check_element_visible with the handle reports the element visible",
+    visibleBefore.exists === true && visibleBefore.visible === true,
+    visibleBefore,
+  );
+  await call("click_browser_element", { tabId, selector: "#hide" });
+  const hiddenWait = await call("wait_browser", {
+    tabId,
+    condition: "hidden",
+    handle: hideTarget.handleId,
+  });
+  check(
+    "wait_browser hidden with the handle resolves once the element hides",
+    hiddenWait.ok === true,
+    hiddenWait,
+  );
+  const visibleAfter = await call("check_element_visible", { tabId, handle: hideTarget.handleId });
+  check(
+    "check_element_visible with the handle reports visible:false after hiding",
+    visibleAfter.exists === true && visibleAfter.visible === false,
+    visibleAfter,
+  );
+  const waitExclusive = await callExpectError("wait_browser", {
+    tabId,
+    condition: "hidden",
+    handle: hideTarget.handleId,
+    selector: "#hide-target",
+  });
+  check(
+    "wait_browser refuses a call giving both a handle and a locator",
+    /只能给一个/.test(waitExclusive),
+    waitExclusive,
+  );
+  const probeExclusive = await callExpectError("check_element_visible", {
+    tabId,
+    handle: hideTarget.handleId,
+    selector: "#hide-target",
+  });
+  check(
+    "check_element_visible refuses a call giving both a handle and a locator",
+    /只能给一个/.test(probeExclusive),
+    probeExclusive,
   );
 
   // --- navigation invalidates every handle of the tab -----------------------

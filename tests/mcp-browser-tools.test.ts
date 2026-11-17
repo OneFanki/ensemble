@@ -626,6 +626,51 @@ describe("browser tool calls", () => {
     expect(calls.some((call) => call.method === "click")).toBe(false);
   });
 
+  it("passes a handle through wait_browser and check_element_visible unchanged", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const waited = await rpc(
+      toolCall("wait_browser", { condition: "hidden", handle: "el-1-ab12" }),
+    );
+    expect(waited.json.result.isError).toBeUndefined();
+    const probe = await rpc(
+      toolCall("check_element_visible", { handle: "el-1-ab12", nth: 1 }),
+    );
+    expect(probe.json.result.isError).toBeUndefined();
+    // The surface receives the descriptor as-is; resolving the handle is the
+    // surface's job, same as for the action tools.
+    const wait = calls.find((call) => call.method === "wait");
+    expect(wait?.args[1]).toEqual({
+      condition: "hidden",
+      target: { handle: "el-1-ab12" },
+      timeoutMs: 5000,
+    });
+    const visibility = calls.find((call) => call.method === "visibility");
+    expect(visibility?.args[1]).toEqual({ handle: "el-1-ab12", nth: 1 });
+  });
+
+  it("rejects wait and visibility calls that give both a handle and a locator", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const waitJson = await rpc(
+      toolCall("wait_browser", {
+        condition: "hidden",
+        handle: "el-1-ab12",
+        selector: "#toast",
+      }),
+    );
+    expect(waitJson.json.result.isError).toBe(true);
+    expect(waitJson.json.result.content[0].text).toContain("只能给一个");
+    const probeJson = await rpc(
+      toolCall("check_element_visible", { handle: "el-1-ab12", label: "用户名" }),
+    );
+    expect(probeJson.json.result.isError).toBe(true);
+    expect(probeJson.json.result.content[0].text).toContain("只能给一个");
+    // The refusal happens at the entrance: neither surface method is reached.
+    expect(calls.some((call) => call.method === "wait")).toBe(false);
+    expect(calls.some((call) => call.method === "visibility")).toBe(false);
+  });
+
   it("fills a whole form in one call", async () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));

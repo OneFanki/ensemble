@@ -3825,7 +3825,10 @@ export class EmbeddedBrowser {
 
   async visibility(tabId: string, target: TargetInput): Promise<VisibilityProbe> {
     const tab = this.requireTab(tabId);
-    return this.withDialogHint(tab, () => tab.cdp.visibility(buildVisibilityExpression(target)));
+    // 观察与动作共用同一条句柄路径：句柄失效/找不到的报错照常冒出，不降级成
+    // exists: false——句柄是调用方显式登记的定位，静默换答案比报错更误导。
+    const effective = await this.resolveActionTarget(tab, target);
+    return this.withDialogHint(tab, () => tab.cdp.visibility(buildVisibilityExpression(effective)));
   }
 
   /**
@@ -4649,6 +4652,11 @@ export class EmbeddedBrowser {
     },
   ): Promise<WaitResult> {
     const tab = this.requireTab(tabId);
+    // 句柄解析一次进轮询：页内轮询吃的是解析后的普通定位，不必每轮重新解析
+    // （与动作工具同粒度）。解析失败（句柄失效/找不到）照常抛出，而不是被当成
+    // 「条件未满足」磨到超时。
+    const target =
+      input.target === undefined ? undefined : await this.resolveActionTarget(tab, input.target);
     const started = Date.now();
     const deadline = started + input.timeoutMs;
     let last: WaitResult | undefined;
@@ -4675,7 +4683,7 @@ export class EmbeddedBrowser {
                 ...(input.status === undefined ? {} : { status: input.status }),
                 timeoutMs: remaining,
               })
-            : buildWaitExpression({ ...input, timeoutMs: remaining });
+            : buildWaitExpression({ ...input, target, timeoutMs: remaining });
       try {
         const result = await Promise.race([
           /*

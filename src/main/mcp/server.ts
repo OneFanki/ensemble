@@ -3541,11 +3541,12 @@ export class McpServer {
       {
         name: "check_element_visible",
         description:
-          "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同身份的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。",
+          "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同身份的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄指向的元素已被移出 DOM 时会报找不到，此时改用 selector 检查（找不到会返回 exists: false）。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
           ...targetProps({ text: string("按钮或链接上的文字") }),
+          ...handleProps(),
         }),
         pageTarget: (args) => tabId(args),
         run: (args) => {
@@ -3873,7 +3874,7 @@ export class McpServer {
       {
         name: "wait_browser",
         description:
-          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）、load（document.readyState 变为 complete，即文档与子资源加载完毕）、response（已收集的请求里出现 URL 含 expect 的响应，可配 status 精确匹配状态码；只读不清空，与 read_browser_requests 共用同一批数据）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 和 response 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）、load（document.readyState 变为 complete，即文档与子资源加载完毕）、response（已收集的请求里出现 URL 含 expect 的响应，可配 status 精确匹配状态码；只读不清空，与 read_browser_requests 共用同一批数据）。visible / hidden / value 也可以传 handle 复用 find_browser_element 的句柄（与 selector / label / elementText / role 二选一，可配 nth）：句柄解析一次进轮询，页面重渲染后仍指向同一逻辑元素；句柄指向的元素被整个移出 DOM 时解析会报找不到，这种情况改用 selector 等（找不到即视为已隐藏）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 和 response 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
         kind: "read",
         inputSchema: object(
           {
@@ -3888,6 +3889,7 @@ export class McpServer {
             elementText: string("元素上的文字，与 wait 的 text 区分开"),
             role: { type: "string", description: "ARIA role，用于收窄候选元素" },
             exact: { type: "boolean", description: "要求文字完全相等" },
+            ...handleProps(),
             expect: string("text / url / value / response 条件要比对的文字（response 时是 URL 子串）"),
             timeoutMs: integer("最多等多久，默认 5000 毫秒"),
             quietMs: integer("network-idle 专用：需要连续安静多久，默认 500 毫秒"),

@@ -155,7 +155,6 @@ try {
         username: `user-${index}`,
         role: "成员",
         color: index === 0 ? "amber" : "teal",
-        passwordMode: "inherit",
         startPath: "/",
       }),
     );

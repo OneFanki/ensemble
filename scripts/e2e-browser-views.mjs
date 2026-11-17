@@ -127,9 +127,7 @@ try {
         name: `账号${name}`,
         username: `user-${index}`,
         role: "成员",
-        color: ["amber", "teal", "violet", "rose"][index],
-        passwordMode: "inherit",
-        startPath: "/",
+        color: ["amber", "teal", "violet", "rose"][index],        startPath: "/",
       }),
     );
   }

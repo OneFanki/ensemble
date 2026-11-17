@@ -147,7 +147,6 @@ try {
       name,
       username: `user-${index}`,
       role: "成员",
-      passwordMode: "inherit",
       startPath: "/start",
     });
     ids.push(identity.id);

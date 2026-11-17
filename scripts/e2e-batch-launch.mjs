@@ -238,18 +238,14 @@ try {
     name: "账号甲",
     username: "user-alpha",
     role: "成员",
-    color: "amber",
-    passwordMode: "inherit",
-    startPath: "/alpha",
+    color: "amber",    startPath: "/alpha",
   });
   const beta = await call("create_identity", {
     siteId: site.id,
     name: "账号乙",
     username: "user-beta",
     role: "成员",
-    color: "teal",
-    passwordMode: "inherit",
-    startPath: "/beta",
+    color: "teal",    startPath: "/beta",
   });
   check("site and two identities created", Boolean(site?.id && alpha?.id && beta?.id));
 
@@ -403,9 +399,7 @@ try {
     name: "账号丙",
     username: "user-gamma",
     role: "成员",
-    color: "rose",
-    passwordMode: "inherit",
-    startPath: "/gamma",
+    color: "rose",    startPath: "/gamma",
   });
   const envelopeTab = await client.evaluate(`(async () => {
     const tab = await window.ensemble.openEmbeddedTab({
@@ -447,18 +441,14 @@ try {
     name: "账号丁",
     username: "user-delta",
     role: "成员",
-    color: "rose",
-    passwordMode: "inherit",
-    startPath: "/slow",
+    color: "rose",    startPath: "/slow",
   });
   const epsilon = await call("create_identity", {
     siteId: site.id,
     name: "账号戊",
     username: "user-epsilon",
     role: "成员",
-    color: "blue",
-    passwordMode: "inherit",
-    startPath: "/epsilon",
+    color: "blue",    startPath: "/epsilon",
   });
   await client.evaluate(`window.ensemble.saveAppSettings({ layout: "2x2" })`);
   // The startup starter tab (the daily profile's blank page) is created in a

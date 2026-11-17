@@ -256,13 +256,13 @@ try {
     return true;
   })()`);
 
-  // 1. Save the site and the super admin.
+  // 1. Save the site and the super admin. 额外登录字段（租户名）属于账号，
+  // 由下面的 create_identity 带 extraFields 传，站点不收这个字段。
   const site = await tryCall("create_site", {
     name: "多租户后台 · 测试",
     baseUrl: BASE,
     loginPath: "/login",
     password: SUPER.password,
-    extraFields: [{ label: "租户名", value: SUPER.tenant }],
   });
   check("create_site saves the site in one call", site.ok && Boolean(site.value?.id), site);
   if (!site.ok) throw new Error("cannot continue without a site");

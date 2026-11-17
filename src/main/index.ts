@@ -810,7 +810,7 @@ function embeddedStartUrl(identityId: string): string | undefined {
  */
 async function openEmbeddedView(
   viewId: string,
-  options: { reveal?: boolean } = {},
+  options: { reveal?: boolean; muted?: boolean } = {},
 ): Promise<ReturnType<EmbeddedBrowser["state"]>> {
   const reveal = options.reveal ?? true;
   if (!service) throw new Error("工作区尚未就绪");
@@ -840,6 +840,9 @@ async function openEmbeddedView(
       ...(identity?.color ? { color: identity.color } : {}),
       viewId: containerId,
       origin: "view",
+      // AI 打开的视图成员与其它 AI 开页一样创建期预静音：加载期间开始出声的
+      // 页面不会外放；始终无声的页面则不带静音标记，也不显示声音图标。
+      ...(options.muted ? { muted: true } : {}),
     });
     // A view launch fills credentials just like an external launch does.
     // Without this, opening a saved view left every login form empty while the
@@ -4587,6 +4590,7 @@ if (!gotLock) {
         setMuted: (tabId, muted, options) =>
           ensureEmbeddedBrowser().setMuted(tabId, muted, options),
         muteForAi: (tabId) => ensureEmbeddedBrowser().muteForAi(tabId),
+        restoreAfterAi: (tabId) => ensureEmbeddedBrowser().restoreAfterAi(tabId),
         pinTab: (slotIndex, tabId, viewId) =>
           ensureEmbeddedBrowser().pinTab(
             viewId ?? ensureEmbeddedBrowser().defaultViewId() ?? "",
@@ -4601,7 +4605,8 @@ if (!gotLock) {
         // Same reasoning as the AI `createTab` above: an AI opening a view must
         // not take the window away from the user. Recording `lastViewId` still
         // happens, so "restore last scene" sees what the AI worked on.
-        openView: (viewId) => openEmbeddedView(viewId, { reveal: false }),
+        openView: (viewId, options) =>
+          openEmbeddedView(viewId, { reveal: false, ...(options?.muted ? { muted: true } : {}) }),
         /**
          * A container for a saved view, without opening its members.
          *

@@ -211,6 +211,8 @@ export interface EmbeddedSurface {
       profileId?: string;
       muted?: boolean;
       audible?: boolean;
+      /** True once the page has produced sound; the chrome gates icons on it. */
+      everAudible?: boolean;
     }>;
     views?: Array<{
       id: string;
@@ -453,8 +455,15 @@ export interface EmbeddedSurface {
   setViewport(tabId: string, size: { width: number; height: number } | null): unknown;
   /** Mutes or unmutes a page; `byUser` is false for AI-driven calls. */
   setMuted?(tabId: string, muted: boolean, options?: { byUser?: boolean }): unknown;
-  /** Mutes before an AI page operation, unless the user asked for sound. */
+  /** Mutes before an AI page operation, but only a page making sound right now. */
   muteForAi?(tabId: string): void;
+  /**
+   * Lifts the mute `muteForAi` applied once the AI action is over.
+   *
+   * Safe to call unconditionally after every action: a page `muteForAi` never
+   * touched (silent pages, user-unmuted pages) comes back unchanged.
+   */
+  restoreAfterAi?(tabId: string): void;
   pinTab(slotIndex: number, tabId: string | null, viewId?: string): unknown;
   /** Reorders the dock, or moves a tab in/out of a view. */
   moveTab(
@@ -478,7 +487,7 @@ export interface EmbeddedSurface {
   /** View a layout call should use; may group loose tabs into a new one. */
   layoutTargetView(layoutId?: string): string | undefined;
   /** Opens a saved view definition as a container on the built-in surface. */
-  openView(viewId: string): Promise<unknown>;
+  openView(viewId: string, options?: { muted?: boolean }): Promise<unknown>;
   /**
    * Creates (or finds) the container for a saved view **without** opening its
    * member tabs, and returns the container id.
@@ -556,6 +565,7 @@ function surfaceCapabilities(surface: EmbeddedSurface): Record<OptionalSurfaceMe
     readPerfHistory: present("readPerfHistory"),
     setMuted: present("setMuted"),
     muteForAi: present("muteForAi"),
+    restoreAfterAi: present("restoreAfterAi"),
     openViewContainer: present("openViewContainer"),
     addInitScript: present("addInitScript"),
     listInitScripts: present("listInitScripts"),
@@ -1622,23 +1632,40 @@ export class McpServer {
           }
           try {
             /*
-             * An AI page operation starts muted unless the user asked for sound.
+             * An AI page operation silences only a page that is making sound
+             * right now, and only for the duration of the action.
              *
-             * The explicit mute tool is exempt: auto-muting before an unmute
-             * would undo the call it is about to make. Applying this after the
-             * approval decision means a refused call does not silence anything.
+             * `muteForAi` leaves pages that have never been audible completely
+             * alone — a mute nobody could hear would just plant a muted state
+             * the tab strip would show. Whatever it does mute is tagged, and
+             * the `finally` below lifts exactly that mute when the action
+             * ends, so the page's sound state comes out as it went in. The
+             * explicit mute tool is exempt: auto-muting before an unmute
+             * would undo the call it is about to make. Applying this after
+             * the approval decision means a refused call does not silence
+             * anything.
              */
+            let aiMutedPageId: string | undefined;
             try {
               const pageId =
                 tool.pageTarget?.(params.arguments ?? {}) ??
                 tool.inputTarget?.(params.arguments ?? {});
               if (pageId && tool.name !== "set_browser_muted") {
                 this.options.embedded?.muteForAi?.(pageId);
+                aiMutedPageId = pageId;
               }
             } catch {
               // A tab lookup that fails must not turn the tool call into a failure.
             }
-            const output = await tool.run(params.arguments ?? {});
+            let output: unknown;
+            try {
+              output = await tool.run(params.arguments ?? {});
+            } finally {
+              // Runs on failure too: a timed-out read must not leave the page
+              // silent behind it. Pages the mute never touched restore as
+              // no-ops.
+              if (aiMutedPageId) this.options.embedded?.restoreAfterAi?.(aiMutedPageId);
+            }
             const page = this.notePageAction(
               tool,
               params.arguments ?? {},
@@ -2719,16 +2746,23 @@ export class McpServer {
           const embeddedSurface = this.options.embedded;
           if (!embeddedSurface) throw new Error("内置浏览器不可用，请先打开内置浏览器页面");
           // A flow that opened its own page had no tab id when the dispatch-level
-          // mute ran; mute it now, before the first step can make noise.
+          // mute ran; mute it now, before the first step can make noise. Only a
+          // page making sound right now is muted, and the mute is lifted when
+          // the flow ends — a silent page is left exactly as it was.
           embeddedSurface.muteForAi?.(tabId);
-          const run = await embeddedSurface.runFlow(tabId, flow.steps, {
-            baseUrl: site.baseUrl,
-            vars: values,
-            // The caller's budget, clamped. It used to be a hardcoded two
-            // minutes here, which made every slow flow fail while the work it
-            // started carried on in the background.
-            timeoutMs: clampFlowTimeout(args["timeoutMs"]),
-          });
+          let run: Awaited<ReturnType<typeof embeddedSurface.runFlow>>;
+          try {
+            run = await embeddedSurface.runFlow(tabId, flow.steps, {
+              baseUrl: site.baseUrl,
+              vars: values,
+              // The caller's budget, clamped. It used to be a hardcoded two
+              // minutes here, which made every slow flow fail while the work it
+              // started carried on in the background.
+              timeoutMs: clampFlowTimeout(args["timeoutMs"]),
+            });
+          } finally {
+            embeddedSurface.restoreAfterAi?.(tabId);
+          }
           return {
             flowId: flow.id,
             tabId,
@@ -3371,15 +3405,14 @@ export class McpServer {
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: async (args) => {
-          const opened = await surface().openView(String(args["viewId"] ?? ""));
-          // AI-opened pages start muted like any other AI page operation, but
-          // a page the user already asked to hear stays unmuted.
-          const tabs = (opened as { tabs?: Array<{ id?: unknown }> } | null)?.tabs;
-          if (Array.isArray(tabs)) {
-            for (const tab of tabs) {
-              if (typeof tab.id === "string") surface().muteForAi?.(tab.id);
-            }
-          }
+          // Member pages are pre-muted at creation, same as any AI-opened page:
+          // a page that starts making sound during the load never does so out
+          // loud, and one that stays silent carries no mute mark at all. Pages
+          // that are already open keep their sound state — reopening a view
+          // must not silence a page the person was listening to.
+          const opened = await surface().openView(String(args["viewId"] ?? ""), {
+            muted: true,
+          });
           return opened;
         },
       },

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * Tab muting and the AI's default-mute contract.
+ * Tab muting and the AI's mute contract.
  *
- * The visible half is a speaker control on the tab; the invisible half is that
- * an AI page operation mutes unless the person asked for sound. Both run
- * through the real MCP endpoint and the real tab strip.
+ * The visible half is a speaker control on the tab, gated on "has ever made
+ * sound" — a page that never made sound shows no audio state at all. The
+ * invisible half is that an AI page operation mutes only a page making sound
+ * right now, and lifts that mute when the action ends; AI-opened pages are
+ * pre-muted at creation so a loud page never blasts. All of it runs through
+ * the real MCP endpoint and the real tab strip.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -181,7 +184,7 @@ try {
   check("MCP endpoint answers", await waitForMcp());
   const opened = await mcp("open_browser_tab", { url: BASE, label: "音频测试" });
   const tabId = opened?.id;
-  check("an AI-created tab is muted from the start", opened?.muted === true && Boolean(tabId), {
+  check("an AI-created page is pre-muted so a loud page never blasts", opened?.muted === true && Boolean(tabId), {
     tabId,
     muted: opened?.muted,
   });
@@ -217,30 +220,80 @@ try {
 
   const initial = await tabState();
   check(
-    "the tab strip shows the muted speaker",
-    initial?.muted === true && (await tabAudio()) === "muted",
+    "a page that has never made sound shows no audio icon at all",
+    initial?.muted === true && initial?.everAudible !== true && (await tabAudio()) === null,
     { state: initial, audio: await tabAudio() },
   );
 
-  // The user asks for sound; later AI reads must not undo that.
-  await client.evaluate(
-    `document.querySelector('[data-tab-id="${tabId}"] [data-audio]')?.click()`,
+  // The page starts making sound. The creation mute now has something to
+  // gate: only at this point does the tab strip gain an icon, and it reads
+  // as muted because the AI's pre-mute is still in force.
+  const played = await playTone();
+  await wait(700);
+  const audibleMuted = await tabState();
+  check(
+    "a sounding page under the AI's creation mute shows the muted icon",
+    played === true &&
+      audibleMuted?.audible === true &&
+      audibleMuted?.everAudible === true &&
+      (await tabAudio()) === "muted",
+    { played, state: audibleMuted, audio: await tabAudio() },
   );
+
+  // The AI lifts its own creation mute (a tool call, not a user gesture, so
+  // no userUnmuted intent is recorded), leaving a sounding page unmuted.
+  await mcp("set_browser_muted", { tabId, muted: false });
+  await wait(400);
+  const unmutedByAi = await tabState();
+  check(
+    "an AI unmute on a sounding page leaves it audible and unmuted",
+    unmutedByAi?.muted !== true && unmutedByAi?.audible === true && (await tabAudio()) === "audible",
+    { state: unmutedByAi, audio: await tabAudio() },
+  );
+
+  // An AI action on that sounding page mutes it only while it runs. The wait
+  // below cannot succeed (the text never appears), so the tool call spans
+  // several seconds and there is time to look at the strip mid-action.
+  const pendingWait = mcp("wait_browser", {
+    tabId,
+    condition: "text",
+    expect: "此文字不会出现在页面上",
+    timeoutMs: 5000,
+  }).catch((error) => ({ error: String(error) }));
+  await wait(1200);
+  const duringAi = await tabState();
+  check(
+    "an AI action mutes a sounding page while it runs",
+    duringAi?.muted === true && (await tabAudio()) === "muted",
+    { state: duringAi, audio: await tabAudio() },
+  );
+  await pendingWait;
+  await wait(600);
+  const afterAiAction = await tabState();
+  check(
+    "the AI's temporary mute is lifted when the action ends",
+    afterAiAction?.muted !== true && (await tabAudio()) === "audible",
+    { state: afterAiAction, audio: await tabAudio() },
+  );
+
+  // The user touches the speaker control: one click silences the sounding
+  // page, a second one asks to hear it again and records that intent.
+  const audioButton = `document.querySelector('[data-tab-id="${tabId}"] [data-audio]')`;
+  await client.evaluate(`${audioButton}?.click()`);
+  await wait(900);
+  const afterUserMute = await tabState();
+  check(
+    "a user click on the speaker silences the page",
+    afterUserMute?.muted === true && (await tabAudio()) === "muted",
+    { state: afterUserMute, audio: await tabAudio() },
+  );
+  await client.evaluate(`${audioButton}?.click()`);
   await wait(900);
   const afterUserUnmute = await tabState();
   check(
-    "clicking the speaker unmutes the tab and removes the muted mark",
-    afterUserUnmute?.muted !== true && (await tabAudio()) === null,
+    "clicking again unmutes and records the user's ask-for-sound intent",
+    afterUserUnmute?.muted !== true && (await tabAudio()) === "audible",
     { state: afterUserUnmute, audio: await tabAudio() },
-  );
-
-  const played = await playTone();
-  await wait(700);
-  const audible = await tabState();
-  check(
-    "a page that is making sound shows the speaker",
-    played === true && audible?.audible === true && (await tabAudio()) === "audible",
-    { played, state: audible, audio: await tabAudio() },
   );
 
   await mcp("read_browser_page", { tabId });
@@ -271,24 +324,32 @@ try {
     { state: afterReload, audio: await tabAudio() },
   );
 
-  // A fresh tab: AI unmute followed by an AI read must auto-mute again, because
-  // no person asked for sound on this one.
-  const fresh = await mcp("open_browser_tab", { url: BASE, label: "自动静音" });
-  const freshId = fresh?.id;
-  await mcp("set_browser_muted", { tabId: freshId, muted: false });
-  await wait(400);
-  const freshBefore = await client.evaluate(
-    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find((tab) => tab.id === ${JSON.stringify(freshId)}) ?? null)()`,
+  // The reported bug: a page the person opened themselves, which never made
+  // sound, must come out of an AI operation exactly as it went in — no mute
+  // mark, no speaker icon.
+  const userTab = await client.evaluate(
+    `window.ensemble.openEmbeddedTab({ url: ${JSON.stringify(BASE)}, viewId: null })`,
   );
-  await mcp("read_browser_page", { tabId: freshId });
+  const userTabId = userTab?.id;
+  await wait(800);
+  const userTabBefore = await client.evaluate(
+    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find((tab) => tab.id === ${JSON.stringify(userTabId)}) ?? null)()`,
+  );
+  await mcp("read_browser_page", { tabId: userTabId });
   await wait(500);
-  const freshAfter = await client.evaluate(
-    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find((tab) => tab.id === ${JSON.stringify(freshId)}) ?? null)()`,
+  const userTabAfter = await client.evaluate(
+    `(async () => (await window.ensemble.getEmbeddedState()).tabs.find((tab) => tab.id === ${JSON.stringify(userTabId)}) ?? null)()`,
+  );
+  const userTabAudio = await client.evaluate(
+    `document.querySelector('[data-tab-id="${userTabId}"] [data-audio]')?.dataset.audio ?? null`,
   );
   check(
-    "an AI operation re-mutes a tab nobody unmuted",
-    freshBefore?.muted !== true && freshAfter?.muted === true,
-    { before: freshBefore, after: freshAfter },
+    "an AI operation on a user-opened silent page adds no mute and no icon",
+    userTabBefore?.muted !== true &&
+      userTabAfter?.muted !== true &&
+      userTabAfter?.everAudible !== true &&
+      userTabAudio === null,
+    { before: userTabBefore, after: userTabAfter, audio: userTabAudio },
   );
 
   /*

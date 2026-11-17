@@ -98,6 +98,14 @@ export interface EmbeddedTab {
   /** True while the page is actually producing audio. */
   audible?: boolean;
   /**
+   * True once the page has produced audio at any point in its life.
+   *
+   * The speaker control only means something on a page that can make sound: a
+   * page that has never been audible shows no audio state at all, whether its
+   * output is currently muted or not.
+   */
+  everAudible?: boolean;
+  /**
    * True while the page's JavaScript is suspended by the background sleep.
    *
    * A sleeping page keeps its DOM, scroll position and login state; only its

@@ -2176,10 +2176,10 @@ function fillMessage(reason?: string): string {
               class="tab-keep"
               :aria-label="t('app.tabNeverSleep')"
             />
-            <!-- A page that is making sound gets a control, and a muted page
-                 keeps one so it can be unmuted without a menu. -->
+            <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
+                 图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
             <span
-              v-if="page.audible || page.muted"
+              v-if="page.everAudible"
               class="tab-audio"
               :class="{ muted: page.muted }"
               role="button"

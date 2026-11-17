@@ -258,6 +258,25 @@ interface TabRecord {
    */
   userUnmuted?: boolean;
   /**
+   * This page has produced sound at least once in its life.
+   *
+   * Latched on the first audible report and never cleared for the life of the
+   * tab record. The chrome gates the speaker control on this rather than on the
+   * momentary `audible` flag: a page that never made sound has no audio state
+   * worth showing, so it shows no speaker at all — muted or not.
+   */
+  everAudible?: boolean;
+  /**
+   * The current mute was applied by `muteForAi`, not by a person or the
+   * explicit mute tool.
+   *
+   * `restoreAfterAi` clears the flag and lifts exactly that mute, so an AI
+   * action leaves the page's sound state as it found it. A user touch of the
+   * speaker control drops the flag: from then on the mute belongs to whoever
+   * is holding the page, and the AI must not undo it.
+   */
+  aiMuted?: boolean;
+  /**
    * Whether mouse input is currently being converted into touch input.
    *
    * Chromium's mouse-to-touch emulation also installs a native touch cursor on
@@ -1065,6 +1084,7 @@ export class EmbeddedBrowser {
       active: this.instanceActive.get(tab.instanceId) === tab.id,
       ...(tab.muted ? { muted: true } : {}),
       ...(audible ? { audible: true } : {}),
+      ...(tab.everAudible ? { everAudible: true } : {}),
       ...(this.frozenTabs.has(tab.id) ? { sleeping: true } : {}),
       ...(tab.dialog
         ? {
@@ -2527,8 +2547,13 @@ export class EmbeddedBrowser {
     });
     // A page that starts or stops making sound changes which icon the strip
     // should draw; without this event the speaker would wait for an unrelated
-    // title/navigation update.
-    contents.on("audio-state-changed", update);
+    // title/navigation update. The first audible report also latches
+    // `everAudible`: the icon gate reads "has made sound", not "is making
+    // sound", so a page that has gone quiet again keeps its speaker control.
+    contents.on("audio-state-changed", () => {
+      if (contents.isCurrentlyAudible()) tab.everAudible = true;
+      update();
+    });
     contents.on("did-start-loading", () => {
       tab.loading = true;
       update();
@@ -3489,7 +3514,9 @@ export class EmbeddedBrowser {
    * interface sees exactly the same page state with or without this.
    *
    * A user click records their intent (`userUnmuted`), which is what stops a
-   * later AI operation from silently re-muting the tab they just unmuted.
+   * later AI operation from silently re-muting the tab they just unmuted. It
+   * also drops `aiMuted`: once a person has touched the control, the mute —
+   * or its absence — is theirs, and `restoreAfterAi` must not undo it.
    */
   setMuted(tabId: string, muted: boolean, options: { byUser?: boolean } = {}): EmbeddedTab {
     const tab = this.requireTab(tabId);
@@ -3498,6 +3525,7 @@ export class EmbeddedBrowser {
     if (options.byUser) {
       if (muted) delete tab.userUnmuted;
       else tab.userUnmuted = true;
+      delete tab.aiMuted;
     }
     const contents = tab.view?.webContents;
     if (contents && !contents.isDestroyed()) contents.setAudioMuted(muted);
@@ -3506,13 +3534,39 @@ export class EmbeddedBrowser {
   }
 
   /**
-   * Mutes before an AI page operation, unless the page is already muted or the
-   * person asked to hear it. Idempotent; called once per tool call.
+   * Mutes before an AI page operation, but only a page that is making sound
+   * right now.
+   *
+   * A silent page is left completely alone: muting it could not be heard and
+   * would only plant a muted state the tab strip would eventually show. A page
+   * that is audible gets a temporary mute tagged `aiMuted`, which
+   * `restoreAfterAi` lifts when the action finishes — unless the person asked
+   * to hear the page (`userUnmuted`), in which case nothing is touched.
+   * Idempotent; called once per tool call.
    */
   muteForAi(tabId: string): void {
     const tab = this.requireTab(tabId);
     if (tab.userUnmuted || tab.muted) return;
+    const contents = tab.view?.webContents;
+    if (!contents || contents.isDestroyed() || !contents.isCurrentlyAudible()) return;
+    tab.aiMuted = true;
     this.setMuted(tab.id, true);
+  }
+
+  /**
+   * Lifts the mute `muteForAi` applied once the AI action is over.
+   *
+   * Only a mute the AI applied is lifted (`aiMuted` guards it), so a page the
+   * user muted themselves, or one `muteForAi` never touched, comes out exactly
+   * as it went in. A page that vanished during the action has nothing to
+   * restore; a page whose mute the user took over mid-action lost the flag in
+   * `setMuted`, so their choice stands.
+   */
+  restoreAfterAi(tabId: string): void {
+    const tab = this.findTab(tabId);
+    if (!tab || !tab.aiMuted) return;
+    delete tab.aiMuted;
+    if (tab.muted) this.setMuted(tab.id, false);
   }
 
   /**

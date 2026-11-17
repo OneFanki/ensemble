@@ -168,8 +168,10 @@ function addPage(): void {
         class="slot-tab-keep"
         :aria-label="t('app.tabNeverSleep')"
       />
+      <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何图标，
+           出过声的按当前是否静音显示喇叭或静音图标。 -->
       <button
-        v-if="page.audible || page.muted"
+        v-if="page.everAudible"
         type="button"
         class="slot-tab-audio"
         :class="{ muted: page.muted }"

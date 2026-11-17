@@ -1045,6 +1045,7 @@ describe("capability reporting", () => {
       readPerfHistory: async () => ({}),
       setMuted: () => ({}),
       muteForAi: () => {},
+      restoreAfterAi: () => {},
       openViewContainer: () => "view-1",
       addInitScript: async () => ({ scriptId: "s1" }),
       listInitScripts: () => [],

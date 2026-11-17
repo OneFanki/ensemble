@@ -117,6 +117,14 @@ function surfaceFor(tab: { identityId?: string; clean?: boolean; url: string }) 
       return { ok: true, checked: true, changed: false };
     },
     elementInfo: async () => ({ ok: true, tag: "div" }),
+    findElements: async () => ({
+      ok: true,
+      handleId: "el-1-aaaa",
+      count: 1,
+      index: 0,
+      resolved: true,
+      matches: [],
+    }),
     attributes: async () => ({ ok: true, attributes: {} }),
     handleDialog: async () => {
       touched.push("handleDialog");

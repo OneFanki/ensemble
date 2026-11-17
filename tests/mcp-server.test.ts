@@ -853,6 +853,7 @@ describe("compose_view", async () => {
       drag: notUsed,
       setChecked: notUsed,
       elementInfo: notUsed,
+      findElements: notUsed,
       attributes: notUsed,
       type: notUsed,
       fillForm: notUsed,

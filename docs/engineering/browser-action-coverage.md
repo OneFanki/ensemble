@@ -205,7 +205,9 @@ Electron 45.2.1 上用真实页面测过：
 | 动作 | 语义 | CDP | 状态 |
 | --- | --- | --- | --- |
 | `snapshot` | 语义快照（可读文本树） | `Runtime.evaluate` | 已有（`read_browser_page`） |
-| `snapshotWithRefs` | 快照 + 稳定句柄 `e1..eN` | 遍历 + 标记属性 | **待做（优先级最高）** |
+| `snapshotWithRefs` | 快照 + 稳定句柄 `e1..eN` | 遍历 + 标记属性 | 已有（定位句柄形态：`find_browser_element` 返回 `handleId` + 全部匹配预览；**叠加式，旧定位参数不变**，快照不再内嵌 `e1..eN` 引用） |
+| `find` | 收窄定位：`hasText` / `hasNotText` / `visible` / `nth`，返回句柄与匹配预览 | `Runtime.evaluate` | 已有（`find_browser_element`，read 档；`timeoutMs` 内轮询等第一个匹配） |
+| `withHandle` | 动作复用句柄，跨重渲染指向同一逻辑元素 | 同上（句柄是定位描述符：每次使用重跑定位，多命中按登记文本特征对齐；导航即失效） | 已有（click / hover / type / `set_browser_checkbox` / `read_browser_element` 的 `handle` 参数；叠加式，旧定位参数不变） |
 | `getState` | url/title/可前进后退/滚动位置 | `Runtime.evaluate` | 部分 |
 | `elementInfo` | 元素的全貌（角色/名称/状态/属性/值） | `Runtime.evaluate`（复用定位辅助） | 已有（`read_browser_element`） |
 | `getText` | 取元素文本 | `Runtime.evaluate` | 已有（`read`） |
@@ -290,7 +292,7 @@ Electron 45.2.1 上用真实页面测过：
 8. `check` / `uncheck`。
 
 **第三批（观察能力）**
-9. `snapshotWithRefs` —— 最大可用性差距，但要改快照格式，影响契约测试（未做，留给 ③ Tab API 一并改）。
+9. `snapshotWithRefs` —— 已由 `find_browser_element`（定位句柄 + 收窄字段）覆盖；**叠加式：旧定位参数不变**，快照本身不再内嵌 `e1..eN` 引用。
 10. `elementInfo`、`getAttribute`、`getValue`。
 11. 截图 `clip` / `ref` / `scale`。
 

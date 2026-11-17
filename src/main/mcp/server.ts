@@ -307,6 +307,17 @@ export interface EmbeddedSurface {
   setChecked(tabId: string, target: ElementTarget | string, checked: boolean): Promise<unknown>;
   /** Role, name, text, state, attributes and value of one element. */
   elementInfo(tabId: string, target: ElementTarget | string): Promise<unknown>;
+  /**
+   * 按定位描述符查找元素并登记句柄。
+   *
+   * 句柄由表面持有（每个标签页一张表），动作工具用 `handle` 参数取回描述符
+   * 重新解析——句柄的存在性、导航失效都由表面回答，协议层只透传。
+   */
+  findElements(
+    tabId: string,
+    locator: ElementTarget | string,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
   /** Reads attributes, or the element's text/value when no name is given. */
   attributes(tabId: string, target: ElementTarget | string, names?: string[]): Promise<unknown>;
   type(
@@ -570,6 +581,18 @@ const targetProps = (extra: Record<string, unknown> = {}): Record<string, unknow
 });
 
 /**
+ * 句柄参数对：动作工具在定位字段之外（或取而代之）接受的两个可选字段。
+ *
+ * `handle` 指向 find_browser_element 登记的定位描述符，页面重渲染后仍指向同一
+ * 逻辑元素；`nth` 在定位命中多个时取第几个。两者都进 targetFrom，互斥校验也在
+ * 那里做——五个工具共用同一条规则，不会各说各话。
+ */
+const handleProps = (): Record<string, unknown> => ({
+  handle: string("find_browser_element 返回的句柄 id；与 selector/label/text/role 二选一"),
+  nth: integer("定位命中多个时取第几个（0 起，负数从尾数）；配合句柄时对句柄的定位生效"),
+});
+
+/**
  * Settings an MCP client may change.
  *
  * A closed whitelist rather than a blacklist: a setting added to `AppSettings`
@@ -676,8 +699,21 @@ function targetFrom(args: Record<string, unknown>, options: { withText: boolean 
   const label = typeof args["label"] === "string" ? args["label"].trim() : "";
   const buttonText = typeof text === "string" ? text.trim() : "";
   const role = typeof args["role"] === "string" ? args["role"].trim() : "";
+  const handle = typeof args["handle"] === "string" ? args["handle"].trim() : "";
+  const nth = targetNth(args);
+  /*
+   * handle 与定位字段互斥，二选一。混用几乎必然是调用方没想清楚要哪条路：
+   * 句柄复用 find_browser_element 的登记，定位字段重新定位——同一调用里两者
+   * 并存时结果取决于解析顺序，这种歧义在入口就拒绝。
+   */
+  if (handle) {
+    if (selector || label || buttonText || role) {
+      throw new Error("handle 与 selector/label/text/role 只能给一个：句柄用于复用 find_browser_element 的结果，定位字段用于直接定位");
+    }
+    return { handle, ...(nth !== undefined ? { nth } : {}) };
+  }
   if (!selector && !label && !buttonText && !role) {
-    throw new Error("需要 selector、label、text 或 role 之一来定位元素");
+    throw new Error("需要 selector、label、text 或 role 之一来定位元素，或传 handle 复用 find_browser_element 的句柄");
   }
   return {
     ...(selector ? { selector } : {}),
@@ -685,6 +721,46 @@ function targetFrom(args: Record<string, unknown>, options: { withText: boolean 
     ...(buttonText ? { text: buttonText } : {}),
     ...(role ? { role } : {}),
     ...(args["exact"] === true ? { exact: true } : {}),
+    ...(nth !== undefined ? { nth } : {}),
+  };
+}
+
+/** Reads the optional `nth` argument: any finite integer counts, even negatives. */
+function targetNth(args: Record<string, unknown>): number | undefined {
+  const value = args["nth"];
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.trunc(value);
+}
+
+/**
+ * Builds a find locator: a base field (selector / label / text / role) plus the
+ * narrowing fields.
+ *
+ * Narrowing alone has no candidate pool to filter — `hasText` narrows *within*
+ * what a base field matched — so a call without any base field is refused here,
+ * with the reason, instead of surfacing later as a confusing page-side timeout.
+ */
+function findLocatorFrom(args: Record<string, unknown>): ElementTarget {
+  const selector = typeof args["selector"] === "string" ? args["selector"].trim() : "";
+  const label = typeof args["label"] === "string" ? args["label"].trim() : "";
+  const text = typeof args["text"] === "string" ? args["text"].trim() : "";
+  const role = typeof args["role"] === "string" ? args["role"].trim() : "";
+  if (!selector && !label && !text && !role) {
+    throw new Error("需要 selector、label、text 或 role 之一来定位元素（收窄字段只能配合定位字段使用）");
+  }
+  const hasText = typeof args["hasText"] === "string" ? args["hasText"] : "";
+  const hasNotText = typeof args["hasNotText"] === "string" ? args["hasNotText"] : "";
+  const nth = targetNth(args);
+  return {
+    ...(selector ? { selector } : {}),
+    ...(label ? { label } : {}),
+    ...(text ? { text } : {}),
+    ...(role ? { role } : {}),
+    ...(args["exact"] === true ? { exact: true } : {}),
+    ...(hasText ? { hasText } : {}),
+    ...(hasNotText ? { hasNotText } : {}),
+    ...(typeof args["visible"] === "boolean" ? { visible: args["visible"] } : {}),
+    ...(nth !== undefined ? { nth } : {}),
   };
 }
 
@@ -837,6 +913,8 @@ export function describeToolAction(tool: string, args: Record<string, unknown>):
   switch (tool) {
     case "click_browser_element":
       return clickTarget ? `点击「${clickTarget}」` : "点击页面元素";
+    case "find_browser_element":
+      return clickTarget ? `查找「${clickTarget}」` : "查找页面元素";
     case "type_browser_text":
       return typeTarget ? `在「${typeTarget}」输入` : "在页面上输入";
     case "fill_browser_form":
@@ -3377,13 +3455,39 @@ export class McpServer {
         },
       },
       {
+        name: "find_browser_element",
+        description:
+          "按定位条件查找元素并返回可复用的句柄。定位给 selector / label / text / role 之一；收窄字段可选：hasText / hasNotText（元素自身文本包含或不包含某子串）、visible（true 只留可见、false 只留不可见）、nth（取第几个，0 起、负数从尾数）。返回 handleId、匹配总数 count 与全部匹配预览（标签、文本、可见性、位置）。之后 click / hover / type / set_browser_checkbox / read_browser_element 直接传 handle 就能操作，页面重渲染后仍指向同一逻辑元素；匹配多个且没有归属时会报「匹配 N 个」。timeoutMs 内一个匹配都没等到就报错，默认 5000。",
+        kind: "read",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          ...targetProps({ text: string("元素上的文字，例如「删除」") }),
+          hasText: string("收窄：元素自身文本包含该子串"),
+          hasNotText: string("收窄：元素自身文本不包含该子串"),
+          visible: { type: "boolean", description: "收窄：true 只留可见元素，false 只留不可见元素" },
+          nth: integer("收窄：匹配多个时取第几个（0 起，负数从尾数，-1 是最后一个）"),
+          timeoutMs: integer("等待第一个匹配出现的毫秒数，默认 5000"),
+        }),
+        pageTarget: (args) => tabId(args),
+        run: (args) => {
+          const locator = findLocatorFrom(args);
+          const raw = args["timeoutMs"];
+          const timeoutMs =
+            typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : undefined;
+          return surface().findElements(tabId(args), locator, {
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          });
+        },
+      },
+      {
         name: "click_browser_element",
         description:
-          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。",
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄的定位命中多个且无法归属时报「匹配 N 个」。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           ...targetProps({ text: string("要点击的元素上的文字，例如「创建租户」") }),
+          ...handleProps(),
         }),
         // Validate the target before resolving the tab: an empty call should say
         // what is missing, not complain that no tab is open.
@@ -3396,11 +3500,12 @@ export class McpServer {
       {
         name: "hover_browser_element",
         description:
-          "把鼠标移到元素上但不点击。用于打开只在悬停时出现的东西：下拉菜单、tooltip、行内操作按钮、hover 才展开的子菜单。发的是真实鼠标移动事件，所以页面的 mouseenter / mouseover 与 CSS :hover 都会生效。返回值里带上找到的元素，可以据此确认悬停的是不是想要的那个。",
+          "把鼠标移到元素上但不点击。用于打开只在悬停时出现的东西：下拉菜单、tooltip、行内操作按钮、hover 才展开的子菜单。发的是真实鼠标移动事件，所以页面的 mouseenter / mouseover 与 CSS :hover 都会生效。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。返回值里带上找到的元素，可以据此确认悬停的是不是想要的那个。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           ...targetProps({ text: string("要悬停的元素上的文字") }),
+          ...handleProps(),
         }),
         inputTarget: (args) => tabId(args),
         run: (args) => {
@@ -3536,13 +3641,14 @@ export class McpServer {
       {
         name: "set_browser_checkbox",
         description:
-          "把复选框或单选框设成指定状态。checked: true 为勾上，false 为取消。幂等：已经在目标状态时什么也不点，所以重复调用不会把勾好的又取消掉。返回的 changed 说明这次是否真的点了；stuckAt 出现表示点了但状态没变（外层 label 被禁用、或有处理器拦了默认行为），此时重试也没用。",
+          "把复选框或单选框设成指定状态。checked: true 为勾上，false 为取消。幂等：已经在目标状态时什么也不点，所以重复调用不会把勾好的又取消掉。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。返回的 changed 说明这次是否真的点了；stuckAt 出现表示点了但状态没变（外层 label 被禁用、或有处理器拦了默认行为），此时重试也没用。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
           {
             tabId: tabIdProp(),
             ...targetProps({ text: string("复选框或单选框旁的标签文字") }),
+            ...handleProps(),
             checked: { type: "boolean", description: "true 为勾上，false 为取消" },
           },
           ["checked"],
@@ -3555,11 +3661,12 @@ export class McpServer {
       {
         name: "read_browser_element",
         description:
-          "读一个元素的全部已知信息：角色、可访问名称、文字、稳定选择器、位置、是否可见/可用/聚焦，以及 value、aria-*、data-*、type、name、href 这些能据以决策的属性。用于「这个按钮现在是不是禁用」「这个链接指向哪」「这个输入框里是什么」这类问题——比 read_browser_page 精确，比 evaluate_browser_page 稳定（不用写 DOM 代码，页面改结构后断言不会失效）。找不到元素会报错，并说明是选择器无效还是真的不存在。",
+          "读一个元素的全部已知信息：角色、可访问名称、文字、稳定选择器、位置、是否可见/可用/聚焦，以及 value、aria-*、data-*、type、name、href 这些能据以决策的属性。用于「这个按钮现在是不是禁用」「这个链接指向哪」「这个输入框里是什么」这类问题——比 read_browser_page 精确，比 evaluate_browser_page 稳定（不用写 DOM 代码，页面改结构后断言不会失效）。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。找不到元素会报错，并说明是选择器无效还是真的不存在。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
           ...targetProps({ text: string("元素上的文字") }),
+          ...handleProps(),
         }),
         pageTarget: (args) => tabId(args),
         run: (args) => {
@@ -3593,7 +3700,7 @@ export class McpServer {
       {
         name: "type_browser_text",
         description:
-          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。定位用 label，不必知道 CSS 选择器。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
+          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。定位用 label，不必知道 CSS 选择器。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
         kind: "run",
         inputSchema: object(
           {
@@ -3602,6 +3709,7 @@ export class McpServer {
             label: string("字段旁的标签文字，例如「用户名」"),
             role: { type: "string", description: "ARIA role，用于收窄候选元素" },
             exact: { type: "boolean", description: "要求标签文字完全相等" },
+            ...handleProps(),
             text: string("要输入的文本"),
             submit: { type: "boolean", description: "输入后按回车" },
             clear: { type: "boolean", description: "先清空原有内容，默认 true" },

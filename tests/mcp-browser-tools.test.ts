@@ -172,6 +172,30 @@ function fakeSurface(): EmbeddedSurface {
       calls.push({ method: "elementInfo", args: [tabId, target] });
       return { ok: true, tag: "button" };
     },
+    findElements: async (tabId, locator, options) => {
+      calls.push({ method: "findElements", args: [tabId, locator, options] });
+      return {
+        ok: true,
+        handleId: "el-1-ab12",
+        count: 2,
+        index: 0,
+        resolved: false,
+        matches: [
+          {
+            tag: "button",
+            text: "删除 A",
+            visible: true,
+            rect: { x: 0, y: 0, width: 80, height: 24 },
+          },
+          {
+            tag: "button",
+            text: "删除 C",
+            visible: true,
+            rect: { x: 0, y: 30, width: 80, height: 24 },
+          },
+        ],
+      };
+    },
     attributes: async (tabId, target, names) => {
       calls.push({ method: "attributes", args: [tabId, target, names] });
       return { ok: true, attributes: {} };
@@ -538,6 +562,65 @@ describe("browser tool calls", () => {
     await rpc(toolCall("click_browser_element", { text: "创建租户" }));
     const clicked = calls.find((call) => call.method === "click");
     expect(clicked?.args[1]).toEqual({ text: "创建租户" });
+  });
+
+  it("find_browser_element carries the narrowing fields and timeout through", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("find_browser_element", {
+        text: "删除",
+        hasNotText: "B",
+        visible: true,
+        nth: 1,
+        timeoutMs: 2000,
+      }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const payload = toolPayload(json) as { handleId: string; count: number; matches: unknown[] };
+    expect(payload.handleId).toBe("el-1-ab12");
+    expect(payload.count).toBe(2);
+    expect(payload.matches).toHaveLength(2);
+    const found = calls.find((call) => call.method === "findElements");
+    expect(found?.args[0]).toBe("tab-1");
+    expect(found?.args[1]).toEqual({
+      text: "删除",
+      hasNotText: "B",
+      visible: true,
+      nth: 1,
+    });
+    expect(found?.args[2]).toEqual({ timeoutMs: 2000 });
+  });
+
+  it("refuses a find locator that narrows without naming anything", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("find_browser_element", { hasText: "删除" }));
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toMatch(/selector|label|text|role/);
+    // The refusal must happen before the surface is touched: no poll started.
+    expect(calls.some((call) => call.method === "findElements")).toBe(false);
+  });
+
+  it("passes a handle through to the action unchanged", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    await rpc(toolCall("click_browser_element", { handle: "el-1-ab12", nth: 1 }));
+    const clicked = calls.find((call) => call.method === "click");
+    // The surface receives the descriptor pair as-is; resolving the handle is
+    // the surface's job (it owns the per-tab handle table).
+    expect(clicked?.args[1]).toEqual({ handle: "el-1-ab12", nth: 1 });
+  });
+
+  it("rejects a call that gives both a handle and a locator field", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("click_browser_element", { handle: "el-1-ab12", text: "删除" }),
+    );
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("只能给一个");
+    expect(calls.some((call) => call.method === "click")).toBe(false);
   });
 
   it("fills a whole form in one call", async () => {

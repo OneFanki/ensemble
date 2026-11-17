@@ -78,29 +78,30 @@
 | `read_browser_requests` | read | — | **只读不清空**：读收集器的滚动窗口（最近 50 条已完成的 fetch/XHR），`read_browser_console` 之后仍能读到同一批。可按 `url`（子串）、`method`、`status` 过滤，`limit` 控制条数。看不到跨域 iframe 的请求 | `{ requests: [{at, method, url, status, ms, failed}], inflight, installed }` |
 | `wait_browser` | read | — | 条件：`visible` / `hidden` / `text` / `url` / `value` / `network-idle` / `load`（readyState complete）/ `response`（URL 含 `expect` 的响应，可配 `status` 精确匹配；基于滚动窗口 peek，不清空）。`timeoutMs` 默认 5000、上限 60000。超时时 `timedOutAt` 区分 `page`（条件确实没满足）与 `bridge`（页面没按时答复） | `{ ok, waitedMs, timedOut, timedOutAt, reason, matched }` |
 | `check_element_visible` | read | — | 无 | `{ exists, visible, bounds, selector, name }` |
+| `find_browser_element` | read | — | 定位给 selector / label / text / role 之一，收窄字段可选：`hasText` / `hasNotText`（元素自身文本包含/不包含）、`visible`、`nth`（0 起，负数从尾数）。`timeoutMs` 默认 5000、上限 60000，一个匹配都没等到就报错。登记允许多个匹配（count 如实返回）；选择器无效或 nth 越界立即报错 | `{ handleId, count, index, resolved, matches: [{tag, text, visible, rect}] }`；之后 click / hover / type / `set_browser_checkbox` / `read_browser_element` 可用 `handle` 复用 |
 | `read_browser_performance` | read | — | 起一个 15 秒后自停的采样器；区间与间隔取自设置 | 逐点样本，`t` 为毫秒偏移 |
 | `measure_browser_performance` | read | — | `durationMs` + `idleMs`；连续读取会继续而非重启 | 每项 `{ avg, max, maxAt, last, samples }` |
 | `list_browser_init_scripts` | read | — | 只给 id、注册时间与前 120 字预览，不回源码 | `{ scripts: [...] }` |
-| `read_browser_element` | read | — | 一个元素的全貌：角色、名称、文字、选择器、位置、可见/可用/聚焦状态、`attributes` 与 `value` | 元素信息对象 |
+| `read_browser_element` | read | — | 一个元素的全貌：角色、名称、文字、选择器、位置、可见/可用/聚焦状态、`attributes` 与 `value`。可用句柄（`handle`，与定位字段互斥，可配 `nth`） | 元素信息对象 |
 | `read_browser_attribute` | read | — | 给 `names` 读指定属性（不存在返回 `null`）；不给则读文字或当前值。轮询状态变化用它，比整份元素信息便宜 | `{ ok, selector, attributes }` 或 `{ ok, selector, value/text }` |
 
 ### 内置浏览器 · 操作
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；返回 `hit` 说明事件实际落点 | `{ ok, tag, text, selector, hit }` |
-| `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip | `{ ok, tag, text, selector }` |
+| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；返回 `hit` 说明事件实际落点。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, hit }` |
+| `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip。可用句柄（同上） | `{ ok, tag, text, selector }` |
 | `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下 | `{ ok, scrolled, moved }`，`moved: false` 表示已到边界 |
 | `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起 | `{ ok, keys, modifiers }` |
 | `read_browser_dialog` | read | — | 从主进程的事件记录读，**不走页面脚本**——弹窗打开时页面是阻塞的，任何页内查询都会超时 | `{ dialog: { type, message, defaultPrompt?, url?, msOpen } }` 或 `{ dialog: null }` |
 | `handle_browser_dialog` | run | 是 | `accept: false` 为取消；prompt 用 `promptText` 填值。没有弹窗时报 `handled: false` 而不是错。弹窗挡路超过 30 秒会被自动取消 | `{ ok, handled, type? }` |
 | `upload_browser_files` | run | 是 | 绝对路径；多个文件必须一次给（每次调用替换输入框内容）。单文件框给多个会报错而不是截断 | `{ ok, count, multiple, selector? }` |
 | `drag_browser_element` | run | 是 | `from` / `to` 各自 `fromSelector`·`fromText`、`toSelector`·`toText`。真实按下 + 六次中间移动 + 松开 | `{ ok, fromTag, toTag, fromText, toText }` |
-| `set_browser_checkbox` | run | 是 | 幂等：已在目标状态就不点。`stuckAt` 表示点了但状态没变（禁用或有处理器拦默认行为） | `{ ok, checked, changed, selector?, stuckAt? }` |
+| `set_browser_checkbox` | run | 是 | 幂等：已在目标状态就不点。`stuckAt` 表示点了但状态没变（禁用或有处理器拦默认行为）。可用句柄（同 click） | `{ ok, checked, changed, selector?, stuckAt? }` |
 | `go_back_browser_tab` | run | 是 | 无可后退历史时什么也不发生 | `{ ok }` |
 | `go_forward_browser_tab` | run | 是 | 无可前进历史时什么也不发生 | `{ ok }` |
 | `reload_browser_tab` | run | 是 | `ignoreCache: true` 等价 Ctrl+Shift+R，绕过 HTTP 缓存 | `{ ok }` |
-| `type_browser_text` | run | 是 | 先聚焦、清空再逐字输入；密码框返回 `secret: true` | `{ ok, selector, secret? }` |
+| `type_browser_text` | run | 是 | 先聚焦、清空再逐字输入；密码框返回 `secret: true`。可用句柄（同 click） | `{ ok, selector, secret? }` |
 | `fill_browser_form` | run | 是 | 逐字段真实输入；某字段失败即停，不留半填表单 | `{ ok, filled }` |
 | `fill_browser_login` | run | 是 | 密码留在主进程，跨域页面拒绝 | 填充结果 |
 | `run_flow` | run | 是 | 步骤失败即停并说明原因。`timeoutMs` 默认 120000、上限 600000，由调用方指定——慢操作必须显式给大一点。`wait` 步骤会被流程剩余预算截断，超时时报的是「流程超过 N 秒」而不是「条件没满足」 | 每步结果与变量；用了原始 CDP 时多一个 `rawCdp` 列表，超过两次附带 `note` |
@@ -109,6 +110,13 @@
 | `cancel_browser_script` | run | 是 | 发 `Runtime.terminateExecution`。只能打断正在执行的代码；停在 Promise 上的脚本之后仍会继续 | `{ ok, note }` |
 | `add_browser_init_script` | run | 是 | **对当前文档不生效**，从下一次导航起生效。脚本随标签页存在 | `{ ok, scriptId, affects: "next-navigation" }` |
 | `remove_browser_init_script` | run | 是 | 下一次导航起不再执行；当前文档里已跑过的不受影响 | `{ ok: true }` |
+
+**元素句柄。** `find_browser_element` 返回的 `handleId` 只在本标签页内有效。它是
+定位描述符的持久化，不是节点身份：每次使用都在当前文档里重新解析定位，页面重渲染
+后仍指向同一逻辑元素——定位命中多个时，按登记（或上次成功命中）那一项的文本特征
+对齐，对不齐就报「匹配 N 个，给 nth 或加收窄」，不猜。标签页发生跨文档导航（含
+刷新）后句柄整体失效，再用报「页面已导航，句柄失效，请重新 find」；SPA 的页内
+路由不换文档，句柄继续有效。
 
 ## 2. 超时与中止
 

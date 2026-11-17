@@ -25,10 +25,81 @@ export interface ElementTarget {
   role?: string;
   /** Require an exact match instead of a prefix / substring match. */
   exact?: boolean;
+  /**
+   * 收窄字段：元素自身可见文本包含该子串。
+   *
+   * 与 `text` 不同，`text` 参与打分排名，`hasText` 是硬过滤——过滤后剩下的每个
+   * 都算命中。比较先做空白归一再转小写，所以「B」也能排掉「b」。
+   */
+  hasText?: string;
+  /** 收窄字段：元素自身可见文本不包含该子串。 */
+  hasNotText?: string;
+  /** 收窄字段：true 只留可见元素，false 只留不可见元素。 */
+  visible?: boolean;
+  /**
+   * 匹配多个时取第几个。0 起，负数从尾数（-1 是最后一个）。
+   *
+   * 不给时单目标解析取排名第一的（与历史行为一致）；句柄路径不给 nth 会按
+   * 「登记/上次命中的文本特征」对齐，对不齐才报「匹配 N 个」。
+   */
+  nth?: number;
+  /**
+   * `find_browser_element` 登记的句柄 id。
+   *
+   * 只在 main 层被解释（查该标签页的句柄表，换出存储的定位描述符），页内脚本
+   * 从不读这个字段。与 selector / label / text / role 互斥。
+   */
+  handle?: string;
 }
 
 /** Shorthand: a bare string is a CSS selector. */
 export type TargetInput = string | ElementTarget;
+
+/** One entry of a find preview: what the caller needs to pick between matches. */
+export interface ElementMatch {
+  tag: string;
+  /** 元素可见文本，截断到 80 字符；也是句柄特征对齐用的那一串。 */
+  text: string;
+  visible: boolean;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+/**
+ * 一次收窄定位的完整结果。
+ *
+ * `ok: false` 时 `reason` 说明为什么没有选出唯一元素——找不到、多个且无法决定、
+ * nth 越界或选择器无效。调用方（main 层）把这些 reason 映射成面向模型的报错
+ * （见本文件的 `locatorErrorText`），页内脚本只报告事实。
+ */
+export interface LocatorMatches {
+  ok: boolean;
+  reason?: "not-found" | "ambiguous" | "nth-out-of-range" | "invalid-selector" | "no-target";
+  /** 应用收窄字段之后的匹配总数。 */
+  count: number;
+  /** 实际选中的匹配下标（ok: true 时存在）。 */
+  index?: number;
+  matchedBy?: string;
+  /** 全部匹配的预览（上限 50 条；count 仍是真实总数）。 */
+  matches: ElementMatch[];
+  /** 选中的那一条，省得调用方再按 index 查一次。 */
+  picked?: ElementMatch;
+}
+
+export interface FindLocatorOptions {
+  /**
+   * 使用句柄时的对齐特征：登记或上次命中时选中元素的文本。在当前匹配里恰好
+   * 只有一个的文本与之相同时选它——重渲染换掉 DOM 节点、打乱顺序之后，
+   * 「同一定位 + 同一文本」仍然指向同一逻辑元素。
+   */
+  trait?: string;
+  /** 显式取第几个（0 起，负数从尾数）；给了一定按位置取，覆盖 trait。 */
+  nth?: number;
+  /**
+   * 登记模式：只要有一个匹配就按 nth（默认 0）定位，不做多匹配判定。
+   * find 工具要允许「先看到有 N 个」再决定收窄，所以登记时不因多匹配报错。
+   */
+  first?: boolean;
+}
 
 export interface DomSnapshotNode {
   role: string;
@@ -308,7 +379,7 @@ const HELPERS = `
     return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
   };
   /**
-   * Resolves a label to the control it describes.
+   * Resolves a label to every control it could describe, best first.
    *
    * Three shapes cover the libraries in use: <label for>, a control wrapped by
    * its <label>, and a wrapper that holds both the label and the control (Naive
@@ -316,8 +387,12 @@ const HELPERS = `
    * reaches a scope with exactly one visible control; a scope with many controls
    * only wins while its own text still mentions the label, so the form as a
    * whole never steals the match.
+   *
+   * The first entry is exactly what the single-target resolver has always taken;
+   * the whole list is what the find tools need to report "this label names two
+   * controls" instead of silently picking one. The same loop produces both.
    */
-  const controlForLabel = (wanted, exact) => {
+  const labelControls = (wanted, exact) => {
     const anchors = deepQueryAll(LABELISH).filter(isVisible);
     const ranked = [];
     for (const el of anchors) {
@@ -325,33 +400,66 @@ const HELPERS = `
       if (score > 0) ranked.push({ el, score });
     }
     ranked.sort((a, b) => b.score - a.score);
+    const out = [];
+    const seen = new Set();
+    const push = (el) => {
+      if (el && !seen.has(el)) { seen.add(el); out.push(el); }
+    };
     for (const item of ranked.slice(0, 6)) {
       const anchor = item.el;
       const own = anchor.control || anchor.querySelector(CONTROLS);
-      if (own && isVisible(own)) return { el: own, matchedBy: "label" };
+      if (own && isVisible(own)) { push(own); continue; }
       let scope = anchor.parentElement;
       for (let depth = 0; scope && depth < 6; depth += 1, scope = scope.parentElement) {
         const controls = Array.from(scope.querySelectorAll(CONTROLS)).filter(isVisible);
-        if (controls.length === 1) return { el: controls[0], matchedBy: "label" };
+        if (controls.length === 1) { push(controls[0]); break; }
         if (controls.length > 1 && scoreName(textOf(scope), wanted, exact) > 0) {
-          return { el: controls[0], matchedBy: "label" };
+          push(controls[0]); break;
         }
       }
     }
-    return null;
+    return out;
   };
-  const resolveTarget = (target) => {
+  /**
+   * Applies the narrowing fields (hasText / hasNotText / visible) to a candidate
+   * list. Order is preserved; the caller decides which entry to take. A bare
+   * candidate list passes through untouched, which is what keeps every existing
+   * caller's behaviour byte-for-byte identical.
+   */
+  const filterNarrow = (els, spec) => {
+    let out = els;
+    if (spec.hasText) {
+      const needle = norm(spec.hasText);
+      if (needle) out = out.filter((el) => norm(textOf(el)).includes(needle));
+    }
+    if (spec.hasNotText) {
+      const needle = norm(spec.hasNotText);
+      if (needle) out = out.filter((el) => !norm(textOf(el)).includes(needle));
+    }
+    if (spec.visible === true) out = out.filter(isVisible);
+    else if (spec.visible === false) out = out.filter((el) => !isVisible(el));
+    return out;
+  };
+  /**
+   * Resolves a locator to every element it names, best first, narrowing applied.
+   *
+   * resolveTarget below is "take one entry of this list"; the find tools are
+   * "report the whole list". One implementation for both is what makes them
+   * agree on which element a locator names — the historical failure mode was two
+   * resolvers drifting apart, where the finder saw one element and the actor
+   * clicked another.
+   */
+  const collectMatches = (target) => {
     if (typeof target === "string") target = { selector: target };
-    if (!target) return { reason: "no-target" };
+    if (!target) return { matches: [], reason: "no-target" };
     if (target.selector) {
-      let el = null;
-      try { el = deepQueryAll(target.selector)[0] ?? null; } catch { return { reason: "invalid-selector" }; }
-      if (!el) return { reason: "not-found" };
-      return { el, matchedBy: "selector" };
+      let els;
+      try { els = deepQueryAll(target.selector); } catch { return { matches: [], reason: "invalid-selector" }; }
+      return { matches: filterNarrow(els, target), matchedBy: "selector" };
     }
     if (target.label) {
-      const found = controlForLabel(target.label, target.exact === true);
-      if (found) return found;
+      const matches = filterNarrow(labelControls(target.label, target.exact === true), target);
+      if (matches.length) return { matches, matchedBy: "label" };
     }
     if (target.text || target.role) {
       const pool = deepQueryAll(INTERACTIVE).filter(isVisible);
@@ -370,9 +478,24 @@ const HELPERS = `
         if (score > 0) ranked.push({ el, score });
       }
       ranked.sort((a, b) => b.score - a.score);
-      if (ranked.length) return { el: ranked[0].el, matchedBy: target.text ? "text" : "role" };
+      const matches = filterNarrow(ranked.map((item) => item.el), target);
+      if (matches.length) return { matches, matchedBy: target.text ? "text" : "role" };
     }
-    return { reason: "not-found" };
+    return { matches: [], reason: "not-found" };
+  };
+  /** Picks a position in a match list: nth (negative from the end) or first. */
+  const pickFromMatches = (count, nth) => {
+    if (typeof nth !== "number" || !Number.isFinite(nth)) return 0;
+    const i = nth < 0 ? count + Math.trunc(nth) : Math.trunc(nth);
+    return i >= 0 && i < count ? i : -1;
+  };
+  const resolveTarget = (target) => {
+    const spec = typeof target === "string" ? { selector: target } : target;
+    const found = collectMatches(spec);
+    if (!found.matches.length) return { reason: found.reason || "not-found" };
+    const index = pickFromMatches(found.matches.length, spec ? spec.nth : undefined);
+    if (index < 0) return { reason: "nth-out-of-range" };
+    return { el: found.matches[index], matchedBy: found.matchedBy };
   };
   /**
    * Finds the smallest visible element whose text matches.
@@ -660,6 +783,140 @@ export function buildVisibilityExpression(target: TargetInput): string {
       bounds: rectOf(el),
       selector: scriptPath(el),
       name: nameOf(el).slice(0, 80),
+    };
+  })()`;
+}
+
+/**
+ * 报错文案集中在 core：单测直接断言措辞，main 层只负责把 `LocatorMatches` 的
+ * reason 映射成这些句子并抛出。文案是给模型看的行动指引——「给 nth 或加收窄」
+ * 就是下一步该做的事。
+ */
+export function locatorNotFoundText(description: string): string {
+  return `找不到 ${description}：页面上没有匹配的元素`;
+}
+
+export function locatorAmbiguousText(description: string, count: number): string {
+  return `${description} 匹配 ${count} 个元素：给 nth（0 起，负数从尾数）或加收窄字段（hasText / hasNotText / visible）后再操作`;
+}
+
+export function locatorNthOutOfRangeText(
+  description: string,
+  nth: number,
+  count: number,
+): string {
+  return `${description} 的 nth=${nth} 超出范围：当前匹配 ${count} 个${
+    count > 0 ? `（0 到 ${count - 1}，负数从尾数）` : ""
+  }`;
+}
+
+export function locatorInvalidSelectorText(description: string): string {
+  return `${description}：选择器无效`;
+}
+
+export function locatorStaleHandleText(handleId: string): string {
+  return `句柄 ${handleId} 已失效：页面已导航，句柄失效，请重新 find`;
+}
+
+export function locatorUnknownHandleText(handleId: string): string {
+  return `句柄不存在：${handleId}。句柄只在本标签页内有效，请先用 find_browser_element 查找`;
+}
+
+/** Maps an in-page reason to the wording the caller sees. */
+export function locatorErrorText(
+  reason: NonNullable<LocatorMatches["reason"]>,
+  description: string,
+  count: number,
+  nth?: number,
+): string {
+  switch (reason) {
+    case "invalid-selector":
+      return locatorInvalidSelectorText(description);
+    case "ambiguous":
+      return locatorAmbiguousText(description, count);
+    case "nth-out-of-range":
+      return locatorNthOutOfRangeText(description, nth ?? 0, count);
+    default:
+      return locatorNotFoundText(description);
+  }
+}
+
+/**
+ * Finds every element a locator names and picks one, all inside the page.
+ *
+ * Two modes answer two different questions. `first: true` is the find/registration
+ * pass — it must not fail on multiple matches, because "I see three buttons" is
+ * exactly the fact the caller asked for; it picks positionally (nth or 0) so the
+ * preview can say which entry a handle would act on. The default mode is the
+ * handle-use pass — it must not guess: an explicit nth wins, a single match is
+ * taken as-is, and otherwise a recorded text trait aligns the one element the
+ * handle has been acting on across re-renders; anything still ambiguous reports
+ * `ambiguous` instead of picking.
+ */
+export function buildFindByLocatorExpression(
+  locator: TargetInput,
+  options: FindLocatorOptions = {},
+): string {
+  const mode = options.first === true ? "first" : "use";
+  const trait = typeof options.trait === "string" ? options.trait : null;
+  const useNth =
+    typeof options.nth === "number" && Number.isFinite(options.nth)
+      ? Math.trunc(options.nth)
+      : null;
+  return `(() => {${HELPERS}
+    const spec = ${targetSource(locator)};
+    const mode = ${JSON.stringify(mode)};
+    const trait = ${JSON.stringify(trait)};
+    const useNth = ${useNth === null ? "null" : String(useNth)};
+    const found = collectMatches(spec);
+    const preview = found.matches.slice(0, 50).map((el) => ({
+      tag: el.tagName.toLowerCase(),
+      text: textOf(el).slice(0, 80),
+      visible: isVisible(el),
+      rect: rectOf(el),
+    }));
+    const count = found.matches.length;
+    const fail = (reason) => ({
+      ok: false,
+      reason,
+      count,
+      matches: preview,
+      ...(found.matchedBy ? { matchedBy: found.matchedBy } : {}),
+    });
+    if (found.reason === "invalid-selector") return fail("invalid-selector");
+    if (found.reason === "no-target") return fail("no-target");
+    if (!count) return fail("not-found");
+    let index = null;
+    if (mode === "first") {
+      const n = useNth !== null ? useNth : 0;
+      const i = n < 0 ? count + n : n;
+      if (i < 0 || i >= count) return fail("nth-out-of-range");
+      index = i;
+    } else {
+      if (useNth !== null) {
+        const i = useNth < 0 ? count + useNth : useNth;
+        if (i < 0 || i >= count) return fail("nth-out-of-range");
+        index = i;
+      } else if (count === 1) {
+        index = 0;
+      } else if (trait) {
+        // 只有一个命中与登记/上次命中的文本相同才对齐：两个同文本的命中说明
+        // 特征失去区分度，宁可让调用方收窄，也不猜。
+        const hits = [];
+        found.matches.forEach((el, i) => {
+          if (textOf(el).slice(0, 80) === trait) hits.push(i);
+        });
+        if (hits.length === 1) index = hits[0];
+      }
+      if (index === null) return fail("ambiguous");
+    }
+    return {
+      ok: true,
+      count,
+      index,
+      matches: preview,
+      picked: preview[index],
+      ...(found.matchedBy ? { matchedBy: found.matchedBy } : {}),
     };
   })()`;
 }

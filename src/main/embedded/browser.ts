@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
   buildElementPointExpression,
   buildElementRectExpression,
   buildFileInputExpression,
+  buildFindByLocatorExpression,
   buildFocusExpression,
   buildReadExpression,
   buildSelectExpression,
@@ -18,6 +19,12 @@ import {
   buildWaitExpression,
   type DomSnapshot,
   describeTarget,
+  locatorErrorText,
+  locatorStaleHandleText,
+  locatorUnknownHandleText,
+  type ElementMatch,
+  type ElementTarget,
+  type LocatorMatches,
   type TargetInput,
   type VisibilityProbe,
   type WaitCondition,
@@ -149,6 +156,14 @@ const SLEEP_SWEEP_DEFAULT_MS = 10_000;
  * the page comes back on its own.
  */
 const DIALOG_AUTO_DISMISS_MS = 30_000;
+
+/**
+ * 每个标签页最多同时登记多少个元素句柄。
+ *
+ * 句柄是轻量定位描述符，但一个失控的循环可以登记到内存爆掉为止；超出就淘汰
+ * 最早登记的——被淘汰的 id 此后报「句柄不存在」，重新 find 一次就回来。
+ */
+const ELEMENT_HANDLE_LIMIT = 64;
 
 /** The sampling knobs in force right now, already range-checked. */
 interface PerfConfig {
@@ -413,6 +428,29 @@ interface TabRecord {
   devtools?: DevToolsRecord;
   /** Monotonic per page, so an in-flight setup step can detect a newer panel. */
   devtoolsGeneration?: number;
+  /**
+   * 本标签页登记过的元素句柄（`find_browser_element` 的产物），id → 存储的定位
+   * 描述符。
+   *
+   * **句柄是定位描述符的持久化，不是节点身份。** 登记时不保存任何 DOM 引用或
+   * backendNodeId——页面一重渲染它们就全部失效。使用时用存储的 locator 在当前
+   * 文档里重新解析；定位命中的元素换了 DOM 节点没关系，「同一定位描述的同一
+   * 逻辑元素」还在原处。定位命中多个时，按句柄记住的文本特征（登记时或上次
+   * 命中时选中那一项的文本，见 `trait`）对齐；对不齐就报「匹配 N 个」，不猜。
+   *
+   * 只存在内存里，随标签页消亡；跨标签页永不共享——句柄 id 只在本 tab 的这张
+   * 表里有效，别的表查不到就报「句柄不存在」。
+   */
+  elementHandles?: Map<string, { locator: ElementTarget; trait: string | null; createdAt: string }>;
+  /** 句柄 id 的页内自增序列，保证 id 单调唯一。 */
+  elementHandleSeq?: number;
+  /**
+   * 导航前存在、导航后失效的句柄 id。
+   *
+   * 拿它区分「页面已导航，句柄失效，请重新 find」（id 在这里）与「句柄不存在」
+   * （哪里都没有）——前者指引重查，后者说明参数就给错了，两种修法不同。
+   */
+  staleHandleIds?: Set<string>;
 }
 
 interface DevToolsRecord {
@@ -2483,6 +2521,18 @@ export class EmbeddedBrowser {
       // navigation would label the new site with the previous site's mark until
       // the new icon arrives.
       if (originOf(url) !== originOf(tab.url)) delete tab.favicon;
+      /*
+       * 元素句柄挂在文档上：跨文档导航（含刷新）之后，定位描述符描述的页面已经
+       * 不存在，整体失效。旧 id 记入 staleHandleIds，此后使用报「页面已导航，
+       * 句柄失效，请重新 find」而不是「句柄不存在」——两种情况该做的事不同。
+       * 页内导航（did-navigate-in-page）不换文档，描述符仍然成立，不清空。
+       */
+      if (tab.elementHandles?.size) {
+        const stale = tab.staleHandleIds ?? new Set<string>();
+        for (const id of tab.elementHandles.keys()) stale.add(id);
+        tab.staleHandleIds = stale;
+      }
+      tab.elementHandles = new Map();
       tab.url = url;
       update();
     });
@@ -3772,6 +3822,140 @@ export class EmbeddedBrowser {
     return this.withDialogHint(tab, () => tab.cdp.visibility(buildVisibilityExpression(target)));
   }
 
+  /**
+   * 按定位描述符查找元素并登记句柄，返回句柄 id 与全部匹配预览。
+   *
+   * 先按 timeoutMs 等待至少一个匹配（与 `wait` 同一套页内轮询思路：导航销毁
+   * 执行上下文时用剩余时间重试，新文档可能已经满足条件），然后登记句柄。登记
+   * 阶段允许多个匹配——「我看到三个按钮」正是调用方问的事实，收窄由调用方接着做；
+   * 只有 `nth` 越界和选择器无效这种「给了也白给」的错误在这里就报。
+   *
+   * 句柄是定位描述符的持久化（见 {@link TabRecord.elementHandles}）：页面重渲染
+   * 后同一句柄仍指向同一逻辑元素；命中多个时靠文本特征对齐，特征存进记录、
+   * 每次成功解析后更新为最近一次实际命中的那一项。
+   */
+  async findElements(
+    tabId: string,
+    locator: TargetInput,
+    options: { timeoutMs?: number } = {},
+  ): Promise<{
+    ok: true;
+    handleId: string;
+    count: number;
+    /** 登记时选中的匹配下标（nth 或 0），预览里可对号。 */
+    index: number;
+    /**
+     * 登记时是否已唯一确定元素（恰有一个匹配，或显式给了 nth）。未唯一确定的
+     * 句柄在动作里必须先解决归属：给 nth 或加收窄，否则报「匹配 N 个」。
+     */
+    resolved: boolean;
+    matches: ElementMatch[];
+  }> {
+    const tab = this.requireTab(tabId);
+    const spec = typeof locator === "string" ? { selector: locator } : locator;
+    if (!spec.selector && !spec.label && !spec.text && !spec.role) {
+      throw new Error("需要 selector、label、text 或 role 之一来定位元素（收窄字段只能配合定位字段使用）");
+    }
+    const timeoutMs = Math.min(60_000, Math.max(100, Math.trunc(options.timeoutMs ?? 5_000)));
+    const started = Date.now();
+    let found: LocatorMatches | undefined;
+    while (Date.now() - started < timeoutMs) {
+      const remaining = Math.max(200, timeoutMs - (Date.now() - started));
+      try {
+        found = await tab.cdp.evaluate<LocatorMatches>(
+          buildFindByLocatorExpression(locator, {
+            first: true,
+            ...(spec.nth !== undefined ? { nth: spec.nth } : {}),
+          }),
+          { timeoutMs: remaining + 2_000 },
+        );
+      } catch {
+        // Navigation destroyed the execution context mid-poll; the same retry
+        // `wait` does — the fresh document may already satisfy the locator.
+        found = undefined;
+      }
+      if (found && (found.count > 0 || found.reason === "invalid-selector" || found.reason === "nth-out-of-range")) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    if (!found) {
+      throw new Error(
+        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配`,
+      );
+    }
+    if (found.reason === "invalid-selector" || found.reason === "nth-out-of-range") {
+      throw new Error(locatorErrorText(found.reason, describeTarget(locator), found.count, spec.nth));
+    }
+    if (!found.count || found.index === undefined) {
+      throw new Error(
+        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配`,
+      );
+    }
+    /*
+     * 登记句柄。id 形如 `el-<页内自增>-<4位随机>`：自增位保证唯一，随机位防止
+     * 猜测他人句柄。每页上限 64 个，超出淘汰最早的——句柄是轻量描述符，重查
+     * 一次就回来，不值得为失控的调用方无限兜底。
+     */
+    if (!tab.elementHandles) tab.elementHandles = new Map();
+    while (tab.elementHandles.size >= ELEMENT_HANDLE_LIMIT) {
+      const oldest = tab.elementHandles.keys().next().value;
+      if (oldest === undefined) break;
+      tab.elementHandles.delete(oldest);
+    }
+    const seq = (tab.elementHandleSeq ?? 0) + 1;
+    tab.elementHandleSeq = seq;
+    const handleId = `el-${seq}-${randomBytes(2).toString("hex")}`;
+    const resolved = found.count === 1 || spec.nth !== undefined;
+    tab.elementHandles.set(handleId, {
+      locator: { ...spec },
+      trait: resolved ? (found.matches[found.index]?.text ?? null) : null,
+      createdAt: new Date().toISOString(),
+    });
+    return {
+      ok: true,
+      handleId,
+      count: found.count,
+      index: found.index,
+      resolved,
+      matches: found.matches,
+    };
+  }
+
+  /**
+   * 把可能带句柄的目标解析成「当前文档里的定位 + nth」。
+   *
+   * 句柄路径是严格解析，与直接定位的宽容排名不同：先查本标签页的句柄表（查不到
+   * 按失效/不存在分别报错，绝不跨标签页找），再在页内重跑定位，然后决定取哪个——
+   * 显式 nth 按位置；唯一命中直接取；句柄记住的文本特征能唯一对齐时取它；仍然
+   * 多个就报「匹配 N 个，给 nth 或加收窄」。不猜。
+   *
+   * 解析成功即更新句柄特征为本次命中的元素：句柄从此跟随调用方最近一次实际
+   * 操作的那个元素，重排之后继续命中它。
+   */
+  private async resolveActionTarget(tab: TabRecord, target: TargetInput): Promise<TargetInput> {
+    if (typeof target === "string" || !target.handle) return target;
+    const handleId = target.handle;
+    const stored = tab.elementHandles?.get(handleId);
+    if (!stored) {
+      if (tab.staleHandleIds?.has(handleId)) throw new Error(locatorStaleHandleText(handleId));
+      throw new Error(locatorUnknownHandleText(handleId));
+    }
+    const found = await tab.cdp.evaluate<LocatorMatches>(
+      buildFindByLocatorExpression(stored.locator, {
+        ...(target.nth !== undefined ? { nth: target.nth } : {}),
+        ...(stored.trait ? { trait: stored.trait } : {}),
+      }),
+    );
+    if (!found.ok || found.index === undefined) {
+      const reason = found.reason ?? "not-found";
+      throw new Error(locatorErrorText(reason, describeTarget(stored.locator), found.count, target.nth));
+    }
+    const trait = found.matches[found.index]?.text ?? null;
+    tab.elementHandles?.set(handleId, { ...stored, trait });
+    return { ...stored.locator, nth: found.index };
+  }
+
   async click(
     tabId: string,
     target: TargetInput,
@@ -3784,14 +3968,15 @@ export class EmbeddedBrowser {
     hit?: { onTarget: boolean; tag?: string; text?: string };
   }> {
     const tab = this.requireTab(tabId);
+    const effective = await this.resolveActionTarget(tab, target);
     // Wrapped too: with a dialog up, the *first* thing that stalls is this
     // evaluate, not the input dispatch below it — so a hint on the dispatch alone
     // never fires and the caller still gets a bare CDP timeout.
     const point = await this.withDialogHint(tab, () =>
-      tab.cdp.elementPoint(buildElementPointExpression(target)),
+      tab.cdp.elementPoint(buildElementPointExpression(effective)),
     );
     if (!point.ok || point.x === undefined || point.y === undefined) {
-      throw new Error(`无法点击 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
+      throw new Error(`无法点击 ${describeTarget(effective)}：${point.reason ?? "unknown"}`);
     }
     const px = point.x;
     const py = point.y;
@@ -3831,11 +4016,12 @@ export class EmbeddedBrowser {
     target: TargetInput,
   ): Promise<{ ok: true; tag?: string; text?: string; selector?: string }> {
     const tab = this.requireTab(tabId);
+    const effective = await this.resolveActionTarget(tab, target);
     const point = await this.withDialogHint(tab, () =>
-      tab.cdp.elementPoint(buildElementPointExpression(target)),
+      tab.cdp.elementPoint(buildElementPointExpression(effective)),
     );
     if (!point.ok || point.x === undefined || point.y === undefined) {
-      throw new Error(`无法悬停 ${describeTarget(target)}：${point.reason ?? "unknown"}`);
+      throw new Error(`无法悬停 ${describeTarget(effective)}：${point.reason ?? "unknown"}`);
     }
     const hx = point.x;
     const hy = point.y;
@@ -4127,6 +4313,7 @@ export class EmbeddedBrowser {
     stuckAt?: boolean;
   }> {
     const tab = this.requireTab(tabId);
+    const effective = await this.resolveActionTarget(tab, target);
     const result = await this.withDialogHint(tab, () =>
       tab.cdp.evaluate<{
         ok: boolean;
@@ -4137,10 +4324,10 @@ export class EmbeddedBrowser {
         tag?: string;
         type?: string;
         stuckAt?: boolean;
-      }>(buildCheckExpression(target, desired)),
+      }>(buildCheckExpression(effective, desired)),
     );
     if (!result.ok) {
-      throw new Error(`无法设置 ${describeTarget(target)}：${result.reason ?? "unknown"}`);
+      throw new Error(`无法设置 ${describeTarget(effective)}：${result.reason ?? "unknown"}`);
     }
     return {
       ok: true,
@@ -4161,11 +4348,12 @@ export class EmbeddedBrowser {
    */
   async elementInfo(tabId: string, target: TargetInput): Promise<unknown> {
     const tab = this.requireTab(tabId);
+    const effective = await this.resolveActionTarget(tab, target);
     const info = await this.withDialogHint(tab, () =>
-      tab.cdp.evaluate<{ ok: boolean; reason?: string }>(buildElementInfoExpression(target)),
+      tab.cdp.evaluate<{ ok: boolean; reason?: string }>(buildElementInfoExpression(effective)),
     );
     if (!info.ok) {
-      throw new Error(`找不到 ${describeTarget(target)}：${info.reason ?? "unknown"}`);
+      throw new Error(`找不到 ${describeTarget(effective)}：${info.reason ?? "unknown"}`);
     }
     return info;
   }
@@ -4412,15 +4600,16 @@ export class EmbeddedBrowser {
     options: { submit?: boolean; clear?: boolean } = {},
   ): Promise<{ ok: true; secret?: true; selector?: string }> {
     const tab = this.requireTab(tabId);
+    const effective = await this.resolveActionTarget(tab, target);
     const focus = await tab.cdp.evaluate<{
       ok: boolean;
       reason?: string;
       inputType?: string;
       selector?: string;
-    }>(buildFocusExpression(target));
+    }>(buildFocusExpression(effective));
     if (!focus.ok)
-      throw new Error(`无法输入到 ${describeTarget(target)}：${focus.reason ?? "unknown"}`);
-    await this.typeInto(tab, target, text, options);
+      throw new Error(`无法输入到 ${describeTarget(effective)}：${focus.reason ?? "unknown"}`);
+    await this.typeInto(tab, effective, text, options);
     // Reported so the MCP layer can keep the value out of its audit log; a
     // password field can be a brand-new credential (creating a tenant), so it
     // cannot always go through `fill_browser_login`.

@@ -4551,6 +4551,8 @@ if (!gotLock) {
         setChecked: (tabId, target, checked) =>
           ensureEmbeddedBrowser().setChecked(tabId, target, checked),
         elementInfo: (tabId, target) => ensureEmbeddedBrowser().elementInfo(tabId, target),
+        findElements: (tabId, locator, options) =>
+          ensureEmbeddedBrowser().findElements(tabId, locator, options),
         attributes: (tabId, target, names) =>
           ensureEmbeddedBrowser().attributes(tabId, target, names),
         type: (tabId, target, text, options) =>

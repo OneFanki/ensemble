@@ -7,8 +7,9 @@
 
 ## [未发布]
 
-补齐 AI 操作页面缺失的动作，修掉几处会让页面「看起来死了」的阻塞，并把流程的原始
-CDP 步骤做成有档位判定的逃生口。
+补齐 AI 操作页面的能力：动作缺口、网络观察、环境模拟、元素句柄、流程编排脚本与
+能力查询；修掉几处会让页面「看起来死了」的阻塞，并把流程的原始 CDP 步骤做成有
+档位判定的逃生口。
 
 ### 中文
 
@@ -17,6 +18,11 @@ CDP 步骤做成有档位判定的逃生口。
 - **补齐动作缺口**：悬停、滚动、组合键、前进/后退/刷新、JS 弹窗的读与答、文件上传、拖拽、复选框设值、元素信息读取、元素裁剪截图。每一项都配了 e2e，断言的是「页面真的变了」而不是「工具返回了 ok」。
 - **流程的原始 CDP 步骤**：`cdp` 步骤可以跑协议层命令，但要先过三档白名单——只作用于当前页面的默认开放，改网络与设备模拟的需要在设置里开启，跨身份与影响整个进程的一律拒绝且不可解锁。一趟流程用超过两次会提示可能缺一个封装动作。
 - **`run_flow` 的 `timeoutMs`**：默认 120 秒、上限 10 分钟，由调用方指定。
+- **网络观察**：`read_browser_requests` 读回页面已收集的 fetch / XHR（地址、方法、状态码、耗时），只读不清空，可按 URL 子串、方法、状态码过滤，并带出已发出还未返回的请求；`wait_browser` 与流程的 `wait` 步骤多了 `load`（文档加载完成）与 `response`（某个请求返回且状态码匹配）两个等待条件。
+- **环境模拟**：`set_browser_emulation` 按键设置或清除时区、CSS 媒体类型、断网与地理位置，四项互相独立，返回当前生效的全部模拟项，标签页关闭即全部丢弃。geolocation 只提供坐标，不授予权限——页面没被用户授权时它的定位 API 仍会被权限检查拦下。
+- **元素句柄**：`find_browser_element` 按语义条件（文字包含 / 文字排除 / 可见 / 第 N 个）定位并返回句柄，点击、悬停、输入等动作工具可以用句柄代替定位字段。页面重渲染后句柄经文本特征对齐仍指向同一元素，导航即失效；既有工具的定位方式保持不变。
+- **流程的 `script` 步骤**：一段 JS 跑在 `node:vm` 里做循环、条件与计算，能调用的原语就是流程动作集（`login` 与原始 `cdp` 不在其中）。vm 是能力边界而非硬沙箱——构造器逃逸实测可达，这条边界写进了工具描述与文档，真正的防线在 MCP 权限档位。
+- **能力查询**：`read_browser_capabilities`（read 档）一次读出当前标签页支持哪些动作，表面的可选能力是实测检查的结果。
 
 #### 修复
 
@@ -28,6 +34,7 @@ CDP 步骤做成有档位判定的逃生口。
 
 - **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
 - **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
+- **e2e 的内联 CDP 客户端归零**。截图、DOM 解析与代理脚本里剩下的 3 份内联客户端也改用 `scripts/lib/e2e-cdp.mjs`，脚本目录里的 WebSocket 连接代码只剩公共客户端这一份。
 - **站点页与账号页的表头/分组分割线不再叠在一起**。
 - **站点页与账号页收成一套表格，操作列的宽间隔与图文混杂一并修掉**。
   - **「列表 / 表格」两态合并为表格**。两者共用同一份行标记、同一条网格线，差别只有 6px 行距和一行列头——不是两种视图，是同一个表格少画一行字。切换按钮与两项设置随之删除；页面现在无条件按表格排：每组的列头是顶盖，组内最后一行是桌脚，中间的行只保留侧边与下边框。
@@ -35,14 +42,21 @@ CDP 步骤做成有档位判定的逃生口。
 
 ### English
 
-Fills the gaps in what an AI can do to a page, fixes several ways a page could look
-dead, and turns a flow's raw CDP step into a tiered escape hatch.
+Fills in what an AI can do to a page — the missing actions, network observation,
+environment emulation, element handles, flow scripting and capability queries —
+fixes several ways a page could look dead, and turns a flow's raw CDP step into a
+tiered escape hatch.
 
 #### Added
 
 - **The missing actions**: hover, scroll, key combinations, back/forward/reload, reading and answering JS dialogs, file upload, drag, setting a checkbox, element info, and element-clipped screenshots. Each has an e2e that asserts the *page* changed rather than the tool returning `ok`.
 - **A flow's raw CDP step**: a `cdp` step can run protocol commands, but only through a three-tier list — commands that act on the current page are open, network and device emulation need a setting, and anything that crosses identities or affects the whole process is refused and cannot be unlocked. More than two raw commands in one flow produces a note that an action is probably missing.
 - **`run_flow`'s `timeoutMs`**: defaults to two minutes, capped at ten, chosen by the caller.
+- **Network observation**: `read_browser_requests` returns the page's collected fetch / XHR traffic (URL, method, status, duration) without clearing it — filterable by URL substring, method and status code, and including requests that are still in flight. `wait_browser` and a flow's `wait` step gain two conditions: `load` (the document finished loading) and `response` (a request came back, optionally with a matching status code).
+- **Environment emulation**: `set_browser_emulation` sets or clears time zone, CSS media type, offline and geolocation per key, the four independent of each other; it reports everything currently in force, and closing the tab drops all of it. Geolocation supplies coordinates only, not permission — a page the user has not authorized still hits the permission check.
+- **Element handles**: `find_browser_element` resolves an element by semantic filters (has text / excludes text / visible / nth) and returns a handle, and the action tools (click, hover, typing and so on) accept a handle in place of the targeting fields. After a re-render the handle follows the same logical element by matching its text; a navigation invalidates it. How the existing tools target elements is unchanged.
+- **A flow's `script` step**: a piece of JS runs inside `node:vm` for loops, conditions and arithmetic, and the primitives it can call are exactly the flow actions (`login` and raw `cdp` are not among them). The vm boundary is a capability boundary, not a hard sandbox — the constructor escape is reachable in practice, and that limit is stated in the tool description and the docs; the real line of defence is the MCP permission tier.
+- **Capability query**: `read_browser_capabilities` (read tier) reports in one call what the current tab supports; the optional capabilities of a surface come from live checks.
 
 #### Fixed
 
@@ -54,6 +68,7 @@ dead, and turns a flow's raw CDP step into a tiered escape hatch.
 
 - **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
 - **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.
+- **No inline CDP clients are left in e2e.** The last 3 inlined copies — the screenshot, DOM-resolver and proxy scripts — now use `scripts/lib/e2e-cdp.mjs` too; the scripts directory holds exactly one WebSocket client.
 - **The sites and identities tables no longer stack their header rule on a group rule.**
 - **The sites and identities pages collapse into one table, and the actions column loses its wide gaps and mixed text-plus-icon clutter.**
   - **The list / table toggle is gone; the table stays**. Both modes shared the same row markup and the same grid line — the only differences were a 6px gap and a header row. That is not two views, it is one table with a line of text left out. The toggle and its two settings keys are removed, and the layout is now unconditional: each group's header is the cap, its last row is the foot, and the rows between keep only their side and bottom rules.

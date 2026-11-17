@@ -1,7 +1,9 @@
 # 浏览器动作能力改造计划
 
-> **状态（2026-11-16）**：①–⑤、⑦ 已完成并有 e2e 覆盖；② 第四批（网络观察与环境
-> 模拟）与 ③（Tab API 句柄形状）未做，⑥ 仍待定。未做的三项都在下面的总表里标着。
+> **状态（2026-11-17）**：①–⑦ 全部完成，均有 e2e 或单测覆盖。其中 ③ 按「叠加式」
+> 口径完成——新增 `find_browser_element` 与动作工具的可选 `handle` 参数，
+> 31 个既有工具形状未动，60+ e2e 断言无需迁移；⑤ 的 `script` 步骤跑在 `node:vm`，
+> 能力边界即流程动作集。明细见末尾总表。
 
 > 这份是给人看的：要改什么、为什么改、按什么顺序、哪些不做。
 > 具体到函数与参数形状的设计另见 [`../engineering/browser-action-coverage.md`](../engineering/browser-action-coverage.md)。
@@ -104,8 +106,12 @@ wait_element({ handle, state: "hidden" })                  →  等状态
 **不借鉴的**：`playwright` 这个命名（会让人以为用了 Playwright 库）、
 它「无差别页面」的模型（我们不区分用户正在看与 AI 开的页面）。
 
-**代价**：这是破坏性变更。31 个浏览器工具里涉及定位的部分形状会变，
-`docs/engineering/ai-tools.md` 的契约测试、依赖这些选择器的 e2e 断言都要改。
+**落地口径（2026-11-17，叠加式）**：原计划的破坏式迁移未做。实际按叠加式落地：
+新增 `find_browser_element`（收窄定位 `hasText` / `hasNotText` / `visible` / `nth`）
+返回句柄，五个动作工具加可选 `handle` 参数；句柄跨重渲染经文本特征对齐存活，
+导航即失效。31 个既有工具形状未动，`ai-tools.md` 的契约测试与 60+ 处 e2e 断言
+原样保留——痛点由句柄层直接解决，破坏式迁移的风险收益不划算
+（66f5c6b，`e2e-browser-handles` 18/18）。
 
 ### 4. 流程里加裸 CDP 步骤（逃生口）
 
@@ -137,8 +143,11 @@ Playwright 的那个行为）。这不是「为了审计而限制」，是必须
 - A：加 `loop` / `if` 步骤类型（声明式，流程仍可读可审）
 - B：脚本只做编排，动作仍调工具原语（脚本能力边界 = 工具集合边界）
 
-倾向 B：工具原语已存在，只是把「AI 直接调工具」变成「AI 写一段调工具的脚本」。
-A 会让流程格式变复杂，且 `{{变量}}` 的字符串替换要升级成表达式求值。
+**按 B 落地（2026-11-17，702e293）**：`script` 步骤在 `node:vm` 的新 context 里跑
+一段 JS，可调用的原语就是流程动作集（不含 `login` / `cdp`）。vm 边界是能力面约束
+而非硬沙箱——Node 24 实测 `constructor` 逃逸可达，这一点已钉入测试与文档，
+真正的防线在 MCP 权限档位（`e2e-flow-script` 12/12）。A 的声明式 `loop` / `if`
+步骤类型随之不需要，`{{变量}}` 的字符串替换保持原样。
 
 **另需修**：`run_flow` 的 120 秒超时写死（`shared/flows.ts:317`、
 `server.ts:2385`），必须进 inputSchema 由调用方指定。慢操作（上传大文件、
@@ -150,7 +159,10 @@ ZCode 的 `Tab` 对象带 `capabilities` 属性，API 清单里每项标注
 `unsupportedByDefaultIn: ["iab"]`。**能力是查询出来的，不是试出来的。**
 
 我们现在把能力写在工具描述的中文长句里。加一个「查询这个标签页支持什么」的工具
-可以减少试错，但也多一层间接。**待定**，看前三项做完后 AI 实际的试错率。
+可以减少试错，但也多一层间接。
+
+**已落地（2026-11-17，同批）**：`read_browser_capabilities`（read 档），表面可选
+能力为实测检查，枚举部分 import 自 shared 常量。
 
 ### 7. e2e 的 CDP 客户端去重
 
@@ -244,7 +256,7 @@ ai-tools   MCP 工具的档位/闸门/时限/返回形状          ← 加工具
 | ⓪ | 45 份内联客户端归零；`pnpm e2e:all` 结果与改造前一致（同样 50 套全绿） |
 | ① | `e2e-flows` 全绿；流程的 click 返回 hit 诊断 |
 | ② | 每个新动作有一个 e2e 断言真实生效（不是「工具返回 ok」）；`hover` 要证明菜单真的展开 |
-| ③ | `ai-tools.md` 工具清单同步；契约测试更新；60+ e2e 断言迁移完成 |
+| ③ | `ai-tools.md` 工具清单同步；契约测试更新；既有 e2e 断言保持原样（叠加式口径下无需迁移，见 §二.3） |
 | ④ | 白名单外的命令被拒；禁止档没有任何入口；两次以上的裸 CDP 给出提示 |
 | ⑤ | 一个真实的多文件上传流程能跑完 |
 | ⑥ | — |
@@ -288,16 +300,16 @@ ai-tools   MCP 工具的档位/闸门/时限/返回形状          ← 加工具
 
 ## 七、待办总表
 
-- [x] ⓪ 抽 `scripts/lib/e2e-cdp.mjs`，消掉 43 份内联 CDP 客户端
+- [x] ⓪ 抽 `scripts/lib/e2e-cdp.mjs`，消掉 43 份内联 CDP 客户端（上轮遗留的 3 份——capture-screenshots / e2e-dom-resolver / e2e-proxy——已收敛，308be69；内联归零验收达成）
 - [x] ① 合并 `runFlow` 与 `BrowserManager` 的 `click` / `fill` / `select`
 - [x] ② 第一批动作：`hover` / `scroll` / `keypress` / `back`·`forward`·`reload` / `dialog`（`e2e-browser-actions` 11/11、`e2e-browser-dialog` 19/19）
 - [x] ② 第二批动作：`setFiles` / `drag` / `check`·`uncheck`（`e2e-browser-form` 17/17）
 - [x] ② 第三批动作：`elementInfo` / `getAttribute` / `getValue` / 元素裁剪截图（`e2e-browser-element` 14/14）
-- [ ] ② 第四批动作：`waitForLoadState` / `waitForResponse` / `getNetwork` / 环境模拟
-- [ ] ③ Tab API 形状改造（句柄 + 收窄链），同步 `ai-tools.md` 与 e2e
+- [x] ② 第四批动作：`waitForLoadState`（`wait` 的 `load` 条件）/ `waitForResponse`（`wait` 的 `response` 条件）/ `read_browser_requests`（只读不清空）/ 环境模拟（时区 / 媒体 / 离线 / 地理）（6cf90c2，`e2e-browser-network` 21/21）
+- [x] ③ Tab API 形状改造——**实施口径为叠加式**：新增 `find_browser_element`（收窄定位 `hasText` / `hasNotText` / `visible` / `nth`）返回句柄，五个动作工具加可选 `handle` 参数；句柄跨重渲染经文本特征对齐存活，导航即失效。31 个既有工具形状未动，60+ e2e 断言未迁移（痛点由句柄层直接解决，破坏式迁移风险收益不划算）（66f5c6b，`e2e-browser-handles` 18/18）
 - [x] ④ 流程的 `cdp` 步骤类型 + 三档白名单（`flow-whitelist.test.ts` 6/6、`e2e-flow-cdp` 11/11）
-- [ ] ⑤ 流程编排能力（方案 B：脚本只做编排）
+- [x] ⑤ 流程编排能力（方案 B）：`script` 步骤跑在 `node:vm`，原语 = 流程动作集（不含 `login` / `cdp`）；vm 边界是能力面约束而非硬沙箱（Node 24 实测 `constructor` 逃逸可达，已钉入测试与文档）（702e293，`e2e-flow-script` 12/12）
 - [x] ⑤ 修 `run_flow` 的 120 秒写死超时（`timeoutMs` 进 schema，默认 120s、上限 600s；`wait` 步骤受流程剩余预算截断）
-- [ ] ⑥ 能力可查询（待定）
+- [x] ⑥ 能力可查询：`read_browser_capabilities`（read 档），表面可选能力为实测检查 + 枚举 import 自 shared 常量（同批落地）
 - [x] ⑦ 文档合并与整理（`cdp-vs-playwright-boundary` 的 B 层改为「决定不做」、E2E 去重已生效、coverage 状态全部校正）
-- [ ] 全程：每个新动作补 e2e，验证真实生效而非「返回 ok」
+- [x] 全程：每个新动作补 e2e，验证真实生效而非「返回 ok」（计划期间新建：`e2e-browser-actions` 11、`e2e-browser-dialog` 19、`e2e-browser-form` 17、`e2e-browser-element` 14、`e2e-flow-cdp` 11、`e2e-browser-network` 21、`e2e-browser-handles` 18、`e2e-flow-script` 12）

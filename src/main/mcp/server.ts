@@ -2923,7 +2923,8 @@ export class McpServer {
       },
       {
         name: "update_site",
-        description: "修改站点。只传需要改的字段。",
+        description:
+          "修改站点。只传需要改的字段。tagIds 传数组即整体替换标签（空数组清空），不传保持不变。",
         kind: "write",
         inputSchema: object(
           {
@@ -2936,6 +2937,11 @@ export class McpServer {
             authTokenKey: string("新令牌 localStorage 键名；传空串清除"),
             authTokenHeader: string("新令牌请求头名；传空串清除"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
+            tagIds: {
+              type: "array",
+              description: "站点标签 id 列表，只用于归类展示；整体替换，空数组清空",
+              items: { type: "string" },
+            },
           },
           ["id"],
         ),

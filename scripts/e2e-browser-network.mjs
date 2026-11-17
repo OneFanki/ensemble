@@ -19,6 +19,13 @@
  * - Geolocation is asserted as "applied and cleared, echoed back correctly":
  *   coordinates without a permission grant never reach the page's API by design,
  *   so that is the honest thing to prove here.
+ * - Console object arguments must arrive as structure (`{seq: 1}`, nested one
+ *   level, strings quoted) — the pre-fix behaviour reported `[object Object]`.
+ * - The host's own dev warnings (Electron security notes) stay out of the
+ *   default console read; `includeHost: true` is the way to ask for them.
+ * - A busy loop driven through evaluate must still be in the performance
+ *   samples read after it ended, and `measure` reports its own interval and
+ *   the buffer window separately.
  *
  * The page under test is a local server written for this suite. Everything is
  * driven through MCP, the same surface an AI client uses.
@@ -181,6 +188,54 @@ try {
     consoleRead,
   );
 
+  // --- console object arguments arrive as structure, not [object Object] ----
+  // The page logs an object; the tool must report its properties. The host's
+  // own dev-mode warnings (Electron security notes) are filtered by default
+  // and reachable only through includeHost.
+  const objectLog = await call("evaluate_browser_page", {
+    tabId,
+    expression: `console.log("提交结果", { seq: 1, nested: { b: 2 }, tag: "ok" }), 'logged'`,
+  });
+  check("the page logged an object argument", objectLog === "logged", objectLog);
+  await wait(400);
+  const objectRead = await call("read_browser_console", { tabId });
+  const serialized = objectRead.logs?.find((entry) => entry.text.includes("提交结果"));
+  check(
+    "the object argument is reported as properties, not [object Object]",
+    Boolean(serialized) &&
+      serialized.text.includes("{seq: 1") &&
+      serialized.text.includes("nested: {b: 2}") &&
+      serialized.text.includes('"ok"') &&
+      !serialized.text.includes("[object Object]"),
+    objectRead,
+  );
+  check(
+    "host development warnings are not in the default read",
+    !(objectRead.logs ?? []).some((entry) => entry.text.includes("Electron Security Warning")),
+    { hostHidden: objectRead.hostHidden, count: objectRead.logs?.length },
+  );
+  const hostRead = await call("read_browser_console", { tabId, includeHost: true });
+  check(
+    "includeHost lifts the exclusion (nothing hidden when all lines are asked for)",
+    (hostRead.hostHidden ?? 0) === 0,
+    { hostHidden: hostRead.hostHidden, hostLines: (hostRead.logs ?? []).filter((entry) => entry.text.includes("Electron Security Warning")).length },
+  );
+
+  // A fresh navigation makes the host re-check the page (and re-warn, in a
+  // build that warns). The default read must stay clean through it too.
+  await call("reload_browser_tab", { tabId });
+  await call("wait_browser", { tabId, condition: "load", timeoutMs: 10_000 });
+  await wait(1_000);
+  await call("evaluate_browser_page", { tabId, expression: `console.log("reload 后仍在"), 'logged'` });
+  await wait(400);
+  const afterReload = await call("read_browser_console", { tabId });
+  check(
+    "the page's own line survives a reload while host warnings stay excluded",
+    (afterReload.logs ?? []).some((entry) => entry.text.includes("reload 后仍在")) &&
+      !(afterReload.logs ?? []).some((entry) => entry.text.includes("Electron Security Warning")),
+    { hostHidden: afterReload.hostHidden, count: afterReload.logs?.length },
+  );
+
   // --- a response wait releases only when the delayed request lands ----------
   await call("evaluate_browser_page", {
     tabId,
@@ -225,6 +280,46 @@ try {
     "a load hit reports the readyState as matched, distinct from a url hit",
     loadWait.matched === "complete" && loadWait.matched !== PAGE_URL,
     loadWait,
+  );
+
+  // --- a busy load is still in the numbers after the load has ended ----------
+  // The sampled window's honest semantics: sampling runs while AI tools touch
+  // the page plus a short tail. So a two-second busy loop driven through
+  // evaluate must show up in a read taken *after* it finished — the failure
+  // being fixed was a sampler that only accumulated while a read was in
+  // flight, which reported an idle page for a load the agent itself ran.
+  const busy = await call("evaluate_browser_page", {
+    tabId,
+    expression: `new Promise((resolve) => {
+      const end = Date.now() + 2000;
+      (function chunk() {
+        const stop = Date.now() + 100;
+        while (Date.now() < stop) { /* spin */ }
+        if (Date.now() < end) setTimeout(chunk, 0); else resolve("busy-done");
+      })();
+    })`,
+  });
+  check("the busy loop ran to completion", busy === "busy-done", busy);
+  const points = await call("read_browser_performance", { tabId });
+  const hot = (points ?? []).filter((sample) => sample.cpu > 30);
+  check(
+    "a read after the load still holds the load's samples",
+    Array.isArray(points) && points.length >= 5 && hot.length >= 3,
+    { points: points?.length, hot: hot.length, maxCpu: Math.max(0, ...(points ?? []).map((s) => s.cpu)) },
+  );
+  const measured = await call("measure_browser_performance", { tabId, durationMs: 300 });
+  check(
+    "measure reports its own interval and the buffer separately",
+    measured.samples >= 1 && measured.recent?.samples >= points.length - 1,
+    {
+      window: { samples: measured.samples, avg: measured.metrics?.cpu?.avg },
+      recent: { samples: measured.recent?.samples, max: measured.recent?.metrics?.cpu?.max },
+    },
+  );
+  check(
+    "the buffer's recent window still carries the load's peak",
+    (measured.recent?.metrics?.cpu?.max ?? 0) > 30,
+    { max: measured.recent?.metrics?.cpu?.max },
   );
 
   // --- timezone moves the page's clock, and clearing moves it back -----------

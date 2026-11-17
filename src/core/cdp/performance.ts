@@ -35,14 +35,16 @@ export {
   PERF_WINDOW_DEFAULT_MS,
 } from "@shared/embedded";
 
-import type { PerfMetric, PerfSample } from "@shared/embedded";
+import type { PerfMetric, PerfMetricSummary, PerfSample } from "@shared/embedded";
 import {
+  PERF_METRICS,
   PERF_WINDOW_DEFAULT_MS,
   perfHistoryLimit,
   perfPeak,
   perfSparkPath,
+  perfSummarize,
 } from "@shared/embedded";
-export type { PerfMetric, PerfSample } from "@shared/embedded";
+export type { PerfMetric, PerfMetricSummary, PerfSample } from "@shared/embedded";
 
 /**
  * The subset of `Performance.getMetrics` this module reads.
@@ -115,7 +117,12 @@ export function deriveSample(
     t: Math.max(0, Math.round(Date.now() - startedAt)),
     at: new Date().toISOString(),
     cpu: interval
-      ? Math.min(100, Math.round((busySeconds(current.TaskDuration, previous?.TaskDuration) / interval) * 1000) / 10)
+      ? Math.min(
+          100,
+          Math.round(
+            (busySeconds(current.TaskDuration, previous?.TaskDuration) / interval) * 1000,
+          ) / 10,
+        )
       : 0,
     nodes,
     listeners,
@@ -170,6 +177,34 @@ export function peakOf(history: PerfSample[], metric: PerfMetric, floor = 1): nu
     if (value > peak) peak = value;
   }
   return Math.max(floor, peak);
+}
+
+/**
+ * Every metric's summary over one window, with `maxAt` moved to that window's
+ * own origin.
+ *
+ * `perfSummarize` reports `maxAt` on the sample clock — milliseconds since the
+ * sampler started. A caller reading "the last 3 seconds" cannot use that
+ * directly: it wants the offset from *its* window's start, which is what the
+ * `offsetT` argument is. The same history summarized twice with different
+ * offsets is exactly the dual reading `measure_browser_performance` reports:
+ * the observation interval and the whole buffer each get their own origin.
+ *
+ * A window with no usable reading still produces a row per metric, with
+ * `samples: 0` — "not measured yet", never "zero cost".
+ */
+export function perfWindowSummary(
+  history: PerfSample[],
+  offsetT = 0,
+): Record<PerfMetric, PerfMetricSummary> {
+  const metrics = {} as Record<PerfMetric, PerfMetricSummary>;
+  for (const metric of PERF_METRICS) {
+    const summary = perfSummarize(history, metric);
+    metrics[metric] = summary
+      ? { ...summary, maxAt: Math.max(0, summary.maxAt - offsetT) }
+      : { avg: 0, max: 0, maxAt: 0, last: 0, samples: 0 };
+  }
+  return metrics;
 }
 
 /** A sample reduced to what a chart line needs. */

@@ -36,10 +36,12 @@ import {
 import {
   PAGE_ACTIVITY_READ_SCRIPT,
   PAGE_ACTIVITY_SCRIPT,
+  PAGE_CONSOLE_SCRIPT,
   PAGE_LOG_LIMIT,
   PAGE_LOG_TEXT_LIMIT,
   buildNetworkIdleExpression,
   buildWaitResponseExpression,
+  looksLikeHostNoise,
   type PageActivity,
   type PageLogLevel,
   type PageNetworkEntry,
@@ -55,6 +57,7 @@ import {
   type PerfSample,
   type RawMetrics,
   deriveSample,
+  perfWindowSummary,
   pushSample,
 } from "@core/cdp/performance";
 import { shouldSleepPage } from "@core/cdp/sleep";
@@ -92,8 +95,6 @@ import {
   PERF_WINDOW_DEFAULT_MS,
   normalizePerfSampleInterval,
   normalizePerfWindow,
-  PERF_METRICS,
-  perfSummarize,
   planTabClick,
   pointerInsidePage,
   resolveSlotPages,
@@ -384,10 +385,11 @@ interface TabRecord {
   /**
    * Performance samples.
    *
-   * Present while the performance tab is open, and for a while after an MCP read
-   * (see `measurePerformance`): the panel's history is drawn, the agent's is
-   * summarised. Not persisted — a history that outlived both readers would
-   * describe a page nobody is profiling, and filling it pins the CDP session.
+   * Present while the performance tab is open, and for a while after any AI
+   * page activity (see `noteAiActivity`): the panel's history is drawn, the
+   * agent's is summarised. Not persisted — a history that outlived both
+   * readers would describe a page nobody is profiling, and filling it pins the
+   * CDP session, which is exactly what idle release exists to avoid.
    */
   perf?: {
     history: PerfSample[];
@@ -405,9 +407,7 @@ interface TabRecord {
      * the panel from being silently killed by an agent read or vice versa.
      */
     owner: "panel" | "ai";
-    /** Last `t` an agent read, so the next read continues from there. */
-    aiCursor?: number;
-    /** Stops an agent-owned sampler once reads go quiet. */
+    /** Stops an agent-owned sampler once AI page activity goes quiet. */
     aiIdleTimer?: ReturnType<typeof setTimeout>;
   };
   /** Guards a stale sampling closure from writing after a restart. */
@@ -425,6 +425,17 @@ interface TabRecord {
    * likes through `evaluate`, so this grants no capability it did not have.
    */
   initScripts?: Map<string, { source: string; createdAt: string }>;
+  /**
+   * The session-level id of the host's own console-wrapping init script.
+   *
+   * Separate from `initScripts` on purpose: that map is caller-visible (listed,
+   * removable), and this one is housekeeping the host does for its own
+   * observation. It also deliberately does **not** pin the session — a
+   * registration lost to an idle detach costs formatting only (the
+   * console-message event keeps collecting), and re-registration happens when
+   * a session opens. See {@link ensureConsoleScript}.
+   */
+  consoleScriptId?: string;
   /**
    * Environment overrides this page currently wears: timezone, media type,
    * offline and geolocation.
@@ -484,8 +495,17 @@ interface TabRecord {
    *
    * Capped at {@link PAGE_LOG_LIMIT}; dropped lines are counted so a reader can
    * say the history is partial instead of silently showing the tail.
+   *
+   * `host` marks a line the host produced, not the page ({@link
+   * looksLikeHostNoise}); readers filter it out by default.
    */
-  consoleLog?: Array<{ at: string; level: PageLogLevel; text: string; source?: string }>;
+  consoleLog?: Array<{
+    at: string;
+    level: PageLogLevel;
+    text: string;
+    source?: string;
+    host?: boolean;
+  }>;
   consoleDropped?: number;
   /**
    * The JavaScript dialog this page is showing right now, if any.
@@ -964,6 +984,16 @@ export class EmbeddedBrowser {
     intervalMs: PERF_SAMPLE_INTERVAL_DEFAULT_MS,
     windowMs: PERF_WINDOW_DEFAULT_MS,
   };
+  /**
+   * How long an AI-owned sampler keeps running after the last AI page activity.
+   *
+   * This is the honest answer to "how far back does a performance read see":
+   * sampling covers AI activity plus this tail, not the page's whole lifetime.
+   * A tail this long covers the common "act, then ask how the act went" pattern;
+   * beyond it the numbers simply do not exist, and the tools say so rather than
+   * implying a window that is not there.
+   */
+  private perfAiIdleMs = 15_000;
   /**
    * Workspace default fixed viewport, mirrored from settings.
    *
@@ -2470,10 +2500,76 @@ export class EmbeddedBrowser {
    */
   private async installPageActivity(tab: TabRecord): Promise<void> {
     if (tab.view.webContents.isDestroyed()) return;
+    // Re-register the wrapper first: a session that was released and reopened
+    // came back without it, and the current document's collector embeds the
+    // same script anyway (the marker keeps it single).
+    await this.ensureConsoleScript(tab);
     try {
       await tab.cdp.evaluate(PAGE_ACTIVITY_SCRIPT);
     } catch {
       // Nothing to instrument yet; the next read installs on demand.
+    }
+  }
+
+  /**
+   * Registers the console-argument wrapper ahead of every future document.
+   *
+   * `Page.addScriptToEvaluateOnNewDocument` is the only way to run before the
+   * page's own scripts, which is what makes `console.log("x", {seq: 1})`
+   * arrive formatted instead of as "x [object Object]" — the formatting has to
+   * happen before the runtime collapses the arguments.
+   *
+   * Called from `installPageActivity` (so a navigation re-registers for the
+   * next document) and from the session-open hook. Two limits are accepted and
+   * honest:
+   *
+   * - **The document being parsed when this runs is not covered.** Registering
+   *   any earlier (from `wireTab`, before the first navigation) measurably
+   *   wedges the session: a command racing the first navigation re-enters the
+   *   session-open path and every later command times out. What keeps the
+   *   coverage honest is the collector's embedded copy — the document that is
+   *   already loaded gets the wrapper the moment the collector installs, so
+   *   every log an agent could trigger is formatted; only an inline script's
+   *   parse-time logs are not, and those lines still arrive, unformatted.
+   * - **The registration is not pinned.** Keeping a session open for
+   *   observation alone is the trade this app refuses (that is what idle
+   *   release exists to prevent). A registration lost to a released session
+   *   costs formatting only, and it is re-registered when a session opens
+   *   ({@link replayConsoleScript}) and on the next activity here.
+   */
+  private async ensureConsoleScript(tab: TabRecord): Promise<void> {
+    if (tab.consoleScriptId || tab.view.webContents.isDestroyed()) return;
+    try {
+      const response = await tab.cdp.send<{ identifier: string }>(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source: PAGE_CONSOLE_SCRIPT },
+      );
+      if (response?.identifier) tab.consoleScriptId = response.identifier;
+    } catch {
+      // A session that is not open yet cannot take the registration. The next
+      // did-finish-load or read retries; until then lines are unformatted.
+    }
+  }
+
+  /**
+   * Re-registers the console wrapper in a freshly opened session.
+   *
+   * Called from the guest manager's session-open hook, next to the caller's
+   * init scripts. The old id belonged to the released session; the wrapper is
+   * registered as new and the id replaced.
+   */
+  async replayConsoleScript(tabId: string, cdp: CdpExecutor): Promise<void> {
+    const tab = this.findTab(tabId);
+    if (!tab || tab.view.webContents.isDestroyed()) return;
+    tab.consoleScriptId = undefined;
+    try {
+      const response = await cdp.send<{ identifier: string }>(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source: PAGE_CONSOLE_SCRIPT },
+      );
+      if (response?.identifier) tab.consoleScriptId = response.identifier;
+    } catch {
+      // The replay is best effort; ensureConsoleScript retries on activity.
     }
   }
 
@@ -2491,18 +2587,29 @@ export class EmbeddedBrowser {
    *   event for that without a pinned CDP session.
    *
    * Reading clears both, so the next call answers "what happened since".
+   *
+   * Lines the host itself produced (Electron's dev-mode security warnings and
+   * the like — see {@link looksLikeHostNoise}) are kept out of the result
+   * unless the caller asks for them with `includeHost`. They are still stored
+   * and still consumed by the read, so a later `includeHost` read sees only
+   * what arrived after the previous one.
    */
-  async readPageActivity(tabId: string): Promise<PageActivity> {
+  async readPageActivity(
+    tabId: string,
+    options: { includeHost?: boolean } = {},
+  ): Promise<PageActivity> {
     const tab = this.requireTab(tabId);
     await this.installPageActivity(tab);
     const page = await tab.cdp.evaluate<PageActivity>(PAGE_ACTIVITY_READ_SCRIPT, {
       awaitPromise: true,
     });
-    const fromMain = tab.consoleLog ?? [];
+    const fromMainAll = tab.consoleLog ?? [];
     const droppedFromMain = tab.consoleDropped ?? 0;
-    const hadMainLines = fromMain.length > 0;
+    const hadMainLines = fromMainAll.length > 0;
     tab.consoleLog = [];
     tab.consoleDropped = 0;
+    const fromMain = options.includeHost ? fromMainAll : fromMainAll.filter((line) => !line.host);
+    const hostHidden = fromMainAll.length - fromMain.length;
     // Main-side lines are the ones a page-side wrapper could not see (and the
     // ones it could: both channels are real, and a double-reported line is more
     // honest than dropping one). Sorted by time so the order reads right.
@@ -2512,6 +2619,7 @@ export class EmbeddedBrowser {
       logs,
       installed: page.installed || hadMainLines,
       dropped: page.dropped + droppedFromMain,
+      hostHidden,
     };
   }
 
@@ -2671,11 +2779,16 @@ export class EmbeddedBrowser {
       }
       const text = String(details.message ?? "").slice(0, PAGE_LOG_TEXT_LIMIT);
       if (!text) return;
+      const source = details.sourceId ? String(details.sourceId) : undefined;
       log.push({
         at: new Date().toISOString(),
         level,
         text,
-        ...(details.sourceId ? { source: details.sourceId } : {}),
+        ...(source ? { source } : {}),
+        // Tagged, not dropped: the default reader excludes these, and
+        // `includeHost` can still ask for them. Dropping here would make the
+        // exclusion irreversible and the exclusion itself untestable.
+        ...(looksLikeHostNoise({ text, source }) ? { host: true } : {}),
       });
     });
     contents.on("page-title-updated", (_event, title) => {
@@ -3531,7 +3644,17 @@ export class EmbeddedBrowser {
       // A page that has not navigated anywhere keeps its rect off the stage so the
       // app's own new-tab surface (search box, engine picker) is what the user
       // sees. The renderer draws it; there is no page to draw behind it.
-      if (page && !page.viewId && !isBlankTab(page) && !page.view.webContents.isDestroyed()) {
+      // `view` is the placeholder until `openCarrier` returns — the tab is
+      // published long before that, and `setStage` can land inside the gap. The
+      // no-stage branch above guards this read; this branch used to assume the
+      // carrier had already arrived and crashed on the first broadcast instead.
+      if (
+        page &&
+        !page.viewId &&
+        !isBlankTab(page) &&
+        page.view?.webContents &&
+        !page.view.webContents.isDestroyed()
+      ) {
         void this.wakeTab(page.id);
         page.view.setBounds(this.placePageSurface(page, this.stage));
         staged.add(page.id);
@@ -7281,6 +7404,51 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Rearms the timer that releases an AI-owned sampler after a quiet period.
+   *
+   * One helper because three callers mean the same thing: "an agent is here,
+   * keep the counters running for a while". The panel's sampler never gets this
+   * timer — it is stopped by its tab being hidden, and an agent must not be
+   * able to kill it.
+   */
+  private armAiIdleTimer(tabId: string, idleMs: number): void {
+    const tab = this.findTab(tabId);
+    if (!tab?.perf || tab.perf.owner !== "ai") return;
+    if (tab.perf.aiIdleTimer) clearTimeout(tab.perf.aiIdleTimer);
+    tab.perf.aiIdleTimer = setTimeout(() => {
+      const record = this.findTab(tabId);
+      if (record?.perf?.owner === "ai") this.stopPerfSampling(record);
+    }, Math.max(0, idleMs));
+    tab.perf.aiIdleTimer.unref?.();
+  }
+
+  /**
+   * Notes that an AI tool touched this page, and keeps its sampler alive.
+   *
+   * This is the piece that makes the sampled window honest. Every AI page
+   * operation — a click, a fill, an evaluate — calls this on the way in, so the
+   * sampler covers the operation's cost, not just the reads before and after
+   * it. Without it, "click, then ask how the click went" sampled nothing
+   * during the click and reported an idle page: the exact failure this window
+   * exists to prevent.
+   *
+   * Fire-and-forget on purpose: starting the sampler costs one `Performance.enable`
+   * round trip and must not delay the tool call that triggered it. A panel-owned
+   * sampler is left alone — one page, one sampler, whoever owns it keeps it.
+   */
+  noteAiActivity(tabId: string): void {
+    const tab = this.findTab(tabId);
+    if (!tab || tab.view?.webContents?.isDestroyed()) return;
+    if (tab.perf) {
+      this.armAiIdleTimer(tabId, this.perfAiIdleMs);
+      return;
+    }
+    void this.startPerfSampling(tab, "ai").then(() => {
+      this.armAiIdleTimer(tabId, this.perfAiIdleMs);
+    });
+  }
+
+  /**
    * Raw samples for an agent, trimmed to something a model can actually read.
    *
    * Starts the sampler if nobody is measuring, so a model that only wants the
@@ -7289,19 +7457,12 @@ export class EmbeddedBrowser {
    * already trimmed it to one window, so a request never returns more than the
    * chart is showing.
    */
-  async readPerfHistory(tabId: string, idleMs = 15_000): Promise<PerfSample[]> {
+  async readPerfHistory(tabId: string, idleMs = this.perfAiIdleMs): Promise<PerfSample[]> {
     const tab = this.requireTab(tabId);
     if (!tab.perf) await this.startPerfSampling(tab, "ai");
     const perf = this.findTab(tabId)?.perf;
     if (!perf) throw new Error("这一页无法读取性能指标");
-    if (perf.owner === "ai") {
-      if (perf.aiIdleTimer) clearTimeout(perf.aiIdleTimer);
-      perf.aiIdleTimer = setTimeout(() => {
-        const record = this.findTab(tabId);
-        if (record?.perf?.owner === "ai") this.stopPerfSampling(record);
-      }, Math.max(0, idleMs));
-      perf.aiIdleTimer.unref?.();
-    }
+    this.armAiIdleTimer(tabId, idleMs);
     return perf.history;
   }
 
@@ -7317,16 +7478,17 @@ export class EmbeddedBrowser {
    * the same source Chrome's own monitor reads, so the tool hands back facts
    * with a known provenance instead of a home-grown approximation.
    *
-   * The shape is a summary, not a series. A model cannot read a sparkline, and
-   * a hundred raw points make it average in prose and get it wrong; `max` and
-   * `maxAt` answer "did it stutter, and when" directly. `maxAt` is milliseconds
-   * from the window's start, which pairs with the `at` timestamps of the console
-   * lines it already reads — that pairing is the point.
+   * The shape is two summaries, not a series. `metrics` covers **this call's
+   * observation interval only** — the samples that landed between this call
+   * starting and ending — so a load that ran for part of it is not diluted by
+   * idle samples from earlier. `recent.metrics` covers the whole buffer (the
+   * configured window, ~20s by default) for the trend question. `maxAt` is
+   * milliseconds from the start of its own window in either case, which pairs
+   * with the `at` timestamps of the console lines an agent already reads.
    *
-   * Consecutive reads continue rather than restart, and sampling keeps running
-   * between them for a short idle period. That is what makes "measure, click,
-   * measure again" see the click: the second call reports what happened while
-   * the first call was still fresh, not an empty window after it.
+   * Sampling itself runs while AI tools are active plus a short tail (see
+   * `noteAiActivity`); this call's interval is inside that span because the
+   * call itself keeps the sampler alive.
    */
   async measurePerformance(
     tabId: string,
@@ -7335,7 +7497,7 @@ export class EmbeddedBrowser {
     tabId: string;
     url: string;
     title: string;
-    /** Wall clock of the window this summary covers. */
+    /** Wall clock of this call's observation interval. */
     from: string;
     to: string;
     /** How long this call waited, as asked. */
@@ -7344,8 +7506,17 @@ export class EmbeddedBrowser {
     windowMs: number;
     /** The configured sampling interval. */
     intervalMs: number;
+    /** Samples in this call's observation interval. */
     samples: number;
+    /** Statistics over this call's observation interval. */
     metrics: Record<PerfMetric, PerfMetricSummary>;
+    /** Statistics over the whole buffer, newest window last. */
+    recent: {
+      from: string;
+      to: string;
+      samples: number;
+      metrics: Record<PerfMetric, PerfMetricSummary>;
+    };
   }> {
     const tab = this.requireTab(tabId);
     const contents = tab.view?.webContents;
@@ -7364,39 +7535,26 @@ export class EmbeddedBrowser {
       // `Performance.enable` failed: the page refuses to be measured.
       throw new Error("这一页无法读取性能指标");
     }
+    // The idle release must not fire while this call is waiting out its window.
     if (perf.owner === "ai" && perf.aiIdleTimer) {
       clearTimeout(perf.aiIdleTimer);
       delete perf.aiIdleTimer;
     }
     const startedAt = Date.now();
+    // This call's interval, on the sample clock: everything at or after this
+    // `t` landed between this call starting and finishing. That is the window
+    // the caller asked to observe — nothing older dilutes it.
+    const windowStartT = Math.max(0, startedAt - perf.startedAt);
     await new Promise((done) => setTimeout(done, Math.max(0, options.durationMs)));
     // Re-read: the page may have closed, or the panel may have taken over while
     // this call was waiting out its window.
     const live = this.findTab(tabId)?.perf;
     if (!live) throw new Error("采样在测量期间被停止");
-    /*
-     * Only what an agent has not seen yet.
-     *
-     * The first read reports its whole window; a later one continues from the
-     * previous cursor. Without the cursor the second call would repeat numbers
-     * the model already acted on, and a series that repeats itself is a series a
-     * model reasons about twice.
-     */
-    const from = live.aiCursor ?? 0;
-    const fresh = live.history.filter((sample) => sample.t > from);
-    const metrics = {} as Record<PerfMetric, PerfMetricSummary>;
-    for (const metric of PERF_METRICS) {
-      const summary = perfSummarize(fresh, metric);
-      /*
-       * A metric with no usable reading still needs a row, but it must not read
-       * as "zero". `samples: 0` is the honest answer for a rate whose window held
-       * only the warmup reading — callers are told to treat it as "not measured
-       * yet" rather than "the page was idle".
-       */
-      metrics[metric] = summary ?? { avg: 0, max: 0, maxAt: 0, last: 0, samples: 0 };
-    }
-    const newest = fresh[fresh.length - 1] ?? live.history[live.history.length - 1];
-    if (newest) live.aiCursor = newest.t;
+    const observed = live.history.filter((sample) => sample.t >= windowStartT);
+    const newest = observed[observed.length - 1];
+    const oldestObserved = observed[0];
+    const all = live.history;
+    const oldestAll = all[0];
     /*
      * Keep sampling for a quiet period, then let go.
      *
@@ -7406,6 +7564,7 @@ export class EmbeddedBrowser {
      * timer releases it, and the panel taking over releases it immediately.
      */
     if (live.owner === "ai") {
+      if (live.aiIdleTimer) clearTimeout(live.aiIdleTimer);
       live.aiIdleTimer = setTimeout(() => {
         const record = this.findTab(tabId);
         if (record?.perf?.owner === "ai") this.stopPerfSampling(record);
@@ -7416,13 +7575,21 @@ export class EmbeddedBrowser {
       tabId: tab.id,
       url: tab.url,
       title: tab.title,
-      from: new Date(live.startedAt + from).toISOString(),
-      to: new Date(live.startedAt + (newest?.t ?? from)).toISOString(),
+      from: new Date(live.startedAt + (oldestObserved?.t ?? windowStartT)).toISOString(),
+      to: new Date(live.startedAt + (newest?.t ?? windowStartT)).toISOString(),
       durationMs: Date.now() - startedAt,
       windowMs: this.perfConfig.windowMs,
       intervalMs: this.perfConfig.intervalMs,
-      samples: fresh.length,
-      metrics,
+      samples: observed.length,
+      metrics: perfWindowSummary(observed, windowStartT),
+      recent: {
+        from: new Date(live.startedAt + (oldestAll?.t ?? 0)).toISOString(),
+        to: new Date(
+          live.startedAt + (all[all.length - 1]?.t ?? oldestAll?.t ?? 0),
+        ).toISOString(),
+        samples: all.length,
+        metrics: perfWindowSummary(all, oldestAll?.t ?? 0),
+      },
     };
   }
 

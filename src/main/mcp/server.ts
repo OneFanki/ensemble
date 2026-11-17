@@ -403,10 +403,13 @@ export interface EmbeddedSurface {
   /**
    * Console lines and request activity since the previous read.
    *
+   * `includeHost` lifts the default exclusion of lines the host itself
+   * produced (its dev-mode warnings); see the tool description.
+   *
    * Optional: a surface without the collector reports nothing rather than
    * failing, which is the same shape the other capability gaps use.
    */
-  readPageActivity?(tabId: string): Promise<unknown>;
+  readPageActivity?(tabId: string, options?: { includeHost?: boolean }): Promise<unknown>;
   /**
    * The page's settled requests, read **without consuming** anything.
    *
@@ -459,6 +462,16 @@ export interface EmbeddedSurface {
    * same reason as the rest of the browser surface.
    */
   readPerfHistory?(tabId: string): Promise<unknown>;
+  /**
+   * Notes that an AI tool is touching this page, keeping its performance
+   * sampler alive for a short tail.
+   *
+   * This is what makes the sampled window honest: the cost of a click or a
+   * fill happens during the tool call, not during the reads around it, so
+   * every AI page operation touches this on the way in. Optional — a surface
+   * without sampling simply never extends its window.
+   */
+  noteAiActivity?(tabId: string): void;
   /** `viewId` omitted means the view currently on stage. */
   setLayout(layoutId: string, viewId?: string): unknown;
   /** Pins a page to a fixed CSS viewport; null returns it to adaptive fill. */
@@ -573,6 +586,7 @@ function surfaceCapabilities(surface: EmbeddedSurface): Record<OptionalSurfaceMe
     setEmulation: present("setEmulation"),
     measurePerformance: present("measurePerformance"),
     readPerfHistory: present("readPerfHistory"),
+    noteAiActivity: present("noteAiActivity"),
     setMuted: present("setMuted"),
     muteForAi: present("muteForAi"),
     restoreAfterAi: present("restoreAfterAi"),
@@ -1706,6 +1720,11 @@ export class McpServer {
                 this.options.embedded?.muteForAi?.(pageId);
                 aiMutedPageId = pageId;
               }
+              // Any AI page activity keeps that page's performance sampler
+              // alive, so the cost of the operation itself lands in the
+              // window the agent will read afterwards. A refused call never
+              // reaches here: nothing happened, nothing to sample.
+              if (pageId) this.options.embedded?.noteAiActivity?.(pageId);
             } catch {
               // A tab lookup that fails must not turn the tool call into a failure.
             }
@@ -3599,14 +3618,19 @@ export class McpServer {
       {
         name: "read_browser_console",
         description:
-          "读取页面自己记下的报错、console 输出和网络请求，读完即清空——回答的是「上次读取之后发生了什么」。排查「点了保存却没反应」时先用它：能看到前端异常和失败的 fetch / XHR。看不到跨域 iframe 的请求，也看不到浏览器自身的警告。",
+          "读取页面自己记下的报错、console 输出和网络请求，读完即清空——回答的是「上次读取之后发生了什么」。排查「点了保存却没反应」时先用它：能看到前端异常和失败的 fetch / XHR。宿主自身的开发警告（如 Electron 的安全提示）默认不收录，includeHost=true 才一并返回。看不到跨域 iframe 的请求，也看不到浏览器自身的警告。",
         kind: "read",
-        inputSchema: object({ tabId: tabIdProp() }),
+        inputSchema: object({
+          tabId: tabIdProp(),
+          includeHost: boolean("是否包含宿主自身的开发警告；默认排除"),
+        }),
         pageTarget: (args) => tabId(args),
         run: (args) => {
           const read = surface().readPageActivity;
           if (!read) throw new Error("当前浏览器表面不支持读取控制台");
-          return read.call(surface(), tabId(args));
+          return read.call(surface(), tabId(args), {
+            includeHost: args["includeHost"] === true,
+          });
         },
       },
       {
@@ -3640,7 +3664,7 @@ export class McpServer {
       {
         name: "measure_browser_performance",
         description:
-          "测量页面当前的实际开销，回答「这个页面卡不卡」。指标与 Chrome 性能监视器同源，每项给出均值、峰值、峰值出现的毫秒时刻（从本次窗口起点算）、最新值和样本数。默认观察 1 秒；连续调用接着上次继续，中间空档也在采样，所以「测一次 → 操作 → 再测一次」能看见那次操作的开销。CPU 均值高＝持续重负载，峰值高但均值低＝某一下卡顿；布局/秒与样式重算/秒的峰值说明那一下在反复排版。某项的 samples 为 0 表示这段窗口里还没有可用读数（刚启动采样，第一次读数无法差分出速率），不是页面空闲。逐点数据用 read_browser_performance。",
+          "测量页面当前的实际开销，回答「这个页面卡不卡」。指标与 Chrome 性能监视器同源。返回双口径：顶层 metrics/samples/from/to 是本次观察区间（durationMs）内的统计——负载被区间外的空闲稀释之前先看这里；recent.metrics 是缓冲区全窗口（默认约 20 秒）的统计，用来看趋势。每项给出均值、峰值、峰值出现的毫秒时刻（从各自窗口起点算）、最新值和样本数。默认观察 1 秒。采样在 AI 活动（任何作用于该页的工具调用）期间及结束后 15 秒内持续；之外的时间没有数据。CPU 均值高＝持续重负载，峰值高但均值低＝某一下卡顿；布局/秒与样式重算/秒的峰值说明那一下在反复排版。某项的 samples 为 0 表示这段窗口里还没有可用读数（刚启动采样，第一次读数无法差分出速率），不是页面空闲。逐点数据用 read_browser_performance。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3660,7 +3684,7 @@ export class McpServer {
       {
         name: "read_browser_performance",
         description:
-          "读取这一页的逐点性能数据（当前采集区间内的全部采样），用于自己算任意统计量或看趋势。区间与采样间隔由设置页的「性能采集区间」「性能采样间隔」决定，默认最近 20 秒、每 200ms 一个点。数据只在有人读过之后才继续累积，闲置 15 秒即停止，所以两次读之间若隔得更久，前面那段就没有。只要汇总（均值、峰值、峰值时刻）用 measure_browser_performance。",
+          "读取这一页的逐点性能数据（缓冲区内的全部采样），用于自己算任意统计量或看趋势。采样在 AI 活动（任何作用于该页的工具调用）期间及结束后 15 秒内持续累积，缓冲区保留最近 20 秒、每 200ms 一个点；更早的时间段与无人活动的空档没有数据，历史不会无限回溯。只要汇总（均值、峰值、峰值时刻）用 measure_browser_performance，它还带本次观察区间与全窗口两个口径。",
         kind: "read",
         inputSchema: object({ tabId: tabIdProp() }),
         pageTarget: (args) => tabId(args),

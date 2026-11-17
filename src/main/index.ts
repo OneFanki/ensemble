@@ -435,6 +435,7 @@ const guestManager = new BrowserGuestManager({
     const tabId = guestManager.keyFor(guestId);
     if (!tabId || !embedded) return;
     await embedded.replayInitScripts(tabId, cdp).catch(() => undefined);
+    await embedded.replayConsoleScript(tabId, cdp).catch(() => undefined);
   },
 });
 
@@ -4588,12 +4589,14 @@ if (!singletonLock.acquired) {
           ensureEmbeddedBrowser().removeInitScript(tabId, scriptId),
         cancelScript: (tabId) => ensureEmbeddedBrowser().cancelScript(tabId),
         visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
-        readPageActivity: (tabId) => ensureEmbeddedBrowser().readPageActivity(tabId),
+        readPageActivity: (tabId, options) =>
+          ensureEmbeddedBrowser().readPageActivity(tabId, options),
         readRequests: (tabId, options) => ensureEmbeddedBrowser().readRequests(tabId, options),
         setEmulation: (tabId, patch) => ensureEmbeddedBrowser().setEmulation(tabId, patch),
         measurePerformance: (tabId, options) =>
           ensureEmbeddedBrowser().measurePerformance(tabId, options),
         readPerfHistory: (tabId) => ensureEmbeddedBrowser().readPerfHistory(tabId),
+        noteAiActivity: (tabId) => ensureEmbeddedBrowser().noteAiActivity(tabId),
         wait: (tabId, input) => ensureEmbeddedBrowser().wait(tabId, input),
         setLayout: (layoutId, viewId) =>
           ensureEmbeddedBrowser().setViewLayout(

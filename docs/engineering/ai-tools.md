@@ -79,13 +79,14 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | --- | --- | --- | --- | --- |
 | `read_browser_page` | read | — | 只返回可见元素，且只有页面当前渲染出来的那些。读取前先探测页面事件循环：循环已停摆（脚本卡死）时立即报错说明原因，不等到命令上限 | 角色、可访问名称、稳定选择器、位置、表单标签 |
 | `read_browser_console` | read | — | **读完即清空**，回答「上次读取之后发生了什么」；看不到跨域 iframe 的请求 | 报错、console 行、失败请求 |
+| `read_browser_console` | read | — | **读完即清空**，回答「上次读取之后发生了什么」；宿主自身的开发警告（Electron 安全提示等）默认不收录，`includeHost: true` 才返回（`hostHidden` 报本次排除的条数）；看不到跨域 iframe 的请求 | 报错、console 行、失败请求 |
 | `read_browser_requests` | read | — | **只读不清空**：读收集器的滚动窗口（最近 50 条已完成的 fetch/XHR），`read_browser_console` 之后仍能读到同一批。可按 `url`（子串）、`method`、`status` 过滤，`limit` 控制条数。看不到跨域 iframe 的请求 | `{ requests: [{at, method, url, status, ms, failed}], inflight, installed }` |
 | `read_browser_capabilities` | read | — | 纯查询，不触页面。给 `tabId` 时 `capabilities` 逐项实测表面可选方法（`false` ＝ 宿主未实现，对应工具会报「不支持」），`surface` 是表面标识（内置为 `embedded`）；省略 `tabId` 只返回枚举部分 | `surface` + `capabilities` + `waitConditions` / `flowActions` / `flowCdpStep`；省略 `tabId` 时只有枚举 |
 | `wait_browser` | read | — | 条件：`visible` / `hidden` / `text` / `url` / `value` / `network-idle` / `load`（readyState complete）/ `response`（URL 含 `expect` 的响应，可配 `status` 精确匹配；基于滚动窗口 peek，不清空）。`visible` / `hidden` / `value` 可用句柄（`handle`，与定位字段互斥，可配 `nth`；句柄解析一次进轮询，元素被移出 DOM 时报找不到）。`timeoutMs` 默认 5000、上限 60000。超时时 `timedOutAt` 区分 `page`（条件确实没满足）与 `bridge`（页面没按时答复） | `{ ok, waitedMs, timedOut, timedOutAt, reason, matched }` |
 | `check_element_visible` | read | — | 可用句柄（`handle`，与定位字段互斥，可配 `nth`；元素被移出 DOM 时报找不到，用 selector 则返回 `exists: false`） | `{ exists, visible, bounds, selector, name }` |
 | `find_browser_element` | read | — | 定位给 selector / label / text / role 之一，收窄字段可选：`hasText` / `hasNotText`（元素自身文本包含/不包含）、`visible`、`nth`（0 起，负数从尾数）。text / role 匹配可交互元素与有自身文字的可见元素（纯容器不算）。`timeoutMs` 默认 5000、上限 60000，一个匹配都没等到就报错。登记允许多个匹配（count 如实返回）；选择器无效或 nth 越界立即报错 | `{ handleId, count, index, resolved, matches: [{tag, text, visible, rect}] }`；之后 click / hover / type / `set_browser_checkbox` / `read_browser_element` / `wait_browser` / `check_element_visible` 可用 `handle` 复用 |
-| `read_browser_performance` | read | — | 起一个 15 秒后自停的采样器；区间与间隔取自设置 | 逐点样本，`t` 为毫秒偏移 |
-| `measure_browser_performance` | read | — | `durationMs` + `idleMs`；连续读取会继续而非重启 | 每项 `{ avg, max, maxAt, last, samples }` |
+| `read_browser_performance` | read | — | 采样窗口的真实语义：AI 活动（任何作用于该页的工具调用）期间及结束后 15 秒内持续累积，缓冲区保留最近 20 秒、间隔取自设置；更早或无人活动期间没有数据。任何 AI 页面操作都会续期采样器 | 逐点样本，`t` 为毫秒偏移 |
+| `measure_browser_performance` | read | — | `durationMs` + `idleMs`。返回双口径：顶层 `metrics`/`samples`/`from`/`to` 只统计本次观察区间；`recent.metrics` 统计缓冲区全窗口（默认约 20 秒）。`maxAt` 相对各自窗口起点 | 顶层每项 `{ avg, max, maxAt, last, samples }` + `recent: { from, to, samples, metrics }` |
 | `list_browser_init_scripts` | read | — | 只给 id、注册时间与前 120 字预览，不回源码 | `{ scripts: [...] }` |
 | `read_browser_element` | read | — | 一个元素的全貌：角色、名称、文字、选择器、位置、可见/可用/聚焦状态、`attributes` 与 `value`。可用句柄（`handle`，与定位字段互斥，可配 `nth`） | 元素信息对象 |
 | `read_browser_attribute` | read | — | 给 `names` 读指定属性（不存在返回 `null`）；不给则读文字或当前值。轮询状态变化用它，比整份元素信息便宜 | `{ ok, selector, attributes }` 或 `{ ok, selector, value/text }` |
@@ -94,21 +95,12 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-<<<<<<< HEAD
-| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；返回 `hit` 说明事件实际落点。点击触发 alert/confirm 时命令在弹窗打开瞬间提前返回，`dialog` 带类型与内容、`hint` 指引先答弹窗（页面与弹窗保持原样，不重试点击）。直连定位命中多个时仍点第一个，`warning` 写明匹配数（句柄与显式 `nth` 不产生）。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, warning?, hit }`；触发弹窗时另有 `dialog` 与 `hint`（hover / scroll / type / press / upload / drag / checkbox 同） |
+| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；`hit` 以按下瞬间为准（onTarget 只在按下与回读都 miss 才 false），`hitAfter` 是松开后的回读，页面在点击处理里替换 DOM 时两者不同——这不代表点击没生效。点击触发 alert/confirm 时命令在弹窗打开瞬间提前返回，`dialog` 带类型与内容、`hint` 指引先答弹窗（页面与弹窗保持原样，不重试点击）。直连定位命中多个时仍点第一个，`warning` 写明匹配数（句柄与显式 `nth` 不产生）。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, warning?, hit, hitAfter? }`；触发弹窗时另有 `dialog` 与 `hint`（hover / scroll / type / press / upload / drag / checkbox 同） |
 | `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip。直连多匹配同 click（`warning`）。可用句柄（同上） | `{ ok, tag, text, selector, warning? }` |
-| `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下。target 多匹配时滚轮仍落第一个（`warning`） | `{ ok, scrolled, moved, warning? }`，`moved: false` 表示已到边界 |
-| `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起 | `{ ok, keys, modifiers }` |
+| `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下。target 多匹配时滚轮仍落第一个（`warning`）。`scrolled` 是动作后回读容器位置得到的真实位移差值，等待滚动稳定后才读；滚轮触发弹窗时同 click 提前返回 | `{ ok, scrolled, moved, warning? }`，`moved: false` 表示没滚（含已到边界） |
+| `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起。常见编辑组合（Ctrl+a/c/x/v/z、Ctrl+Shift+z）随 keyDown 派发 Chromium 编辑命令，效果对后续输入可见 | `{ ok, keys, modifiers }` |
 | `read_browser_dialog` | read | — | 从主进程的事件记录读，**不走页面脚本**——弹窗打开时页面是阻塞的，任何页内查询都会超时。`pageBlocked: false` 表示 beforeunload 拦截：页面活着，只缺一个去留决定 | `{ dialog: { type, message, defaultPrompt?, url?, msOpen, pageBlocked, hint } }` 或 `{ dialog: null }` |
 | `handle_browser_dialog` | run | 是 | `accept: false` 为取消；prompt 用 `promptText` 填值。beforeunload 拦截也在这里答：`accept: true` 重发被拦的导航并等它完成，`false` 留下。没有弹窗时报 `handled: false` 而不是错。无人应答的弹窗超预算后自动取消（唯一会自动应答弹窗的路径；工具超时一律不动弹窗）；挂起期间 CDP 会话保持附加，不会分离 | `{ ok, handled, type? }` |
-=======
-| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；`hit` 以按下瞬间为准（onTarget 只在按下与回读都 miss 才 false），`hitAfter` 是松开后的回读，页面在点击处理里替换 DOM 时两者不同。直连定位命中多个时仍点第一个，`warning` 写明匹配数（句柄与显式 `nth` 不产生）。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, warning?, hit, hitAfter? }` |
-| `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip。直连多匹配同 click（`warning`）。可用句柄（同上） | `{ ok, tag, text, selector, warning? }` |
-| `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下。target 多匹配时滚轮仍落第一个（`warning`）。`scrolled` 是动作后回读容器位置得到的真实位移差值，等待滚动稳定后才读 | `{ ok, scrolled, moved, warning? }`，`moved: false` 表示没滚（含已到边界） |
-| `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起。常见编辑组合（Ctrl+a/c/x/v/z、Ctrl+Shift+z）随 keyDown 派发 Chromium 编辑命令，效果对后续输入可见 | `{ ok, keys, modifiers }` |
-| `read_browser_dialog` | read | — | 从主进程的事件记录读，**不走页面脚本**——弹窗打开时页面是阻塞的，任何页内查询都会超时 | `{ dialog: { type, message, defaultPrompt?, url?, msOpen } }` 或 `{ dialog: null }` |
-| `handle_browser_dialog` | run | 是 | `accept: false` 为取消；prompt 用 `promptText` 填值。没有弹窗时报 `handled: false` 而不是错。弹窗挡路超过 30 秒会被自动取消 | `{ ok, handled, type? }` |
->>>>>>> wt/action-truth
 | `upload_browser_files` | run | 是 | 绝对路径；多个文件必须一次给（每次调用替换输入框内容）。单文件框给多个会报错而不是截断。定位多匹配同 click（`warning`） | `{ ok, count, multiple, selector?, warning? }` |
 | `drag_browser_element` | run | 是 | `from` / `to` 各自 `fromSelector`·`fromText`、`toSelector`·`toText`。真实按下 + 六次中间移动 + 松开。动作后回读页面：`dropped` 说明页内是否收到 drop（`dropAt` 坐标、`droppedAtTarget` 是否落在终点附近、`reordered` 起点元素位置是否变化），缺失或坐标异常时 `warning` 说明，不算成功。任一端多匹配时仍取第一个，`warning` 写明 | `{ ok, fromTag, toTag, fromText, toText, dropped, dropAt?, droppedAtTarget, reordered?, warning? }` |
 | `set_browser_checkbox` | run | 是 | 幂等：已在目标状态就不点。`stuckAt` 表示点了但状态没变（禁用或有处理器拦默认行为）。直连多匹配同 click（`warning`）。可用句柄（同 click） | `{ ok, checked, changed, selector?, stuckAt?, warning? }` |

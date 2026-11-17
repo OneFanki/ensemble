@@ -426,19 +426,18 @@ try {
   );
   record("the measurement reports real CPU and layout work", measured.ok, measured.value?.metrics);
 
-  // Consecutive calls must continue the window instead of restarting it: the
-  // second read covers what happened while the first was fresh, which is what
-  // makes "measure, click, measure" see the click.
+  // The second call gets its own interval as the top-level numbers, while
+  // `recent` keeps the whole buffer — the load the first call measured must
+  // still be visible in `recent` even though this call's window never saw it.
   await wait(700);
   const remeasured = await tool(
     "measure_browser_performance",
     { tabId: busyTabId, durationMs: 900 },
-    (v) => v?.samples >= 2 && v?.metrics?.cpu?.max >= 0,
+    (v) => v?.samples >= 2 && v?.recent?.samples >= 2 && v?.recent?.metrics?.cpu?.max > 0,
   );
-  record("a second measurement continues rather than starting over", remeasured.ok, {
-    samples: remeasured.value?.samples,
-    from: remeasured.value?.from,
-    to: remeasured.value?.to,
+  record("a second measurement keeps its own window and the buffer separate", remeasured.ok, {
+    window: { samples: remeasured.value?.samples, avg: remeasured.value?.metrics?.cpu?.avg },
+    recent: { samples: remeasured.value?.recent?.samples, max: remeasured.value?.recent?.metrics?.cpu?.max },
   });
   const series = await tool(
     "read_browser_performance",

@@ -5,7 +5,7 @@
 
 - 准备发版时，把 `package.json` 的 `version` 改掉，并在本文件顶部加一节 `## [x.y.z] - YYYY-MM-DD`；`scripts/release-notes.mjs` 会按版本号抽出这一节当作 Release 正文。
 
-## [2.2.3] - 2026-11-16
+## [未发布]
 
 补齐 AI 操作页面缺失的动作，修掉几处会让页面「看起来死了」的阻塞，并把流程的原始
 CDP 步骤做成有档位判定的逃生口。
@@ -29,6 +29,9 @@ CDP 步骤做成有档位判定的逃生口。
 - **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
 - **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
 - **站点页与账号页的表头/分组分割线不再叠在一起**。
+- **站点页与账号页收成一套表格，操作列的宽间隔与图文混杂一并修掉**。
+  - **「列表 / 表格」两态合并为表格**。两者共用同一份行标记、同一条网格线，差别只有 6px 行距和一行列头——不是两种视图，是同一个表格少画一行字。切换按钮与两项设置随之删除；页面现在无条件按表格排：每组的列头是顶盖，组内最后一行是桌脚，中间的行只保留侧边与下边框。
+  - **操作列不再又宽又乱**。账号行的三个文字动作与站点行的「新建身份」都改成了图标按钮，同一簇里不再混两种宽度和两种字号；紧凑启动控件从 22px 提到 24px，与 `IconButton` 等高，整簇贴齐列尾。原先账号行的操作组会吸收列内所有空余宽度，于是三个动作贴左、铅笔孤零零贴右——现在整簇是一个右对齐的簇。腾出来的宽度还给了地址、角色与状态这些要读的列。
 
 ### English
 
@@ -52,26 +55,9 @@ dead, and turns a flow's raw CDP step into a tiered escape hatch.
 - **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
 - **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.
 - **The sites and identities tables no longer stack their header rule on a group rule.**
-
-## [2.2.2] - 2026-11-16
-
-站点页与账号页收成一套表格，并修掉操作列的宽间隔与图文混杂。
-
-### 中文
-
-#### 优化
-
-- **「列表 / 表格」两态合并为表格**。两者共用同一份行标记、同一条网格线，差别只有 6px 行距和一行列头——不是两种视图，是同一个表格少画一行字。切换按钮与两项设置随之删除；页面现在无条件按表格排：每组的列头是顶盖，组内最后一行是桌脚，中间的行只保留侧边与下边框。
-- **操作列不再又宽又乱**。账号行的三个文字动作与站点行的「新建身份」都改成了图标按钮，同一簇里不再混两种宽度和两种字号；紧凑启动控件从 22px 提到 24px，与 `IconButton` 等高，整簇贴齐列尾。原先账号行的操作组会吸收列内所有空余宽度，于是三个动作贴左、铅笔孤零零贴右——现在整簇是一个右对齐的簇。腾出来的宽度还给了地址、角色与状态这些要读的列。
-
-### English
-
-The sites and identities pages collapse into one table, and the actions column loses its wide gaps and mixed text-plus-icon clutter.
-
-#### Improved
-
-- **The list / table toggle is gone; the table stays**. Both modes shared the same row markup and the same grid line — the only differences were a 6px gap and a header row. That is not two views, it is one table with a line of text left out. The toggle and its two settings keys are removed, and the layout is now unconditional: each group's header is the cap, its last row is the foot, and the rows between keep only their side and bottom rules.
-- **The actions column is no longer wide and ragged**. The three text actions on an account row and the "new identity" button on a site row are icon buttons now, so no cluster mixes two widths and two type sizes. The compact launch control went from 22px to 24px to match `IconButton`, and each cluster is pinned to the right edge of its column. The old session group absorbed every spare pixel of the column, which put three actions at the left and a lone pencil at the right; there is one right-aligned cluster now. The width that freed up went back to the columns people actually read — address, role, status.
+- **The sites and identities pages collapse into one table, and the actions column loses its wide gaps and mixed text-plus-icon clutter.**
+  - **The list / table toggle is gone; the table stays**. Both modes shared the same row markup and the same grid line — the only differences were a 6px gap and a header row. That is not two views, it is one table with a line of text left out. The toggle and its two settings keys are removed, and the layout is now unconditional: each group's header is the cap, its last row is the foot, and the rows between keep only their side and bottom rules.
+  - **The actions column is no longer wide and ragged**. The three text actions on an account row and the "new identity" button on a site row are icon buttons now, so no cluster mixes two widths and two type sizes. The compact launch control went from 22px to 24px to match `IconButton`, and each cluster is pinned to the right edge of its column. The old session group absorbed every spare pixel of the column, which put three actions at the left and a lone pencil at the right; there is one right-aligned cluster now. The width that freed up went back to the columns people actually read — address, role, status.
 
 ## [2.2.1] - 2026-11-16
 

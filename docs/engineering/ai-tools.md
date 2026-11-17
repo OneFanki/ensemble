@@ -106,8 +106,8 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | `go_back_browser_tab` | run | 是 | 无可后退历史时什么也不发生 | `{ ok }` |
 | `go_forward_browser_tab` | run | 是 | 无可前进历史时什么也不发生 | `{ ok }` |
 | `reload_browser_tab` | run | 是 | `ignoreCache: true` 等价 Ctrl+Shift+R，绕过 HTTP 缓存 | `{ ok }` |
-| `type_browser_text` | run | 是 | 先聚焦、清空再逐字输入；密码框返回 `secret: true`。直连多匹配同 click（`warning`）。可用句柄（同 click） | `{ ok, selector, secret?, warning? }` |
-| `fill_browser_form` | run | 是 | 逐字段真实输入；某字段失败即停，不留半填表单。某字段定位多匹配时仍填第一个，该字段条目带 `warning` | `{ ok, filled: [{field, selector?, secret?, warning?}] }` |
+| `type_browser_text` | run | 是 | 先聚焦、清空再逐字输入；密码框返回 `secret: true`。目标是 select 时直接报错，select 用 fill_browser_form。直连多匹配同 click（`warning`）。可用句柄（同 click） | `{ ok, selector, secret?, warning? }` |
+| `fill_browser_form` | run | 是 | 逐字段真实输入；select 字段按 option 文字或值精确匹配（trim 后全等，无子串），匹配不到进 `failed` 带原因与可选项；两个不同定位解析到同一控件时第二个进 `failed`，不串写。其余字段继续填。某字段定位多匹配时仍填第一个，该字段条目带 `warning` | `{ ok, filled: [{field, selector?, secret?, warning?}], failed: [{field, reason}] }` |
 | `fill_browser_login` | run | 是 | 密码留在主进程，跨域页面拒绝 | 填充结果 |
 | `run_flow` | run | 是 | 步骤失败即停并说明原因。`timeoutMs` 默认 120000、上限 600000，由调用方指定——慢操作必须显式给大一点。`wait` 步骤会被流程剩余预算截断，超时时报的是「流程超过 N 秒」而不是「条件没满足」。`script` 步骤在 vm 里编排动作原语（不含 login/cdp），整段受同一个预算约束，到点报「脚本超时」 | 每步结果与变量；用了原始 CDP 时多一个 `rawCdp` 列表，超过两次附带 `note` |
 | `screenshot_browser_tab` | run | — | `timeoutMs` 默认 15000、上限 60000。超时返回 `reason: "page-busy"` 而不是报错。给 `selector`/`elementText`/`role` 时只截该元素（裁剪到元素范围；元素在视口外直接报错，不回退成整页图） | `{ path, bytes, data? }` 或 `{ ok: false, timedOut, reason }` |

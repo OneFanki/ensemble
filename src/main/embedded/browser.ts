@@ -4712,12 +4712,21 @@ export class EmbeddedBrowser {
     const focus = await tab.cdp.evaluate<{
       ok: boolean;
       reason?: string;
+      tag?: string;
       inputType?: string;
       selector?: string;
       matchCount?: number;
     }>(buildFocusExpression(effective));
     if (!focus.ok)
       throw new Error(`无法输入到 ${describeTarget(effective)}：${focus.reason ?? "unknown"}`);
+    // 逐字打字对 select 完全无效：字符不会落进任何 option，返回 ok 只会让
+    // 调用方以为填上了。在这里直接拒绝，并指向能真正设值的工具。
+    if (focus.tag === "select") {
+      throw new Error(
+        `「${describeTarget(effective)}」是 select 下拉框，type_browser_text 无法对它逐字输入。` +
+          `请改用 fill_browser_form，按 option 的文字或值精确选择`,
+      );
+    }
     await this.typeInto(tab, effective, text, options);
     // Reported so the MCP layer can keep the value out of its audit log; a
     // password field can be a brand-new credential (creating a tenant), so it
@@ -4861,6 +4870,14 @@ export class EmbeddedBrowser {
    * its own MCP request, and a slow backend meant the caller had to poll between
    * them anyway. One call also keeps the page from being left half-filled when a
    * single request times out.
+   *
+   * A field that cannot be filled lands in `failed` with the reason instead of
+   * stopping the run: the remaining fields keep their round trips, and the
+   * caller sees exactly which control was left untouched. Two guards keep a
+   * value from ever landing in the wrong control: a `<select>` goes through the
+   * option matcher (an unmatched option fails its field rather than being typed
+   * into a neighbour), and two differently-named fields resolving to the same
+   * control refuse the second write.
    */
   async fillForm(
     tabId: string,
@@ -4873,22 +4890,69 @@ export class EmbeddedBrowser {
   ): Promise<{
     ok: true;
     filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }>;
+    failed: Array<{ field: string; reason: string }>;
   }> {
     const tab = this.requireTab(tabId);
     const filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }> = [];
+    const failed: Array<{ field: string; reason: string }> = [];
+    const claimed = new Map<string, { field: string; target: string }>();
     for (const field of fields) {
       const name = describeTarget(field.target);
       const focus = await tab.cdp.evaluate<{
         ok: boolean;
         reason?: string;
+        tag?: string;
         inputType?: string;
         selector?: string;
         matchCount?: number;
       }>(buildFocusExpression(field.target));
       if (!focus.ok) {
-        throw new Error(
-          `第 ${filled.length + 1} 个字段（${name}）无法输入：${focus.reason ?? "unknown"}`,
-        );
+        failed.push({
+          field: name,
+          reason: `无法定位可输入控件：${focus.reason ?? "unknown"}`,
+        });
+        continue;
+      }
+      const selectorKey = focus.selector ?? "";
+      const prior = selectorKey ? claimed.get(selectorKey) : undefined;
+      if (prior && prior.target !== name) {
+        // 两个不同的定位解析到了同一个控件：其中一个认领错了。把值照写
+        // 就会把一个字段的内容灌进另一个字段，这里拒绝第二个写入。
+        failed.push({
+          field: name,
+          reason: `与字段「${prior.field}」解析到了同一个控件，为避免把值写进另一个字段，本字段未填写`,
+        });
+        continue;
+      }
+      if (selectorKey && !prior) claimed.set(selectorKey, { field: name, target: name });
+      if (focus.tag === "select") {
+        const picked = await tab.cdp.evaluate<{
+          ok: boolean;
+          reason?: string;
+          available?: string[];
+          value?: string;
+          text?: string;
+          selector?: string;
+          matchCount?: number;
+        }>(buildSelectExpression(field.target, field.value));
+        if (!picked.ok) {
+          const hint = picked.available?.length
+            ? `，可选：${picked.available.join(" / ")}`
+            : "";
+          failed.push({
+            field: name,
+            reason: `select 选项「${field.value}」不存在（${picked.reason ?? "unknown"}${hint}）`,
+          });
+          continue;
+        }
+        const warning = multiMatchWarning(field.target, picked.matchCount);
+        if (field.submit) await tab.cdp.pressNamedKey("Enter");
+        filled.push({
+          field: name,
+          ...(picked.selector ? { selector: picked.selector } : {}),
+          ...(warning ? { warning } : {}),
+        });
+        continue;
       }
       await this.typeInto(tab, field.target, field.value, {
         clear: field.clear !== false,
@@ -4904,7 +4968,7 @@ export class EmbeddedBrowser {
         ...(warning ? { warning } : {}),
       });
     }
-    return { ok: true, filled };
+    return { ok: true, filled, failed };
   }
 
   /**

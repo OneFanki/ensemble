@@ -53,6 +53,7 @@ const server = createServer((req, res) => {
 <section><button id="blocked" disabled>已提交</button></section>
 <section><a id="link" href="/detail/42" data-testid="detail-link">查看详情</a></section>
 <section><label for="name-field">名称</label><input id="name-field" type="text" value="初始值"></section>
+<section><label for="frozen-field">锁定</label><input id="frozen-field" type="text" value="锁死" readonly></section>
 <section><div id="target-box"></div></section>
 <div id="spacer"></div>
 <section><div id="far-box"></div></section>
@@ -227,6 +228,20 @@ try {
     "a field's current value is reported separately from its text",
     field.value === "初始值" && field.inputType === "text",
     field,
+  );
+  // A plain text input is editable: not contenteditable, but a control that
+  // accepts input, and reporting it as not-editable while readOnly:false is a
+  // contradiction the caller cannot act on.
+  check(
+    "a plain text input reports itself as editable",
+    field.state?.editable === true && field.state?.readOnly === false,
+    field.state,
+  );
+  const frozen = await call("read_browser_element", { tabId, selector: "#frozen-field" });
+  check(
+    "a readonly input reports editable false with readOnly true",
+    frozen.state?.editable === false && frozen.state?.readOnly === true,
+    frozen.state,
   );
   const fieldValue = await call("read_browser_attribute", { tabId, selector: "#name-field" });
   check(

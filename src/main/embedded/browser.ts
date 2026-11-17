@@ -167,6 +167,78 @@ const SLEEP_SWEEP_DEFAULT_MS = 10_000;
 const DIALOG_AUTO_DISMISS_MS = 30_000;
 
 /**
+ * 对话框挡路时，返回体与报错共用的一句话。
+ *
+ * 动作工具在对话框打开时返回结构化结果（dialog + hint），读工具把它作为
+ * 报错抛出；两种出口都必须说清同一件事：先看弹窗、再答弹窗、然后重试。
+ */
+const DIALOG_BLOCKING_HINT =
+  "用 read_browser_dialog 确认内容，用 handle_browser_dialog 回答（accept: true 为确定），然后再继续。";
+
+/**
+ * beforeunload 被拦时的说明。页面没有被阻塞，缺的是一次去留决定。
+ */
+const BEFOREUNLOAD_HINT =
+  "离开被页面的 beforeunload 处理器拦下了，页面还留在原地且可以继续操作。" +
+  "用 handle_browser_dialog 决定：accept: true 离开（会重新发起刚才那次导航），accept: false 留下。";
+
+/**
+ * 页面事件循环探针失败时的说明。
+ */
+const LOOP_BLOCKED_HINT =
+  "页面事件循环已阻塞（页内定时器持续不运行）。常见原因是页面调用了本环境不支持的 " +
+  "prompt()，或一段脚本把主线程卡死；CDP 的读取走别的通道所以仍能返回，不代表页面正常。" +
+  "这个页面无法继续驱动，建议关闭标签页重开。";
+
+/**
+ * 「对话框在命令执行途中打开」的专用错误。
+ *
+ * 打开弹窗的那条输入命令在 CDP 层永远等不到回应（实测：modal 打开后
+ * `Input.dispatch*` 不 ack），打断等待靠的是 `Page.javascriptDialogOpening`
+ * 事件信号。动作工具捕获它换回结构化返回（dialog + hint）；读工具让它
+ * 直接冒出去，message 本身就是完整指引。
+ */
+class DialogInterruptedError extends Error {
+  readonly dialog: {
+    type: string;
+    message: string;
+    defaultPrompt?: string;
+    url?: string;
+  };
+
+  constructor(dialog: {
+    type: string;
+    message: string;
+    defaultPrompt?: string;
+    url?: string;
+  }) {
+    const brief = dialog.message.replace(/\s+/g, " ").trim().slice(0, 120);
+    super(
+      `页面弹出了一个 ${dialog.type} 弹窗：「${brief}」，这条命令已提前中断，页面与弹窗保持原样。` +
+        DIALOG_BLOCKING_HINT,
+    );
+    this.name = "DialogInterruptedError";
+    this.dialog = dialog;
+  }
+}
+
+/**
+ * 动作工具被「弹窗打开」打断时，返回体里的结构化片段。
+ *
+ * 弹窗本身就是那次点击/按键的页面回应，所以 `ok` 仍为 true：动作已送达，
+ * 接下来该做的是处理弹窗而不是重试动作。
+ */
+interface DialogOpenedInfo {
+  dialog: {
+    type: string;
+    message: string;
+    defaultPrompt?: string;
+    url?: string;
+  };
+  hint: string;
+}
+
+/**
  * 每个标签页最多同时登记多少个元素句柄。
  *
  * 句柄是轻量定位描述符，但一个失控的循环可以登记到内存爆掉为止；超出就淘汰
@@ -431,6 +503,20 @@ interface TabRecord {
     defaultPrompt?: string;
     url?: string;
     openedAt: number;
+    /**
+     * 这条记录对应的弹窗是否把页面挡住了。
+     *
+     * alert / confirm（以及 CDP 事件报来的任何弹窗）打开期间页面是阻塞的，
+     * 这是记录的默认语义。beforeunload 在 Electron 里不走原生弹窗——离开被拦
+     * 后页面照常回答命令（见 {@link recordUnloadBlock}）——这种记录标记为
+     * false：输入命令不因它被打断，前置检查也不因它拒绝发命令。
+     */
+    blocksPage?: boolean;
+    /**
+     * beforeunload 拦下的那次导航要去的地址。accept=true 时用它重发导航；
+     * 拦截来自页面内链接且拿不到去向时缺省。
+     */
+    blockedTarget?: string;
     /** Drops the dialog if nobody answers it; cleared when one is answered. */
     autoDismiss?: ReturnType<typeof setTimeout>;
   };
@@ -442,6 +528,47 @@ interface TabRecord {
    * the page it describes.
    */
   dialogListener?: () => void;
+  /**
+   * 输入命令挂着的「对话框已打开」一次性信号（`withDialogHint` 创建）。
+   *
+   * `Page.javascriptDialogOpening` 到达时 resolve：正在等待的输入命令立刻
+   * 返回，而不是等它自己的 30 秒上限——对话框打开的那条输入命令在 CDP 层
+   * 永远等不到回应（实测），靠事件信号打断是唯一及时的路。命令收尾时若
+   * 信号还是自己建的这份就删掉；并发命令共享同一份，谁后完成谁删。
+   */
+  dialogWait?: { promise: Promise<void>; resolve: () => void };
+  /**
+   * navigate 挂着的「离开被 beforeunload 拦下」一次性信号。
+   *
+   * 拦截发生时 navigate 还在等加载完成，不靠这条信号就得等满 10 秒超时才
+   * 返回——而拦截本身几毫秒内就已成事实。
+   */
+  unloadWait?: { promise: Promise<void>; resolve: () => void };
+  /**
+   * handle_browser_dialog(accept: true) 对一条 beforeunload 记录的「放行」标记。
+   *
+   * Electron 的 will-prevent-unload 在事件派发返回时就把去留定了，异步的
+   * preventDefault 不起作用；放行只能带着这个标记把被拦的导航重发一遍，
+   * 再触发的拦截在 {@link recordUnloadBlock} 里同步消费掉它。did-navigate
+   * 是兜底清理，防止标记在异常路径上残留。
+   */
+  unloadAnswer?: "leave";
+  /**
+   * navigate 正在发起的这次导航的目标地址。
+   *
+   * will-prevent-unload 事件不带去向（Electron 45 的监听器签名只有 event），
+   * 主进程自己发起的导航只有这里知道；{@link recordUnloadBlock} 把它抄进
+   * beforeunload 记录的 blockedTarget，供 accept=true 重发。navigate 收尾
+   * 即清：拦截若发生，发生在 loadURL 返回之前，记录里已经抄走了一份。
+   */
+  pendingUnloadNav?: string;
+  /**
+   * 本页装了登录捕获绑定，绑定事件要求会话保持附加才会送达。
+   *
+   * 由 {@link installLoginCapture} 声明，是否真的钉住由 syncSessionHold 的
+   * 统一谓词裁决——各功能直接调 holdSession 会互相冲掉。
+   */
+  loginCaptureHold?: boolean;
   /**
    * The DevTools panel this app hosts for the page, when one exists.
    *
@@ -2315,8 +2442,12 @@ export class EmbeddedBrowser {
        * arrives whenever they press Enter, and an event emitted with nobody
        * attached is dropped rather than queued. So the session stays held for
        * as long as an instrumented document is loaded.
+       *
+       * 钉住与否交给 syncSessionHold 的统一谓词：这里只声明需求。各功能各自
+       * 直接调 holdSession 会互相冲掉——后写的 false 会覆盖先写的 true。
        */
-      this.options.guests?.holdSession?.(tab.id, true);
+      tab.loginCaptureHold = true;
+      this.syncSessionHold(tab);
     } catch {
       // A page that navigated away or a failed load has nothing to instrument.
     }
@@ -2584,7 +2715,16 @@ export class EmbeddedBrowser {
       }
       tab.elementHandles = new Map();
       tab.url = url;
+      // 真的导航走了：beforeunload 的放行标记已完成使命，兜底清掉。
+      delete tab.unloadAnswer;
       update();
+    });
+    /*
+     * beforeunload 拦下导航：Electron 不弹原生的「离开/留下」框，改发这个事件
+     * （实测不发 Page.javascriptDialogOpening），所以离开拦截在这里记账。
+     */
+    contents.on("will-prevent-unload", (event) => {
+      this.recordUnloadBlock(tab, event);
     });
     contents.on("did-navigate-in-page", (_event, url) => {
       tab.url = url;
@@ -2859,8 +2999,21 @@ export class EmbeddedBrowser {
     }
   }
 
-  async navigate(tabId: string, url: string): Promise<EmbeddedTab> {
+  /**
+   * Navigates the tab and reports whether the page let it happen.
+   *
+   * 返回体在导航真的完成时是 `{ tab }`；被 beforeunload 拦下时多出
+   * `cancelled: "beforeunload"` 与说明——拦截后的「成功」比失败更误导，调用方
+   * 会拿着旧页面的地址当新地址继续走。拦截记录本身可应答：read_browser_dialog
+   * 看它，handle_browser_dialog 决定去留（accept=true 重发这次导航）。
+   */
+  async navigate(
+    tabId: string,
+    url: string,
+  ): Promise<{ tab: EmbeddedTab; cancelled?: "beforeunload"; note?: string }> {
     const tab = this.requireTab(tabId);
+    // 真实弹窗挡着时页面发不了命令，导航只会空等：先答弹窗。
+    if (tab.dialog && tab.dialog.blocksPage !== false) this.throwIfDialogOpen(tab);
     const target = normalizeEmbeddedUrl(url);
     if (!target) throw new Error("只支持 http(s) 地址");
     // Where the page is before we ask it to move. A redirect off this address is
@@ -2876,22 +3029,45 @@ export class EmbeddedBrowser {
     // A frozen page must take the navigation; loadURL alone can leave the
     // old document parked in the lifecycle cache.
     this.wakeTab(tabId);
-    await tab.view.webContents.loadURL(target).catch(() => {
-      // The error page is the feedback; the tab stays alive.
+    // will-prevent-unload 不带去向，主进程发起的导航只有这里知道目标。
+    tab.pendingUnloadNav = target;
+    // 拦截记录一出现就返回，不等加载超时：拦截本身几毫秒内就已成事实。
+    let resolveUnload!: () => void;
+    const unloadPromise = new Promise<void>((done) => {
+      resolveUnload = done;
     });
-    // A flow's next step runs immediately after this, and a guest's `loadURL`
-    // resolves before the new document is ready — the first `wait` then matched
-    // the *old* page and the following `read` looked in the wrong document.
-    // Native views never showed this because their load settled first.
-    if (this.options.guests) {
-      await this.whenReady(tab, target, before);
+    tab.unloadWait = { promise: unloadPromise, resolve: resolveUnload };
+    try {
+      await tab.view.webContents.loadURL(target).catch(() => {
+        // 拦截（did-fail-load）与加载失败都到这里；是不是拦截由下面的记录说话。
+      });
+      // A flow's next step runs immediately after this, and a guest's `loadURL`
+      // resolves before the new document is ready — the first `wait` then matched
+      // the *old* page and the following `read` looked in the wrong document.
+      // Native views never showed this because their load settled first.
+      if (this.options.guests) {
+        await Promise.race([this.whenReady(tab, target, before), tab.unloadWait.promise]);
+      }
+    } finally {
+      if (tab.unloadWait?.promise === unloadPromise) delete tab.unloadWait;
+      // 拦截记录已经在 blockedTarget 里抄走了地址；记录没产生就说明这次导航
+      // 与拦截无关，别把地址留给下一次无关的拦截。
+      if (tab.dialog?.type !== "beforeunload") delete tab.pendingUnloadNav;
     }
+    const blocked = tab.dialog?.type === "beforeunload" && tab.dialog.blocksPage === false;
     this.syncTab(tab);
     // The page is no longer blank, so it has to take over its cell: until now
-    // the renderer was drawing the new-tab surface there instead.
+    // the renderer was drawing the app's own new-tab surface there instead.
     this.applyLayout();
     this.emitState();
-    return this.describe(tab);
+    if (blocked) {
+      return {
+        tab: this.describe(tab),
+        cancelled: "beforeunload",
+        note: BEFOREUNLOAD_HINT,
+      };
+    }
+    return { tab: this.describe(tab) };
   }
 
   back(tabId: string): void {
@@ -3888,12 +4064,67 @@ export class EmbeddedBrowser {
     };
   }
 
+  /**
+   * 事件循环探针：页内 `setTimeout(0)` 在预算内跑不跑得动。
+   *
+   * CDP 的 `Runtime.evaluate` 走的是调试通道，页面主线程半挂死时它**仍能
+   * 返回**（实测，prompt() 之后），所以「读得到」不等于「活着」。探针必须
+   * 用页面自己的定时器：循环停摆时那个 Promise 永不 resolve，`awaitPromise`
+   * 的求值也就等不到回应——本地计时器到点即判死。
+   *
+   * 走 `evaluate` 而不是裸 send，是为了顺带把页面呈现出来：后台页面的定时器
+   * 被钳到 ~1s，不呈现就会把「被节流」误报成「已阻塞」。
+   */
+  private async probeEventLoop(tab: TabRecord): Promise<boolean> {
+    const beat = tab.cdp
+      .evaluate<unknown>("new Promise((resolve) => { setTimeout(() => resolve(true), 0); })", {
+        awaitPromise: true,
+        timeoutMs: 1_200,
+      })
+      .then((): "alive" => "alive")
+      .catch((): "failed" => "failed");
+    const deadline = new Promise<"deadline">((resolve) => {
+      const timer = setTimeout(() => resolve("deadline"), 800);
+      timer.unref?.();
+    });
+    const outcome = await Promise.race([beat, deadline]);
+    if (outcome === "alive") return true;
+    if (outcome === "deadline") return false;
+    // 探针命令自己失败：挂死特征要等满它自己的 1.2s 上限才会败，那时 race 早
+    // 被本地计时器赢走。能落到这里的都是快速失败（导航销毁上下文、页面关闭），
+    // 不指认阻塞。
+    return true;
+  }
+
   async snapshotDom(tabId: string, options: { maxNodes?: number } = {}): Promise<DomSnapshot> {
     const tab = this.requireTab(tabId);
+    /*
+     * 先探后读。
+     *
+     * 循环停摆的页面（busy loop）会让读取一直挂到命令上限——先探一次，
+     * 800ms 内就能报出真正的原因，而不是 30 秒后的「CDP 没有响应」。
+     * 健康页面只多一次轻量求值；探针失败的那些情况（导航销毁上下文）
+     * 不指认阻塞，由后面的正常读取给出自己的错误。
+     */
+    if ((await this.probeEventLoop(tab)) === false) {
+      throw new Error(LOOP_BLOCKED_HINT);
+    }
     // Hinted like the actions: reading the page is the first thing a caller does
     // when an action stalls, and a bare evaluate timeout there reads as "the
     // selector is wrong" when the real answer is "a dialog is waiting".
-    return this.withDialogHint(tab, () => tab.cdp.snapshotDom(buildDomSnapshotExpression(options)));
+    let snapshot: DomSnapshot;
+    try {
+      snapshot = await this.withDialogHint(tab, () =>
+        tab.cdp.snapshotDom(buildDomSnapshotExpression(options)),
+      );
+    } catch (error) {
+      // 读取失败时再探一次：探针通过后、读取期间页面把自己卡死的情况。
+      if (!(error instanceof DialogInterruptedError) && (await this.probeEventLoop(tab)) === false) {
+        throw new Error(LOOP_BLOCKED_HINT);
+      }
+      throw error;
+    }
+    return snapshot;
   }
 
   async visibility(tabId: string, target: TargetInput): Promise<VisibilityProbe> {
@@ -4050,6 +4281,9 @@ export class EmbeddedBrowser {
     warning?: string;
     /** Where the events actually landed; `onTarget: false` means they missed. */
     hit?: { onTarget: boolean; tag?: string; text?: string };
+    /** 点击触发了 JavaScript 弹窗时：弹窗内容与后续指引。 */
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
   }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
@@ -4064,7 +4298,26 @@ export class EmbeddedBrowser {
     }
     const px = point.x;
     const py = point.y;
-    await this.withDialogHint(tab, () => tab.cdp.clickAt(px, py));
+    let interrupted: DialogInterruptedError | undefined;
+    try {
+      await this.withDialogHint(tab, () => tab.cdp.clickAt(px, py));
+    } catch (error) {
+      // 打开弹窗的那次派发在 CDP 层永远等不到回应；事件信号打断后把弹窗
+      // 直接交给调用方，而不是让它挂着等满命令上限。
+      if (error instanceof DialogInterruptedError) interrupted = error;
+      else throw error;
+    }
+    const warning = multiMatchWarning(effective, point.matchCount);
+    if (interrupted) {
+      return {
+        ok: true,
+        ...(point.tag ? { tag: point.tag } : {}),
+        ...(point.text ? { text: point.text } : {}),
+        ...(point.selector ? { selector: point.selector } : {}),
+        ...(warning ? { warning } : {}),
+        ...this.dialogOpenedFields(interrupted),
+      };
+    }
     // An overlay, a late scroll or a re-render can redirect the events. Reading
     // the hit back turns "the site ignored my click" from a guess into a fact
     // the caller can act on.
@@ -4075,7 +4328,6 @@ export class EmbeddedBrowser {
       // Navigation right after the click destroys the context; the click still
       // happened, so the result is reported without hit facts.
     }
-    const warning = multiMatchWarning(effective, point.matchCount);
     return {
       ok: true,
       ...(point.tag ? { tag: point.tag } : {}),
@@ -4100,7 +4352,15 @@ export class EmbeddedBrowser {
   async hover(
     tabId: string,
     target: TargetInput,
-  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string; warning?: string }> {
+  ): Promise<{
+    ok: true;
+    tag?: string;
+    text?: string;
+    selector?: string;
+    warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
+  }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
     const point = await this.withDialogHint(tab, () =>
@@ -4111,7 +4371,23 @@ export class EmbeddedBrowser {
     }
     const hx = point.x;
     const hy = point.y;
-    await this.withDialogHint(tab, () => tab.cdp.hoverAt(hx, hy));
+    try {
+      await this.withDialogHint(tab, () => tab.cdp.hoverAt(hx, hy));
+    } catch (error) {
+      if (error instanceof DialogInterruptedError) {
+        return {
+          ok: true,
+          ...(point.tag ? { tag: point.tag } : {}),
+          ...(point.text ? { text: point.text } : {}),
+          ...(point.selector ? { selector: point.selector } : {}),
+          ...(multiMatchWarning(effective, point.matchCount)
+            ? { warning: multiMatchWarning(effective, point.matchCount) }
+            : {}),
+          ...this.dialogOpenedFields(error),
+        };
+      }
+      throw error;
+    }
     const warning = multiMatchWarning(effective, point.matchCount);
     return {
       ok: true,
@@ -4141,7 +4417,14 @@ export class EmbeddedBrowser {
       deltaX?: number;
       deltaY?: number;
     } = {},
-  ): Promise<{ ok: true; scrolled: { x: number; y: number }; moved: boolean; warning?: string }> {
+  ): Promise<{
+    ok: true;
+    scrolled?: { x: number; y: number };
+    moved?: boolean;
+    warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
+  }> {
     const tab = this.requireTab(tabId);
     /*
      * Which element actually scrolls is not knowable from the call.
@@ -4216,7 +4499,22 @@ export class EmbeddedBrowser {
     const before = await tab.cdp.evaluate<{ x: number; y: number }>(
       `window.__ensembleScrollProbe.read()`,
     );
-    await this.withDialogHint(tab, () => tab.cdp.scrollAt(x, y, options.deltaX ?? 0, options.deltaY ?? 0));
+    try {
+      await this.withDialogHint(tab, () =>
+        tab.cdp.scrollAt(x, y, options.deltaX ?? 0, options.deltaY ?? 0),
+      );
+    } catch (error) {
+      // 滚轮触发的弹窗（悬停加载、滚动监听）一样会挂住派发：页面被挡住后
+      // 读不到滚动位置，返回体只剩弹窗本身。
+      if (error instanceof DialogInterruptedError) {
+        return {
+          ok: true,
+          ...(warning ? { warning } : {}),
+          ...this.dialogOpenedFields(error),
+        };
+      }
+      throw error;
+    }
     // A wheel event is queued against the compositor, not applied synchronously.
     // Reading in the same tick measured the pre-scroll position and reported
     // `moved: false` for a scroll that had in fact happened.
@@ -4243,7 +4541,13 @@ export class EmbeddedBrowser {
   async pressKeys(
     tabId: string,
     keys: string,
-  ): Promise<{ ok: true; keys: string; modifiers: number }> {
+  ): Promise<{
+    ok: true;
+    keys: string;
+    modifiers: number;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
+  }> {
     const tab = this.requireTab(tabId);
     const parts = keys
       .split("+")
@@ -4263,19 +4567,42 @@ export class EmbeddedBrowser {
       if (!entry) throw new Error(`不认识的修饰键：${name}`);
       modifiers |= entry.mask;
     }
+    // Enter/submit 落在一个会弹 confirm 的表单上是常见路径：按键派发与点击
+    // 同样会被弹窗挂住，同样靠事件信号打断。
+    const sendKey = async (key: string, code: string, keyCode: number) => {
+      try {
+        await this.withDialogHint(tab, () =>
+          tab.cdp.pressWithModifiers(key, code, keyCode, modifiers),
+        );
+      } catch (error) {
+        if (error instanceof DialogInterruptedError) return { interrupted: error };
+        throw error;
+      }
+      return {};
+    };
     const keyEntry = KEY_TABLE[target] ?? KEY_TABLE[target.charAt(0).toUpperCase() + target.slice(1)];
     if (!keyEntry) {
       // A single character is a legitimate shortcut target ("Control+a"); it has
       // no entry in the named-key table because its code is derived, not listed.
       if (target.length === 1) {
         const upper = target.toUpperCase();
-        await tab.cdp.pressWithModifiers(target, `Key${upper}`, upper.charCodeAt(0), modifiers);
-        return { ok: true, keys, modifiers };
+        const { interrupted } = await sendKey(target, `Key${upper}`, upper.charCodeAt(0));
+        return {
+          ok: true,
+          keys,
+          modifiers,
+          ...(interrupted ? this.dialogOpenedFields(interrupted) : {}),
+        };
       }
       throw new Error(`不支持的按键：${target}`);
     }
-    await tab.cdp.pressWithModifiers(keyEntry.key, keyEntry.code, keyEntry.keyCode, modifiers);
-    return { ok: true, keys, modifiers };
+    const { interrupted } = await sendKey(keyEntry.key, keyEntry.code, keyEntry.keyCode);
+    return {
+      ok: true,
+      keys,
+      modifiers,
+      ...(interrupted ? this.dialogOpenedFields(interrupted) : {}),
+    };
   }
 
   /**
@@ -4296,10 +4623,12 @@ export class EmbeddedBrowser {
     paths: string[],
   ): Promise<{
     ok: true;
-    count: number;
-    multiple: boolean;
+    count?: number;
+    multiple?: boolean;
     selector?: string;
     warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
   }> {
     const tab = this.requireTab(tabId);
     if (paths.length === 0) throw new Error("至少要给一个文件路径");
@@ -4327,7 +4656,23 @@ export class EmbeddedBrowser {
     // probe above ran in the same document, so this cannot drift to another node.
     const selector = probe.selector;
     if (!selector) throw new Error(`无法定位文件框：${describeTarget(target)}`);
-    await this.withDialogHint(tab, () => tab.cdp.setFiles(selector, paths));
+    try {
+      await this.withDialogHint(tab, () => tab.cdp.setFiles(selector, paths));
+    } catch (error) {
+      // change 事件处理器弹窗：文件命令是否落盘无法确证（派发没有应答就
+      // 被打断了），所以不带 count，只把弹窗交给调用方。
+      if (error instanceof DialogInterruptedError) {
+        return {
+          ok: true,
+          ...(probe.selector ? { selector: probe.selector } : {}),
+          ...(multiMatchWarning(target, probe.matchCount)
+            ? { warning: multiMatchWarning(target, probe.matchCount) }
+            : {}),
+          ...this.dialogOpenedFields(error),
+        };
+      }
+      throw error;
+    }
     const warning = multiMatchWarning(target, probe.matchCount);
     return {
       ok: true,
@@ -4358,6 +4703,8 @@ export class EmbeddedBrowser {
     fromText?: string;
     toText?: string;
     warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
   }> {
     const tab = this.requireTab(tabId);
     const points = await this.withDialogHint(tab, () =>
@@ -4377,7 +4724,19 @@ export class EmbeddedBrowser {
     if (!points.ok || !points.from || !points.to) {
       throw new Error(`无法拖拽：${points.reason ?? "unknown"}`);
     }
-    await this.withDialogHint(tab, () => tab.cdp.dragFromTo(points.from!, points.to!));
+    try {
+      await this.withDialogHint(tab, () => tab.cdp.dragFromTo(points.from!, points.to!));
+    } catch (error) {
+      if (error instanceof DialogInterruptedError) {
+        return {
+          ok: true,
+          ...(points.fromTag ? { fromTag: points.fromTag } : {}),
+          ...(points.toTag ? { toTag: points.toTag } : {}),
+          ...this.dialogOpenedFields(error),
+        };
+      }
+      throw error;
+    }
     // 两端都可能多匹配：各自生成提醒，都有时拼成一条，保持返回值只有 warning 一个附加字段。
     const warnings = [
       multiMatchWarning(from, points.fromMatchCount),
@@ -4411,27 +4770,49 @@ export class EmbeddedBrowser {
     desired: boolean,
   ): Promise<{
     ok: true;
-    checked: boolean;
-    changed: boolean;
+    checked?: boolean;
+    changed?: boolean;
     selector?: string;
     stuckAt?: boolean;
     warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
   }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
-    const result = await this.withDialogHint(tab, () =>
-      tab.cdp.evaluate<{
-        ok: boolean;
-        reason?: string;
-        checked?: boolean;
-        changed?: boolean;
-        selector?: string;
-        tag?: string;
-        type?: string;
-        stuckAt?: boolean;
-        matchCount?: number;
-      }>(buildCheckExpression(effective, desired)),
-    );
+    let result: {
+      ok: boolean;
+      reason?: string;
+      checked?: boolean;
+      changed?: boolean;
+      selector?: string;
+      tag?: string;
+      type?: string;
+      stuckAt?: boolean;
+      matchCount?: number;
+    };
+    try {
+      result = await this.withDialogHint(tab, () =>
+        tab.cdp.evaluate<{
+          ok: boolean;
+          reason?: string;
+          checked?: boolean;
+          changed?: boolean;
+          selector?: string;
+          tag?: string;
+          type?: string;
+          stuckAt?: boolean;
+          matchCount?: number;
+        }>(buildCheckExpression(effective, desired)),
+      );
+    } catch (error) {
+      // 勾选动作在页内点击，change 处理器可能弹窗：表达式等不到返回就被
+      // 打断，状态读不出来，返回体只剩弹窗。
+      if (error instanceof DialogInterruptedError) {
+        return { ok: true, ...this.dialogOpenedFields(error) };
+      }
+      throw error;
+    }
     if (!result.ok) {
       throw new Error(`无法设置 ${describeTarget(effective)}：${result.reason ?? "unknown"}`);
     }
@@ -4495,12 +4876,26 @@ export class EmbeddedBrowser {
    * A read, not a poll: the record is filled by the CDP listener installed when
    * the page was created, so the answer works even while the page is blocked —
    * which is precisely when a caller needs to ask.
+   *
+   * `pageBlocked` 区分两种状态：真实弹窗（alert/confirm，页面阻塞）与被
+   * beforeunload 拦下的导航（页面活着，缺一个去留决定）。
    */
   dialogStatus(tabId: string): {
-    dialog: { type: string; message: string; defaultPrompt?: string; url?: string; msOpen: number } | null;
+    dialog:
+      | {
+          type: string;
+          message: string;
+          defaultPrompt?: string;
+          url?: string;
+          msOpen: number;
+          pageBlocked: boolean;
+          hint?: string;
+        }
+      | null;
   } {
     const tab = this.findTab(tabId);
     if (!tab?.dialog) return { dialog: null };
+    const blocked = tab.dialog.blocksPage !== false;
     return {
       dialog: {
         type: tab.dialog.type,
@@ -4508,6 +4903,8 @@ export class EmbeddedBrowser {
         ...(tab.dialog.defaultPrompt ? { defaultPrompt: tab.dialog.defaultPrompt } : {}),
         ...(tab.dialog.url ? { url: tab.dialog.url } : {}),
         msOpen: Date.now() - tab.dialog.openedAt,
+        pageBlocked: blocked,
+        ...(blocked ? { hint: DIALOG_BLOCKING_HINT } : { hint: BEFOREUNLOAD_HINT }),
       },
     };
   }
@@ -4539,9 +4936,43 @@ export class EmbeddedBrowser {
   async handleDialog(
     tabId: string,
     options: { accept: boolean; promptText?: string },
-  ): Promise<{ ok: true; handled: boolean; type?: string }> {
+  ): Promise<{ ok: true; handled: boolean; type?: string; note?: string }> {
     const tab = this.requireTab(tabId);
-    const type = tab.dialog?.type;
+    const open = tab.dialog;
+    const type = open?.type;
+    /*
+     * 合成的 beforeunload 记录：页面没有被阻塞，也没有 CDP 弹窗可应答。
+     *
+     * Electron 用 will-prevent-unload 事件取代了原生 beforeunload 弹窗（实测
+     * 不发 javascriptDialogOpening），拦截在事件派发返回那一刻已经完成——
+     * 「留下」是既成事实。要离开，只能带着放行标记把被拦的导航重发一遍：
+     * 重发会再次触发 will-prevent-unload，recordUnloadBlock 同步消费标记并
+     * preventDefault，导航于是真的走。
+     */
+    if (open && open.blocksPage === false) {
+      const target = open.blockedTarget;
+      this.clearDialog(tab);
+      if (!options.accept) {
+        return { ok: true, handled: true, type: "beforeunload" };
+      }
+      if (!target) {
+        return {
+          ok: true,
+          handled: false,
+          type: "beforeunload",
+          note: "这次拦截拿不到要去的地址（不是本工具发起的导航），无法替页面重发；页面保持在原地。",
+        };
+      }
+      tab.unloadAnswer = "leave";
+      await tab.view.webContents.loadURL(target).catch(() => {
+        // 重发失败就收回标记，别让它拦住下一次无关的拦截。
+        delete tab.unloadAnswer;
+      });
+      // 与 navigate 同一条「等加载完成」的路：应答成功时页面已经在新地址，
+      // 调用方的下一条命令不必自己猜导航有没有走完。
+      await this.whenReady(tab, target);
+      return { ok: true, handled: true, type: "beforeunload" };
+    }
     try {
       await tab.cdp.handleDialog(options.accept, options.promptText);
     } catch (error) {
@@ -4590,22 +5021,40 @@ export class EmbeddedBrowser {
           openedAt: Date.now(),
         };
         /*
+         * A real modal blocks everything, so the waiters come home now: the input
+         * command that opened this dialog stops waiting for a reply it will never
+         * get, and a navigate that ran into it stops waiting for a load.
+         */
+        tab.dialogWait?.resolve();
+        /*
          * A dialog nobody answers blocks the page for the rest of the session —
          * no read, no click, no screenshot. The auto-dismiss is what makes that
          * bounded: the caller that opened it usually answers within a step or
          * two, and a person who walked away costs one dismissed confirm rather
          * than a page that has to be closed.
+         *
+         * 这是唯一会自动应答弹窗的地方——工具超时、命令失败都只报错，不动
+         * 弹窗：应答方向只有无人照看时才可推断，谁在等结果就绝不能替他选。
          */
         const budget = this.options.dialogAutoDismissMs ?? DIALOG_AUTO_DISMISS_MS;
         tab.dialog.autoDismiss = setTimeout(() => {
           const open = tab.dialog;
           if (!open) return;
           delete open.autoDismiss;
+          if (open.blocksPage === false) {
+            // 合成的 beforeunload 记录没有人答：按「留下」收场。页面没有被
+            // 阻塞，本来就没有 CDP 弹窗可应答，什么都不发。
+            this.clearDialog(tab);
+            this.emitState();
+            return;
+          }
           void tab.cdp.handleDialog(false).catch(() => undefined);
           this.clearDialog(tab);
           this.emitState();
         }, budget);
         tab.dialog.autoDismiss.unref?.();
+        // 弹窗挂起期间会话不许闲置分离：分离会把被抑制的弹窗交还给原生兜底。
+        this.syncSessionHold(tab);
         this.emitState();
         return;
       }
@@ -4613,18 +5062,69 @@ export class EmbeddedBrowser {
         // Fires when the page's own code or the browser closes it — including the
         // case where our auto-dismiss fired first. Clearing here keeps the record
         // from outliving the dialog.
+        //
+        // 合成的 beforeunload 记录（blocksPage: false）不在这里清：Electron 把
+        // beforeunload 弹窗换成了 will-prevent-unload，Chromium 侧仍会对那次
+        // 被抑制的弹窗发 closed——实测它会在拦截记录登记后几毫秒内到达，把
+        // 还没被应答的记录冲掉。合成记录只由 handle_browser_dialog 与兜底
+        // 定时器清。
+        if (tab.dialog?.blocksPage === false) return;
         this.clearDialog(tab);
         this.emitState();
       }
     });
   }
 
-  /** Drops the dialog record and its timer, without answering anything. */
+  /**
+   * Drops the dialog record and its timer, without answering anything.
+   *
+   * 清 beforeunload 记录时连同这次拦截的去向：去向只对这条记录的应答有意义，
+   * 记录没了还留着地址，下一次拦截就可能拿旧地址重发。
+   */
   private clearDialog(tab: TabRecord): void {
     const dialog = tab.dialog;
     if (!dialog) return;
     if (dialog.autoDismiss) clearTimeout(dialog.autoDismiss);
     delete tab.dialog;
+    if (dialog.type === "beforeunload") delete tab.pendingUnloadNav;
+    // 弹窗清掉后交还正常的闲置释放节奏；合成 beforeunload 记录本就不参与
+    // 钉住判定，这里统一交给谓词回答。
+    this.syncSessionHold(tab);
+  }
+
+  /**
+   * beforeunload 拦下一次导航：登记一条可应答的 beforeunload 记录。
+   *
+   * 实测（Electron 45.2.1）：页面装了 beforeunload 处理器后，导航触发拦截走
+   * 的是 `will-prevent-unload`，CDP 的 `javascriptDialogOpening` **不**发——
+   * Chromium 原生那条「离开/留下」弹窗被 Electron 换成了这个事件。事件派发
+   * 返回时去留已定：没人 preventDefault 就是「留下」，所以拦截完成后页面
+   * **没有被阻塞**，JS 照常回答命令。这条记录因此标记 blocksPage: false，
+   * 也不 resolve 输入命令的打断信号。
+   *
+   * 放行（accept=true）只能重发那次导航：重发会再次触发 will-prevent-unload，
+   * 本方法开头同步消费 {@link TabRecord.unloadAnswer} 标记并 preventDefault。
+   */
+  private recordUnloadBlock(tab: TabRecord, event: Electron.Event): void {
+    if (tab.unloadAnswer === "leave") {
+      // 这是 handleDialog(accept: true) 重发的那次导航：同步放行。preventDefault
+      // 只在事件派发期间有效，异步调用（AI 应答时再调）不起作用。
+      delete tab.unloadAnswer;
+      event.preventDefault();
+      return;
+    }
+    const blockedTarget = tab.pendingUnloadNav;
+    this.clearDialog(tab);
+    tab.dialog = {
+      type: "beforeunload",
+      message: "页面要求确认后才允许离开当前地址。",
+      ...(blockedTarget ? { blockedTarget } : {}),
+      openedAt: Date.now(),
+      blocksPage: false,
+    };
+    // navigate 正在等加载完成：拦截已成事实，别让它再等满超时。
+    tab.unloadWait?.resolve();
+    this.emitState();
   }
 
   /**
@@ -4648,18 +5148,79 @@ export class EmbeddedBrowser {
      * 30-second timeout followed by an error: while a dialog is up no command
      * reaches the page at all, so sending one can only wait. The record is
      * authoritative — it is filled from the browser's own event, and nothing
-     * clears it except answering the dialog.
+     * clears it except answering the dialog. 合成的 beforeunload 记录
+     * （blocksPage: false）不挡命令，跳过前置检查。
      */
-    if (tab.dialog) this.throwIfDialogOpen(tab);
+    if (tab.dialog && tab.dialog.blocksPage !== false) this.throwIfDialogOpen(tab);
+    /*
+     * Race the command against the dialog opening.
+     *
+     * The dispatch that opens a confirm never gets its reply, so waiting the
+     * command out means waiting out the 30-second ceiling. The opening event
+     * instead arrives within milliseconds of the dialog appearing: resolving on
+     * it interrupts the wait while the dialog is still fresh. The stalled CDP
+     * command keeps running underneath — its own deadline eventually settles it —
+     * and its rejection is swallowed, because the caller has already been
+     * answered with the dialog.
+     */
+    const wait = this.openDialogWait(tab);
+    const runPromise = run();
+    runPromise.catch(() => undefined);
     try {
-      return await run();
+      return await Promise.race([
+        runPromise,
+        wait.promise.then(() => {
+          throw new DialogInterruptedError({
+            type: tab.dialog?.type ?? "alert",
+            message: tab.dialog?.message ?? "",
+            ...(tab.dialog?.defaultPrompt ? { defaultPrompt: tab.dialog.defaultPrompt } : {}),
+            ...(tab.dialog?.url ? { url: tab.dialog.url } : {}),
+          });
+        }),
+      ]);
     } catch (error) {
-      // A dialog can open *during* the command — a click that triggers a confirm
-      // is exactly that. The event fills the record, so by the time the command
-      // stalls it is already there.
-      if (!tab.dialog) throw error;
-      this.throwIfDialogOpen(tab, error);
+      // The interrupt is the answer; everything else keeps the old rule: a
+      // failure with a dialog now open names the dialog instead of the command.
+      if (!(error instanceof DialogInterruptedError)) {
+        if (tab.dialog && tab.dialog.blocksPage !== false) {
+          this.throwIfDialogOpen(tab, error);
+        }
+      }
+      throw error;
+    } finally {
+      if (tab.dialogWait === wait) delete tab.dialogWait;
     }
+  }
+
+  /**
+   * 打开（或复用）本页的「对话框已打开」一次性信号。
+   *
+   * 并发命令共享同一份：两个工具同时打向一个页面时，任何一个收到
+   * javascriptDialogOpening 都该把两个都放回来——那时两条命令都已经
+   * 发不出去了。
+   */
+  private openDialogWait(tab: TabRecord): { promise: Promise<void>; resolve: () => void } {
+    if (!tab.dialogWait) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      tab.dialogWait = { promise, resolve };
+    }
+    return tab.dialogWait;
+  }
+
+  /**
+   * 动作被打断时的结构化返回片段。
+   *
+   * DialogInterruptedError 携带的 dialog 字段优先：读的是打断那一刻的快照，
+   * 不受之后记录变化影响（自动应答定时器可能在调用方读结果前清掉记录）。
+   */
+  private dialogOpenedFields(error: DialogInterruptedError): DialogOpenedInfo {
+    return {
+      dialog: error.dialog,
+      hint: `动作已发出，页面用上面的弹窗接管了流程；这条命令提前中断，页面与弹窗保持原样。${DIALOG_BLOCKING_HINT}`,
+    };
   }
 
   /** The one message for "a dialog is in the way"; always throws. */
@@ -4697,8 +5258,13 @@ export class EmbeddedBrowser {
       }
     }
     if (options.clear !== false) await tab.cdp.selectAll().catch(() => undefined);
-    await tab.cdp.insertText(value);
-    if (options.submit) await tab.cdp.pressNamedKey("Enter");
+    // 输入与回车提交都可能触发页面的弹窗（input 处理器 alert、表单 confirm）：
+    // 挂住的派发靠事件信号打断，DialogInterruptedError 向上交给动作方法换
+    // 结构化返回。selectAll 的静默兜底不能吞掉它，所以这两个不套 catch。
+    await this.withDialogHint(tab, () => tab.cdp.insertText(value));
+    if (options.submit) {
+      await this.withDialogHint(tab, () => tab.cdp.pressNamedKey("Enter"));
+    }
   }
 
   async type(
@@ -4706,7 +5272,14 @@ export class EmbeddedBrowser {
     target: TargetInput,
     text: string,
     options: { submit?: boolean; clear?: boolean } = {},
-  ): Promise<{ ok: true; secret?: true; selector?: string; warning?: string }> {
+  ): Promise<{
+    ok: true;
+    secret?: true;
+    selector?: string;
+    warning?: string;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
+  }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
     const focus = await tab.cdp.evaluate<{
@@ -4727,7 +5300,18 @@ export class EmbeddedBrowser {
           `请改用 fill_browser_form，按 option 的文字或值精确选择`,
       );
     }
-    await this.typeInto(tab, effective, text, options);
+    try {
+      await this.typeInto(tab, effective, text, options);
+    } catch (error) {
+      if (error instanceof DialogInterruptedError) {
+        return {
+          ok: true,
+          ...(focus.selector ? { selector: focus.selector } : {}),
+          ...this.dialogOpenedFields(error),
+        };
+      }
+      throw error;
+    }
     // Reported so the MCP layer can keep the value out of its audit log; a
     // password field can be a brand-new credential (creating a tenant), so it
     // cannot always go through `fill_browser_login`.
@@ -4891,6 +5475,8 @@ export class EmbeddedBrowser {
     ok: true;
     filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }>;
     failed: Array<{ field: string; reason: string }>;
+    dialog?: DialogOpenedInfo["dialog"];
+    hint?: string;
   }> {
     const tab = this.requireTab(tabId);
     const filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }> = [];
@@ -4954,10 +5540,19 @@ export class EmbeddedBrowser {
         });
         continue;
       }
-      await this.typeInto(tab, field.target, field.value, {
-        clear: field.clear !== false,
-        ...(field.submit ? { submit: true } : {}),
-      });
+      try {
+        await this.typeInto(tab, field.target, field.value, {
+          clear: field.clear !== false,
+          ...(field.submit ? { submit: true } : {}),
+        });
+      } catch (error) {
+        // 某个字段的输入触发了弹窗：已填好的字段如实上报，弹窗交给调用方
+        // 处理后再补剩下的——带着弹窗继续填只会越填越错。
+        if (error instanceof DialogInterruptedError) {
+          return { ok: true, filled, failed, ...this.dialogOpenedFields(error) };
+        }
+        throw error;
+      }
       const warning = multiMatchWarning(field.target, focus.matchCount);
       filled.push({
         field: name,
@@ -6424,12 +7019,23 @@ export class EmbeddedBrowser {
    * around it, and unpinning on the last removal used to be the kind of bug that
    * silently turns the emulated phone back into a desktop mid-run.
    *
+   * 第五项是挂起的弹窗：拦截挂在「debugger 已附加且 Page.enable」上。弹窗开着
+   * 的时候闲置分离一旦发生，被抑制的弹窗会被 Chromium 交还给 Electron 的
+   * 原生对话框兜底——那是用户桌面上的一个真弹窗，带着页面的原始文案。所以
+   * 从弹窗登记到应答/兜底取消之间，会话不许分离。
+   *
    * One predicate, one call site, so "nothing needs the session" is decided in
    * exactly one place.
    */
   private syncSessionHold(tab: TabRecord): void {
     const needed = Boolean(
-      tab.device || tab.perf || tab.emulation || (tab.initScripts?.size ?? 0) > 0,
+      tab.device ||
+        tab.perf ||
+        tab.emulation ||
+        (tab.initScripts?.size ?? 0) > 0 ||
+        tab.loginCaptureHold === true ||
+        // 合成的 beforeunload 记录不挡会话分离：页面活着，拦截也不依赖 CDP。
+        (tab.dialog !== undefined && tab.dialog.blocksPage !== false),
     );
     this.options.guests?.holdSession?.(tab.id, needed);
   }

@@ -3923,7 +3923,7 @@ export class McpServer {
       {
         name: "type_browser_text",
         description:
-          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。定位用 label，不必知道 CSS 选择器。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。直连定位命中多个时仍输入排名第一个，返回值里的 warning 会写明匹配数。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
+          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。目标是 select 下拉框时会直接报错——select 请用 fill_browser_form（按 option 文字或值）。定位用 label，不必知道 CSS 选择器。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。直连定位命中多个时仍输入排名第一个，返回值里的 warning 会写明匹配数。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
         kind: "run",
         inputSchema: object(
           {
@@ -3951,7 +3951,7 @@ export class McpServer {
       {
         name: "fill_browser_form",
         description:
-          "一次填完一个表单：每个字段给 label（或 selector）和要输入的值。按顺序逐个填、每个都走真实输入事件，最后一个字段可以带 submit: true 提交。比逐个字段调 type_browser_text 少几十次往返，也不会因为中间某次调用超时让页面停在半填状态。某字段的定位命中多个时仍填排名第一个，该字段的返回条目里带 warning 说明匹配数。",
+          "一次填完一个表单：每个字段给 label（或 selector）和要输入的值。按顺序逐个填、每个都走真实输入事件，最后一个字段可以带 submit: true 提交。比逐个字段调 type_browser_text 少几十次往返，也不会因为中间某次调用超时让页面停在半填状态。目标是 select 时按 option 的文字或值精确匹配（trim 后全等，不做子串），匹配不到该字段进 failed 并给出可选项；其余字段照常填写。两个不同定位解析到同一控件时第二个进 failed，不会把值写进另一个字段。某字段的定位命中多个时仍填排名第一个，该字段的返回条目里带 warning 说明匹配数。",
         kind: "run",
         inputSchema: object(
           {

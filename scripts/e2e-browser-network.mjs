@@ -218,6 +218,14 @@ try {
     loadWait.ok === true && secondReady === "complete",
     { loadWait, secondReady },
   );
+  // `matched` carries the readyState for a load hit, not the URL: a url
+  // condition reports the URL in the same field, so a caller must be able to
+  // tell which condition released the wait.
+  check(
+    "a load hit reports the readyState as matched, distinct from a url hit",
+    loadWait.matched === "complete" && loadWait.matched !== PAGE_URL,
+    loadWait,
+  );
 
   // --- timezone moves the page's clock, and clearing moves it back -----------
   const baselineOffset = await call("evaluate_browser_page", {

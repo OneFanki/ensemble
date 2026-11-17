@@ -76,6 +76,19 @@ const server = createServer((req, res) => {
     <li draggable="true" data-id="c">第三项</li>
   </ul>
 </section>
+<section id="loose-form">
+  <label>姓名</label>
+  <input id="who" type="text">
+  <label>简介</label>
+  <textarea id="brief"></textarea>
+  <label>城市</label>
+  <select id="city">
+    <option value="">请选择</option>
+    <option value="gz">广州</option>
+    <option value="gz-city">广州市</option>
+    <option value="sz">深圳</option>
+  </select>
+</section>
 <div id="log"></div>
 <script>
   const log = (text) => { document.getElementById('log').textContent += text + '\\n'; };
@@ -87,6 +100,10 @@ const server = createServer((req, res) => {
       log(id + ':' + files.map((f) => f.name + '/' + f.size).join(','));
     });
   }
+
+  document.getElementById('city').addEventListener('change', (event) => {
+    log('city:' + event.target.value);
+  });
 
   // A minimal sortable list: HTML5 drag events, the shape every library uses.
   // A drag that goes straight from press to release fires no dragover, so the
@@ -350,6 +367,100 @@ try {
     "the drag emitted dragstart, so the page recognised it as a drag",
     /dragstart:a/.test(dragLog) && /order:b,c,a/.test(dragLog),
     dragLog,
+  );
+
+  // --- fill_browser_form: a bare three-field form, labels without `for` ------
+  /*
+   * The loose form has no `for`, no wrappers: three labels and three controls
+   * as flat siblings. That is the layout where a resolver that grabs the first
+   * control in the section would fill every field into the same input — the
+   * "城市 value typed into the 简介 textarea" bug. Every assertion below reads
+   * the page's own state, so a value in the wrong control fails here.
+   */
+  const mixed = await call("fill_browser_form", {
+    tabId,
+    fields: [
+      { label: "姓名", value: "张三" },
+      { label: "简介", value: "测试简介" },
+      { label: "城市", value: "广州" },
+    ],
+  });
+  check(
+    "all three fields report filled and none failed",
+    mixed.ok === true && mixed.filled.length === 3 && mixed.failed.length === 0,
+    mixed,
+  );
+  const whoValue = await call("evaluate_browser_page", {
+    tabId,
+    expression: "document.getElementById('who').value",
+  });
+  check(
+    "the name landed in the name input",
+    whoValue === "张三",
+    whoValue,
+  );
+  const briefValue = await call("evaluate_browser_page", {
+    tabId,
+    expression: "document.getElementById('brief').value",
+  });
+  check(
+    "the bio textarea holds only its own text, none of the option wording",
+    briefValue === "测试简介" && !briefValue.includes("广州"),
+    briefValue,
+  );
+  const cityState = await call("evaluate_browser_page", {
+    tabId,
+    expression: "document.getElementById('city').value + '|' + document.getElementById('city').selectedOptions[0].textContent.trim()",
+  });
+  check(
+    "the select took the exact option (广州, not the substring-neighbour 广州市)",
+    cityState === "gz|广州",
+    cityState,
+  );
+  await wait(300);
+  const formLog = await readLog(tabId);
+  check(
+    "the select fired a real change event with the option's value",
+    /city:gz/.test(formLog),
+    formLog,
+  );
+
+  // A substring of an option's text is not a match: 州 is inside 广州, and
+  // accepting it would pick a row the caller never asked for.
+  const substringPick = await call("fill_browser_form", {
+    tabId,
+    fields: [{ label: "城市", value: "州" }],
+  });
+  const cityAfterRefusal = await call("evaluate_browser_page", {
+    tabId,
+    expression: "document.getElementById('city').value",
+  });
+  check(
+    "a non-matching option fails its field with the reason and the options",
+    substringPick.failed?.length === 1 &&
+      /option-not-found/.test(substringPick.failed[0].reason ?? "") &&
+      /广州/.test(substringPick.failed[0].reason ?? "") &&
+      cityAfterRefusal === "gz",
+    { substringPick, cityAfterRefusal },
+  );
+
+  // Typing into a select does nothing on the page; the tool must say so
+  // instead of reporting ok.
+  let selectType = null;
+  try {
+    await call("type_browser_text", { tabId, label: "城市", text: "深圳" });
+    selectType = "no-error";
+  } catch (error) {
+    selectType = String(error);
+  }
+  const cityUntouched = await call("evaluate_browser_page", {
+    tabId,
+    expression: "document.getElementById('city').value",
+  });
+  check(
+    "type_browser_text refuses a select and points at fill_browser_form",
+    /fill_browser_form/.test(selectType ?? "") && cityUntouched === "gz",
+    { selectType, cityUntouched },
   );
 } catch (error) {
   check("run completed", false, String(error));

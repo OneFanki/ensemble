@@ -209,7 +209,11 @@ export interface WaitResult {
    */
   timedOutAt?: "page" | "bridge";
   reason?: string;
-  /** What was matched, for the caller's log. */
+  /**
+   * What was matched, for the caller's log: the URL for `url`, the readyState
+   * (`"complete"`) for `load`, the match reason for element conditions — so the
+   * caller can tell which condition released the wait.
+   */
   matched?: string;
 }
 
@@ -394,14 +398,58 @@ const HELPERS = `
     return { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
   };
   /**
+   * DOM closeness between a label anchor and a candidate control, as three
+   * ordered keys: tree distance first, then how far apart the two branches sit
+   * under their common ancestor, then a preference for a control that comes
+   * after the label (labels precede their fields in most forms, including
+   * wrapper-less ones). A tie across all three means the DOM genuinely cannot
+   * say which field the label names — the caller must decline rather than
+   * guess, because a wrong guess writes one field's value into another.
+   */
+  const domRank = (a, b) => {
+    if (a === b) return { dist: 0, spread: 0, after: 0 };
+    const ancestors = new Map();
+    let node = a;
+    for (let d = 0; node; d += 1, node = node.parentElement) ancestors.set(node, d);
+    let other = b;
+    let steps = 0;
+    let common = null;
+    while (other) {
+      if (ancestors.has(other)) { common = other; break; }
+      steps += 1;
+      other = other.parentElement;
+    }
+    if (!common) return null;
+    const branch = (el) => {
+      let n = el;
+      while (n && n.parentElement !== common) n = n.parentElement;
+      return n ? Array.prototype.indexOf.call(common.children, n) : -1;
+    };
+    return {
+      dist: ancestors.get(common) + steps,
+      spread: Math.abs(branch(a) - branch(b)),
+      after: branch(b) - branch(a),
+    };
+  };
+  const closerRank = (x, y) => {
+    if (x.dist !== y.dist) return x.dist < y.dist;
+    if (x.spread !== y.spread) return x.spread < y.spread;
+    const tx = x.after >= 0 ? x.after : 100 - x.after;
+    const ty = y.after >= 0 ? y.after : 100 - y.after;
+    return tx < ty;
+  };
+  /**
    * Resolves a label to every control it could describe, best first.
    *
    * Three shapes cover the libraries in use: <label for>, a control wrapped by
    * its <label>, and a wrapper that holds both the label and the control (Naive
    * UI, Ant Design, Element Plus). The last one climbs from the label until it
    * reaches a scope with exactly one visible control; a scope with many controls
-   * only wins while its own text still mentions the label, so the form as a
-   * whole never steals the match.
+   * only wins while its own text still mentions the label, and then claims the
+   * control closest to the label rather than the first in document order —
+   * "closest" is what keeps a three-field bare form (label, input, label,
+   * textarea, label, select, all siblings) from resolving every label to the
+   * same first control and typing one field's value into another.
    *
    * The first entry is exactly what the single-target resolver has always taken;
    * the whole list is what the find tools need to report "this label names two
@@ -429,7 +477,13 @@ const HELPERS = `
         const controls = Array.from(scope.querySelectorAll(CONTROLS)).filter(isVisible);
         if (controls.length === 1) { push(controls[0]); break; }
         if (controls.length > 1 && scoreName(textOf(scope), wanted, exact) > 0) {
-          push(controls[0]); break;
+          let best = null;
+          for (const control of controls) {
+            const rank = domRank(anchor, control);
+            if (rank && (!best || closerRank(rank, best.rank))) best = { control, rank };
+          }
+          if (best) push(best.control);
+          break;
         }
       }
     }
@@ -996,9 +1050,11 @@ export function buildWaitExpression(input: {
       } else if (condition === "load") {
         // "complete" covers everything the load event means: subresources
         // settled and the event fired. Pages that keep loading data afterwards
-        // stay complete — data fetching is not document loading.
+        // stay complete — data fetching is not document loading. matched
+        // carries the readyState rather than the URL so a caller can tell a
+        // load hit from a url hit, which both return the same shape otherwise.
         if (document.readyState === "complete") {
-          return { ok: true, waitedMs: Date.now() - started, matched: location.href };
+          return { ok: true, waitedMs: Date.now() - started, matched: document.readyState };
         }
         lastReason = "still-loading";
       } else {
@@ -1055,17 +1111,20 @@ export function buildSelectExpression(target: TargetInput, option: string): stri
       el = el.querySelector ? el.querySelector("select") : null;
     }
     if (!el) return { ok: false, reason: "not-a-select" };
-    const wanted = norm(${JSON.stringify(option)});
+    // Trim + whitespace-fold, no case folding, no substring: option values are
+    // enumerations where case can be meaningful, and "广州" must not match
+    // "广州市" — an approximate hit here picks the wrong row of real data.
+    const clean = (s) => String(s ?? "").replace(/\\s+/g, " ").trim();
+    const wanted = clean(${JSON.stringify(option)});
     const options = Array.from(el.options || []);
     const match =
-      options.find((item) => norm(item.textContent) === wanted) ??
-      options.find((item) => norm(item.textContent).includes(wanted)) ??
-      options.find((item) => norm(item.value) === wanted);
+      options.find((item) => clean(item.textContent) === wanted) ??
+      options.find((item) => clean(item.value) === wanted);
     if (!match) {
       return {
         ok: false,
         reason: "option-not-found",
-        available: options.slice(0, 20).map((item) => item.textContent.trim()),
+        available: options.slice(0, 20).map((item) => clean(item.textContent)).filter(Boolean),
       };
     }
     const view = el.ownerDocument.defaultView;
@@ -1075,7 +1134,14 @@ export function buildSelectExpression(target: TargetInput, option: string): stri
     else el.value = match.value;
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true, matchedBy: found.matchedBy, value: match.value, text: match.textContent.trim() };
+    return {
+      ok: true,
+      matchedBy: found.matchedBy,
+      value: match.value,
+      text: clean(match.textContent),
+      selector: scriptPath(el),
+      matchCount: found.matchCount,
+    };
   })()`;
 }
 
@@ -1289,6 +1355,7 @@ export function buildElementInfoExpression(target: TargetInput): string {
         attributes[attr.name] = String(attr.value).slice(0, 200);
       }
     }
+    const isFormControl = tag === "input" || tag === "textarea" || tag === "select";
     const state = {
       visible: isVisible(el),
       enabled: el.disabled !== true && el.getAttribute("aria-disabled") !== "true",
@@ -1297,7 +1364,10 @@ export function buildElementInfoExpression(target: TargetInput): string {
       selected: typeof el.selected === "boolean" ? el.selected : undefined,
       expanded: el.getAttribute("aria-expanded") === null ? undefined : el.getAttribute("aria-expanded") === "true",
       readOnly: el.readOnly === true,
-      editable: el.isContentEditable === true,
+      // One meaning for "editable": a form control that accepts input, or
+      // contenteditable text. Reporting contenteditable alone would call a plain
+      // <input type=text> not-editable while readOnly:false — a contradiction.
+      editable: (isFormControl && el.disabled !== true && el.readOnly !== true) || el.isContentEditable === true,
     };
     return {
       ok: true,

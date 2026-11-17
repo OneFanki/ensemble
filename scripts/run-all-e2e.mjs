@@ -19,7 +19,7 @@ import { readdirSync } from "node:fs";
 const VISIBLE_WINDOW_SUITES = new Set(["e2e-external-launch.mjs"]);
 
 const files = readdirSync("scripts")
-  .filter((name) => /^e2e-[a-z-]+\.mjs$/.test(name))
+  .filter((name) => /^e2e-[a-z0-9-]+\.mjs$/.test(name))
   .filter((name) => !VISIBLE_WINDOW_SUITES.has(name))
   .sort();
 const skipped = readdirSync("scripts")

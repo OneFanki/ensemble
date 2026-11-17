@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { waitForWindow } from "./lib/e2e-cdp.mjs";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 
@@ -119,10 +120,29 @@ async function main() {
   app.stdout.on("data", (chunk) => (appLog += chunk));
   app.stderr.on("data", (chunk) => (appLog += chunk));
 
-  const client = await connectRenderer();
+  // `waitForWindow` throws when the window never appears; the inline loop this
+  // replaces resolved to `undefined`, and the "app started" check below is what
+  // reports that failure. Keep that shape.
+  let client;
+  try {
+    client = await waitForWindow({ userData, waitForDebugPort });
+  } catch {
+    client = undefined;
+  }
   check("app started", Boolean(client), client ? undefined : appLog.slice(-600));
 
-  const checked = await client.evaluate(`(async () => {
+  // The public client rejects when a page exception escapes the expression; the
+  // inline one resolved it to `{ ok: false, message }`, which is the shape the
+  // assertion below reads.
+  const evaluate = async (expression) => {
+    try {
+      return await client.evaluate(expression);
+    } catch (error) {
+      return { ok: false, message: String(error?.message ?? error) };
+    }
+  };
+
+  const checked = await evaluate(`(async () => {
     // The real path: the same call the settings page's button makes.
     try {
       const result = await window.ensemble.checkUpdate();
@@ -155,57 +175,6 @@ async function main() {
   client?.close();
   app.kill();
   await wait(1200);
-}
-
-async function connectRenderer() {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await wait(250);
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
-      const target = list.find(
-        (item) => item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
-      );
-      if (!target) continue;
-      const socket = new WebSocket(target.webSocketDebuggerUrl);
-      let nextId = 0;
-      const pending = new Map();
-      socket.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
-        const call = pending.get(message.id);
-        if (!call) return;
-        pending.delete(message.id);
-        call(message.result);
-      });
-      await new Promise((done) => socket.addEventListener("open", done));
-      return {
-        evaluate(expression) {
-          return new Promise((done) => {
-            const id = ++nextId;
-            pending.set(id, (result) => {
-              if (result?.exceptionDetails) {
-                done({ ok: false, message: result.exceptionDetails.exception?.description });
-                return;
-              }
-              done(result?.result?.value);
-            });
-            socket.send(
-              JSON.stringify({
-                id,
-                method: "Runtime.evaluate",
-                params: { expression, returnByValue: true, awaitPromise: true },
-              }),
-            );
-          });
-        },
-        close() {
-          socket.close();
-        },
-      };
-    } catch {
-      // not ready yet
-    }
-  }
-  return undefined;
 }
 
 try {

@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildElementPointExpression, buildFocusExpression } from "../src/core/cdp/inspect.ts";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 
 const PORT = await freePort();
@@ -85,7 +86,7 @@ electron.stdout.on("data", (chunk) => (hostLog += chunk));
 electron.stderr.on("data", (chunk) => (hostLog += chunk));
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
-let socket;
+let client;
 try {
   let target;
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -100,30 +101,18 @@ try {
   }
   if (!target?.webSocketDebuggerUrl) throw new Error(`no debug target; host log: ${hostLog.slice(-300)}`);
 
-  socket = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((done) => socket.addEventListener("open", done));
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const handler = pending.get(message.id);
-    if (handler) {
-      pending.delete(message.id);
-      handler(message.result);
+  client = await connectToWindow(target.webSocketDebuggerUrl);
+  // The public client rejects when a page exception escapes the expression; the
+  // inline one resolved it to `undefined`, and every assertion below reads that
+  // as a plain miss. Keep that shape so a throwing resolver still fails its own
+  // check instead of aborting the remaining ones.
+  const evaluate = async (expression) => {
+    try {
+      return await client.evaluate(expression);
+    } catch {
+      return undefined;
     }
-  });
-  const evaluate = (expression) =>
-    new Promise((done) => {
-      const id = ++nextId;
-      pending.set(id, (result) => done(result?.result?.value));
-      socket.send(
-        JSON.stringify({
-          id,
-          method: "Runtime.evaluate",
-          params: { expression, returnByValue: true, awaitPromise: true },
-        }),
-      );
-    });
+  };
 
   await wait(800);
 
@@ -184,7 +173,7 @@ try {
   })()`);
   check("the unlabelled field is visible but never matched by a label", searchId === true);
 
-  socket.close();
+  client.close();
   const failed = results.filter((item) => !item.ok);
   console.log(`\nSUMMARY ${results.length - failed.length}/${results.length} passed`);
   if (failed.length > 0) process.exitCode = 1;

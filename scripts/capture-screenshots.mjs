@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { connectToWindow } from "./lib/e2e-cdp.mjs";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
 
@@ -1149,36 +1150,20 @@ function wait(ms) {
 }
 
 async function connect(url) {
-  const socket = new WebSocket(url);
-  let nextId = 0;
-  const pending = new Map();
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    const call = pending.get(message.id);
-    if (!call) return;
-    pending.delete(message.id);
-    call(message.result);
-  });
-  await new Promise((resolvePromise) => socket.addEventListener("open", resolvePromise));
+  const client = await connectToWindow(url);
+  // The public client rejects when a page exception escapes the expression; the
+  // inline one resolved it to `undefined`, so a failing setup step degraded to a
+  // wrong screenshot instead of aborting the remaining shots. Keep that.
   return {
-    send(method, params = {}) {
-      return new Promise((resolvePromise) => {
-        const id = ++nextId;
-        pending.set(id, resolvePromise);
-        socket.send(JSON.stringify({ id, method, params }));
-      });
+    send: client.send,
+    evaluate: async (expression) => {
+      try {
+        return await client.evaluate(expression);
+      } catch {
+        return undefined;
+      }
     },
-    async evaluate(expression) {
-      const result = await this.send("Runtime.evaluate", {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      });
-      return result?.result?.value;
-    },
-    close() {
-      socket.close();
-    },
+    close: client.close,
   };
 }
 

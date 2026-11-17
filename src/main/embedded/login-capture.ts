@@ -180,12 +180,22 @@ export class LoginCaptureStore {
 }
 
 /**
- * Runs in every embedded page. It reports the first visible password field and
- * the username field before it, on submit, submit-button click or Enter.
+ * Runs in every embedded page. It reports the visible password field and the
+ * username field in its own credential form, on that form's submit, a button
+ * click inside it, or Enter inside it.
  *
- * Deliberately conservative: two password fields (sign-up, password change) and
- * an empty username or password are ignored, so a registration form never
- * offers to save a half-made account.
+ * Deliberately conservative, on two axes:
+ *
+ *  - Shape: two password fields (sign-up with confirmation, password change)
+ *  and an empty username or password are ignored, so a registration form never
+ *  offers to save a half-made account. A one-password sign-up (username plus
+ *  password) looks exactly like a login and *does* prompt — saving those
+ *  credentials is as useful as saving a login's.
+ *  - Relatedness: a page can carry a password box and still not be a login —
+ *  a search box beside a newsletter widget, a payment confirmation asking to
+ *  re-enter a password. The submit intent therefore has to come from inside
+ *  the password's own form, or — for the formless single-page cards — from an
+ *  element sharing an actual container with it, not just the same document.
  */
 export const LOGIN_CAPTURE_SCRIPT = `(() => {
   if (window.__ensembleCaptureInstalled) return;
@@ -198,51 +208,92 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
   };
   const passwordFields = () =>
     [...document.querySelectorAll('input[type="password"]')].filter(visible);
-  const usernameOf = (pw) => {
-    const scope = pw.form ?? document;
-    const candidates = [
-      ...scope.querySelectorAll('input[type="text"], input[type="email"], input:not([type])'),
-    ].filter(visible);
-    let best = null;
-    for (const el of candidates) {
-      if (el.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING) best = el;
+  /*
+   * The credential area a password box belongs to.
+   *
+   * With a form this is simply the form. Formless single-page cards have no
+   * such boundary, so the fallback is the nearest common ancestor of the
+   * password box and the element in question — and only if that ancestor is a
+   * real container. Two elements whose only shared ancestor is the body are
+   * not one form; they just happen to be on the same page, and a click or an
+   * Enter between them must not read as submitting credentials.
+   */
+  const sharedBox = (a, b) => {
+    if (!a || !b) return null;
+    const chain = [];
+    let node = a;
+    while (
+      node &&
+      node !== document.body &&
+      node !== document.documentElement &&
+      node.parentElement
+    ) {
+      chain.push(node);
+      node = node.parentElement;
     }
-    return (best && best.value ? best.value : '').trim();
+    let other = b;
+    while (other) {
+      if (chain.includes(other)) return other;
+      other = other.parentElement;
+    }
+    return null;
   };
-  const lastBeforePassword = (pw) => {
-    const scope = pw.form ?? document;
-    const candidates = [
-      ...scope.querySelectorAll('input[type="text"], input[type="email"], input:not([type])'),
-    ].filter(visible);
+  const inScope = (pw, el) => {
+    if (!el) return false;
+    if (pw.form) return pw.form.contains(el);
+    return Boolean(sharedBox(pw, el));
+  };
+  /*
+   * Fields that can name an account: text, email and tel (an input with no
+   * type is text), plus anything that declares itself through autocomplete.
+   * Other types — number, checkbox, date — do not identify an account, so a
+   * confirmation dialog asking for a password next to an amount field never
+   * becomes a "login".
+   */
+  const isIdentityInput = (el) => {
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+    return (
+      type === 'text' ||
+      type === 'email' ||
+      type === 'tel' ||
+      type === '' ||
+      ac.includes('username') ||
+      ac.includes('email')
+    );
+  };
+  const identityInputs = (pw) =>
+    [...(pw.form ?? document).querySelectorAll('input')].filter(
+      (el) => visible(el) && el.type !== 'password' && isIdentityInput(el) && inScope(pw, el),
+    );
+  const usernameFieldOf = (pw) => {
     let best = null;
-    for (const el of candidates) {
+    for (const el of identityInputs(pw)) {
       if (el.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING) best = el;
     }
     return best;
   };
+  const usernameOf = (pw) => {
+    const field = usernameFieldOf(pw);
+    return (field && field.value ? field.value : '').trim();
+  };
   /*
-   * The other text fields above the password box, with what was typed in them.
+   * The other identity fields above the password box, with what was typed in
+   * them.
    *
    * A multi-tenant login asks for tenant + user + password in that order, so the
-   * username is the *last* text field and anything before it is a second
+   * username is the *last* identity field and anything before it is a second
    * dimension of the account. Naming them from the page's own wording is what
    * makes the saved account findable later ("租户名: acme"); the placeholder is
    * used because it is often the only label a component library puts on the
    * field.
    */
   const extraFieldsOf = (pw) => {
-    const scope = pw.form ?? document;
-    const inputs = [
-      ...scope.querySelectorAll('input[type="text"], input[type="email"], input:not([type])'),
-    ].filter(visible);
-    const usernameField = lastBeforePassword(pw);
-    const before = inputs.filter(
-      (el) =>
-        el !== usernameField &&
-        (el.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING),
-    );
+    const usernameField = usernameFieldOf(pw);
     const out = [];
-    for (const el of before) {
+    for (const el of identityInputs(pw)) {
+      if (el === usernameField) continue;
+      if (!(el.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
       if (!el.value) continue;
       const label =
         (el.getAttribute('placeholder') || '').trim() ||
@@ -268,7 +319,9 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
    *    anyone looks the value is the empty string.
    *
    * Remembering the filled-in values as they are typed — not the act of
-   * submitting — makes both cases read from something that already exists.
+   * submitting — makes both cases read from something that already exists. The
+   * remembered password box travels with the snapshot, so a capture is only
+   * ever emitted while its form still exists in the document.
    */
   let lastSeen = null;
   const remember = () => {
@@ -278,10 +331,10 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
     if (!pw || !pw.value) return;
     const username = usernameOf(pw);
     if (!username) return;
-    lastSeen = { username, password: pw.value, extraFields: extraFieldsOf(pw) };
+    lastSeen = { pw, username, password: pw.value, extraFields: extraFieldsOf(pw) };
   };
   const emit = (seen) => {
-    if (!seen) return;
+    if (!seen || !seen.pw || !seen.pw.isConnected) return;
     try {
       window.__ensembleLoginCaptured(
         JSON.stringify({
@@ -313,9 +366,20 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
   /*
    * Capture on submit *before* the default action runs: by the time a delegated
    * listener on the bubble phase fires, a native submit may already be tearing
-   * the document down.
+   * the document down. Only the form that actually holds the password counts —
+   * a search box or a filter submitting next to an unrelated password field is
+   * not somebody signing in.
    */
-  document.addEventListener('submit', capture, true);
+  document.addEventListener(
+    'submit',
+    (event) => {
+      const form = event.target;
+      if (!form || form.nodeType !== 1) return;
+      if (!passwordFields().some((pw) => pw.form === form)) return;
+      capture();
+    },
+    true,
+  );
   document.addEventListener(
     'click',
     (event) => {
@@ -327,14 +391,12 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
        * type="button" with a click handler, and the form may submit itself from
        * script. This is also why the click is read from the *snapshot* — the
        * handler that clears the password field is attached to the same button
-       * and often runs first.
+       * and often runs first. For a formless card the button has to sit in the
+       * same container as the password box; a button anywhere else on the page
+       * says nothing about the credentials in it.
        */
       if (!target.closest('button, input[type="submit"], [role="button"]')) return;
-      const inCredentialForm = passwordFields().some((pw) => {
-        const box = pw.form ?? pw.closest('form');
-        return box ? box.contains(target) : true;
-      });
-      if (!inCredentialForm) return;
+      if (!passwordFields().some((pw) => inScope(pw, target))) return;
       remember();
       later();
     },
@@ -344,9 +406,12 @@ export const LOGIN_CAPTURE_SCRIPT = `(() => {
     'keydown',
     (event) => {
       if (event.key !== 'Enter') return;
-      if (!event.target || !event.target.matches || !event.target.matches('input')) return;
-      // Enter in a password box is the other way a form is submitted, and it
-      // runs before the page's own keydown-driven submit.
+      const el = event.target;
+      if (!el || !el.matches || !el.matches('input')) return;
+      // Enter inside the credential area is the other way a form is submitted,
+      // and it runs before the page's own keydown-driven submit. Enter in a
+      // search box somewhere else on the page is not a login.
+      if (!passwordFields().some((pw) => el === pw || inScope(pw, el))) return;
       remember();
       later();
     },

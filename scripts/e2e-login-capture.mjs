@@ -59,6 +59,59 @@ const clearingPage = `<!doctype html><html><head><meta charset="utf-8"><title>�
 </script>
 </body></html>`;
 
+/*
+ * Pages that look like they might be a sign-in but are not. Each one is a
+ * shape a real site shipped, and each one must not produce a save prompt for
+ * credentials nobody was signing in with.
+ */
+const mixedPage = `<!doctype html><html><head><meta charset="utf-8"><title>查询页</title></head>
+<body>
+<form id="search" action="/console" method="get">
+  <label>关键词 <input id="q" name="q" type="text" /></label>
+  <button id="search" type="submit">搜索</button>
+</form>
+<div class="widget">
+  <label>访问密码 <input id="pass" type="password" /></label>
+</div>
+</body></html>`;
+
+const payPage = `<!doctype html><html><head><meta charset="utf-8"><title>支付确认</title></head>
+<body>
+<form id="f" action="/console" method="get">
+  <label>金额 <input id="amount" name="amount" type="number" /></label>
+  <label>支付密码 <input id="paypass" name="paypass" type="password" /></label>
+  <button id="confirm" type="submit">确认支付</button>
+</form>
+</body></html>`;
+
+const changePasswordPage = `<!doctype html><html><head><meta charset="utf-8"><title>修改密码</title></head>
+<body>
+<form id="f" action="/console" method="get">
+  <label>原密码 <input id="old" type="password" /></label>
+  <label>新密码 <input id="new" type="password" /></label>
+  <button id="submit" type="submit">修改</button>
+</form>
+</body></html>`;
+
+const signupPage = `<!doctype html><html><head><meta charset="utf-8"><title>注册</title></head>
+<body>
+<form id="f" action="/console" method="get">
+  <label>用户名 <input id="user" name="user" type="text" /></label>
+  <label>密码 <input id="pass" name="pass" type="password" /></label>
+  <button id="submit" type="submit">注册</button>
+</form>
+</body></html>`;
+
+const cornerPage = `<!doctype html><html><head><meta charset="utf-8"><title>角落登录</title></head>
+<body>
+<header><button id="nav" type="button">菜单</button></header>
+<div class="card">
+  <label>账号 <input id="user" type="text" /></label>
+  <label>密码 <input id="pass" type="password" /></label>
+  <button id="login" type="button">登录</button>
+</div>
+</body></html>`;
+
 const page = createServer((req, res) => {
   if (req.url.startsWith("/spa")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -70,12 +123,36 @@ const page = createServer((req, res) => {
     res.end(clearingPage);
     return;
   }
+  if (req.url.startsWith("/mixed")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(mixedPage);
+    return;
+  }
+  if (req.url.startsWith("/pay")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(payPage);
+    return;
+  }
+  if (req.url.startsWith("/change-password")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(changePasswordPage);
+    return;
+  }
+  if (req.url.startsWith("/signup")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(signupPage);
+    return;
+  }
+  if (req.url.startsWith("/corner")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(cornerPage);
+    return;
+  }
   if (req.url.startsWith("/console")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end("<!doctype html><html><body>console</body></html>");
     return;
   }
-  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(`<!doctype html><html><head><meta charset="utf-8"><title>登录页</title></head>
 <body>
 <form id="f" action="/console" method="get">
@@ -682,6 +759,156 @@ try {
       await wait(200);
     }
   }
+
+  /*
+   * Forms that are not sign-ins must stay silent.
+   *
+   * Each case carries a password field somewhere on the page, fills something
+   * in, and commits — submit, click, Enter — and must produce no prompt. The
+   * query page is the shape that actually bit someone: a search box plus an
+   * unrelated password widget, where the old heuristics read the search term
+   * as a username. The unique query tag keeps the CDP target lookup on the tab
+   * this step opened, since every case shares the port.
+   */
+  const clearPending = async () => {
+    await client.evaluate(`(async () => {
+      for (const item of await window.ensemble.pendingLogins()) {
+        await window.ensemble.dismissLoginCapture(item.token);
+      }
+      return true;
+    })()`);
+    await wait(200);
+  };
+
+  async function driveQuietly(path, tag, fill, act) {
+    const url = `${BASE_URL}${path}?case=${tag}`;
+    await client.evaluate(
+      `window.ensemble.openEmbeddedTab({ viewId: null, url: ${JSON.stringify(url)} })`,
+    );
+    await wait(1_500);
+    const list = await (await fetch(`http://127.0.0.1:${await waitForDebugPort(userData)}/json/list`)).json();
+    const target = list.find((item) => item.url.includes(`case=${tag}`));
+    if (!target) return { targetMissing: true };
+    const pageClient = await connectToWindow(target.webSocketDebuggerUrl);
+    await pageClient.evaluate(`(() => {
+      const values = ${JSON.stringify(fill)};
+      for (const [selector, value] of Object.entries(values)) {
+        const el = document.querySelector(selector);
+        if (!el) continue;
+        const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(el, value);
+        else el.value = value;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return true;
+    })()`);
+    await wait(250);
+    if (act.click) {
+      await pageClient.evaluate(`(() => {
+        document.querySelector(${JSON.stringify(act.click)})?.click();
+        return true;
+      })()`);
+      await wait(900);
+    }
+    if (act.enterIn) {
+      await pageClient.evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(act.enterIn)});
+        el?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        return true;
+      })()`);
+      await wait(900);
+    }
+    pageClient.close();
+    const pending = await client.evaluate(`window.ensemble.pendingLogins()`);
+    return { pending: pending ?? [] };
+  }
+
+  const quietCases = [
+    {
+      name: "a search box beside an unrelated password widget stays silent on submit",
+      path: "/mixed",
+      fill: { "#q": "测试搜索词", "#pass": "pw-quiet" },
+      act: { click: "#search" },
+    },
+    {
+      name: "a search box beside an unrelated password widget stays silent on Enter",
+      path: "/mixed",
+      fill: { "#q": "测试搜索词", "#pass": "pw-quiet" },
+      act: { enterIn: "#q" },
+    },
+    {
+      name: "a payment confirmation with no account field stays silent",
+      path: "/pay",
+      fill: { "#amount": "4200", "#paypass": "pw-pay" },
+      act: { click: "#confirm" },
+    },
+    {
+      name: "a password change with old and new fields stays silent",
+      path: "/change-password",
+      fill: { "#old": "pw-old", "#new": "pw-new" },
+      act: { click: "#submit" },
+    },
+    {
+      name: "a page button outside a form-less login card stays silent",
+      path: "/corner",
+      fill: { "#user": "corner@example.test", "#pass": "pw-corner" },
+      act: { click: "#nav" },
+    },
+  ];
+  let caseTag = 0;
+  for (const quiet of quietCases) {
+    await clearPending();
+    const outcome = await driveQuietly(quiet.path, `quiet-${(caseTag += 1)}`, quiet.fill, quiet.act);
+    check(
+      quiet.name,
+      outcome?.targetMissing !== true && outcome?.pending?.length === 0,
+      outcome,
+    );
+  }
+
+  /*
+   * And the shapes that must still prompt, so the tightening above did not
+   * shut the real thing off along with the noise:
+   *
+   *  - a one-password sign-up prompts like a login: the credentials become
+   *  usable the moment the account exists, and saving them is the same offer.
+   *  A sign-up with a confirmation field (two password boxes) stays silent —
+   *  pinned by the password-change case above, same shape.
+   *  - a form-less login card still prompts from its own button; only buttons
+   *  outside the card were noise.
+   */
+  const loudCases = [
+    {
+      name: "a one-password sign-up still offers to save",
+      path: "/signup",
+      fill: { "#user": "signup@example.test", "#pass": "pw-signup" },
+      act: { click: "#submit" },
+      username: "signup@example.test",
+    },
+    {
+      name: "a form-less login card still prompts from its own button",
+      path: "/corner",
+      fill: { "#user": "corner@example.test", "#pass": "pw-corner" },
+      act: { click: "#login" },
+      username: "corner@example.test",
+    },
+  ];
+  for (const loud of loudCases) {
+    await clearPending();
+    const outcome = await driveQuietly(loud.path, `loud-${(caseTag += 1)}`, loud.fill, loud.act);
+    const head = outcome?.pending?.[0];
+    check(
+      loud.name,
+      outcome?.targetMissing !== true && head?.username === loud.username,
+      outcome,
+    );
+    if (head) {
+      await client.evaluate(`window.ensemble.dismissLoginCapture(${JSON.stringify(head.token)})`);
+      await wait(200);
+    }
+  }
+  await clearPending();
 
   /*
    * Same username, different tenant: two accounts, so the second sign-in must

@@ -645,6 +645,22 @@ function originOf(url: string): string {
 }
 
 /**
+ * 直连定位命中多个时的非致命提醒。
+ *
+ * 直连路径的历史行为是「取排名第一的元素」，保持不变——把它改成报错会让每一
+ * 个组件库页面的常规调用都失败。但静默取第一个正是试运行里点错元素的那类事故：
+ * 调用方有权知道「匹配不止一个」。页内 resolveTarget 现在随命中带回 matchCount，
+ * count > 1 时把它翻成一句话。句柄路径的严格归属（对齐或报「匹配 N 个」）在
+ * resolveActionTarget 里已经完成，解析成功带显式 nth 重新定位；调用方自己给了
+ * nth 的同理——两者都不再重复提醒。
+ */
+function multiMatchWarning(target: TargetInput, count: number | undefined): string | undefined {
+  if (typeof count !== "number" || count <= 1) return undefined;
+  if (typeof target !== "string" && target.nth !== undefined) return undefined;
+  return `${describeTarget(target)} 匹配 ${count} 个元素，已操作第 1 个；要精确请用 find_browser_element 收窄或 nth`;
+}
+
+/**
  * Whether two URLs address the same document.
  *
  * Used only to recognise that a navigation arrived: absolute vs relative form
@@ -3890,7 +3906,7 @@ export class EmbeddedBrowser {
     }
     if (!found) {
       throw new Error(
-        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配`,
+        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配（text 匹配的是可交互元素和有自身文字的可见元素）`,
       );
     }
     if (found.reason === "invalid-selector" || found.reason === "nth-out-of-range") {
@@ -3898,7 +3914,7 @@ export class EmbeddedBrowser {
     }
     if (!found.count || found.index === undefined) {
       throw new Error(
-        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配`,
+        `找不到匹配 ${describeTarget(locator)} 的元素：等待 ${timeoutMs}ms 内没有出现任何匹配（text 匹配的是可交互元素和有自身文字的可见元素）`,
       );
     }
     /*
@@ -3973,6 +3989,8 @@ export class EmbeddedBrowser {
     tag?: string;
     text?: string;
     selector?: string;
+    /** 直连定位命中多个时的非致命提醒；句柄与显式 nth 路径不产生。 */
+    warning?: string;
     /** Where the events actually landed; `onTarget: false` means they missed. */
     hit?: { onTarget: boolean; tag?: string; text?: string };
   }> {
@@ -4000,11 +4018,13 @@ export class EmbeddedBrowser {
       // Navigation right after the click destroys the context; the click still
       // happened, so the result is reported without hit facts.
     }
+    const warning = multiMatchWarning(effective, point.matchCount);
     return {
       ok: true,
       ...(point.tag ? { tag: point.tag } : {}),
       ...(point.text ? { text: point.text } : {}),
       ...(point.selector ? { selector: point.selector } : {}),
+      ...(warning ? { warning } : {}),
       ...(hit ? { hit } : {}),
     };
   }
@@ -4023,7 +4043,7 @@ export class EmbeddedBrowser {
   async hover(
     tabId: string,
     target: TargetInput,
-  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string }> {
+  ): Promise<{ ok: true; tag?: string; text?: string; selector?: string; warning?: string }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
     const point = await this.withDialogHint(tab, () =>
@@ -4035,11 +4055,13 @@ export class EmbeddedBrowser {
     const hx = point.x;
     const hy = point.y;
     await this.withDialogHint(tab, () => tab.cdp.hoverAt(hx, hy));
+    const warning = multiMatchWarning(effective, point.matchCount);
     return {
       ok: true,
       ...(point.tag ? { tag: point.tag } : {}),
       ...(point.text ? { text: point.text } : {}),
       ...(point.selector ? { selector: point.selector } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -4062,7 +4084,7 @@ export class EmbeddedBrowser {
       deltaX?: number;
       deltaY?: number;
     } = {},
-  ): Promise<{ ok: true; scrolled: { x: number; y: number }; moved: boolean }> {
+  ): Promise<{ ok: true; scrolled: { x: number; y: number }; moved: boolean; warning?: string }> {
     const tab = this.requireTab(tabId);
     /*
      * Which element actually scrolls is not knowable from the call.
@@ -4093,6 +4115,7 @@ export class EmbeddedBrowser {
 
     let x: number;
     let y: number;
+    let warning: string | undefined;
     if (options.target) {
       const scrollTarget = options.target;
       const point = await this.withDialogHint(tab, () =>
@@ -4103,6 +4126,7 @@ export class EmbeddedBrowser {
       }
       x = point.x;
       y = point.y;
+      warning = multiMatchWarning(scrollTarget, point.matchCount);
       // Point the probe at the scrollable ancestor of the target the caller named,
       // so the before/after reading is about the thing they asked to move.
       await tab.cdp.evaluate(`
@@ -4147,6 +4171,7 @@ export class EmbeddedBrowser {
       ok: true,
       scrolled: after,
       moved: after.x !== before.x || after.y !== before.y,
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -4217,6 +4242,7 @@ export class EmbeddedBrowser {
     count: number;
     multiple: boolean;
     selector?: string;
+    warning?: string;
   }> {
     const tab = this.requireTab(tabId);
     if (paths.length === 0) throw new Error("至少要给一个文件路径");
@@ -4228,6 +4254,7 @@ export class EmbeddedBrowser {
         accept?: string;
         selector?: string;
         tag?: string;
+        matchCount?: number;
       }>(buildFileInputExpression(target)),
     );
     if (!probe.ok) {
@@ -4244,11 +4271,13 @@ export class EmbeddedBrowser {
     const selector = probe.selector;
     if (!selector) throw new Error(`无法定位文件框：${describeTarget(target)}`);
     await this.withDialogHint(tab, () => tab.cdp.setFiles(selector, paths));
+    const warning = multiMatchWarning(target, probe.matchCount);
     return {
       ok: true,
       count: paths.length,
       multiple: probe.multiple === true,
       selector,
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -4271,6 +4300,7 @@ export class EmbeddedBrowser {
     toTag?: string;
     fromText?: string;
     toText?: string;
+    warning?: string;
   }> {
     const tab = this.requireTab(tabId);
     const points = await this.withDialogHint(tab, () =>
@@ -4283,18 +4313,26 @@ export class EmbeddedBrowser {
         toTag?: string;
         fromText?: string;
         toText?: string;
+        fromMatchCount?: number;
+        toMatchCount?: number;
       }>(buildDragPointsExpression(from, to)),
     );
     if (!points.ok || !points.from || !points.to) {
       throw new Error(`无法拖拽：${points.reason ?? "unknown"}`);
     }
     await this.withDialogHint(tab, () => tab.cdp.dragFromTo(points.from!, points.to!));
+    // 两端都可能多匹配：各自生成提醒，都有时拼成一条，保持返回值只有 warning 一个附加字段。
+    const warnings = [
+      multiMatchWarning(from, points.fromMatchCount),
+      multiMatchWarning(to, points.toMatchCount),
+    ].filter((item): item is string => Boolean(item));
     return {
       ok: true,
       ...(points.fromTag ? { fromTag: points.fromTag } : {}),
       ...(points.toTag ? { toTag: points.toTag } : {}),
       ...(points.fromText ? { fromText: points.fromText } : {}),
       ...(points.toText ? { toText: points.toText } : {}),
+      ...(warnings.length ? { warning: warnings.join("；") } : {}),
     };
   }
 
@@ -4320,6 +4358,7 @@ export class EmbeddedBrowser {
     changed: boolean;
     selector?: string;
     stuckAt?: boolean;
+    warning?: string;
   }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
@@ -4333,17 +4372,20 @@ export class EmbeddedBrowser {
         tag?: string;
         type?: string;
         stuckAt?: boolean;
+        matchCount?: number;
       }>(buildCheckExpression(effective, desired)),
     );
     if (!result.ok) {
       throw new Error(`无法设置 ${describeTarget(effective)}：${result.reason ?? "unknown"}`);
     }
+    const warning = multiMatchWarning(effective, result.matchCount);
     return {
       ok: true,
       checked: result.checked === true,
       changed: result.changed === true,
       ...(result.selector ? { selector: result.selector } : {}),
       ...(result.stuckAt !== undefined ? { stuckAt: result.stuckAt } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -4607,7 +4649,7 @@ export class EmbeddedBrowser {
     target: TargetInput,
     text: string,
     options: { submit?: boolean; clear?: boolean } = {},
-  ): Promise<{ ok: true; secret?: true; selector?: string }> {
+  ): Promise<{ ok: true; secret?: true; selector?: string; warning?: string }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
     const focus = await tab.cdp.evaluate<{
@@ -4615,6 +4657,7 @@ export class EmbeddedBrowser {
       reason?: string;
       inputType?: string;
       selector?: string;
+      matchCount?: number;
     }>(buildFocusExpression(effective));
     if (!focus.ok)
       throw new Error(`无法输入到 ${describeTarget(effective)}：${focus.reason ?? "unknown"}`);
@@ -4622,10 +4665,12 @@ export class EmbeddedBrowser {
     // Reported so the MCP layer can keep the value out of its audit log; a
     // password field can be a brand-new credential (creating a tenant), so it
     // cannot always go through `fill_browser_login`.
+    const warning = multiMatchWarning(effective, focus.matchCount);
     return {
       ok: true,
       ...(focus.selector ? { selector: focus.selector } : {}),
       ...(focus.inputType === "password" ? { secret: true as const } : {}),
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -4770,10 +4815,10 @@ export class EmbeddedBrowser {
     }>,
   ): Promise<{
     ok: true;
-    filled: Array<{ field: string; selector?: string; secret?: true }>;
+    filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }>;
   }> {
     const tab = this.requireTab(tabId);
-    const filled: Array<{ field: string; selector?: string; secret?: true }> = [];
+    const filled: Array<{ field: string; selector?: string; secret?: true; warning?: string }> = [];
     for (const field of fields) {
       const name = describeTarget(field.target);
       const focus = await tab.cdp.evaluate<{
@@ -4781,6 +4826,7 @@ export class EmbeddedBrowser {
         reason?: string;
         inputType?: string;
         selector?: string;
+        matchCount?: number;
       }>(buildFocusExpression(field.target));
       if (!focus.ok) {
         throw new Error(
@@ -4791,12 +4837,14 @@ export class EmbeddedBrowser {
         clear: field.clear !== false,
         ...(field.submit ? { submit: true } : {}),
       });
+      const warning = multiMatchWarning(field.target, focus.matchCount);
       filled.push({
         field: name,
         ...(focus.selector ? { selector: focus.selector } : {}),
         // The MCP layer masks every value whose field reported `secret`, so one
         // password in the middle of a form must not leak the rest of the call.
         ...(focus.inputType === "password" ? { secret: true as const } : {}),
+        ...(warning ? { warning } : {}),
       });
     }
     return { ok: true, filled };

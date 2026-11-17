@@ -78,6 +78,14 @@ describe("element targets", () => {
     expect(expression).not.toContain('"hasText"');
     expect(expression).not.toContain('"nth"');
   });
+
+  it("carries the match count back for the multi-match warning", () => {
+    // 直连动作保持「取排名第一个」，但调用方要能从返回值知道「匹配不止一个」：
+    // 这个数由页内 resolver 随命中带回，断言它进了表达式，上层 warning 链路
+    // 才有数据可用。
+    const expression = buildElementPointExpression({ text: "创建租户" });
+    expect(expression).toContain("matchCount");
+  });
 });
 
 describe("narrowed find (locator handles)", () => {
@@ -128,6 +136,9 @@ describe("narrowed find (locator handles)", () => {
     // The wording is the contract: a model reading「匹配 N 个」must learn that
     // nth or a narrowing field is the way forward, not that the page is broken.
     expect(locatorNotFoundText("文本「删除」")).toContain("找不到");
+    // 「找不到」必须交代 text 的匹配范围：排查者看到纯展示 div 没被命中时，得能
+    // 自己得出「它没有自身文字」而不是「元素不存在」。
+    expect(locatorNotFoundText("文本「删除」")).toContain("有自身文字");
     const ambiguous = locatorAmbiguousText("文本「删除」", 3);
     expect(ambiguous).toContain("匹配 3 个");
     expect(ambiguous).toContain("nth");

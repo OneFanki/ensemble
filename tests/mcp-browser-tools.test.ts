@@ -991,6 +991,46 @@ describe("browser tool calls", () => {
   });
 });
 
+describe("unknown arguments are refused at the entrance", () => {
+  /**
+   * schema 的 `additionalProperties: false` 只有端点真正执行才有意义。这里的
+   * 代表样本覆盖两类错误：把 find 专属收窄字段传给动作工具（张冠李戴，必须点名
+   * 去处），以及传一个根本不存在的字段。拒绝必须是协议错误（-32602）且发生在
+   * 入口——表面方法一个都不能被碰到。
+   */
+  it("rejects a find-only narrowing field passed to an action tool and names where it belongs", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("click_browser_element", { tabId: "tab-1", text: "删除", hasText: "A" }),
+    );
+    expect(json.error?.code).toBe(-32602);
+    expect(json.error?.message).toContain("未知参数");
+    expect(json.error?.message).toContain("hasText");
+    expect(json.error?.message).toContain("find_browser_element");
+    expect(calls.some((call) => call.method === "click")).toBe(false);
+  });
+
+  it("rejects a field that the tool does not declare", async () => {
+    await startServer(fakeSurface());
+    const { json } = await rpc(toolCall("list_browser_tabs", { limit: 5 }));
+    expect(json.error?.code).toBe(-32602);
+    expect(json.error?.message).toContain("limit");
+    expect(json.error?.message).toContain("没有这个参数");
+    expect(calls.some((call) => call.method === "createTab")).toBe(false);
+  });
+
+  it("does not put update_settings behind the generic refusal (it owns its whitelist)", async () => {
+    await startServer(fakeSurface());
+    const { json } = await rpc(toolCall("update_settings", { notASetting: true }));
+    // update_settings 是唯一开放键集的工具：未知键到达工具本身，由它解释为什么
+    // 不允许改。若被入口的 -32602 拦下，这条解释就到不了调用方。
+    expect(json.error).toBeUndefined();
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("不允许通过 MCP 修改");
+  });
+});
+
 describe("capability reporting", () => {
   /**
    * The shared fake plus every optional member. This is the "all present"

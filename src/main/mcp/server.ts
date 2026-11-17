@@ -810,6 +810,22 @@ function targetNth(args: Record<string, unknown>): number | undefined {
 }
 
 /**
+ * 收窄字段只属于 find_browser_element：动作工具的定位不吃它们（要精确就先 find
+ * 再用 handle），把 `hasText` 传给 click 这类调用是张冠李戴的典型，报错时点名
+ * 去处比一句「未知参数」更能直接纠正。
+ */
+const FIND_ONLY_FIELDS = new Set(["hasText", "hasNotText", "visible"]);
+
+function unknownArgumentsMessage(unknown: string[]): string {
+  const listed = unknown.map((key) =>
+    FIND_ONLY_FIELDS.has(key)
+      ? `${key}（该字段属于 find_browser_element 的收窄字段，这个工具不接受；要精确定位请先 find 再传 handle）`
+      : `${key}（该工具没有这个参数）`,
+  );
+  return `未知参数：${listed.join("、")}`;
+}
+
+/**
  * Builds a find locator: a base field (selector / label / text / role) plus the
  * narrowing fields.
  *
@@ -1570,6 +1586,17 @@ export class McpServer {
             });
             return;
           }
+          const unknown = this.unknownArguments(tool, params.arguments ?? {});
+          if (unknown.length > 0) {
+            const messageText = unknownArgumentsMessage(unknown);
+            this.audit(tool.name, params.arguments, false, messageText);
+            send(200, {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: messageText },
+            });
+            return;
+          }
           // The origin gate sits here rather than inside each tool so a new
           // input tool cannot forget it: it only has to declare `inputTarget`.
           const origin = this.originGate(tool, params.arguments ?? {});
@@ -1688,6 +1715,24 @@ export class McpServer {
       if (value === undefined || value === null) return true;
       return typeof value === "string" && value.trim() === "";
     });
+  }
+
+  /**
+   * Arguments the tool's schema does not declare.
+   *
+   * `additionalProperties: false` 一直写在 schema 里，但此前只有客户端读它——端点
+   * 本身不校验，拼错或张冠李戴的字段静默落空：实测把 find 专属的 `hasText` 传给
+   * click，调用照常执行、点的是收窄前的第一个元素，调用方毫无察觉。在入口统一
+   * 拒绝而不是每个工具各自防：调用方立刻知道字段没有被用上，而不是事后对着错误
+   * 的结果猜。`update_settings` 是唯一声明 `additionalProperties: true` 的工具
+   * （开放键集、自带白名单），在这里自然放行。
+   */
+  private unknownArguments(tool: ToolDefinition, args: Record<string, unknown>): string[] {
+    if (tool.inputSchema["additionalProperties"] !== false) return [];
+    const properties = tool.inputSchema["properties"];
+    if (!properties || typeof properties !== "object") return [];
+    const known = new Set(Object.keys(properties as Record<string, unknown>));
+    return Object.keys(args).filter((key) => !known.has(key));
   }
 
   private gate(tool: ToolDefinition): string | undefined {
@@ -3557,7 +3602,7 @@ export class McpServer {
       {
         name: "find_browser_element",
         description:
-          "按定位条件查找元素并返回可复用的句柄。定位给 selector / label / text / role 之一；收窄字段可选：hasText / hasNotText（元素自身文本包含或不包含某子串）、visible（true 只留可见、false 只留不可见）、nth（取第几个，0 起、负数从尾数）。返回 handleId、匹配总数 count 与全部匹配预览（标签、文本、可见性、位置）。之后 click / hover / type / set_browser_checkbox / read_browser_element 直接传 handle 就能操作，页面重渲染后仍指向同一逻辑元素；匹配多个且没有归属时会报「匹配 N 个」。timeoutMs 内一个匹配都没等到就报错，默认 5000。",
+          "按定位条件查找元素并返回可复用的句柄。定位给 selector / label / text / role 之一；收窄字段可选：hasText / hasNotText（元素自身文本包含或不包含某子串）、visible（true 只留可见、false 只留不可见）、nth（取第几个，0 起、负数从尾数）。text / role 匹配可交互元素与有自身文字的可见元素（纯容器不算）。返回 handleId、匹配总数 count 与全部匹配预览（标签、文本、可见性、位置）。之后 click / hover / type / set_browser_checkbox / read_browser_element 直接传 handle 就能操作，页面重渲染后仍指向同一逻辑元素；匹配多个且没有归属时会报「匹配 N 个」。timeoutMs 内一个匹配都没等到就报错，默认 5000。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3582,7 +3627,7 @@ export class McpServer {
       {
         name: "click_browser_element",
         description:
-          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄的定位命中多个且无法归属时报「匹配 N 个」。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。",
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄的定位命中多个且无法归属时报「匹配 N 个」。直连定位命中多个时仍点排名第一个，返回值里的 warning 会写明匹配数——要精确请改用 find_browser_element 收窄或给 nth。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3600,7 +3645,7 @@ export class McpServer {
       {
         name: "hover_browser_element",
         description:
-          "把鼠标移到元素上但不点击。用于打开只在悬停时出现的东西：下拉菜单、tooltip、行内操作按钮、hover 才展开的子菜单。发的是真实鼠标移动事件，所以页面的 mouseenter / mouseover 与 CSS :hover 都会生效。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。返回值里带上找到的元素，可以据此确认悬停的是不是想要的那个。",
+          "把鼠标移到元素上但不点击。用于打开只在悬停时出现的东西：下拉菜单、tooltip、行内操作按钮、hover 才展开的子菜单。发的是真实鼠标移动事件，所以页面的 mouseenter / mouseover 与 CSS :hover 都会生效。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。直连定位命中多个时仍悬停排名第一个，返回值里的 warning 会写明匹配数。返回值里带上找到的元素，可以据此确认悬停的是不是想要的那个。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3616,7 +3661,7 @@ export class McpServer {
       {
         name: "scroll_browser_page",
         description:
-          "滚动页面或某个容器。给 target 时滚轮落在那个元素中心，所以嵌套的滚动容器（虚拟列表、弹窗正文）会滚动而不是整个页面；不给 target 则滚动整个视口。deltaY 正数向下、负数向上，单位是像素；一屏大约是 500-800。返回里的 moved 说明位置真的变了——已经到底再滚就是 false，此时不该继续等新内容出现。",
+          "滚动页面或某个容器。给 target 时滚轮落在那个元素中心，所以嵌套的滚动容器（虚拟列表、弹窗正文）会滚动而不是整个页面；不给 target 则滚动整个视口。deltaY 正数向下、负数向上，单位是像素；一屏大约是 500-800。target 的定位命中多个时滚轮仍落在排名第一个元素处，返回值里的 warning 会写明匹配数。返回里的 moved 说明位置真的变了——已经到底再滚就是 false，此时不该继续等新内容出现。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3691,7 +3736,7 @@ export class McpServer {
       {
         name: "upload_browser_files",
         description:
-          "把本机文件塞进页面的文件输入框，等价于用户点了「选择文件」并选好。files 是绝对路径，多个文件要在同一个数组里一次给——分多次调用只有最后一次生效，因为每次都会替换输入框的内容。返回的 count 是实际放进去的数量，multiple 说明这个输入框收不收多个。只能收一个却给了多个会直接报错，不会静默截断（截断会让调用方以为上传成功了）。目标是隐藏的 file input 时可以给它旁边的按钮文字，工具会顺着找到那个 input。",
+          "把本机文件塞进页面的文件输入框，等价于用户点了「选择文件」并选好。files 是绝对路径，多个文件要在同一个数组里一次给——分多次调用只有最后一次生效，因为每次都会替换输入框的内容。返回的 count 是实际放进去的数量，multiple 说明这个输入框收不收多个。只能收一个却给了多个会直接报错，不会静默截断（截断会让调用方以为上传成功了）。定位命中多个文件框时仍选排名第一个，返回值里的 warning 会写明匹配数。目标是隐藏的 file input 时可以给它旁边的按钮文字，工具会顺着找到那个 input。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
@@ -3717,7 +3762,7 @@ export class McpServer {
       {
         name: "drag_browser_element",
         description:
-          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个。",
+          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。任一端定位命中多个时仍取排名第一个，返回值里的 warning 会写明匹配数。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
@@ -3741,7 +3786,7 @@ export class McpServer {
       {
         name: "set_browser_checkbox",
         description:
-          "把复选框或单选框设成指定状态。checked: true 为勾上，false 为取消。幂等：已经在目标状态时什么也不点，所以重复调用不会把勾好的又取消掉。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。返回的 changed 说明这次是否真的点了；stuckAt 出现表示点了但状态没变（外层 label 被禁用、或有处理器拦了默认行为），此时重试也没用。",
+          "把复选框或单选框设成指定状态。checked: true 为勾上，false 为取消。幂等：已经在目标状态时什么也不点，所以重复调用不会把勾好的又取消掉。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。直连定位命中多个时仍设置排名第一个，返回值里的 warning 会写明匹配数。返回的 changed 说明这次是否真的点了；stuckAt 出现表示点了但状态没变（外层 label 被禁用、或有处理器拦了默认行为），此时重试也没用。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
@@ -3800,7 +3845,7 @@ export class McpServer {
       {
         name: "type_browser_text",
         description:
-          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。定位用 label，不必知道 CSS 选择器。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
+          "向一个输入框输入文本：先聚焦，清空原内容（除非 clear: false），再逐字输入，submit: true 则随后回车。定位用 label，不必知道 CSS 选择器。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。直连定位命中多个时仍输入排名第一个，返回值里的 warning 会写明匹配数。一次填多个字段用 fill_browser_form；填已保存的账号密码用 fill_browser_login。",
         kind: "run",
         inputSchema: object(
           {
@@ -3828,7 +3873,7 @@ export class McpServer {
       {
         name: "fill_browser_form",
         description:
-          "一次填完一个表单：每个字段给 label（或 selector）和要输入的值。按顺序逐个填、每个都走真实输入事件，最后一个字段可以带 submit: true 提交。比逐个字段调 type_browser_text 少几十次往返，也不会因为中间某次调用超时让页面停在半填状态。",
+          "一次填完一个表单：每个字段给 label（或 selector）和要输入的值。按顺序逐个填、每个都走真实输入事件，最后一个字段可以带 submit: true 提交。比逐个字段调 type_browser_text 少几十次往返，也不会因为中间某次调用超时让页面停在半填状态。某字段的定位命中多个时仍填排名第一个，该字段的返回条目里带 warning 说明匹配数。",
         kind: "run",
         inputSchema: object(
           {

@@ -153,6 +153,11 @@ export interface ElementPoint {
   /** Selector of the element that was actually resolved. */
   selector?: string;
   matchedBy?: string;
+  /**
+   * 收窄后的匹配总数。直连动作取排名第一的元素不变，但上层据此在 count > 1 时
+   * 附一条非致命 warning（「匹配 N 个，已操作第 1 个」）。
+   */
+  matchCount?: number;
 }
 
 export interface VisibilityProbe {
@@ -262,6 +267,16 @@ const HELPERS = `
   const textOf = (el) => {
     const raw = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
     return raw;
+  };
+  // 元素自己的文字：只数直接挂在它下面的文本节点，不含子孙带进来的。「有自身
+  // 文字」是 text 定位候选池的入池条件——容器（body、包着一串孩子的 div）因此
+  // 天然落选，不会让整页陪着同一个词命中。
+  const ownTextOf = (el) => {
+    let out = "";
+    for (const node of el.childNodes) {
+      if (node.nodeType === 3) out += node.textContent || "";
+    }
+    return out.replace(/\\s+/g, " ").trim();
   };
   const labelOf = (el) => {
     const aria = el.getAttribute("aria-label");
@@ -462,7 +477,19 @@ const HELPERS = `
       if (matches.length) return { matches, matchedBy: "label" };
     }
     if (target.text || target.role) {
-      const pool = deepQueryAll(INTERACTIVE).filter(isVisible);
+      // 候选池 = 可交互元素 ∪ 有非空自身文字的可见元素。text 要点的常常是按钮，
+      // 但要读、要等的目标（一个会消失的盒子、一个 li）不一定是控件——只扫交互
+      // 元素会让 text 定位对纯展示元素报「不存在」。保持文档序遍历：交互元素
+      // 之间的相对顺序与只扫 INTERACTIVE 时完全一致。
+      const pool = [];
+      eachRoot((root) => {
+        try {
+          root.querySelectorAll("*").forEach((el) => {
+            if (!isVisible(el)) return;
+            if (el.matches(INTERACTIVE) || ownTextOf(el)) pool.push(el);
+          });
+        } catch {}
+      });
       const ranked = [];
       for (const el of pool) {
         if (target.role && roleOf(el) !== target.role) continue;
@@ -495,7 +522,14 @@ const HELPERS = `
     if (!found.matches.length) return { reason: found.reason || "not-found" };
     const index = pickFromMatches(found.matches.length, spec ? spec.nth : undefined);
     if (index < 0) return { reason: "nth-out-of-range" };
-    return { el: found.matches[index], matchedBy: found.matchedBy };
+    // matchCount 随命中一起返回：直连动作保持「取排名第一个」的行为不变，但
+    // 上层要据此给出非致命 warning（「匹配 N 个，已操作第 1 个」），没有这个数
+    // 就编不出来。
+    return {
+      el: found.matches[index],
+      matchedBy: found.matchedBy,
+      matchCount: found.matches.length,
+    };
   };
   /**
    * Finds the smallest visible element whose text matches.
@@ -512,11 +546,8 @@ const HELPERS = `
     let bestScore = 0;
     for (const el of all) {
       if (!isVisible(el)) continue;
-      const own = Array.from(el.childNodes)
-        .filter((node) => node.nodeType === 3)
-        .map((node) => node.textContent || "")
-        .join(" ");
-      const candidate = own.trim() ? own : el.children.length === 0 ? textOf(el) : "";
+      const own = ownTextOf(el);
+      const candidate = own ? own : el.children.length === 0 ? textOf(el) : "";
       if (!candidate) continue;
       const score = scoreName(candidate, wanted, exact);
       if (score === 0) continue;
@@ -704,6 +735,7 @@ export function buildElementPointExpression(target: TargetInput): string {
       text: nameOf(el).slice(0, 80),
       selector: scriptPath(el),
       matchedBy: found.matchedBy,
+      matchCount: found.matchCount,
     };
   })()`;
 }
@@ -754,6 +786,7 @@ export function buildFocusExpression(target: TargetInput): string {
       tag,
       selector: scriptPath(el),
       matchedBy: found.matchedBy,
+      matchCount: found.matchCount,
       ...(inputType ? { inputType } : {}),
     };
   })()`;
@@ -793,7 +826,7 @@ export function buildVisibilityExpression(target: TargetInput): string {
  * 就是下一步该做的事。
  */
 export function locatorNotFoundText(description: string): string {
-  return `找不到 ${description}：页面上没有匹配的元素`;
+  return `找不到 ${description}：页面上没有匹配的元素（text 匹配的是可交互元素和有自身文字的可见元素）`;
 }
 
 export function locatorAmbiguousText(description: string, count: number): string {
@@ -1146,6 +1179,7 @@ export function buildFileInputExpression(target: TargetInput): string {
       multiple: el.multiple === true,
       accept: (el.getAttribute("accept") || "").slice(0, 200),
       matchedBy: found.matchedBy,
+      matchCount: found.matchCount,
       selector: scriptPath(el),
     };
   })()`;
@@ -1180,6 +1214,8 @@ export function buildDragPointsExpression(from: TargetInput, to: TargetInput): s
       toTag: end.el.tagName.toLowerCase(),
       fromText: textOf(start.el).slice(0, 60),
       toText: textOf(end.el).slice(0, 60),
+      fromMatchCount: start.matchCount,
+      toMatchCount: end.matchCount,
     };
   })()`;
 }
@@ -1207,7 +1243,7 @@ export function buildCheckExpression(target: TargetInput, desired: boolean): str
     if (!isVisible(el)) return { ok: false, reason: "not-visible" };
     const before = el.checked === true;
     const desired = ${desired ? "true" : "false"};
-    if (before === desired) return { ok: true, changed: false, checked: before, tag, type, selector: scriptPath(el) };
+    if (before === desired) return { ok: true, changed: false, checked: before, tag, type, selector: scriptPath(el), matchCount: found.matchCount };
     el.click();
     const after = el.checked === true;
     return {
@@ -1217,6 +1253,7 @@ export function buildCheckExpression(target: TargetInput, desired: boolean): str
       tag,
       type,
       selector: scriptPath(el),
+      matchCount: found.matchCount,
       // A click that did not change the box is a fact worth reporting: a
       // disabled label wrapper or a handler calling preventDefault is exactly the
       // case where the caller otherwise assumes it worked.

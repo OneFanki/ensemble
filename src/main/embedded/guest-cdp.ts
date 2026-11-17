@@ -1,6 +1,14 @@
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
+import { buildPressHitExpression } from "@core/cdp/inspect";
 import { withDeadline } from "@shared/async";
-import { KEY_TABLE, MODIFIER_KEYS, type CdpEventListener, type CdpExecutor } from "./cdp";
+import {
+  EDIT_COMMANDS_BY_COMBO,
+  KEY_TABLE,
+  MODIFIER_KEYS,
+  type ClickPressHit,
+  type CdpEventListener,
+  type CdpExecutor,
+} from "./cdp";
 
 /**
  * A page's CDP surface when the page lives in a `<webview>`.
@@ -312,15 +320,26 @@ export class GuestCdp implements CdpExecutor {
     }
   }
 
-  async clickAt(x: number, y: number): Promise<void> {
+  async clickAt(x: number, y: number): Promise<ClickPressHit | null> {
     // Presented while the pointer works: a hidden page's hit testing follows
     // the same visibility rules as everything else, so a click on a background
     // tab would otherwise land on nothing.
+    let pressHit: ClickPressHit | null = null;
     await this.presented(async () => {
       // A move first: Chromium resolves the hit target from the last pointer
       // position, so press/release at a spot the mouse never visited can land
       // on nothing.
       await this.pointerMove(x, y);
+      // Press-time hit read, before `mousePressed` — the same instant the
+      // browser resolves its own hit test. A page that swaps its DOM in the
+      // click's handler makes the post-release read-back see the replacement,
+      // which reported misses for clicks that landed and worked. A failure here
+      // must not cancel the click; the caller falls back to the read-back.
+      try {
+        pressHit = await this.evaluate<ClickPressHit>(buildPressHitExpression(x, y));
+      } catch {
+        pressHit = null;
+      }
       await this.send("Input.dispatchMouseEvent", {
         type: "mousePressed",
         x,
@@ -339,6 +358,7 @@ export class GuestCdp implements CdpExecutor {
       });
     });
     this.pointerSeen = true;
+    return pressHit;
   }
 
   /**
@@ -379,6 +399,10 @@ export class GuestCdp implements CdpExecutor {
    * `ensureInputFocus` first: a guest drops every key event until it has received
    * a real pointer event, and Ctrl+A on a field that never saw the pointer is a
    * shortcut the page never receives.
+   *
+   * Known editing combinations carry `commands` on the keyDown — same reason as
+   * the direct executor: the keydown's own default action never reaches the
+   * input pipeline the next IME commit reads from.
    */
   async pressWithModifiers(
     key: string,
@@ -387,6 +411,7 @@ export class GuestCdp implements CdpExecutor {
     modifiers: number,
   ): Promise<void> {
     await this.ensureInputFocus();
+    const commands = EDIT_COMMANDS_BY_COMBO[`${modifiers}:${key}`];
     const held = MODIFIER_KEYS.filter((entry) => (modifiers & entry.mask) !== 0);
     for (const modifier of held) {
       await this.send("Input.dispatchKeyEvent", {
@@ -405,6 +430,8 @@ export class GuestCdp implements CdpExecutor {
       windowsVirtualKeyCode: keyCode,
       nativeVirtualKeyCode: keyCode,
       modifiers,
+      // Editing commands ride the pipeline, same as the direct executor.
+      ...(commands ? { commands } : {}),
     });
     await this.send("Input.dispatchKeyEvent", {
       type: "keyUp",

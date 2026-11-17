@@ -94,14 +94,23 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
+<<<<<<< HEAD
 | `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；返回 `hit` 说明事件实际落点。点击触发 alert/confirm 时命令在弹窗打开瞬间提前返回，`dialog` 带类型与内容、`hint` 指引先答弹窗（页面与弹窗保持原样，不重试点击）。直连定位命中多个时仍点第一个，`warning` 写明匹配数（句柄与显式 `nth` 不产生）。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, warning?, hit }`；触发弹窗时另有 `dialog` 与 `hint`（hover / scroll / type / press / upload / drag / checkbox 同） |
 | `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip。直连多匹配同 click（`warning`）。可用句柄（同上） | `{ ok, tag, text, selector, warning? }` |
 | `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下。target 多匹配时滚轮仍落第一个（`warning`） | `{ ok, scrolled, moved, warning? }`，`moved: false` 表示已到边界 |
 | `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起 | `{ ok, keys, modifiers }` |
 | `read_browser_dialog` | read | — | 从主进程的事件记录读，**不走页面脚本**——弹窗打开时页面是阻塞的，任何页内查询都会超时。`pageBlocked: false` 表示 beforeunload 拦截：页面活着，只缺一个去留决定 | `{ dialog: { type, message, defaultPrompt?, url?, msOpen, pageBlocked, hint } }` 或 `{ dialog: null }` |
 | `handle_browser_dialog` | run | 是 | `accept: false` 为取消；prompt 用 `promptText` 填值。beforeunload 拦截也在这里答：`accept: true` 重发被拦的导航并等它完成，`false` 留下。没有弹窗时报 `handled: false` 而不是错。无人应答的弹窗超预算后自动取消（唯一会自动应答弹窗的路径；工具超时一律不动弹窗）；挂起期间 CDP 会话保持附加，不会分离 | `{ ok, handled, type? }` |
+=======
+| `click_browser_element` | run | 是 | 真实鼠标事件；先滚动到可见；`hit` 以按下瞬间为准（onTarget 只在按下与回读都 miss 才 false），`hitAfter` 是松开后的回读，页面在点击处理里替换 DOM 时两者不同。直连定位命中多个时仍点第一个，`warning` 写明匹配数（句柄与显式 `nth` 不产生）。可用句柄（`handle`，与定位字段互斥，可配 `nth`；命中多个且无法归属时报「匹配 N 个」） | `{ ok, tag, text, selector, warning?, hit, hitAfter? }` |
+| `hover_browser_element` | run | 是 | 真实鼠标移动（不发按下），打开只在悬停时出现的菜单与 tooltip。直连多匹配同 click（`warning`）。可用句柄（同上） | `{ ok, tag, text, selector, warning? }` |
+| `scroll_browser_page` | run | 是 | 给 target 时滚轮落在该元素中心，可滚嵌套容器；`deltaY` 正数向下。target 多匹配时滚轮仍落第一个（`warning`）。`scrolled` 是动作后回读容器位置得到的真实位移差值，等待滚动稳定后才读 | `{ ok, scrolled, moved, warning? }`，`moved: false` 表示没滚（含已到边界） |
+| `press_browser_keys` | run | 是 | 组合键写作 `Control+a`；修饰键先按下、再主键、逆序抬起。常见编辑组合（Ctrl+a/c/x/v/z、Ctrl+Shift+z）随 keyDown 派发 Chromium 编辑命令，效果对后续输入可见 | `{ ok, keys, modifiers }` |
+| `read_browser_dialog` | read | — | 从主进程的事件记录读，**不走页面脚本**——弹窗打开时页面是阻塞的，任何页内查询都会超时 | `{ dialog: { type, message, defaultPrompt?, url?, msOpen } }` 或 `{ dialog: null }` |
+| `handle_browser_dialog` | run | 是 | `accept: false` 为取消；prompt 用 `promptText` 填值。没有弹窗时报 `handled: false` 而不是错。弹窗挡路超过 30 秒会被自动取消 | `{ ok, handled, type? }` |
+>>>>>>> wt/action-truth
 | `upload_browser_files` | run | 是 | 绝对路径；多个文件必须一次给（每次调用替换输入框内容）。单文件框给多个会报错而不是截断。定位多匹配同 click（`warning`） | `{ ok, count, multiple, selector?, warning? }` |
-| `drag_browser_element` | run | 是 | `from` / `to` 各自 `fromSelector`·`fromText`、`toSelector`·`toText`。真实按下 + 六次中间移动 + 松开。任一端多匹配时仍取第一个，`warning` 写明 | `{ ok, fromTag, toTag, fromText, toText, warning? }` |
+| `drag_browser_element` | run | 是 | `from` / `to` 各自 `fromSelector`·`fromText`、`toSelector`·`toText`。真实按下 + 六次中间移动 + 松开。动作后回读页面：`dropped` 说明页内是否收到 drop（`dropAt` 坐标、`droppedAtTarget` 是否落在终点附近、`reordered` 起点元素位置是否变化），缺失或坐标异常时 `warning` 说明，不算成功。任一端多匹配时仍取第一个，`warning` 写明 | `{ ok, fromTag, toTag, fromText, toText, dropped, dropAt?, droppedAtTarget, reordered?, warning? }` |
 | `set_browser_checkbox` | run | 是 | 幂等：已在目标状态就不点。`stuckAt` 表示点了但状态没变（禁用或有处理器拦默认行为）。直连多匹配同 click（`warning`）。可用句柄（同 click） | `{ ok, checked, changed, selector?, stuckAt?, warning? }` |
 | `go_back_browser_tab` | run | 是 | 无可后退历史时什么也不发生 | `{ ok }` |
 | `go_forward_browser_tab` | run | 是 | 无可前进历史时什么也不发生 | `{ ok }` |

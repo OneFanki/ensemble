@@ -1,5 +1,6 @@
 import type { WebContents } from "electron";
 import type { DomSnapshot, ElementPoint, VisibilityProbe } from "@core/cdp/inspect";
+import { buildPressHitExpression } from "@core/cdp/inspect";
 import { withDeadline } from "@shared/async";
 
 /**
@@ -23,6 +24,22 @@ export const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
  * `Record<string, unknown>` would force every listener to narrow anyway.
  */
 export type CdpEventListener = (method: string, params: Record<string, unknown>) => void;
+
+/**
+ * Where the press was about to land, read at press time.
+ *
+ * Produced by `clickAt` in the window between the pointer move and
+ * `mousePressed` — the same instant Chromium resolves its own hit test — so it
+ * is the trusted baseline for whether the click went to the target. `null` means
+ * the page could not answer at that moment (a dialog up, a navigation mid-flight)
+ * and the click was still dispatched; the caller then falls back to the
+ * post-release read alone.
+ */
+export interface ClickPressHit {
+  onTarget: boolean;
+  tag?: string;
+  text?: string;
+}
 
 /**
  * The command surface every displayed page is driven through.
@@ -75,7 +92,18 @@ export interface CdpExecutor {
      */
     clip?: { x: number; y: number; width: number; height: number; scale?: number };
   }): Promise<Buffer>;
-  clickAt(x: number, y: number): Promise<void>;
+  /**
+   * Clicks a point and reports where the press was about to land.
+   *
+   * The press-time read happens between the pointer move and `mousePressed` —
+   * the instant Chromium's own hit test resolves — and is the baseline for
+   * "did this click go to the target". The usual read-back after
+   * `mouseReleased` cannot be that baseline: a page that swaps its DOM in the
+   * click's handler makes the read-back see the replacement, while the click
+   * itself landed and worked. `null` means the press-time read failed and the
+   * click was dispatched anyway.
+   */
+  clickAt(x: number, y: number): Promise<ClickPressHit | null>;
   /**
    * Moves the pointer without pressing.
    *
@@ -543,11 +571,25 @@ export class EmbeddedCdp implements CdpExecutor {
     }
   }
 
-  async clickAt(x: number, y: number): Promise<void> {
+  async clickAt(x: number, y: number): Promise<ClickPressHit | null> {
     // A move first: Chromium resolves the hit target from the last pointer
     // position, so dispatching press/release at a spot the mouse never visited
     // can land on nothing and the page's own handler never runs.
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+    /*
+     * Read the hit at the instant the press is about to happen. After
+     * `mouseReleased` a page that swaps its DOM in the click's handler makes the
+     * read-back see the replacement element, which reported misses for clicks
+     * that landed and worked. A read failure here must not cancel the click:
+     * a dialog opening between the move and this evaluate leaves the press
+     * perfectly valid, only unverifiable at press time.
+     */
+    let pressHit: ClickPressHit | null = null;
+    try {
+      pressHit = await this.evaluate<ClickPressHit>(buildPressHitExpression(x, y));
+    } catch {
+      pressHit = null;
+    }
     await this.send("Input.dispatchMouseEvent", {
       type: "mousePressed",
       x,
@@ -564,6 +606,7 @@ export class EmbeddedCdp implements CdpExecutor {
       buttons: 0,
       clickCount: 1,
     });
+    return pressHit;
   }
 
   /**
@@ -618,6 +661,15 @@ export class EmbeddedCdp implements CdpExecutor {
    * The modifier keys themselves are derived from the same bit field the caller
    * passes, so "Ctrl+Shift+S" needs one number rather than a list of key presses
    * that has to agree with it.
+   *
+   * Known editing combinations additionally carry `commands` on the keyDown.
+   * The keydown's own default action edits only the DOM selection; the input
+   * pipeline that the next `Input.insertText` (an IME commit) reads from never
+   * learns about it, so a Ctrl+A followed by typing appended instead of
+   * replaced — measured on Electron 45. `commands` runs the same editing command
+   * through the input pipeline, where both the IME state and later editing
+   * commands see the result. The keydown still reaches the page first, so
+   * handlers that observe or prevent it behave as before.
    */
   async pressWithModifiers(
     key: string,
@@ -625,6 +677,7 @@ export class EmbeddedCdp implements CdpExecutor {
     keyCode: number,
     modifiers: number,
   ): Promise<void> {
+    const commands = EDIT_COMMANDS_BY_COMBO[`${modifiers}:${key}`];
     const held = MODIFIER_KEYS.filter((entry) => (modifiers & entry.mask) !== 0);
     for (const modifier of held) {
       await this.send("Input.dispatchKeyEvent", {
@@ -643,6 +696,12 @@ export class EmbeddedCdp implements CdpExecutor {
       windowsVirtualKeyCode: keyCode,
       nativeVirtualKeyCode: keyCode,
       modifiers,
+      // The editing command runs in the pipeline — the same layer a later
+      // `Input.insertText` (an IME commit) reads its selection from, which is
+      // what makes "select all, then type" replace. Without `commands` the
+      // keydown's own default action edits only the DOM selection, which the
+      // pipeline never sees (measured on Electron 45).
+      ...(commands ? { commands } : {}),
     });
     await this.send("Input.dispatchKeyEvent", {
       type: "keyUp",
@@ -664,7 +723,15 @@ export class EmbeddedCdp implements CdpExecutor {
     }
   }
 
-  /** Types through the input pipeline so frameworks see real input events. */
+  /**
+   * Types through the input pipeline so frameworks see real input events.
+   *
+   * `Input.insertText` is an IME commit. It replaces whatever selection the
+   * *input pipeline* recorded — which is why clear-before-type goes through
+   * `selectAll()` (an editing command the pipeline tracks) and why page-script
+   * selections never make typing replace anything. Callers that want "select,
+   * then replace" must select through this executor, not through the page.
+   */
   async insertText(text: string): Promise<void> {
     await this.send("Input.insertText", { text });
   }
@@ -746,6 +813,25 @@ export class EmbeddedCdp implements CdpExecutor {
     });
   }
 }
+
+/**
+ * Editing commands carried on the keyDown for known modifier combinations.
+ *
+ * Keyed by `${modifiers}:${key}` — the same bit field the caller passes. These
+ * run through the input pipeline (see the note in `pressWithModifiers`), which
+ * is what makes the combination's effect visible to the IME commit that a later
+ * `Input.insertText` performs. Kept to the combinations Chromium maps to plain
+ * editing commands on every platform; anything else (browser-level shortcuts,
+ * tab management) stays with the keydown's own default handling.
+ */
+export const EDIT_COMMANDS_BY_COMBO: Record<string, string[]> = {
+  "2:a": ["selectAll"],
+  "2:c": ["copy"],
+  "2:x": ["cut"],
+  "2:v": ["paste"],
+  "2:z": ["undo"],
+  "10:z": ["redo"],
+};
 
 /**
  * Chromium's modifier bit field, as the key each bit stands for.

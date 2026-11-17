@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of the three pointer/keyboard actions the tool surface lacked.
+ * End-to-end check of the pointer/keyboard actions and their honest returns.
  *
  * Each assertion proves the *page* reacted, not that the tool returned `ok`:
  *
  * - `hover` must open a menu that only exists under `:hover` and `mouseenter`.
- * - `scroll` must move a nested container (not the page) and report `moved: false`
- *   at the end of its range.
+ * - `click` on a button whose handler replaces itself must still report
+ *   `hit.onTarget: true` (the press landed) while `hitAfter` shows the swap.
+ * - `scroll` must move a nested container (not the page) and report the real
+ *   displacement read back from it, `moved: false` at the end of its range.
  * - `press` of a key combination must reach the page's own `keydown` handler with
- *   the modifier bits set.
+ *   the modifier bits set, and Ctrl+A must produce a live selection that typing
+ *   replaces rather than appends to.
  *
  * The page under test is a local server written for this suite. Everything is
  * driven through MCP, the same surface an AI client uses.
@@ -26,15 +29,22 @@ const TOKEN = "e2e-actions-token-123456789";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-actions-"));
 
 /*
- * The page has three things to prove, one per action:
+ * The page has five things to prove, one per action:
  *
  * 1. A menu that is `display: none` until `:hover` — the shape every hover-driven
  *    dropdown has, and the thing a click-only tool surface cannot open.
- * 2. A scrollable box whose own scrollTop is what moves, so "scrolled the page"
- *    and "scrolled the container" are distinguishable.
- * 3. A keydown listener that records the modifier flags, so a combination that
+ * 2. A button whose click handler *synchronously replaces itself* — the shape
+ *    that made the post-release hit read-back report misses for clicks that
+ *    landed. The hit verdict must come from the press instant.
+ * 3. A scrollable box whose own scrollTop is what moves, so "scrolled the page"
+ *    and "scrolled the container" are distinguishable, and the reported
+ *    displacement is the real delta read back from the container.
+ * 4. A keydown listener that records the modifier flags, so a combination that
  *    was only labelled with modifiers but not actually pressed with them shows up
  *    as `none`.
+ * 5. A text field for the select-all chain: Ctrl+A must really select (selection
+ *    collapsed to nothing after Delete proves it), and typing right after must
+ *    replace — not append after — the old value.
  */
 const server = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -54,10 +64,23 @@ const server = createServer((req, res) => {
   <button id="menu-trigger" type="button">菜单</button>
   <div id="menu"><div>选项一</div><div>选项二</div></div>
 </div>
+<button id="swap" type="button">换我</button>
 <div id="scroller"><div id="scroller-inner"></div></div>
 <input id="keyfield" placeholder="点这里再按键">
 <div id="keylog">none</div>
 <script>
+  // The click handler swaps the button out in the same tick the click runs in,
+  // so any read-back after the release sees the replacement, not the target.
+  window.__swapClicks = 0;
+  document.getElementById('swap').addEventListener('click', () => {
+    window.__swapClicks += 1;
+    const next = document.createElement('button');
+    next.id = 'swap';
+    next.type = 'button';
+    next.textContent = '换我（第' + window.__swapClicks + '次）';
+    document.getElementById('swap').replaceWith(next);
+  });
+
   // Recorded so the test can prove the page's own handler saw the modifiers, not
   // just that some key event happened.
   document.addEventListener('keydown', (event) => {
@@ -193,6 +216,28 @@ try {
     menuAfter,
   );
 
+  // --- click survives a handler that replaces the target in the same tick ---
+  const swap = await call("click_browser_element", { tabId, selector: "#swap" });
+  const swapClicks = await call("evaluate_browser_page", {
+    tabId,
+    expression: `window.__swapClicks`,
+  });
+  check(
+    "the click ran even though the handler replaced the element",
+    swapClicks === 1,
+    { swapClicks, swap },
+  );
+  check(
+    "the hit verdict stays true when the page swapped itself after the press",
+    swap.ok === true && swap.hit?.onTarget === true,
+    swap,
+  );
+  check(
+    "the post-release read saw the replacement element, reported separately",
+    swap.hitAfter?.onTarget === false,
+    swap,
+  );
+
   // --- scroll moves the container, and says so ------------------------------
   const containerBefore = await call("evaluate_browser_page", {
     tabId,
@@ -207,6 +252,11 @@ try {
   check(
     "scrolling a container reports that it moved",
     scrolled.ok === true && scrolled.moved === true,
+    scrolled,
+  );
+  check(
+    "scrolled is the real displacement read back, matching the wheel delta",
+    scrolled.scrolled?.y === 200 && scrolled.scrolled?.x === 0,
     scrolled,
   );
   const containerAfter = await call("evaluate_browser_page", {
@@ -228,6 +278,11 @@ try {
   check(
     "scrolling past the end reports moved: false",
     atEnd.moved === false,
+    atEnd,
+  );
+  check(
+    "a no-op scroll reports a zero displacement rather than the resting position",
+    atEnd.scrolled?.x === 0 && atEnd.scrolled?.y === 0,
     atEnd,
   );
 
@@ -261,6 +316,54 @@ try {
     expression: `document.getElementById('keylog').textContent`,
   });
   check("a named key with no modifier arrives unmodified", /^Enter:none$/.test(enterLog), enterLog);
+
+  // --- select-all chain: Ctrl+A must select, and typing must replace --------
+  // The field is focused first, exactly as a caller would. Ctrl+A's verdict is
+  // read from the selection itself; then a real Delete (an editing command that
+  // follows the selection) emptying the field is the hard proof the selection
+  // was there and usable, not just an event with modifier bits set.
+  await call("type_browser_text", { tabId, selector: "#keyfield", text: "abc" });
+  await call("press_browser_keys", { tabId, keys: "Control+a" });
+  await wait(150);
+  const selected = await call("evaluate_browser_page", {
+    tabId,
+    expression: `({ s: document.getElementById('keyfield').selectionStart,
+                    e: document.getElementById('keyfield').selectionEnd,
+                    v: document.getElementById('keyfield').value })`,
+  });
+  check(
+    "Ctrl+A really selects the field's contents",
+    selected.s === 0 && selected.e === 3 && selected.v === "abc",
+    selected,
+  );
+  await call("press_browser_keys", { tabId, keys: "Delete" });
+  await wait(120);
+  const emptied = await call("evaluate_browser_page", {
+    tabId,
+    expression: `document.getElementById('keyfield').value`,
+  });
+  check(
+    "Delete right after Ctrl+A empties the field, proving the selection is live",
+    emptied === "",
+    emptied,
+  );
+
+  // The full chain a caller actually runs: select all, then type. The typed
+  // character must replace the selection — an append would mean the combination
+  // never reached the editing pipeline.
+  await call("type_browser_text", { tabId, selector: "#keyfield", text: "abc" });
+  await call("press_browser_keys", { tabId, keys: "Control+a" });
+  await wait(150);
+  await call("type_browser_text", { tabId, selector: "#keyfield", text: "X" });
+  const replaced = await call("evaluate_browser_page", {
+    tabId,
+    expression: `document.getElementById('keyfield').value`,
+  });
+  check(
+    "typing after Ctrl+A replaces the content instead of appending",
+    replaced === "X",
+    replaced,
+  );
 
   clientDone();
 } catch (error) {

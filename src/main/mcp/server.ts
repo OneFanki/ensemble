@@ -3714,7 +3714,7 @@ export class McpServer {
       {
         name: "click_browser_element",
         description:
-          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄的定位命中多个且无法归属时报「匹配 N 个」。直连定位命中多个时仍点排名第一个，返回值里的 warning 会写明匹配数——要精确请改用 find_browser_element 收窄或给 nth。返回值里的 hit 说明事件实际落点：onTarget 为 false 表示被遮罩之类挡住没点到目标，hit.tag 是实际接收事件的元素——先看 hit 再决定重试还是换目标，别盲目重试。点击触发 alert/confirm 弹窗时，返回体带 dialog（类型与内容）和 hint：点击已生效、页面在等弹窗应答，先按 hint 处理弹窗再继续，不要重试点击。",
+          "点击标签页里的一个元素。发送的是真实鼠标事件（不是脚本 click），因此会触发框架的事件处理。元素会先滚动到可见区域。定位优先用 text（按钮上的字）或 label（表单项的标签），比 CSS 选择器稳得多——组件库的 DOM 里位置选择器随渲染顺序变。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄的定位命中多个且无法归属时报「匹配 N 个」。直连定位命中多个时仍点排名第一个，返回值里的 warning 会写明匹配数——要精确请改用 find_browser_element 收窄或给 nth。返回值里的 hit 以按下瞬间为准：onTarget 只在按下瞬间与松开后回读都不在目标上才为 false，hit.tag 是按下时实际接收按下的元素；hitAfter 是松开后的回读，页面在点击处理里替换过 DOM 时它与 hit 不同，这不代表点击没生效——先看 hit 再决定重试还是换目标，别盲目重试。点击触发 alert/confirm 弹窗时，返回体带 dialog（类型与内容）和 hint：点击已生效、页面在等弹窗应答，先按 hint 处理弹窗再继续，不要重试点击。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3748,7 +3748,7 @@ export class McpServer {
       {
         name: "scroll_browser_page",
         description:
-          "滚动页面或某个容器。给 target 时滚轮落在那个元素中心，所以嵌套的滚动容器（虚拟列表、弹窗正文）会滚动而不是整个页面；不给 target 则滚动整个视口。deltaY 正数向下、负数向上，单位是像素；一屏大约是 500-800。target 的定位命中多个时滚轮仍落在排名第一个元素处，返回值里的 warning 会写明匹配数。返回里的 moved 说明位置真的变了——已经到底再滚就是 false，此时不该继续等新内容出现。",
+          "滚动页面或某个容器。给 target 时滚轮落在那个元素中心，所以嵌套的滚动容器（虚拟列表、弹窗正文）会滚动而不是整个页面；不给 target 则滚动整个视口。deltaY 正数向下、负数向上，单位是像素；一屏大约是 500-800。target 的定位命中多个时滚轮仍落在排名第一个元素处，返回值里的 warning 会写明匹配数。返回里的 scrolled 是这次滚动的真实位移（动作后回读容器位置的差值），moved 为 false 表示没滚——已经到底再滚就是 false，此时不该继续等新内容出现。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3849,7 +3849,7 @@ export class McpServer {
       {
         name: "drag_browser_element",
         description:
-          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。任一端定位命中多个时仍取排名第一个，返回值里的 warning 会写明匹配数。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个。",
+          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。任一端定位命中多个时仍取排名第一个，返回值里的 warning 会写明匹配数。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个；dropped 说明页面真的收到了 drop，dropAt 是 drop 的坐标，droppedAtTarget 为 false 或 dropped 为 false 时返回值里的 warning 会说明原因（目标不接受放置、元素不可拖拽等），此时别当成拖拽成功。reordered 为 true 表示起点元素在父容器里的位置变了——排序类页面的成功信号。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(

@@ -352,6 +352,14 @@ try {
     dragged.ok === true && dragged.fromTag === "li" && dragged.toTag === "li",
     dragged,
   );
+  check(
+    "the drag reports the drop as received, near the target, with a real coordinate",
+    dragged.dropped === true &&
+      dragged.droppedAtTarget === true &&
+      typeof dragged.dropAt?.x === "number" &&
+      typeof dragged.dropAt?.y === "number",
+    dragged,
+  );
   await wait(400);
   const after = await call("evaluate_browser_page", {
     tabId,
@@ -361,6 +369,11 @@ try {
     "the page's own drop handler reordered the list",
     after === "b,c,a",
     { before, after },
+  );
+  check(
+    "the drag hints that the element changed places",
+    dragged.reordered === true,
+    dragged,
   );
   const dragLog = await readLog(tabId);
   check(

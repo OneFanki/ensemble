@@ -113,6 +113,12 @@ import {
   type FlowStepResult,
   interpolateStep,
 } from "@shared/flows";
+import {
+  flowScriptValueToString,
+  runFlowScript,
+  type FlowScriptActions,
+  type FlowScriptTarget,
+} from "./flow-script";
 import type { AppSettings, LayoutId, RoleColor, SlotRect } from "@shared/types";
 import {
   app,
@@ -4792,8 +4798,9 @@ export class EmbeddedBrowser {
    * Runs a saved flow's steps against one tab.
    *
    * Every step goes through the same primitives the individual tools use, so a
-   * flow clicks and types exactly like a person driving the app would. That is
-   * the whole reason flows are step lists instead of page scripts.
+   * flow clicks and types exactly like a person driving the app would. 动作层
+   * 始终如此；编排层（script 步骤）能调用的也是这同一条单步实现路径——
+   * 能力边界就是原语集合，没有第二套动作代码。
    *
    * A failed step stops the run and reports where. Continuing would be worse:
    * the remaining steps assume the page reached the state this one was meant to
@@ -4810,6 +4817,9 @@ export class EmbeddedBrowser {
     const started = Date.now();
     const results: FlowStepResult[] = [];
     const vars = { ...options.vars };
+    // script 步骤上下文里的 params 用这个起点快照：调用方给的输入在运行中
+    // 不变，vars 才是 read 与 as 不断写入的那份。
+    const flowParams = { ...vars };
     /**
      * Every raw command this run used.
      *
@@ -4819,6 +4829,175 @@ export class EmbeddedBrowser {
      * a reviewer reading the steps.
      */
     const rawCdpSteps: string[] = [];
+
+    /**
+     * 一个已插值步骤的实现路径。script 步骤的动作原语构造回这里调用：
+     * 脚本里 `await fill(...)` 与直接排一个 fill 步骤走的是同一段代码，
+     * fill 的清空重输、wait 的预算截断、read 的 vars 写入都只有这一份。
+     *
+     * `value` 只有 read（和 script 自己）会带：原语要把读到的字符串交回
+     * 脚本，detail 是给人看的日志，两者形状不同。
+     */
+    const runStepAction = async (step: FlowStep): Promise<FlowStepOutcome> => {
+      const target = this.targetOf(step);
+      switch (step.action) {
+        case "navigate": {
+          const url = this.resolveFlowUrl(step.url ?? "", options.baseUrl);
+          await tab.view.webContents.loadURL(url).catch(() => {
+            // An error page is the feedback; the navigation itself did happen.
+          });
+          // The next step starts immediately; on a guest the old document is
+          // still the active context until the new one commits.
+          if (this.options.guests) await this.whenReady(tab, url);
+          this.syncTab(tab);
+          return { detail: url };
+        }
+        case "fill": {
+          // Same reasoning as `click`: `type` already resolves the field,
+          // reports a password input for redaction, and does the
+          // pointer-then-select-then-insert dance a guest needs. The copy that
+          // was here duplicated all of it, minus the redaction.
+          const typed = await this.type(tabId, target, step.value ?? "", { clear: true });
+          return { detail: typed.secret ? "[redacted]" : step.value };
+        }
+        case "click": {
+          // The tool's own `click`, not a second copy of it: that one reads the
+          // hit back and reports `onTarget`, which is how a flow tells "the
+          // page ignored me" from "an overlay ate the click". The copy that
+          // used to live here dispatched the same three events and then threw
+          // the read-back away, so a flow could only ever say "clicked".
+          const clicked = await this.click(tabId, target);
+          return { detail: clicked.text };
+        }
+        case "select": {
+          const selected = await tab.cdp.evaluate<{
+            ok: boolean;
+            reason?: string;
+            available?: string[];
+            text?: string;
+          }>(buildSelectExpression(target, step.option ?? ""));
+          if (!selected.ok) {
+            const hint = selected.available?.length
+              ? `（可选：${selected.available.join(" / ")}）`
+              : "";
+            throw new Error(`无法选择「${step.option}」：${selected.reason ?? "unknown"}${hint}`);
+          }
+          return { detail: selected.text };
+        }
+        case "press": {
+          await tab.cdp.pressNamedKey(step.key ?? "");
+          return { detail: step.key };
+        }
+        case "login": {
+          const filled = await this.fillLogin(tabId);
+          if (!filled.ok) throw new Error(`无法填充登录：${filled.reason ?? "unknown"}`);
+          return {
+            detail: filled.missingFields?.length
+              ? `已填入账号密码，缺少字段：${filled.missingFields.join("、")}`
+              : "已填入账号密码",
+          };
+        }
+        case "wait": {
+          /*
+           * A wait may not outlive the flow's own budget.
+           *
+           * The check at the top of the loop only runs *between* steps, so a
+           * 30-second wait inside a flow given one second waited the full 30 —
+           * and the caller then saw "wait timed out" when what had actually
+           * happened is that the whole run was out of time. The earlier of the
+           * two budgets is the honest one. The script step's `wait` 原语也走
+           * 这里，所以脚本里的等待同样被截断，不用第二份预算逻辑。
+           */
+          const remaining = Math.max(200, options.timeoutMs - (Date.now() - started));
+          const stepBudget = step.timeoutMs ?? 5000;
+          const outcome = await this.wait(tabId, {
+            condition: step.condition ?? "visible",
+            ...(step.condition === "text" || step.condition === "url" ? {} : { target }),
+            ...(step.expect ? { text: step.expect } : {}),
+            timeoutMs: Math.min(stepBudget, remaining),
+          });
+          if (!outcome.ok && !step.optional) {
+            // Blame the flow budget when that is what ran out: the difference
+            // matters — "this condition never held" is a step bug, "you did not
+            // give the run enough time" is a call-site one.
+            if (remaining < stepBudget) {
+              // 原语路径没有步骤序号可报：把流程预算耗尽的原样抛出，让
+              // 上层（循环或脚本竞速）按自己的语境包装。
+              throw new FlowBudgetExhaustedError();
+            }
+            throw new Error(`等待超时：${outcome.reason ?? "unknown"}`);
+          }
+          return { detail: outcome.ok ? `等了 ${outcome.waitedMs}ms` : "超时，按可选项继续" };
+        }
+        case "read": {
+          const read = await tab.cdp.evaluate<{
+            ok: boolean;
+            reason?: string;
+            value?: string;
+          }>(buildReadExpression(target));
+          if (!read.ok) throw new Error(`无法读取：${read.reason ?? "unknown"}`);
+          if (step.as) vars[step.as] = read.value ?? "";
+          return {
+            detail: step.as ? `${step.as} = ${read.value}` : read.value,
+            value: read.value ?? "",
+          };
+        }
+        case "script": {
+          /*
+           * 编排层。脚本只做循环、条件与推导；每个动作调用都在上面找到
+           * 自己的 case。`login` 不在原语集合里（它走凭据路径，编排脚本
+           * 不得触碰），`cdp` 也不在（逃生口有自己的白名单与闸门，不经过
+           * 脚本）——能力边界就是这里的原语集合。
+           *
+           * 预算与 wait 同一思路：步骤之间才有预算检查，脚本内部没有，
+           * 所以整个脚本吃的是 min(步骤 timeoutMs, 流程剩余)。
+           */
+          const remaining = Math.max(200, options.timeoutMs - (Date.now() - started));
+          const budget = Math.min(step.timeoutMs ?? remaining, remaining);
+          const outcome = await runFlowScript({
+            script: step.value ?? "",
+            vars,
+            params: flowParams,
+            budgetMs: budget,
+            actions: this.buildScriptActions(tabId, runStepAction),
+          });
+          const value = flowScriptValueToString(outcome.value);
+          if (step.as) vars[step.as] = value;
+          const parts: string[] = [];
+          if (outcome.logs.length > 0) {
+            parts.push(`console ${outcome.logs.length} 行`);
+          }
+          if (step.as) parts.push(`${step.as} = ${value.slice(0, 120)}`);
+          return { detail: parts.length > 0 ? parts.join("；") : undefined, value };
+        }
+        case "cdp": {
+          /*
+           * The escape hatch, checked before anything is sent.
+           *
+           * The tier list decides whether this command may run at all: the
+           * allowed tier acts on this page the way a person would, the optional
+           * tier sits behind a setting, and the forbidden tier can reach another
+           * identity's partition — the one thing this app exists to keep
+           * separate. See `core/cdp/flow-whitelist.ts`.
+           */
+          const method = (step.method ?? "").trim();
+          const verdict = checkCdpCommand(method, {
+            gatedAllowed: this.options.flowCdpExtended?.() === true,
+          });
+          if (!verdict.ok) throw new Error(verdict.reason);
+          const response = await tab.cdp.send<unknown>(method, step.params ?? {}, {
+            timeoutMs: step.timeoutMs ?? 30_000,
+          });
+          rawCdpSteps.push(method);
+          // The reply is summarised, not returned whole: a `Runtime.evaluate`
+          // result carries a remote object id that means nothing outside this
+          // call, and printing it costs tokens without answering anything.
+          return { detail: `${method} ${summarizeCdpResult(response)}` };
+        }
+        default:
+          throw new Error(`不认识的动作 ${String(step.action)}`);
+      }
+    };
 
     for (let index = 0; index < steps.length; index += 1) {
       if (Date.now() - started > options.timeoutMs) {
@@ -4843,147 +5022,15 @@ export class EmbeddedBrowser {
         };
       }
 
-      const target = this.targetOf(step);
       try {
-        let detail: string | undefined;
-        switch (step.action) {
-          case "navigate": {
-            const url = this.resolveFlowUrl(step.url ?? "", options.baseUrl);
-            await tab.view.webContents.loadURL(url).catch(() => {
-              // An error page is the feedback; the navigation itself did happen.
-            });
-            // The next step starts immediately; on a guest the old document is
-            // still the active context until the new one commits.
-            if (this.options.guests) await this.whenReady(tab, url);
-            this.syncTab(tab);
-            detail = url;
-            break;
-          }
-          case "fill": {
-            // Same reasoning as `click`: `type` already resolves the field,
-            // reports a password input for redaction, and does the
-            // pointer-then-select-then-insert dance a guest needs. The copy that
-            // was here duplicated all of it, minus the redaction.
-            const typed = await this.type(tabId, target, step.value ?? "", { clear: true });
-            detail = typed.secret ? "[redacted]" : step.value;
-            break;
-          }
-          case "click": {
-            // The tool's own `click`, not a second copy of it: that one reads the
-            // hit back and reports `onTarget`, which is how a flow tells "the
-            // page ignored me" from "an overlay ate the click". The copy that
-            // used to live here dispatched the same three events and then threw
-            // the read-back away, so a flow could only ever say "clicked".
-            const clicked = await this.click(tabId, target);
-            detail = clicked.text;
-            break;
-          }
-          case "select": {
-            const selected = await tab.cdp.evaluate<{
-              ok: boolean;
-              reason?: string;
-              available?: string[];
-              text?: string;
-            }>(buildSelectExpression(target, step.option ?? ""));
-            if (!selected.ok) {
-              const hint = selected.available?.length
-                ? `（可选：${selected.available.join(" / ")}）`
-                : "";
-              throw new Error(`无法选择「${step.option}」：${selected.reason ?? "unknown"}${hint}`);
-            }
-            detail = selected.text;
-            break;
-          }
-          case "press": {
-            await tab.cdp.pressNamedKey(step.key ?? "");
-            detail = step.key;
-            break;
-          }
-          case "login": {
-            const filled = await this.fillLogin(tabId);
-            if (!filled.ok) throw new Error(`无法填充登录：${filled.reason ?? "unknown"}`);
-            detail = filled.missingFields?.length
-              ? `已填入账号密码，缺少字段：${filled.missingFields.join("、")}`
-              : "已填入账号密码";
-            break;
-          }
-          case "wait": {
-            /*
-             * A wait may not outlive the flow's own budget.
-             *
-             * The check at the top of the loop only runs *between* steps, so a
-             * 30-second wait inside a flow given one second waited the full 30 —
-             * and the caller then saw "wait timed out" when what had actually
-             * happened is that the whole run was out of time. The earlier of the
-             * two budgets is the honest one.
-             */
-            const remaining = Math.max(200, options.timeoutMs - (Date.now() - started));
-            const stepBudget = step.timeoutMs ?? 5000;
-            const outcome = await this.wait(tabId, {
-              condition: step.condition ?? "visible",
-              ...(step.condition === "text" || step.condition === "url" ? {} : { target }),
-              ...(step.expect ? { text: step.expect } : {}),
-              timeoutMs: Math.min(stepBudget, remaining),
-            });
-            if (!outcome.ok && !step.optional) {
-              // Blame the flow budget when that is what ran out: the difference
-              // matters — "this condition never held" is a step bug, "you did not
-              // give the run enough time" is a call-site one.
-              if (remaining < stepBudget) {
-                return {
-                  ok: false,
-                  failedAt: index,
-                  reason: `流程超过 ${Math.round(options.timeoutMs / 1000)} 秒仍未跑完`,
-                  steps: results,
-                  vars,
-                };
-              }
-              throw new Error(`等待超时：${outcome.reason ?? "unknown"}`);
-            }
-            detail = outcome.ok ? `等了 ${outcome.waitedMs}ms` : "超时，按可选项继续";
-            break;
-          }
-          case "read": {
-            const read = await tab.cdp.evaluate<{
-              ok: boolean;
-              reason?: string;
-              value?: string;
-            }>(buildReadExpression(target));
-            if (!read.ok) throw new Error(`无法读取：${read.reason ?? "unknown"}`);
-            if (step.as) vars[step.as] = read.value ?? "";
-            detail = step.as ? `${step.as} = ${read.value}` : read.value;
-            break;
-          }
-          case "cdp": {
-            /*
-             * The escape hatch, checked before anything is sent.
-             *
-             * The tier list decides whether this command may run at all: the
-             * allowed tier acts on this page the way a person would, the optional
-             * tier sits behind a setting, and the forbidden tier can reach another
-             * identity's partition — the one thing this app exists to keep
-             * separate. See `core/cdp/flow-whitelist.ts`.
-             */
-            const method = (step.method ?? "").trim();
-            const verdict = checkCdpCommand(method, {
-              gatedAllowed: this.options.flowCdpExtended?.() === true,
-            });
-            if (!verdict.ok) throw new Error(verdict.reason);
-            const response = await tab.cdp.send<unknown>(method, step.params ?? {}, {
-              timeoutMs: step.timeoutMs ?? 30_000,
-            });
-            rawCdpSteps.push(method);
-            // The reply is summarised, not returned whole: a `Runtime.evaluate`
-            // result carries a remote object id that means nothing outside this
-            // call, and printing it costs tokens without answering anything.
-            detail = `${method} ${summarizeCdpResult(response)}`;
-            break;
-          }
-          default:
-            throw new Error(`不认识的动作 ${String(step.action)}`);
-        }
+        const outcome = await runStepAction(step);
         this.syncTab(tab);
-        results.push({ index, action: step.action, ok: true, ...(detail ? { detail } : {}) });
+        results.push({
+          index,
+          action: step.action,
+          ok: true,
+          ...(outcome.detail ? { detail: outcome.detail } : {}),
+        });
       } catch (error) {
         if (step.optional) {
           results.push({
@@ -4994,6 +5041,18 @@ export class EmbeddedBrowser {
             detail: (error as Error).message,
           });
           continue;
+        }
+        if (error instanceof FlowBudgetExhaustedError) {
+          // wait 原语路径报告的「流程预算耗尽」：措辞与 steps 的形状都和
+          // 改造前的直接 return 一致（当前步骤不在 steps 里），对调用方
+          // 来说这是同一件事，不该因为重构换了形状。
+          return {
+            ok: false,
+            failedAt: index,
+            reason: `流程超过 ${Math.round(options.timeoutMs / 1000)} 秒仍未跑完`,
+            steps: results,
+            vars,
+          };
         }
         return {
           ok: false,
@@ -5018,6 +5077,62 @@ export class EmbeddedBrowser {
             note: `这一趟用了 ${rawCdpSteps.length} 次原始 CDP 命令。超过两次通常说明缺一个封装动作，把常见用法做成动作会稳得多`,
           }
         : {}),
+    };
+  }
+
+  /**
+   * script 步骤的动作原语：编排脚本能调用的全部「页面动作」。
+   *
+   * 对应流程步骤的原语（navigate/click/fill/select/press/wait/read）构造回
+   * runStepAction 走同一个 case；hover/scroll/check/setFiles/drag 还不是流程
+   * 步骤，直接调 BrowserManager 上的同名方法——那是工具自己的唯一实现，不是
+   * 第二份。`login` 与 `cdp` 刻意不在返回值里：凭据路径与协议逃生口不经过
+   * 编排脚本，这是 script 步骤能力边界的一半，另一半（无 require/网络）在
+   * `flow-script.ts` 的 context 里。
+   */
+  private buildScriptActions(
+    tabId: string,
+    runStep: (step: FlowStep) => Promise<FlowStepOutcome>,
+  ): FlowScriptActions {
+    // 字符串目标按 CSS selector 处理（与工具层「selector 兜底」一致）；
+    // 对象目标就是 FlowTarget 的字段。转成步骤形状是为了复用 targetOf。
+    const asStep = (input: FlowScriptTarget): FlowStep => {
+      if (typeof input === "string") return { action: "click", selector: input };
+      return { action: "click", ...input };
+    };
+    return {
+      navigate: (url) => runStep({ action: "navigate", url }),
+      click: (target) => runStep(asStep(target)),
+      fill: (target, value) => runStep({ ...asStep(target), action: "fill", value }),
+      select: (target, option) => runStep({ ...asStep(target), action: "select", option }),
+      press: (key) => runStep({ action: "press", key }),
+      hover: (target) => this.hover(tabId, this.targetOf(asStep(target))),
+      scroll: (options = {}) =>
+        this.scroll(tabId, {
+          ...(options.target ? { target: this.targetOf(asStep(options.target)) } : {}),
+          ...(options.deltaX !== undefined ? { deltaX: options.deltaX } : {}),
+          ...(options.deltaY !== undefined ? { deltaY: options.deltaY } : {}),
+        }),
+      check: (target, desired) => this.setChecked(tabId, this.targetOf(asStep(target)), desired),
+      setFiles: (target, paths) => this.setFiles(tabId, this.targetOf(asStep(target)), paths),
+      drag: (from, to) =>
+        this.drag(tabId, this.targetOf(asStep(from)), this.targetOf(asStep(to))),
+      wait: (condition, expect, timeoutMs, target) =>
+        runStep({
+          ...(target ? asStep(target) : { action: "wait" }),
+          action: "wait",
+          condition,
+          ...(expect !== undefined ? { expect } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        }),
+      read: async (target, as) => {
+        const outcome = await runStep({
+          ...asStep(target),
+          action: "read",
+          ...(as ? { as } : {}),
+        });
+        return outcome.value ?? "";
+      },
     };
   }
 
@@ -6681,5 +6796,26 @@ function summarizeCdpResult(response: unknown): string {
     return text.length > 200 ? `${text.slice(0, 200)}…` : text;
   } catch {
     return "完成";
+  }
+}
+
+/** runFlow 单步执行的结果：detail 进日志，value 由 read/script 产出供原语取值。 */
+interface FlowStepOutcome {
+  detail?: string;
+  value?: string;
+}
+
+/**
+ * wait 的「流程预算耗尽」信号。
+ *
+ * wait 原来直接在 case 里 return 整个失败结果；单步执行被抽成函数后，
+ * 这个结果要穿过原语路径（脚本里的 `await wait(...)`）回到循环才能上报，
+ * 用一个专门的错误类型携带它——循环按原来的形状（reason、不含当前步骤的
+ * steps）转成 FlowRunResult，调用方看到的东西不变。
+ */
+class FlowBudgetExhaustedError extends Error {
+  constructor() {
+    super("流程预算已用完");
+    this.name = "FlowBudgetExhaustedError";
   }
 }

@@ -2408,7 +2408,7 @@ export class McpServer {
       {
         name: "save_flow",
         description:
-          "保存一个流程：一串在某个站点里可重复执行的步骤。步骤是声明式的，不是任意脚本。封装动作为主：navigate / fill / click / select / press / login / wait / read；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨身份与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
+          "保存一个流程：一串在某个站点里可重复执行的步骤。动作步骤：navigate / fill / click / select / press / login / wait / read；script 步骤用一段 JS 做循环与条件的编排，能调用的只有动作原语（navigate / click / fill / select / press / hover / scroll / check / setFiles / drag / wait / read，不含 login 与 cdp）；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨身份与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
         kind: "write",
         inputSchema: object(
           {
@@ -2435,9 +2435,10 @@ export class McpServer {
               type: "array",
               description: "按顺序执行的步骤",
               items: object({
+                // 与 zod 层同一个来源：FLOW_ACTIONS 派生，加步骤类型不会漏这里。
                 action: {
                   type: "string",
-                  enum: ["navigate", "fill", "click", "select", "press", "login", "wait", "read"],
+                  enum: [...FLOW_ACTIONS],
                 },
                 label: string("字段旁的标签文字"),
                 text: string("按钮上的文字"),
@@ -2541,7 +2542,7 @@ export class McpServer {
       {
         name: "run_flow",
         description:
-          "运行一个已保存的流程。给了 tabId 就在那个页面里跑；否则新开一个标签页（默认用该站点第一个账号，登录表单会自动填充），返回这个标签页 id，让你能看到它在做什么。params 填流程声明的参数。某一步失败会停在那一步并说明原因，不会带着半填的表单继续。",
+          "运行一个已保存的流程。给了 tabId 就在那个页面里跑；否则新开一个标签页（默认用该站点第一个账号，登录表单会自动填充），返回这个标签页 id，让你能看到它在做什么。params 填流程声明的参数。某一步失败会停在那一步并说明原因，不会带着半填的表单继续。script 步骤在沙箱里编排动作原语，整段受 timeoutMs 预算约束，超时报「脚本超时」。",
         kind: "run",
         inputSchema: object(
           {

@@ -140,6 +140,43 @@ Electron 45.2.1 上用真实页面测过：
 且 `wait` 步骤会被流程剩余预算截断——否则一个 30 秒的等待能吃掉一个只给 1 秒的
 流程，然后把错误报成「条件没满足」。
 
+## 2.2 流程里的 script 步骤
+
+循环、条件、「读到的值决定下一步」属于编排层，与动作层是两件事。`script` 步骤
+（方案 B）在 `node:vm` 的新 context 里跑一段 JS（≤10000 字符），脚本里能调用的
+**只有动作原语**：`navigate` / `click` / `fill` / `select` / `press` / `hover` /
+`scroll` / `check` / `setFiles` / `drag` / `wait` / `read`——**能力边界 = 工具集合**。
+脚本没有第二套动作实现：每个原语都构造回 `runFlow` 的单步执行器
+（`browser.ts` 的 `runStepAction`），所以 wait 的预算截断、read 的 vars 写入与
+直接排步骤完全一致；`hover` / `scroll` / `check` / `setFiles` / `drag` 还不是
+流程步骤，原语直接调 BrowserManager 上的同名方法（工具的唯一实现）。
+
+刻意不暴露的两个：`login`（走凭据路径，编排脚本不得触碰）与 `cdp`（协议逃生口
+有自己的三档白名单与闸门，不经过脚本）。
+
+**vm 的真实强度（诚实版）。** `node:vm` 不是对抗恶意代码的硬沙箱——这是 Node
+官方立场，而且实测成立：`globalThis.constructor.constructor("return process")`
+在当前 Node 上能摸回宿主 process，注入的原语函数（`fill.constructor`）是同一条
+路。所以 script 步骤的安全叙事分两层：
+
+- 对**正常作者**（写循环与条件的人）：context 里没有 `require` / `process` /
+  `Buffer` / `setTimeout` / `fetch`，只有动作原语、vars/params 和无能力面的内置
+  （JSON、Math、Error 等），碰不到文件系统、宿主网络与凭据。
+- 对**决心逃逸的作者**：vm 挡不住，防线在 MCP 权限档位。且持有 `run_flow` 权限
+  的调用方本来就有 `evaluate_browser_page` 与 `cdp` 工具——逃逸并没有放大他
+  已有的能力面。
+
+**超时与错误。** 整段脚本吃 `min(步骤 timeoutMs, 流程剩余)`：到点中断报
+「脚本超时」，中断后脚本里挂着的下一次原语调用直接失败（页面不再被动）。
+同步死循环由 vm 的执行超时打断。语法与运行时错误都带脚本本体的行号
+（`flow-script.js:N`，包装前缀不换行所以行号不用换算）。
+
+**vars 往返。** 此前 `read` 步骤的变量、流程参数（`params`）都在脚本可见；
+`read(target, as)` 的 `as` 写穿到流程 vars；步骤的 `as` 字段把脚本 `return`
+值落进 vars，后续步骤可 `{{引用}}`。脚本 console 输出按行收进该步的 detail。
+`tests/flow-script.test.ts` 钉住封闭面与超时行为，`scripts/e2e-flow-script.mjs`
+验证页面真的变了。
+
 ## 3. 封装动作清单
 
 状态说明：**已有** = 已实现且有工具；**部分** = 命令在但能力不全；
@@ -273,7 +310,7 @@ Electron 45.2.1 上用真实页面测过：
 | `Tracing.*`（录制 trace） | 不做 | 产出是给开发者看的 trace 文件，不是「操作页面」。需要时人手动开 DevTools。 |
 | `submitForm` | 谨慎做 | `form.requestSubmit()` 会绕过「提交按钮是否可用」这类校验，可能提交一个界面本不允许提交的表单。只在目标按钮被遮挡时作为显式降级。 |
 | `setDownloadBehavior` | 有条件做 | 必须 per-tab（`BrowserContext` 级别），绝不改全局；理由见 ADR 0001 对 Playwright 的否决。 |
-| `loop` / `if`（流程编排） | 单独议题 | 属编排层能力，不是动作封装。见 `cdp-vs-playwright-boundary.md` §5 决策缺口 2。 |
+| `loop` / `if`（流程编排） | 已做 | 方案 B：`script` 步骤在 vm 里编排动作原语，能力边界 = 工具集合（§2.2）。声明式的 `loop` / `if` 步骤类型不再需要。 |
 
 ## 5. 实现顺序
 
@@ -330,3 +367,4 @@ MCP 工具（click_browser_element …）  ─┐
 - [x] 第三批动作（`elementInfo` / `getAttribute` / `getValue` / 元素裁剪截图）
 - [x] 第四批动作（网络与环境模拟：`read_browser_requests` / `wait_browser` 的 `load`·`response` 条件 / `set_browser_emulation` 的时区·媒体·离线·地理）
 - [x] 流程的 `cdp` 步骤类型 + 三档白名单（`core/cdp/flow-whitelist.ts`，`tests/flow-whitelist.test.ts` + `scripts/e2e-flow-cdp.mjs`）
+- [x] 流程的 `script` 步骤（编排层，方案 B；`main/embedded/flow-script.ts`，`tests/flow-script.test.ts` + `scripts/e2e-flow-script.mjs`）

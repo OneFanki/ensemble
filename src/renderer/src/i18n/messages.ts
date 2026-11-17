@@ -131,6 +131,8 @@ export const messages = {
       authProxyTitle: "代理要求登录",
       actionWait: "等待",
       actionRead: "读取",
+      actionScript: "脚本",
+      flowStepScript: "JS 脚本：await fill('#名称', '值'); await click('#按钮')",
       // 逃生口：只有封装动作表达不了的命令才该出现在流程里，所以标签直接这么写。
       actionCdp: "原始 CDP",
       flowNoSite: "先在站点页建一个站点，流程要挂在站点上。",
@@ -1314,6 +1316,8 @@ export const messages = {
       authProxyTitle: "The proxy requires a sign-in",
       actionWait: "Wait",
       actionRead: "Read",
+      actionScript: "Script",
+      flowStepScript: "JS body: await fill('#name', 'value'); await click('#go')",
       actionCdp: "Raw CDP",
       flowNoSite: "Create a site first — a flow has to belong to one.",
       flowParamRequiredShort: "required",

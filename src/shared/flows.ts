@@ -4,24 +4,18 @@
  * flip a feature flag), saves the sequence here, and the next session runs it in
  * one call instead of rediscovering the page.
  *
- * **Steps, not scripts.** A flow could have been an arbitrary JavaScript body
- * evaluated in the page, and that is what the first draft proposed. It was
- * rejected for three concrete reasons:
+ * **动作层是步骤，编排层才是脚本。** 两者是分开的两件事：
  *
- * 1. A script can only dispatch synthetic events. Every other action in this app
- *    goes through `Input.dispatch*`, which is what makes framework handlers fire
- *    and what makes "did the click actually work" mean anything. A flow that
- *    clicks differently from a person would be a second, weaker execution path.
- * 2. A shared workspace full of arbitrary JavaScript needs a code-review gate
- *    before the first run, per client, forever. A declarative step list can only
- *    do what the tools can already do, on its own site, so the security story
- *    stays the one that already exists.
- * 3. A person can read, fix and reorder steps. Nobody edits a stranger's script.
- *
- * What a script would buy is computed logic (read a table cell, derive a value,
- * loop until done). `read` covers the first of those: it captures page text into
- * a variable that later steps interpolate. Anything beyond that belongs in
- * `evaluate_browser_page`, which still exists for one-off work.
+ * 1. 每个动作都走 `Input.dispatch*` 这条真实输入管线，这是「点击真的生效了」
+ *    有意义的原因。第一稿曾把整个流程设计成一段在页面里求值的 JS，被否掉：
+ *    合成事件触发不了框架处理器，那等于多出一条更弱的执行路径。
+ * 2. 编排（循环、条件、从读到的值推导下一步）曾经只能靠把步骤铺平来表达，
+ *    后来以 `script` 步骤放开：脚本在 `node:vm` 里跑，能调用的只有动作原语，
+ *    **能力边界 = 工具集合**——脚本做不了任何「直接一步步排」做不到的事，
+ *    也没有 require/process/网络/凭据。执行器见
+ *    `src/main/embedded/flow-script.ts`。
+ * 3. 声明式步骤人能读、能改、能重排；script 步骤是编排者的工具，出现在
+ *    流程里时也应当一眼看出它编排了哪几个原语。
  */
 
 /**
@@ -63,9 +57,22 @@ export const FLOW_ACTIONS = [
   "login",
   "wait",
   "read",
+  /**
+   * 编排层：一段在 `node:vm` 里跑的 JS，调用动作原语完成循环与条件。
+   * 不暴露 `login`（走凭据路径）与 `cdp`（逃生口有自己的白名单与闸门）。
+   */
+  "script",
   "cdp",
 ] as const;
 export type FlowAction = (typeof FLOW_ACTIONS)[number];
+
+/**
+ * script 步骤的脚本长度上限。
+ *
+ * 编排脚本只需要循环与条件，写不到一万字符；上限挡的是把整个抓取逻辑塞进
+ * 一个步骤。schema 层用同一个常量，两边不会各说各话。
+ */
+export const FLOW_SCRIPT_MAX_CHARS = 10_000;
 
 /** Keys the page inspector understands when a step needs a target. */
 export interface FlowTarget {
@@ -80,7 +87,7 @@ export interface FlowStep extends FlowTarget {
   action: FlowAction;
   /** Shown in the UI and to the AI instead of re-deriving one from the fields. */
   note?: string;
-  /** Text to type; may contain `{{param}}` references. */
+  /** Text to type; may contain `{{param}}` references. For `script`, the JS body itself. */
   value?: string;
   /** Absolute http(s) address, or a path resolved against the flow's site. */
   url?: string;
@@ -92,11 +99,11 @@ export interface FlowStep extends FlowTarget {
   condition?: WaitCondition;
   /** Text compared by a `wait` step. */
   expect?: string;
-  /** Milliseconds for `wait`; defaults to 5000. */
+  /** Milliseconds for `wait`; defaults to 5000. For `script`, the whole body's budget. */
   timeoutMs?: number;
   /** A `wait` that is allowed to time out without failing the flow. */
   optional?: boolean;
-  /** Variable name a `read` step stores its result under. */
+  /** Variable name a `read` or `script` step stores its result under. */
   as?: string;
   /**
    * CDP method name for a `cdp` step, e.g. `DOM.setFileInputFiles`.
@@ -246,6 +253,16 @@ export function validateStep(step: FlowStep, index: number): string[] {
       else if (!/^[A-Z][A-Za-z]+\.[A-Za-z]+$/.test(step.method.trim()))
         problems.push(`${at}（cdp）的 method 要写成 域.方法，例如 DOM.setFileInputFiles`);
       break;
+    case "script":
+      // 语法在运行时才编译（报错带行号）；这里只挡空脚本与超长脚本。
+      if (!step.value?.trim()) problems.push(`${at}（script）需要 value（脚本内容）`);
+      else if (step.value.length > FLOW_SCRIPT_MAX_CHARS)
+        problems.push(
+          `${at}（script）的 value 超过 ${FLOW_SCRIPT_MAX_CHARS} 字符（当前 ${step.value.length}）`,
+        );
+      if (step.as && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(step.as))
+        problems.push(`${at}（script）的 as 只能是字母、数字与下划线，且不能以数字开头`);
+      break;
     default:
       problems.push(`${at} 的动作 ${String(step.action)} 不认识`);
   }
@@ -285,7 +302,7 @@ export function validateFlow(input: { params: FlowParam[]; steps: FlowStep[] }):
         problems.push(`第 ${index + 1} 步引用了未定义的变量 {{${name}}}`);
       }
     }
-    if (step.action === "read" && step.as) {
+    if ((step.action === "read" || step.action === "script") && step.as) {
       if (!VARIABLE.test(`{{${step.as}}}`) && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(step.as)) {
         problems.push(`第 ${index + 1} 步的变量名 ${step.as} 不合法`);
       }
@@ -356,6 +373,17 @@ export function summarizeStep(step: FlowStep): StepSummary {
       return { action: step.action, target, detail: step.as ? `→ ${step.as}` : undefined };
     case "cdp":
       return { action: step.action, target: step.method ?? "", detail: "原始 CDP" };
+    case "script": {
+      // 摘要只回答「这是多大的编排、结果落在哪」；脚本本体在编辑器里看。
+      const lines = step.value ? step.value.trim().split("\n").length : 0;
+      return {
+        action: step.action,
+        target: "",
+        detail: [lines > 0 ? `${lines} 行脚本` : undefined, step.as ? `→ ${step.as}` : undefined]
+          .filter(Boolean)
+          .join(" ") || undefined,
+      };
+    }
     default:
       return { action: step.action, target };
   }

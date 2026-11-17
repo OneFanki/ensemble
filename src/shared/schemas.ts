@@ -6,7 +6,7 @@ import {
   PERF_WINDOW_MIN_MS,
 } from "./embedded";
 import { LOCALE_SETTINGS } from "./locale";
-import { FLOW_ACTIONS, WAIT_CONDITIONS } from "./flows";
+import { FLOW_ACTIONS, FLOW_SCRIPT_MAX_CHARS, WAIT_CONDITIONS } from "./flows";
 
 const httpUrl = z
   .string()
@@ -122,7 +122,15 @@ export const flowStepSchema = z.object({
   action: z.enum(FLOW_ACTIONS),
   ...flowTargetShape,
   note: z.string().max(200).optional(),
-  value: z.string().max(4000).optional(),
+  /*
+   * The script step's body is the largest thing that lands in `value`. This
+   * schema is only the transport bound against abuse — deliberately wider
+   * than the business cap (`FLOW_SCRIPT_MAX_CHARS`), because zod's refusal is
+   * a JSON path nobody can act on, while `validateFlow` names the step and
+   * the overshoot in words the caller can fix. MCP callers hit the same
+   * `validateFlow`, so both surfaces get the readable message first.
+   */
+  value: z.string().max(FLOW_SCRIPT_MAX_CHARS * 2).optional(),
   url: z.string().max(2000).optional(),
   option: z.string().max(200).optional(),
   key: z.string().max(20).optional(),
@@ -130,6 +138,7 @@ export const flowStepSchema = z.object({
   expect: z.string().max(500).optional(),
   timeoutMs: z.number().int().min(100).max(600_000).optional(),
   optional: z.boolean().optional(),
+  // `read` 的结果与 `script` 的返回值都落在这里。
   as: z.string().max(60).optional(),
   /**
    * Raw CDP escape hatch; see `FLOW_ACTIONS` for why it is a separate tier.

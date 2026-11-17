@@ -73,6 +73,21 @@ describe("step validation", () => {
     const problems = validateStep({ action: "scroll" as FlowStep["action"] }, 0);
     expect(problems.join(" ")).toContain("不认识");
   });
+
+  it("requires a script body and a bounded one", () => {
+    // 语法在运行时编译（报错带行号）；保存时只挡空脚本与超长脚本。
+    expect(validateStep({ action: "script" }, 0).join(" ")).toContain("需要 value");
+    const long = "x".repeat(10_001);
+    expect(validateStep({ action: "script", value: long }, 0).join(" ")).toContain("超过 10000");
+    expect(validateStep({ action: "script", value: "return 1;" }, 0)).toEqual([]);
+  });
+
+  it("validates the variable name a script stores its result under", () => {
+    expect(validateStep({ action: "script", value: "return 1;", as: "result" }, 0)).toEqual([]);
+    expect(
+      validateStep({ action: "script", value: "return 1;", as: "1bad" }, 0).join(" "),
+    ).toContain("as 只能");
+  });
 });
 
 describe("flow validation", () => {

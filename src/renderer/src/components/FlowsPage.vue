@@ -633,6 +633,29 @@ async function saveDraft() {
                   @update:model-value="setStepParams(step, $event)"
                 />
               </template>
+              <template v-if="step.action === 'script'">
+                <textarea
+                  v-model="step.value"
+                  class="script-value full"
+                  rows="5"
+                  spellcheck="false"
+                  :placeholder="$t('app.flowStepScript')"
+                  :aria-label="$t('app.flowStepScript')"
+                ></textarea>
+                <TextField
+                  :model-value="step.timeoutMs"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="$t('app.flowStepTimeout')"
+                  @update:model-value="step.timeoutMs = $event ? Number($event) || undefined : undefined"
+                />
+                <TextField
+                  v-model="step.as"
+                  mono
+                  type="text"
+                  :placeholder="$t('app.flowStepAs')"
+                />
+              </template>
               <TextField
                 v-if="step.action === 'navigate'"
                 v-model="step.url"
@@ -1063,5 +1086,25 @@ async function saveDraft() {
 
 .step-fields .full {
   flex: 1 1 100%;
+}
+
+/* 脚本步骤的本体输入：多行，等宽（技术数据），视觉与 .input 同一套变量。 */
+.script-value {
+  flex: 1 1 100%;
+  min-height: 72px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 7px 9px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  outline: 0;
+  resize: vertical;
+  transition: border-color var(--motion-base) var(--ease-out);
+}
+
+.script-value:focus {
+  border-color: var(--accent);
 }
 </style>

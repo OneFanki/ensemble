@@ -534,13 +534,14 @@ Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不
 
 MCP 另外暴露 4 个流程工具：`list_flows` / `save_flow` / `run_flow` / `delete_flow`，
 界面上对应侧栏导航的**流程**页（`FlowsPage.vue`）。数据模型见
-`src/shared/flows.ts`，动作只有 8 种：`navigate` / `fill` / `click` / `select` / `press` /
-`login` / `wait` / `read`。
+`src/shared/flows.ts`，动作有 10 种：`navigate` / `fill` / `click` / `select` / `press` /
+`login` / `wait` / `read` / `script` / `cdp`。
 
-**流程是步骤清单，不是脚本。** 三个理由写在 `flows.ts` 的文件头里：脚本只能派发合成事件，
-而其余动作都走 `Input.dispatch*`，会变成第二条更弱的执行路径；共享工作区里的任意 JS 需要
-一份永久的逐客户端代码审查门；而步骤清单人能读、能改、能调顺序。`read` 动作把页面文字
-收进 `{{变量}}` 供后续步骤使用，覆盖了脚本本来能换来的主要能力。
+**动作层是步骤，编排层才是脚本。** 每个动作都走 `Input.dispatch*` 这条真实输入管线；
+`script` 步骤只做编排——循环、条件、从读到的值推导下一步——它在 `node:vm` 里跑，
+能调用的只有动作原语（不含 `login` 与 `cdp`），能力边界就是工具集合，执行器见
+`src/main/embedded/flow-script.ts`（vm 强度的诚实说明在其文件头）。`read` 动作把
+页面文字收进 `{{变量}}` 供后续步骤使用。
 
 - **参数与变量在保存时校验**：未定义的 `{{name}}`、缺 `value` 的 `fill`、不认识的键名都在
   `saveFlow` 拒绝，消息点名第几步——这些字符串直接给到要改它的 AI。校验放在

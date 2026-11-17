@@ -17,7 +17,7 @@ const to = Number(process.argv[3] ?? 0);
 const VISIBLE_WINDOW_SUITES = new Set(["e2e-external-launch.mjs"]);
 
 const files = readdirSync("scripts")
-  .filter((name) => /^e2e-[a-z-]+\.mjs$/.test(name))
+  .filter((name) => /^e2e-[a-z0-9-]+\.mjs$/.test(name))
   .filter((name) => !VISIBLE_WINDOW_SUITES.has(name))
   .sort()
   .slice(from, to);

@@ -69,8 +69,18 @@ export async function connectToWindow(url) {
     const call = pending.get(message.id);
     if (!call) return;
     pending.delete(message.id);
-    if (message.error) call.reject(new Error(message.error.message ?? "CDP error"));
-    else call.resolve(message.result);
+    if (message.error) {
+      // `data` carries the protocol's own detail (e.g. which parameter failed
+      // validation); dropping it turned a one-line fix into a blind hunt.
+      const data =
+        typeof message.error.data === "string"
+          ? message.error.data
+          : message.error.data !== undefined
+            ? JSON.stringify(message.error.data)
+            : "";
+      const text = message.error.message ?? "CDP error";
+      call.reject(new Error(data ? `${text}: ${data}` : text));
+    } else call.resolve(message.result);
   });
 
   await new Promise((resolve, reject) => {

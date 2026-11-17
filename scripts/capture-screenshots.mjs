@@ -1217,7 +1217,7 @@ async function capture(shot) {
     await client.send("Emulation.setDeviceMetricsOverride", {
       width: VIEWPORT.width,
       height: VIEWPORT.height,
-      deviceScale,
+      deviceScaleFactor: deviceScale,
       mobile: false,
     });
     await wait(700);

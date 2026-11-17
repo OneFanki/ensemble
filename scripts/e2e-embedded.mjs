@@ -277,9 +277,10 @@ try {
   // The compositor stops producing frames for a view that is not on screen, and
   // `Page.captureScreenshot` does not fail there — it never returns, so the old
   // code waited out its full 4s timeout on every screenshot of a backgrounded
-  // page. Reading pixels from the renderer directly avoids that. The bound is
-  // deliberately loose (1.5s) so a slow machine is not a false failure, while
-  // still failing on the 4s timeout this guards against.
+  // page. Reading pixels from the renderer directly avoids that. The bound sits
+  // just under that 4s timeout, which is the regression this guards: a parked
+  // page is also allowed to have gone to sleep (observation no longer keeps it
+  // awake), and waking a sleeping renderer costs a second or more on its own.
   await call("set_tab_page", { pageId: memberTab.id });
   await new Promise((r) => setTimeout(r, 900));
   const parkedStart = Date.now();
@@ -287,7 +288,7 @@ try {
   const parkedMs = Date.now() - parkedStart;
   check(
     "a backgrounded page screenshots without waiting out the CDP timeout",
-    (parkedShot.bytes ?? 0) > 1000 && parkedMs < 1500,
+    (parkedShot.bytes ?? 0) > 1000 && parkedMs < 3500,
     { bytes: parkedShot.bytes, ms: parkedMs },
   );
   await call("set_tab_page", { pageId: adminTab.id });

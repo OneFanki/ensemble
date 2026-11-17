@@ -15,6 +15,7 @@
 | [0009](./0009-daily-profile-and-bookmarks.md) | 日常档案 + 内存级干净会话；书签独立于站点 | 已采纳 |
 | [0010](./0010-webview-pivot-deferred.md) | 内置浏览器迁移到 `<webview>` 暂缓，并列出三条重启条件 | 已被 0011 取代 |
 | [0011](./0011-webview-cdp-on-guest-pivot.md) | 内置浏览器宿主改为 renderer `<webview>` + CDP-on-guest | 已采纳 |
+| [0012](./0012-no-in-app-split-screen.md) | 应用内分屏与应用内多视图不做，舞台单格 | 已采纳 |
 
 新决策模板：
 

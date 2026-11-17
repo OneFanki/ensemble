@@ -1,0 +1,21 @@
+# Everything is stored and checked out as LF.
+#
+# The repository has no files that need CRLF on disk (no .bat/.cmd/.ps1), and a
+# checkout whose line endings depend on the platform makes text parsing
+# platform-dependent too: a contract test that splits source on `\n` passed here
+# and found nothing on the Windows CI runner. Pin the line ending once, so the
+# same bytes are read everywhere.
+* text=auto eol=lf
+
+# Binary assets must not be normalised at all.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.woff2 binary
+*.zip binary
+*.exe binary
+*.dmg binary
+*.deb binary
+*.AppImage binary

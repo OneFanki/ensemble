@@ -14,8 +14,15 @@ import { describe, expect, it } from "vitest";
  *
  * So the table and the source are compared mechanically. Adding a tool without a
  * row fails here; deleting one while leaving its row also fails.
+ *
+ * Line endings are normalised on the way in. The patterns below are anchored to
+ * `\n`, and the checkout that decides the line endings is not this test's
+ * business: a Windows runner with `core.autocrlf` on hands over CRLF, every
+ * pattern then misses, and the suite reports "0 tools found" instead of anything
+ * about the code.
  */
-const read = (path: string): string => readFileSync(join(process.cwd(), path), "utf8");
+const normalise = (text: string): string => text.replace(/\r\n/g, "\n");
+const read = (path: string): string => normalise(readFileSync(join(process.cwd(), path), "utf8"));
 
 interface ToolEntry {
   name: string;
@@ -29,12 +36,11 @@ interface ToolEntry {
  * is a literal array of object literals; a `name:` followed by a `kind:` inside
  * the same entry is the shape every one of them has.
  */
-function toolsInSource(): ToolEntry[] {
-  const source = read("src/main/mcp/server.ts");
+function parseTools(source: string): ToolEntry[] {
   const entries: ToolEntry[] = [];
   // Split on the indentation that starts one entry in the array. Every tool
   // object begins with `      {` and nothing else in the file uses that.
-  for (const block of source.split(/\n {6}\{\n/).slice(1)) {
+  for (const block of normalise(source).split(/\n {6}\{\n/).slice(1)) {
     const name = block.match(/^ {8}name: "([a-z0-9_]+)"/);
     if (!name) continue;
     const kind = block.match(/\n {8}kind: "(read|write|run|danger)"/);
@@ -42,6 +48,10 @@ function toolsInSource(): ToolEntry[] {
     entries.push({ name: name[1]!, kind: kind[1]! });
   }
   return entries;
+}
+
+function toolsInSource(): ToolEntry[] {
+  return parseTools(read("src/main/mcp/server.ts"));
 }
 
 interface DocRow {
@@ -84,6 +94,16 @@ function toolsInDoc(): Set<string> {
 }
 
 describe("the AI tool matrix matches the code", () => {
+  it("parses the same tools from a CRLF checkout", () => {
+    // The patterns are anchored to `\n`. A Windows runner checking out with
+    // `core.autocrlf` on used to hand this suite CRLF, every pattern missed, and
+    // the failure surfaced as "expected 0 to be greater than 50" — a message
+    // about nothing. Normalising at the read boundary is what fixes it, and this
+    // is the assertion that keeps it fixed.
+    const lf = read("src/main/mcp/server.ts");
+    expect(parseTools(lf.replace(/\n/g, "\r\n"))).toEqual(parseTools(lf));
+  });
+
   it("finds the tools it is supposed to be checking", () => {
     // If the parser stops matching (a reformat, a different indent), every
     // assertion below would pass vacuously against an empty set. This is the

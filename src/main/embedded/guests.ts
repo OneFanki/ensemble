@@ -254,6 +254,24 @@ export class BrowserGuestManager {
     };
     this.guests.set(guestId, record);
     this.routeWindowOpen(record);
+    /*
+     * 会话在页面任何脚本运行之前就开。
+     *
+     * 弹窗拦截挂在「debugger 已附加且 Page.enable」上；懒惰附加（等第一条
+     * 命令）留了一个空窗——页首脚本里的 alert() 会在没有任何 CDP 会话时
+     * 落到 Electron 的原生对话框兜底，那是用户桌面上的一个真弹窗。attach
+     * 发生在节点挂载、导航开始之前，页内脚本必然晚于它执行。
+     *
+     * 代价是反探测时钟提前起表：钉住只保到首个文档落地，之后交给正常的
+     * 闲置释放节奏（登录捕获等需求由浏览器管理器的统一谓词接手）。一个
+     * 页面真正被驱动之前，debugger 照样会分离。
+     */
+    void this.sessions.run(record.handle, async () => undefined).catch(() => undefined);
+    contents.once("did-finish-load", () => {
+      // 首个文档落地：创建期的钉住完成使命。登录捕获自己的钉住由它所在的
+      // did-finish-load 处理器接手；此后的空闲分离照常工作。
+      if (this.guests.get(guestId)?.contents === contents) this.pinSession(guestId, false);
+    });
 
     // `destroyed` is the only signal that the node is gone; the renderer may
     // remove it without telling us first (a reload of the embedder, a crash).

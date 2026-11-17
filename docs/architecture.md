@@ -1013,6 +1013,18 @@ AI 调试声音界面才不必被外放打扰。
 `muted`。用户手动点过取消静音后 `userUnmuted` 置位，之后的 AI 操作不再自动覆盖；AI 显式调用
 `set_browser_muted` 仍然可以静音——那是它自己的意图，不是默认策略。
 
+**JS 弹窗是一条有状态的 AI 工作流，不是一个报错。** 实测（Electron 45.2.1）：弹窗打开期间
+触发它的 `Input.dispatch*` 永远不 ack。`Page.javascriptDialogOpening` 一到，挂着的输入命令靠
+事件信号立刻返回，返回体带 `dialog` 类型与内容——不重试点击，先答弹窗（`read_browser_dialog`
+/ `handle_browser_dialog`）。唯一会自动应答弹窗的是「无人应答超预算」的兜底定时器；其它一切
+超时只报错，不动弹窗。弹窗挂起期间会话钉住（见闲置释放一节的统一谓词）：分离会把被抑制的
+弹窗交还 Electron 的原生对话框兜底，那是用户桌面上的真弹窗；guest 注册即开会话并保到首个
+文档落地，堵住「弹窗先开、会话后附」的空窗。beforeunload 不走 CDP 弹窗事件（Electron 换成
+`will-prevent-unload`，且 Chromium 只在页面有用户激活时才拦）：拦截自行记账为不阻塞页面的
+记录，`navigate` 返回体带 `cancelled: "beforeunload"`，`accept: true` 带放行标记重发被拦的
+导航（`preventDefault` 只在事件派发期间有效，只能同步消费）。`prompt()` 本环境同步抛错，
+页面循环不停摆；真正的循环停摆由 `read_browser_page` 的页内定时器探针在 800ms 内报出。
+
 **批量操作要合并广播。** `BrowserManager` 的 `withoutBroadcasts()` 包住 `createView` 与整个
 `launchIdentityBatch`：逐条广播会让渲染层把「容器在、页面还没到」的中间态真画出来，舞台就
 空一下再填满。合并后一次启动只发一次终态；失败回滚的路径必须先释放 hold 再抛错，否则界面
@@ -1045,7 +1057,10 @@ DevTools pref service 读 `language` 与 `disable-locale-info-bar`（值都是 J
 三条实测得出的规则（来自 CDP 探针，不是推测）：
 
 1. **上面三个 `Emulation.*` 覆盖都不跨 CDP 会话。** 会话一释放，页面立刻回到桌面。
-   因此穿设备的页面必须**钉住会话**（`holdSession`），不能沿用「闲置 1.5 秒释放」的策略。
+   因此穿设备的页面必须**钉住会话**，不能沿用「闲置 1.5 秒释放」的策略。谁需要会话由
+   `syncSessionHold` 一个谓词统一回答（设备模拟、性能采样、环境覆盖、init 脚本、登录捕获、
+   挂起的弹窗），各功能只声明需求，不直接调 `holdSession`——多个功能各自 pin/unpin 同一个
+   布尔标志，等于谁都能悄悄解除别人的防御。
 2. **设备跨文档导航靠重新下发。** 覆盖是 per-document 的，点了链接就没了。`did-finish-load`
    里对带设备的页面重放一次（`reapply`），否则「点进下一页变回桌面」会在最需要它的时候翻车。
 3. **`setDeviceMetricsOverride` 会钉死 CSS 视口，与节点的 box 无关。** 这让几何错误在设备

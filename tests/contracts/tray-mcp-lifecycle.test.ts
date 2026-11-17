@@ -22,8 +22,14 @@ function handlerBody(source: string, event: string): string {
 
 describe("tray and MCP lifecycle contract", () => {
   it("takes a single instance lock so only one process can own the MCP port", () => {
-    expect(main).toMatch(/app\.requestSingleInstanceLock\(\)/);
-    expect(main).toMatch(/app\.on\("second-instance"/);
+    // The lock is this app's own exclusive-create file keyed by pid. Its
+    // predecessor — the platform singleton — treated a leftover file from a
+    // force-killed run as "already running" and quit without a word, which is
+    // exactly the failure this contract exists to keep out.
+    expect(main).toMatch(/acquireSingletonLock\(/);
+    expect(main).toMatch(/已有实例持有实例锁/);
+    expect(handlerBody(main, "will-quit")).toMatch(/singletonLock\.release\(\)/);
+    expect(main).not.toMatch(/requestSingleInstanceLock/);
   });
 
   it("hides to the tray instead of quitting when the window is closed", () => {

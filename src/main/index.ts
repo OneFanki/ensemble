@@ -129,6 +129,7 @@ import { LoginCaptureStore } from "./embedded/login-capture";
 import { DEV_DEFAULT_PORT, McpServer } from "./mcp/server";
 import { createTrustedUpdateFetch } from "./update-fetch";
 import { DEV_APP_NAME, devUserDataDir } from "./user-data";
+import { acquireSingletonLock } from "./single-instance";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
 
@@ -4343,14 +4344,20 @@ function logLine(message: string): void {
 }
 
 // A second instance would own its own browsers and MCP port, and both would write
-// workspace.json. The first instance wins and simply reveals its window instead.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
+// workspace.json. The lock is this app's own exclusive-create file with the
+// holder's pid in it: a crashed or force-killed previous run leaves the file
+// behind, and the pid check is what tells a leftover (self-heals, lock taken)
+// from a live instance (this start exits, saying why). The platform singleton
+// this replaces treated the mere presence of the file as "already running",
+// which twice sent a start into a silent quit with nothing but GPU warnings.
+const singletonLock = acquireSingletonLock(join(app.getPath("userData"), "lockfile"), process.pid);
+if (!singletonLock.acquired) {
+  const holder = singletonLock.holderPid !== undefined ? `（pid ${singletonLock.holderPid}）` : "";
+  console.error(
+    `[ensemble] 已有实例持有实例锁${holder}，本次启动退出。若确认没有正在运行的 Ensemble，可删除锁文件后重试：${join(app.getPath("userData"), "lockfile")}`,
+  );
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    showMainWindow();
-  });
 
   // Windows' native window occlusion tracking has been observed to mark a
   // docked DevTools view (a WebContentsView beside another one) as occluded:
@@ -4365,6 +4372,13 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     mkdirSync(profileRoot(), { recursive: true });
+    // A normal exit removes the lock file; a crash leaves it, and the next
+    // start heals that by pid check instead of refusing to start.
+    if (singletonLock.acquired) {
+      app.on("will-quit", () => {
+        singletonLock.release();
+      });
+    }
     // Windows groups taskbar entries by AppUserModelID and takes the icon from
     // the packaged executable. In development the process is electron.exe, so
     // without this the taskbar shows Electron's logo for our window.

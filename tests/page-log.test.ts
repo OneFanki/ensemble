@@ -2,6 +2,7 @@ import {
   PAGE_LOG_TEXT_LIMIT,
   PAGE_NETWORK_LIMIT,
   buildNetworkIdleExpression,
+  buildWaitResponseExpression,
 } from "@core/cdp/page-log";
 import { describe, expect, it } from "vitest";
 
@@ -94,5 +95,46 @@ describe("network idle wait", () => {
   it("says so when the page was never instrumented", () => {
     const expression = buildNetworkIdleExpression({ timeoutMs: 1000 });
     expect(expression).toContain('reason: "not-instrumented"');
+  });
+});
+
+describe("wait for a matching response", () => {
+  it("carries the needle, the status and the deadline", () => {
+    const expression = buildWaitResponseExpression({ expect: "/api/save", status: 200, timeoutMs: 8000 });
+    expect(expression).toContain('"/api/save"');
+    expect(expression).toContain("const wantedStatus = 200;");
+    expect(expression).toContain("Date.now() + 8000");
+  });
+
+  /**
+   * The condition and `read_browser_requests` answer from the same rolling
+   * window. A wait that clears it would erase what the next console read was
+   * supposed to report, so the peek shape is part of the contract, not an
+   * implementation detail.
+   */
+  it("reads the rolling window without clearing it", () => {
+    const expression = buildWaitResponseExpression({ expect: "/api/save", timeoutMs: 1000 });
+    expect(expression).toContain("state.recent.find(");
+    expect(expression).not.toContain("recent.length = 0");
+    expect(expression).not.toContain("recent.pop()");
+  });
+
+  it("says so when the page was never instrumented", () => {
+    const expression = buildWaitResponseExpression({ expect: "/x", timeoutMs: 1000 });
+    expect(expression).toContain('reason: "not-instrumented"');
+  });
+
+  it("lowercases the needle so the match is case-insensitive", () => {
+    const expression = buildWaitResponseExpression({ expect: "/API/Save", timeoutMs: 1000 });
+    // The caller's text reaches the page already lowercased; the page compares
+    // against `String(entry.url).toLowerCase()`.
+    expect(expression).toContain('"/api/save"');
+    expect(expression).toContain("toLowerCase().indexOf(needle)");
+  });
+
+  it("requires no needle when only a status is given", () => {
+    const expression = buildWaitResponseExpression({ expect: "", status: 204, timeoutMs: 1000 });
+    expect(expression).toContain('const needle = "";');
+    expect(expression).toContain("const wantedStatus = 204;");
   });
 });

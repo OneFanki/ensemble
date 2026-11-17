@@ -195,9 +195,9 @@ Electron 45.2.1 上用真实页面测过：
 | `waitForHidden` | 等元素消失 | 轮询求值 | 已有 |
 | `waitForText` | 等页面出现文本 | 轮询求值 | 已有 |
 | `waitForUrl` | 等地址匹配 | 轮询求值 | **待做**（当前 `wait` 有 url 条件，无独立工具） |
-| `waitForLoadState` | 等 `load` / `domcontentloaded` / `networkidle` | `Page.loadEventFired` 等事件 | **待做** |
+| `waitForLoadState` | 等 `load` / `domcontentloaded` / `networkidle` | `Page.loadEventFired` 等事件 | 已有（`load` 形态：`wait_browser` 的 `load` 条件，页内轮询 readyState） |
 | `waitForNetworkIdle` | 等网络静默 | `Network.requestWillBeSent`/`loadingFinished` | 部分（有 `wait_browser` 条件） |
-| `waitForResponse` | 等某个请求返回（含状态码） | `Fetch.*` 或 `Network.*` | **待做**（需网络域，见 §2） |
+| `waitForResponse` | 等某个请求返回（含状态码） | 页面收集器（`fetch`/XHR 包装） | 已有（`wait_browser` 的 `response` 条件，配 `status` 精确匹配） |
 | `wait` | 固定等待 | 定时器 | 已有 |
 
 ### 3.5 读取与观察
@@ -213,7 +213,7 @@ Electron 45.2.1 上用真实页面测过：
 | `getValue` | 取输入框当前值 | `Runtime.evaluate` | 已有（不给 `names` 时返回 `value`） |
 | `screenshot` | 截图（全页/裁剪/元素/缩放） | `Page.captureScreenshot` | 已有元素裁剪（`clip` + `scale = 1/DPR`）；整页截图仍需滚动拼接 |
 | `getConsole` | 读控制台 | `Runtime.consoleAPICalled` | 已有 |
-| `getNetwork` | 读请求列表（含状态码） | `Network.*` | **待做** |
+| `getNetwork` | 读请求列表（含状态码） | 页面收集器（`fetch`/XHR 包装） | 已有（`read_browser_requests`，只读不清空；`read_browser_console` 附带同一批数据） |
 
 ### 3.6 弹窗、下载、上传
 
@@ -234,11 +234,11 @@ Electron 45.2.1 上用真实页面测过：
 | `setViewport` | 固定 CSS 视口 | `Emulation.setDeviceMetricsOverride` | 已有 |
 | `resetViewport` | 恢复自适应 | `Emulation.clearDeviceMetricsOverride` | 已有 |
 | `setDevice` | 预设设备（含 UA/touch/pixelRatio） | `Emulation.*` | 已有 |
-| `setGeolocation` | 地理位置 | `Emulation.setGeolocationOverride` | **待做** |
-| `setTimezone` | 时区 | `Emulation.setTimezoneOverride` | **待做** |
-| `setMedia` | 配色偏好 / 打印 / 减少动效 | `Emulation.setEmulatedMedia` | **待做** |
-| `setOffline` | 离线模式 | `Network.emulateNetworkConditions` | **待做** |
-| `setNetworkConditions` | 限速 / 高延迟 | `Network.emulateNetworkConditions` | **待做** |
+| `setGeolocation` | 地理位置 | `Emulation.setGeolocationOverride` | 已有（`set_browser_emulation` 的 `geolocation` 键；不授予权限，页面没被授权时拿不到坐标） |
+| `setTimezone` | 时区 | `Emulation.setTimezoneOverride` | 已有（`set_browser_emulation` 的 `timezone` 键） |
+| `setMedia` | 配色偏好 / 打印 / 减少动效 | `Emulation.setEmulatedMedia` | 已有（打印形态：`set_browser_emulation` 的 `mediaType` 键） |
+| `setOffline` | 离线模式 | `Network.emulateNetworkConditions` | 已有（`set_browser_emulation` 的 `offline` 键） |
+| `setNetworkConditions` | 限速 / 高延迟 | `Network.emulateNetworkConditions` | **待做**（offline 已随 `set_browser_emulation` 落地，限速曲线仍是独立条目） |
 | `setLocale` | 语言 | `Emulation.setLocaleOverride` | **待做** |
 | `setPermissions` | 授予/拒绝权限（地理位置、通知等） | `Browser.grantPermissions` | **禁止**（见 §2，需评审后变更） |
 
@@ -326,5 +326,5 @@ MCP 工具（click_browser_element …）  ─┐
 - [x] 第一批动作（`hover` / `scroll` / `keypress` / `back`·`forward`·`reload` / `dialog`）
 - [x] 第二批动作（`setFiles` / `drag` / `check`）
 - [x] 第三批动作（`elementInfo` / `getAttribute` / `getValue` / 元素裁剪截图）
-- [ ] 第四批动作（网络与环境模拟）
+- [x] 第四批动作（网络与环境模拟：`read_browser_requests` / `wait_browser` 的 `load`·`response` 条件 / `set_browser_emulation` 的时区·媒体·离线·地理）
 - [x] 流程的 `cdp` 步骤类型 + 三档白名单（`core/cdp/flow-whitelist.ts`，`tests/flow-whitelist.test.ts` + `scripts/e2e-flow-cdp.mjs`）

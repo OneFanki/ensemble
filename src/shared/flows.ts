@@ -27,9 +27,20 @@
 /**
  * `network-idle` joins the DOM conditions because a step is written as intent:
  * "wait until the save finished" is a request-activity fact, and the model
- * should not have to know which module answers it.
+ * should not have to know which module answers it. `load` and `response` are
+ * the same kind of fact — `load` about the document's lifecycle, `response`
+ * about one specific request having come back.
  */
-export const WAIT_CONDITIONS = ["visible", "hidden", "text", "url", "value", "network-idle"] as const;
+export const WAIT_CONDITIONS = [
+  "visible",
+  "hidden",
+  "text",
+  "url",
+  "value",
+  "network-idle",
+  "load",
+  "response",
+] as const;
 export type WaitCondition = (typeof WAIT_CONDITIONS)[number];
 
 /**
@@ -201,7 +212,12 @@ export function validateStep(step: FlowStep, index: number): string[] {
       break;
     case "wait":
       if (!step.condition) problems.push(`${at}（wait）需要 condition`);
-      if (step.condition === "text" || step.condition === "url" || step.condition === "value") {
+      if (
+        step.condition === "text" ||
+        step.condition === "url" ||
+        step.condition === "value" ||
+        step.condition === "response"
+      ) {
         if (!step.expect?.trim()) problems.push(`${at}（wait ${step.condition}）需要 expect`);
       }
       if (

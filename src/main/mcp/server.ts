@@ -360,11 +360,21 @@ export interface EmbeddedSurface {
   wait(
     tabId: string,
     input: {
-      condition: "visible" | "hidden" | "text" | "url" | "value" | "network-idle";
+      condition:
+        | "visible"
+        | "hidden"
+        | "text"
+        | "url"
+        | "value"
+        | "network-idle"
+        | "load"
+        | "response";
       target?: ElementTarget | string;
       text?: string;
       timeoutMs: number;
       quietMs?: number;
+      /** For `response`: exact status required on the matching request. */
+      status?: number;
     },
   ): Promise<WaitResult>;
   /**
@@ -374,6 +384,39 @@ export interface EmbeddedSurface {
    * failing, which is the same shape the other capability gaps use.
    */
   readPageActivity?(tabId: string): Promise<unknown>;
+  /**
+   * The page's settled requests, read **without consuming** anything.
+   *
+   * Separate from `readPageActivity` because the two tools answer different
+   * questions with different semantics: the console tool consumes its channel,
+   * this one peeks at a rolling window that every later read still sees.
+   * Optional for the same reason as `readPageActivity`.
+   */
+  readRequests?(
+    tabId: string,
+    options?: {
+      url?: string;
+      method?: string;
+      status?: number;
+      limit?: number;
+    },
+  ): Promise<unknown>;
+  /**
+   * Applies or clears environment overrides (timezone / media / offline /
+   * geolocation) on one page; returns what is in force afterwards.
+   *
+   * Optional like the rest of the browser surface: a carrier without CDP access
+   * reports the capability as absent instead of pretending to emulate.
+   */
+  setEmulation?(
+    tabId: string,
+    patch: {
+      timezone?: string | null;
+      mediaType?: string | null;
+      offline?: boolean | null;
+      geolocation?: { latitude: number; longitude: number; accuracy?: number } | null;
+    },
+  ): Promise<unknown>;
   /**
    * Measures the page's rendering/GC work for a moment and reports a summary.
    *
@@ -3258,6 +3301,34 @@ export class McpServer {
         },
       },
       {
+        name: "read_browser_requests",
+        description:
+          "读取该标签页已收集的 fetch / XHR 请求（地址、方法、状态码、耗时），只读不清空：同一批数据之后 read_browser_console 仍能读到。可按 url（子串）、method、status 过滤，limit 控制最多返回多少条。还带上 inflight（已发出还没回来的请求），所以「页面调了接口但还没回来」不会被读成安静。只看页面自己的 JavaScript 能看到的请求，跨域 iframe 与页面脚本启动前就完成的资源加载不在其中。",
+        kind: "read",
+        inputSchema: object({
+          tabId: tabIdProp(),
+          url: string("按 URL 子串过滤，不区分大小写"),
+          method: string("按 HTTP 方法过滤，如 GET / POST"),
+          status: integer("按状态码精确过滤，如 200"),
+          limit: integer("最多返回多少条；超出时保留最新的"),
+        }),
+        pageTarget: (args) => tabId(args),
+        run: (args) => {
+          const read = surface().readRequests;
+          if (!read) throw new Error("当前浏览器表面不支持读取请求");
+          const status = Number(args["status"]);
+          const limit = Number(args["limit"]);
+          return read.call(surface(), tabId(args), {
+            ...(typeof args["url"] === "string" && args["url"] ? { url: args["url"] } : {}),
+            ...(typeof args["method"] === "string" && args["method"]
+              ? { method: args["method"] }
+              : {}),
+            ...(Number.isFinite(status) ? { status: Math.trunc(status) } : {}),
+            ...(Number.isFinite(limit) && limit > 0 ? { limit: Math.trunc(limit) } : {}),
+          });
+        },
+      },
+      {
         name: "measure_browser_performance",
         description:
           "测量页面当前的实际开销，回答「这个页面卡不卡」。指标与 Chrome 性能监视器同源，每项给出均值、峰值、峰值出现的毫秒时刻（从本次窗口起点算）、最新值和样本数。默认观察 1 秒；连续调用接着上次继续，中间空档也在采样，所以「测一次 → 操作 → 再测一次」能看见那次操作的开销。CPU 均值高＝持续重负载，峰值高但均值低＝某一下卡顿；布局/秒与样式重算/秒的峰值说明那一下在反复排版。某项的 samples 为 0 表示这段窗口里还没有可用读数（刚启动采样，第一次读数无法差分出速率），不是页面空闲。逐点数据用 read_browser_performance。",
@@ -3595,14 +3666,14 @@ export class McpServer {
       {
         name: "wait_browser",
         description:
-          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）、load（document.readyState 变为 complete，即文档与子资源加载完毕）、response（已收集的请求里出现 URL 含 expect 的响应，可配 status 精确匹配状态码；只读不清空，与 read_browser_requests 共用同一批数据）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 和 response 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
         kind: "read",
         inputSchema: object(
           {
             tabId: tabIdProp(),
             condition: {
               type: "string",
-              enum: ["visible", "hidden", "text", "url", "value", "network-idle"],
+              enum: ["visible", "hidden", "text", "url", "value", "network-idle", "load", "response"],
               description: "要等的条件",
             },
             selector: string("CSS 选择器；可用 label / elementText / role 代替"),
@@ -3610,9 +3681,10 @@ export class McpServer {
             elementText: string("元素上的文字，与 wait 的 text 区分开"),
             role: { type: "string", description: "ARIA role，用于收窄候选元素" },
             exact: { type: "boolean", description: "要求文字完全相等" },
-            expect: string("text / url / value 条件要比对的文字"),
+            expect: string("text / url / value / response 条件要比对的文字（response 时是 URL 子串）"),
             timeoutMs: integer("最多等多久，默认 5000 毫秒"),
             quietMs: integer("network-idle 专用：需要连续安静多久，默认 500 毫秒"),
+            status: integer("response 专用：要求响应的状态码精确等于这个值"),
           },
           ["condition"],
         ),
@@ -3620,23 +3692,27 @@ export class McpServer {
         run: (args) => {
           const condition = String(args["condition"] ?? "");
           if (
-            !["visible", "hidden", "text", "url", "value", "network-idle"].includes(condition)
+            !["visible", "hidden", "text", "url", "value", "network-idle", "load", "response"].includes(
+              condition,
+            )
           ) {
             throw new Error(
-              "condition 必须是 visible / hidden / text / url / value / network-idle 之一",
+              "condition 必须是 visible / hidden / text / url / value / network-idle / load / response 之一",
             );
           }
           const needsTarget =
             condition === "visible" || condition === "hidden" || condition === "value";
           const target = needsTarget ? targetFrom(args, { withText: false }) : undefined;
           const expect = typeof args["expect"] === "string" ? args["expect"] : "";
-          // Only the DOM conditions need a value to compare against; idle is a
-          // state, and requiring a needle there would be a trap.
-          if (condition !== "network-idle" && !needsTarget && !expect) {
+          // Only the DOM conditions and `response` need a value to compare
+          // against; idle and load are states, and requiring a needle there
+          // would be a trap.
+          if (condition !== "network-idle" && condition !== "load" && !needsTarget && !expect) {
             throw new Error(`${condition} 条件需要 expect`);
           }
           const timeout = Number(args["timeoutMs"]);
           const quiet = Number(args["quietMs"]);
+          const status = Number(args["status"]);
           return surface().wait(tabId(args), {
             condition: condition as
               | "visible"
@@ -3644,10 +3720,13 @@ export class McpServer {
               | "text"
               | "url"
               | "value"
-              | "network-idle",
+              | "network-idle"
+              | "load"
+              | "response",
             ...(target ? { target } : {}),
             ...(expect ? { text: expect } : {}),
             ...(Number.isFinite(quiet) && quiet >= 0 ? { quietMs: Math.trunc(quiet) } : {}),
+            ...(Number.isFinite(status) ? { status: Math.trunc(status) } : {}),
             timeoutMs:
               Number.isFinite(timeout) && timeout > 0
                 ? Math.min(Math.trunc(timeout), 60_000)
@@ -3972,6 +4051,97 @@ export class McpServer {
           if (!setMuted) throw new Error("这个宿不支持静音");
           setMuted.call(surface(), id, args["muted"], { byUser: false });
           return { tabId: id, muted: args["muted"] };
+        },
+      },
+      {
+        name: "set_browser_emulation",
+        description:
+          "设置或清除一个标签页的环境模拟，四项互相独立，按传入的键生效：timezone（IANA 时区名，如 Asia/Tokyo，null 清除）、mediaType（CSS 媒体类型，如 print / screen，null 恢复）、offline（true 断网、false 恢复）、geolocation（{latitude, longitude, accuracy?}，null 清除）。返回当前生效的全部模拟项；标签页关闭即全部丢弃。注意：geolocation 只提供坐标，不授予权限——页面没被用户授权时它的 geolocation API 仍然会被权限检查拦下。",
+        kind: "write",
+        inputSchema: object(
+          {
+            tabId: tabIdProp(),
+            timezone: { type: ["string", "null"], description: "IANA 时区名；null 清除模拟" },
+            mediaType: {
+              type: ["string", "null"],
+              description: "CSS 媒体类型，如 print / screen；null 恢复真实类型",
+            },
+            offline: {
+              type: ["boolean", "null"],
+              description: "true 模拟断网，false 恢复联网",
+            },
+            geolocation: {
+              type: ["object", "null"],
+              description: "要模拟的坐标 {latitude, longitude, accuracy?}；null 清除",
+              properties: {
+                latitude: { type: "number", description: "纬度" },
+                longitude: { type: "number", description: "经度" },
+                accuracy: { type: "number", description: "精度半径（米），默认 1" },
+              },
+              required: ["latitude", "longitude"],
+            },
+          },
+          ["tabId"],
+        ),
+        inputTarget: (args) => tabId(args),
+        run: (args) => {
+          const set = surface().setEmulation;
+          if (!set) throw new Error("当前浏览器表面不支持环境模拟");
+          const has = (...keys: string[]) => keys.some((key) => key in args);
+          if (
+            !has("timezone", "mediaType", "offline", "geolocation")
+          ) {
+            throw new Error("至少要给 timezone / mediaType / offline / geolocation 之一");
+          }
+          const patch: {
+            timezone?: string | null;
+            mediaType?: string | null;
+            offline?: boolean | null;
+            geolocation?: { latitude: number; longitude: number; accuracy?: number } | null;
+          } = {};
+          if (has("timezone")) {
+            const value = args["timezone"];
+            if (value !== null && typeof value !== "string") {
+              throw new Error("timezone 必须是 IANA 时区名字符串或 null");
+            }
+            patch.timezone = (value ?? null) as string | null;
+          }
+          if (has("mediaType")) {
+            const value = args["mediaType"];
+            if (value !== null && typeof value !== "string") {
+              throw new Error("mediaType 必须是字符串或 null");
+            }
+            patch.mediaType = (value ?? null) as string | null;
+          }
+          if (has("offline")) {
+            const value = args["offline"];
+            if (value !== null && typeof value !== "boolean") {
+              throw new Error("offline 必须是布尔值或 null");
+            }
+            patch.offline = (value ?? null) as boolean | null;
+          }
+          if (has("geolocation")) {
+            const value = args["geolocation"];
+            if (value === null) {
+              patch.geolocation = null;
+            } else if (typeof value === "object") {
+              const record = value as Record<string, unknown>;
+              const latitude = Number(record["latitude"]);
+              const longitude = Number(record["longitude"]);
+              if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                throw new Error("geolocation 需要 latitude 与 longitude（数字）");
+              }
+              const accuracy = Number(record["accuracy"]);
+              patch.geolocation = {
+                latitude,
+                longitude,
+                ...(Number.isFinite(accuracy) && accuracy > 0 ? { accuracy } : {}),
+              };
+            } else {
+              throw new Error("geolocation 必须是 {latitude, longitude} 对象或 null");
+            }
+          }
+          return set.call(surface(), tabId(args), patch);
         },
       },
       {

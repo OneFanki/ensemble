@@ -96,12 +96,22 @@ export interface VisibilityProbe {
 /**
  * What a `wait` can wait for.
  *
- * `network-idle` is the odd one out: the first five are page-DOM facts, and this
- * one is a fact about the page's request activity, read from the collector in
- * `page-log.ts`. It is here because callers pick a wait by intent — "until this
- * settled" — not by which internal module answers it.
+ * `network-idle` and `response` are the odd ones out: the first five are
+ * page-DOM facts, and these two are facts about the page's request activity,
+ * read from the collector in `page-log.ts`. `load` stays here because it is a
+ * DOM fact (`document.readyState`), just one about the document's lifecycle
+ * rather than its content. They are all in one list because callers pick a wait
+ * by intent — "until this settled" — not by which internal module answers it.
  */
-export type WaitCondition = "visible" | "hidden" | "text" | "url" | "value" | "network-idle";
+export type WaitCondition =
+  | "visible"
+  | "hidden"
+  | "text"
+  | "url"
+  | "value"
+  | "network-idle"
+  | "load"
+  | "response";
 
 export interface WaitResult {
   ok: boolean;
@@ -693,6 +703,14 @@ export function buildWaitExpression(input: {
           return { ok: true, waitedMs: Date.now() - started, matched: location.href };
         }
         lastReason = "url-mismatch";
+      } else if (condition === "load") {
+        // "complete" covers everything the load event means: subresources
+        // settled and the event fired. Pages that keep loading data afterwards
+        // stay complete — data fetching is not document loading.
+        if (document.readyState === "complete") {
+          return { ok: true, waitedMs: Date.now() - started, matched: location.href };
+        }
+        lastReason = "still-loading";
       } else {
         const found = resolveTarget(target);
         if (condition === "visible") {

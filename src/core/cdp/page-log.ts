@@ -216,6 +216,62 @@ export const PAGE_ACTIVITY_READ_SCRIPT = `(() => {
 })()`;
 
 /**
+ * Polls inside the page until a settled request matches, without consuming.
+ *
+ * `response` reads the same rolling window `PAGE_ACTIVITY_READ_SCRIPT` reads,
+ * and reads it exactly as peekably: `recent` is never emptied on a read, so a
+ * wait that matched does not erase the answer the next `read_browser_console`
+ * would have given. The poll runs page-side for the same reason the idle one
+ * does — one round trip instead of "sleep, read, sleep, read" — and the match
+ * is returned so the caller can tell *which* request ended the wait.
+ */
+export function buildWaitResponseExpression(input: {
+  /** URL substring, compared case-insensitively. Empty matches any URL. */
+  expect: string;
+  /** Exact status code to require, when the caller names one. */
+  status?: number;
+  timeoutMs: number;
+  intervalMs?: number;
+}): string {
+  const interval = Math.max(50, Math.trunc(input.intervalMs ?? 150));
+  const needle = JSON.stringify(input.expect.toLowerCase());
+  const status = input.status === undefined ? "null" : String(Math.trunc(input.status));
+  return `(async () => {
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const state = window.__ensembleActivity;
+    if (!state) {
+      return { ok: false, waitedMs: 0, reason: "not-instrumented" };
+    }
+    const needle = ${needle};
+    const wantedStatus = ${status};
+    const deadline = Date.now() + ${Math.max(100, Math.trunc(input.timeoutMs))};
+    const started = Date.now();
+    while (Date.now() < deadline) {
+      const hit = state.recent.find((entry) => {
+        if (needle && String(entry.url).toLowerCase().indexOf(needle) === -1) return false;
+        if (wantedStatus !== null && entry.status !== wantedStatus) return false;
+        return true;
+      });
+      if (hit) {
+        return {
+          ok: true,
+          waitedMs: Date.now() - started,
+          matched: hit.method + " " + hit.status + " " + hit.url,
+        };
+      }
+      await wait(${interval});
+    }
+    return {
+      ok: false,
+      waitedMs: Date.now() - started,
+      timedOut: true,
+      timedOutAt: "page",
+      reason: "no-matching-response",
+    };
+  })()`;
+}
+
+/**
  * Polls inside the page until no request has been in flight for `quietMs`.
  *
  * Idle is defined narrowly and the narrower definition is the point: no

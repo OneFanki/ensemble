@@ -743,6 +743,35 @@ export interface EmbeddedDevice extends EmbeddedViewport {
   name?: string;
 }
 
+/** A coordinate a page's geolocation API should report. */
+export interface EmbeddedGeolocation {
+  latitude: number;
+  longitude: number;
+  /** Metres of the confidence radius; the protocol's own default is 1. */
+  accuracy?: number;
+}
+
+/**
+ * Environment overrides one page wears, as the tab record keeps them.
+ *
+ * A key left `undefined` means "not overridden" — the page sees the real thing.
+ * The record is the source of truth for what is in force (a tool echoes it back)
+ * and it dies with the tab: nothing here is meant to outlive the page it
+ * distorts. Overrides reach the page through CDP, so the same session-pinning
+ * rule as device emulation applies — an idle session detach would silently drop
+ * them all.
+ */
+export interface EmbeddedEmulation {
+  /** IANA name the page's clock uses ("Asia/Tokyo"); absent means system. */
+  timezone?: string;
+  /** CSS media type the page sees ("print", "screen"); absent means real. */
+  mediaType?: string;
+  /** True while the page's network is cut; absent or false means connected. */
+  offline?: boolean;
+  /** Position the geolocation API answers with; absent means real. */
+  geolocation?: EmbeddedGeolocation;
+}
+
 /**
  * Devices worth one click.
  *

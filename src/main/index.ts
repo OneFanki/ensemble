@@ -4568,6 +4568,8 @@ if (!gotLock) {
         cancelScript: (tabId) => ensureEmbeddedBrowser().cancelScript(tabId),
         visibility: (tabId, target) => ensureEmbeddedBrowser().visibility(tabId, target),
         readPageActivity: (tabId) => ensureEmbeddedBrowser().readPageActivity(tabId),
+        readRequests: (tabId, options) => ensureEmbeddedBrowser().readRequests(tabId, options),
+        setEmulation: (tabId, patch) => ensureEmbeddedBrowser().setEmulation(tabId, patch),
         measurePerformance: (tabId, options) =>
           ensureEmbeddedBrowser().measurePerformance(tabId, options),
         readPerfHistory: (tabId) => ensureEmbeddedBrowser().readPerfHistory(tabId),

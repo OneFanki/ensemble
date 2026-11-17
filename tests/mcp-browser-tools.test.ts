@@ -229,6 +229,36 @@ function fakeSurface(): EmbeddedSurface {
         dropped: 0,
       };
     },
+    readRequests: async (
+      tabId: string,
+      options?: { url?: string; method?: string; status?: number; limit?: number },
+    ) => {
+      calls.push({ method: "readRequests", args: [tabId, options] });
+      return {
+        requests: [
+          { at: "2026-01-01T00:00:00.000Z", method: "GET", url: "/api/tenants", status: 200, ms: 12, failed: false },
+        ],
+        inflight: [],
+        installed: true,
+      };
+    },
+    setEmulation: async (
+      tabId: string,
+      patch: {
+        timezone?: string | null;
+        mediaType?: string | null;
+        offline?: boolean | null;
+        geolocation?: { latitude: number; longitude: number; accuracy?: number } | null;
+      },
+    ) => {
+      calls.push({ method: "setEmulation", args: [tabId, patch] });
+      const now: Record<string, unknown> = {};
+      if (patch.timezone) now.timezone = patch.timezone;
+      if (patch.mediaType) now.mediaType = patch.mediaType;
+      if (patch.offline) now.offline = true;
+      if (patch.geolocation) now.geolocation = patch.geolocation;
+      return now;
+    },
     visibility: async (tabId, target) => {
       calls.push({ method: "visibility", args: [tabId, target] });
       return { exists: true, visible: true };
@@ -685,6 +715,97 @@ describe("browser tool calls", () => {
     expect(json.result.isError).toBeUndefined();
     const waited = calls.find((call) => call.method === "wait");
     expect(waited?.args[1]).toMatchObject({ condition: "network-idle", quietMs: 800 });
+  });
+
+  it("waits for a response by URL substring with an exact status", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("wait_browser", { condition: "response", expect: "/api/save", status: 200 }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const waited = calls.find((call) => call.method === "wait");
+    expect(waited?.args[1]).toMatchObject({
+      condition: "response",
+      text: "/api/save",
+      status: 200,
+    });
+  });
+
+  it("waits for document load without needing a value to compare", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("wait_browser", { condition: "load" }));
+    expect(json.result.isError).toBeUndefined();
+    const waited = calls.find((call) => call.method === "wait");
+    expect(waited?.args[1]).toMatchObject({ condition: "load", timeoutMs: 5000 });
+    expect(waited?.args[1]).not.toHaveProperty("text");
+  });
+
+  it("reads settled requests with filters and never consumes them", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("read_browser_requests", { url: "/api/tenants", status: 200, limit: 10 }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const payload = toolPayload(json) as {
+      requests: Array<{ url: string; status: number }>;
+      installed: boolean;
+    };
+    expect(payload.installed).toBe(true);
+    expect(payload.requests[0]?.url).toBe("/api/tenants");
+    const read = calls.find((call) => call.method === "readRequests");
+    expect(read?.args[1]).toEqual({ url: "/api/tenants", status: 200, limit: 10 });
+  });
+
+  it("rejects an emulation call that names nothing to change", async () => {
+    await startServer(fakeSurface());
+    // `set_browser_emulation` is a `write` tool; the suite starts with only the
+    // run permission on, and the gate must not be bypassed by an empty patch.
+    await server.update({ allowWrite: true });
+    const opened = await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const tabId = (toolPayload(opened.json) as { id: string }).id;
+    const { json } = await rpc(toolCall("set_browser_emulation", { tabId }));
+    expect(json.result.isError).toBe(true);
+    expect(calls.find((call) => call.method === "setEmulation")).toBeUndefined();
+  });
+
+  it("refuses an emulation call while the write permission is off", async () => {
+    await startServer(fakeSurface());
+    // The default settings leave writes on; the closed state has to be set
+    // explicitly for the gate to matter.
+    await server.update({ allowWrite: false });
+    const opened = await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const tabId = (toolPayload(opened.json) as { id: string }).id;
+    const { json } = await rpc(toolCall("set_browser_emulation", { tabId, timezone: "Asia/Tokyo" }));
+    // The permission gate is a tool-level refusal (`isError`), not a protocol error.
+    expect(json.result.isError).toBe(true);
+    expect(calls.find((call) => call.method === "setEmulation")).toBeUndefined();
+  });
+
+  it("passes each emulation key through and distinguishes null from omission", async () => {
+    await startServer(fakeSurface());
+    await server.update({ allowWrite: true });
+    const opened = await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const tabId = (toolPayload(opened.json) as { id: string }).id;
+    await rpc(
+      toolCall("set_browser_emulation", {
+        tabId,
+        timezone: "Asia/Tokyo",
+        geolocation: { latitude: 35.68, longitude: 139.76 },
+      }),
+    );
+    await rpc(toolCall("set_browser_emulation", { tabId, timezone: null }));
+    const emulations = calls.filter((call) => call.method === "setEmulation");
+    // The first call carries the keys given and leaves the others out entirely;
+    // the second clears exactly the one key, which a merged object could not
+    // express.
+    expect(emulations[0]?.args[1]).toEqual({
+      timezone: "Asia/Tokyo",
+      geolocation: { latitude: 35.68, longitude: 139.76 },
+    });
+    expect(emulations[1]?.args[1]).toEqual({ timezone: null });
   });
 
   it("moves a tab relative to another tab", async () => {

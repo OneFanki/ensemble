@@ -67,6 +67,7 @@
 | `set_browser_layout` / `pin_browser_tab` / `compose_view` | run / run / write | — | 省略 `viewId` 时作用于台上的视图 | 布局或容器 |
 | `set_browser_viewport` / `reset_browser_viewport` | run | 是 | 宽 320–3840、高 320–2160 | 生效后的尺寸 |
 | `set_browser_muted` | run | — | 只切换 Ensemble 的输出；页面自己的媒体与 Web Audio 照常运行。不受来源闸门限制，AI 自动静音不会覆盖用户手动取消的静音 | `{ tabId, muted }` |
+| `set_browser_emulation` | write | 是 | 每个传入的键独立生效：`timezone`（IANA 名）/ `mediaType`（CSS 媒体类型）/ `offline` / `geolocation`，传 `null` 清除该项。模拟只作用于这一个页面，随标签页关闭丢弃；状态存在 CDP 会话里，与设备模拟同一套会话钉住规则。不授予权限——页面没被用户授权时拿不到地理坐标 | 当前生效的全部模拟项 |
 
 ### 内置浏览器 · 观察
 
@@ -74,7 +75,8 @@
 | --- | --- | --- | --- | --- |
 | `read_browser_page` | read | — | 只返回可见元素，且只有页面当前渲染出来的那些 | 角色、可访问名称、稳定选择器、位置、表单标签 |
 | `read_browser_console` | read | — | **读完即清空**，回答「上次读取之后发生了什么」；看不到跨域 iframe 的请求 | 报错、console 行、失败请求 |
-| `wait_browser` | read | — | `timeoutMs` 默认 5000、上限 60000。超时时 `timedOutAt` 区分 `page`（条件确实没满足）与 `bridge`（页面没按时答复） | `{ ok, waitedMs, timedOut, timedOutAt, reason, matched }` |
+| `read_browser_requests` | read | — | **只读不清空**：读收集器的滚动窗口（最近 50 条已完成的 fetch/XHR），`read_browser_console` 之后仍能读到同一批。可按 `url`（子串）、`method`、`status` 过滤，`limit` 控制条数。看不到跨域 iframe 的请求 | `{ requests: [{at, method, url, status, ms, failed}], inflight, installed }` |
+| `wait_browser` | read | — | 条件：`visible` / `hidden` / `text` / `url` / `value` / `network-idle` / `load`（readyState complete）/ `response`（URL 含 `expect` 的响应，可配 `status` 精确匹配；基于滚动窗口 peek，不清空）。`timeoutMs` 默认 5000、上限 60000。超时时 `timedOutAt` 区分 `page`（条件确实没满足）与 `bridge`（页面没按时答复） | `{ ok, waitedMs, timedOut, timedOutAt, reason, matched }` |
 | `check_element_visible` | read | — | 无 | `{ exists, visible, bounds, selector, name }` |
 | `read_browser_performance` | read | — | 起一个 15 秒后自停的采样器；区间与间隔取自设置 | 逐点样本，`t` 为毫秒偏移 |
 | `measure_browser_performance` | read | — | `durationMs` + `idleMs`；连续读取会继续而非重启 | 每项 `{ avg, max, maxAt, last, samples }` |

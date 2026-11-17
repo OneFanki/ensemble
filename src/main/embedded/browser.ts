@@ -29,8 +29,10 @@ import {
   PAGE_LOG_LIMIT,
   PAGE_LOG_TEXT_LIMIT,
   buildNetworkIdleExpression,
+  buildWaitResponseExpression,
   type PageActivity,
   type PageLogLevel,
+  type PageNetworkEntry,
 } from "@core/cdp/page-log";
 import {
   bodyMarksSignedOut,
@@ -87,6 +89,8 @@ import {
   resolveSlotTabs,
   settleSplitPages,
   type EmbeddedDevice,
+  type EmbeddedEmulation,
+  type EmbeddedGeolocation,
   type EmbeddedViewport,
   type PerfMetric,
   type PerfMetricSummary,
@@ -303,6 +307,17 @@ interface TabRecord {
    * likes through `evaluate`, so this grants no capability it did not have.
    */
   initScripts?: Map<string, { source: string; createdAt: string }>;
+  /**
+   * Environment overrides this page currently wears: timezone, media type,
+   * offline and geolocation.
+   *
+   * The record is the echo a tool reads back — the CDP session itself does not
+   * answer "what is overridden" — and it dies with the tab, so nothing here is
+   * ever persisted. Any key here pins the CDP session (see `syncSessionHold`):
+   * an idle detach would silently drop every override and the page would drift
+   * back to reality mid-run.
+   */
+  emulation?: EmbeddedEmulation;
   /** Zoom factor the current viewport fit resolved to; drives `applyZoom`. */
   viewportScale?: number;
   /**
@@ -2280,6 +2295,62 @@ export class EmbeddedBrowser {
       logs,
       installed: page.installed || hadMainLines,
       dropped: page.dropped + droppedFromMain,
+    };
+  }
+
+  /**
+   * Reads the page's settled requests **without consuming anything**.
+   *
+   * The collector keeps a rolling window of the last settled `fetch`/XHR
+   * entries, and `readPageActivity` already treats it as peekable — the window
+   * is only ever trimmed by new traffic, never by a read. This method therefore
+   * needs no cursor and no clearing: it runs the same read expression and
+   * reports the window (filtered, bounded), and a later `readPageActivity` — the
+   * console tool — still sees everything this call saw. The only thing this
+   * deliberately does *not* touch is the console log, which remains the console
+   * tool's consume-on-read channel.
+   *
+   * In-flight requests are reported alongside so "the page is calling something
+   * and it has not come back yet" is visible instead of reading as silence.
+   */
+  async readRequests(
+    tabId: string,
+    options: {
+      /** URL substring, case-insensitive. */
+      url?: string;
+      /** Exact method, case-insensitive ("GET", "POST"). */
+      method?: string;
+      /** Exact settled status. Failed requests never match a status. */
+      status?: number;
+      /** Cap on returned entries, oldest dropped. Default all. */
+      limit?: number;
+    } = {},
+  ): Promise<{
+    requests: PageNetworkEntry[];
+    inflight: Array<{ method: string; url: string; at: string; ms: number }>;
+    installed: boolean;
+  }> {
+    const tab = this.requireTab(tabId);
+    await this.installPageActivity(tab);
+    const page = await tab.cdp.evaluate<PageActivity>(PAGE_ACTIVITY_READ_SCRIPT, {
+      awaitPromise: true,
+    });
+    const needle = options.url?.trim().toLowerCase() ?? "";
+    const method = options.method?.trim().toUpperCase() ?? "";
+    const limit =
+      Number.isFinite(options.limit) && (options.limit as number) > 0
+        ? Math.trunc(options.limit as number)
+        : undefined;
+    const matched = page.recent.filter((entry) => {
+      if (needle && !entry.url.toLowerCase().includes(needle)) return false;
+      if (method && entry.method.toUpperCase() !== method) return false;
+      if (options.status !== undefined && entry.status !== options.status) return false;
+      return true;
+    });
+    return {
+      requests: limit === undefined ? matched : matched.slice(-limit),
+      inflight: page.inflight,
+      installed: page.installed,
     };
   }
 
@@ -4378,6 +4449,8 @@ export class EmbeddedBrowser {
       timeoutMs: number;
       /** For `network-idle`: how long the page must stay quiet. Default 500ms. */
       quietMs?: number;
+      /** For `response`: exact status to require on the matching request. */
+      status?: number;
     },
   ): Promise<WaitResult> {
     const tab = this.requireTab(tabId);
@@ -4387,12 +4460,12 @@ export class EmbeddedBrowser {
     while (Date.now() < deadline) {
       const remaining = Math.max(200, deadline - Date.now());
       /*
-       * Idle is measured inside the page against its own collector, so it needs
-       * the collector to be there. Installing on demand keeps `wait` working on
-       * a page opened before this feature existed, and the install is idempotent
-       * on every later call.
+       * Idle and response are measured inside the page against its own
+       * collector, so they need the collector to be there. Installing on demand
+       * keeps `wait` working on a page opened before this feature existed, and
+       * the install is idempotent on every later call.
        */
-      if (input.condition === "network-idle") {
+      if (input.condition === "network-idle" || input.condition === "response") {
         await tab.cdp.evaluate(PAGE_ACTIVITY_SCRIPT).catch(() => undefined);
       }
       const expression =
@@ -4401,7 +4474,13 @@ export class EmbeddedBrowser {
               timeoutMs: remaining,
               ...(input.quietMs === undefined ? {} : { quietMs: input.quietMs }),
             })
-          : buildWaitExpression({ ...input, timeoutMs: remaining });
+          : input.condition === "response"
+            ? buildWaitResponseExpression({
+                expect: input.text ?? "",
+                ...(input.status === undefined ? {} : { status: input.status }),
+                timeoutMs: remaining,
+              })
+            : buildWaitExpression({ ...input, timeoutMs: remaining });
       try {
         const result = await Promise.race([
           /*
@@ -5409,6 +5488,117 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Applies, replaces or clears one page's environment overrides.
+   *
+   * Four independent dials, each with its own protocol story:
+   *
+   * - **Timezone** has no explicit clear command: an empty `timezoneId` is how
+   *   Chromium itself unsets the override, and that is what DevTools sends.
+   * - **Media type** is the same shape — an empty string means "stop pretending".
+   * - **Offline** rides `Network.emulateNetworkConditions`. Restoring goes back
+   *   to unlimited throughput (`-1`), which is the protocol's "no cap" marker,
+   *   not zero: zero would be a link that exists but never moves a byte.
+   * - **Geolocation** is the one domain with a real clear command
+   *   (`clearGeolocationOverride`).
+   *
+   * A key that is present in `patch` — even as `undefined`/`null` — is applied
+   * or cleared; a key left out entirely is untouched. The returned object is
+   * what is in force afterwards, read back from the tab record rather than from
+   * CDP, which has no "what is overridden" query. Any override pins the CDP
+   * session the same way device emulation does: the idle detach would silently
+   * drop every one of these and the page would drift back to reality mid-run.
+   *
+   * Known limit, stated rather than papered over: overriding coordinates does
+   * not grant the page the *permission* to call the geolocation API. A page the
+   * user has not granted will fail at its permission check and never see the
+   * coordinates — permission grants sit in the forbidden CDP tier on purpose.
+   */
+  async setEmulation(
+    tabId: string,
+    patch: {
+      timezone?: string | null;
+      mediaType?: string | null;
+      offline?: boolean | null;
+      geolocation?: EmbeddedGeolocation | null;
+    },
+  ): Promise<EmbeddedEmulation> {
+    const tab = this.requireTab(tabId);
+    const next: EmbeddedEmulation = { ...(tab.emulation ?? {}) };
+    const contents = tab.view.webContents;
+    if (contents.isDestroyed()) throw new Error("页面已关闭");
+
+    if ("timezone" in patch) {
+      const value = typeof patch.timezone === "string" ? patch.timezone.trim() : "";
+      if (value) {
+        // Reject a name the page's own Intl would reject, so the tool call says
+        // "Asia/Tokyo is misspelled" instead of a silent no-op override.
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: value });
+        } catch {
+          throw new Error(`不是有效的 IANA 时区名：${value}`);
+        }
+        await tab.cdp.send("Emulation.setTimezoneOverride", { timezoneId: value });
+        next.timezone = value;
+      } else {
+        await tab.cdp.send("Emulation.setTimezoneOverride", { timezoneId: "" });
+        delete next.timezone;
+      }
+    }
+
+    if ("mediaType" in patch) {
+      const value = typeof patch.mediaType === "string" ? patch.mediaType.trim() : "";
+      await tab.cdp.send("Emulation.setEmulatedMedia", { media: value });
+      if (value) next.mediaType = value;
+      else delete next.mediaType;
+    }
+
+    if ("offline" in patch) {
+      const offline = patch.offline === true;
+      /*
+       * `emulateNetworkConditions` lives in the Network domain, and a domain
+       * that was never enabled accepts the command but applies nothing —
+       * measured, not guessed: without this the page's own fetch sails through
+       * an "offline" override. The frontend always enables first, so that is
+       * what this does too. Enabling starts an event stream, but the override
+       * pins the session anyway, so the cost is already being paid.
+       */
+      await tab.cdp.send("Network.enable").catch(() => undefined);
+      await tab.cdp.send("Network.emulateNetworkConditions", offline
+        ? { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 }
+        : { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      if (offline) next.offline = true;
+      else delete next.offline;
+    }
+
+    if ("geolocation" in patch) {
+      const value = patch.geolocation;
+      if (
+        value &&
+        Number.isFinite(value.latitude) &&
+        Number.isFinite(value.longitude)
+      ) {
+        const params = {
+          latitude: value.latitude,
+          longitude: value.longitude,
+          accuracy: Number.isFinite(value.accuracy) && (value.accuracy as number) > 0
+            ? (value.accuracy as number)
+            : 1,
+        };
+        await tab.cdp.send("Emulation.setGeolocationOverride", params);
+        next.geolocation = params;
+      } else {
+        await tab.cdp.send("Emulation.clearGeolocationOverride");
+        delete next.geolocation;
+      }
+    }
+
+    if (Object.keys(next).length === 0) delete tab.emulation;
+    else tab.emulation = next;
+    this.syncSessionHold(tab);
+    return { ...next };
+  }
+
+  /**
    * Turns mouse-to-touch conversion on or off for one page.
    *
    * Chromium's conversion comes with a native touch cursor image. Leaving it
@@ -5506,9 +5696,10 @@ export class EmbeddedBrowser {
   /**
    * Whether this page's CDP session has to stay attached, and why.
    *
-   * Three features live in session state rather than in the target — device
-   * emulation overrides, the performance counters, and pre-document scripts —
-   * and all three are wiped by the idle detach. They are also independent: a
+   * Four features live in session state rather than in the target — device
+   * emulation overrides, the performance counters, the environment overrides
+   * (timezone / media / offline / geolocation), and pre-document scripts —
+   * and all of them are wiped by the idle detach. They are also independent: a
    * page can be wearing a phone while a script registration is added and removed
    * around it, and unpinning on the last removal used to be the kind of bug that
    * silently turns the emulated phone back into a desktop mid-run.
@@ -5517,7 +5708,9 @@ export class EmbeddedBrowser {
    * exactly one place.
    */
   private syncSessionHold(tab: TabRecord): void {
-    const needed = Boolean(tab.device || tab.perf || (tab.initScripts?.size ?? 0) > 0);
+    const needed = Boolean(
+      tab.device || tab.perf || tab.emulation || (tab.initScripts?.size ?? 0) > 0,
+    );
     this.options.guests?.holdSession?.(tab.id, needed);
   }
 

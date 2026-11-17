@@ -51,6 +51,16 @@ describe("step validation", () => {
     );
   });
 
+  it("requires a URL needle for a response wait, but nothing for load", () => {
+    expect(validateStep({ action: "wait", condition: "response" }, 0).join(" ")).toContain(
+      "需要 expect",
+    );
+    expect(
+      validateStep({ action: "wait", condition: "response", expect: "/api/save" }, 0),
+    ).toEqual([]);
+    expect(validateStep({ action: "wait", condition: "load" }, 0)).toEqual([]);
+  });
+
   it("requires a variable name for read", () => {
     expect(validateStep({ action: "read", label: "订单号" }, 0).join(" ")).toContain("需要 as");
     expect(validateStep({ action: "read", label: "订单号", as: "orderNo" }, 0)).toEqual([]);

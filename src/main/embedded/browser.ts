@@ -58,6 +58,7 @@ import { shouldSleepPage } from "@core/cdp/sleep";
 import type { MissingCredentialReason } from "@core/credentials/vault";
 import { t } from "@core/i18n/translate";
 import { primeDevToolsFrontendLanguage } from "./devtools-language";
+import { flattenPngOntoWhite } from "./png";
 import { type AiPageContext, aiOriginOf } from "@shared/ai-policy";
 import {
   clampZoom,
@@ -5413,6 +5414,7 @@ export class EmbeddedBrowser {
      * error.
      */
     let clip: { x: number; y: number; width: number; height: number; scale?: number } | undefined;
+    let lockedBuffer: Buffer | undefined;
     if (options.target) {
       const spec = options.target;
       const box = await this.withDialogHint(tab, () =>
@@ -5428,36 +5430,162 @@ export class EmbeddedBrowser {
         throw new Error(`元素不在可视区域内，无法截取：${describeTarget(spec)}`);
       }
       /*
-       * `scale` is the reciprocal of the device pixel ratio, and it is not
-       * cosmetic: with `scale: 1` Chromium emits one image pixel per *device*
-       * pixel, so a 200×80 CSS box came back as 300×120 on a 1.5× display. The
-       * caller asked for the element's size, so that is what it gets.
+       * `scale` is the reciprocal of the pixel ratio the capture maps clip CSS
+       * pixels through, and it is not cosmetic: with `scale: 1` Chromium emits
+       * one image pixel per *device* pixel, so a 200×80 CSS box came back as
+       * 300×120 on a 1.5× display. The caller asked for the element's size, so
+       * that is what it gets.
+       *
+       * The ratio to divide by depends on the capture path, and `window
+       * .devicePixelRatio` alone answers for the wrong one: a page zoom (the
+       * fit-to-cell scale a fixed viewport installs, or a Ctrl +/- step) is
+       * baked into it, while the plain compositor capture keeps mapping clip
+       * pixels through the display ratio alone. Using the page's ratio raw made
+       * every zoomed capture come back sized `css / zoom` — bigger than the
+       * element at a fit scale below 1, with the overflow filled by whatever
+       * the compositor had past the layout viewport (page background, scrollbar,
+       * transparent pixels).
        */
-      clip = {
-        ...box.clip,
-        scale: 1 / (box.devicePixelRatio > 0 ? box.devicePixelRatio : 1),
-      };
+      const zoom = this.zoomFactorOf(tab);
+      const displayRatio = zoom > 0 ? box.devicePixelRatio / zoom : box.devicePixelRatio;
+      // A zoomed page has a second problem the scale cannot paper over: the
+      // compositor surface only covers the widget-sized part of the layout
+      // viewport, so the region past it (where a bottom-of-page element sits at
+      // a fit scale below 1) reads back transparent, and the widget-sized frame
+      // plus the zoom factor disagree about how clip pixels map onto it. Such a
+      // capture takes the layout-lock path, which pins the layout, measures the
+      // element there and captures before the pin is lifted — the whole capture
+      // has to live inside the pin. A page at 100% has one geometry and one
+      // ratio; the plain path answers it correctly. A page already wearing a
+      // device keeps its emulation untouched and needs no lock (the override
+      // already owns the layout, and rasterises for it).
+      const needsEmulationLock = Math.abs(zoom - 1) > 0.001 && !tab.device;
+      if (!needsEmulationLock) {
+        clip = {
+          ...box.clip,
+          scale: 1 / (displayRatio > 0 ? displayRatio : 1),
+        };
+      } else {
+        lockedBuffer = await this.captureClipUnderLayoutLock(tab, spec, options);
+      }
     }
-    // A page the user switched away from, or one in a minimised window, has no
-    // compositor frames: the CDP path would stall until its timeout, while the
-    // renderer still paints into an offscreen surface (measured: 41ms and a full
-    // image against a 5s timeout). Decide before priming — priming captures the
-    // *host*, which is exactly the thing that never answers in that state.
-    //
-    // A clip makes this moot: the executor forces the compositor path for a
-    // clipped capture, because the renderer path cannot take a rectangle.
-    const preferRenderer = !this.isOnScreen(tab) && !clip;
-    if (!preferRenderer) {
-      // The embedder has to have painted before its guest can.
-      await this.options.guests?.primeForCapture?.();
-    }
-    const buffer = await tab.cdp.screenshot({
-      format: options.format,
-      quality: options.quality,
-      preferRenderer,
-      ...(clip ? { clip } : {}),
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    });
+    const raw = lockedBuffer ?? (await (async () => {
+      // A page the user switched away from, or one in a minimised window, has no
+      // compositor frames: the CDP path would stall until its timeout, while the
+      // renderer still paints into an offscreen surface (measured: 41ms and a full
+      // image against a 5s timeout). Decide before priming — priming captures the
+      // *host*, which is exactly the thing that never answers in that state.
+      //
+      // A clip makes this moot: the executor forces the compositor path for a
+      // clipped capture, because the renderer path cannot take a rectangle.
+      //
+      // A headless run cannot trust either capture path for a whole-viewport
+      // shot: its window sits at opacity 0, and a page that paints no root
+      // background keeps alpha 0 over every region nothing drew into — the
+      // compositor answers with such a frame and the renderer copies the same
+      // one, so both come back as a mostly-transparent PNG with only the
+      // scrollbar drawn (measured, stable per page, not a timing fluke). The
+      // layout lock is what breaks it: pinning the metrics forces the renderer
+      // to lay out and rasterise the whole viewport for this capture, which is
+      // a clipped capture of the viewport with the pin held around it.
+      if (!clip && this.options.headless === true) {
+        const size = await tab.cdp
+          .evaluate<{ w: number; h: number; dpr: number }>(
+            "(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio || 1 }))()",
+          )
+          .catch(() => undefined);
+        if (size && size.w > 0 && size.h > 0) {
+          const contents = tab.view.webContents;
+          const zoomed = Math.abs(this.zoomFactorOf(tab) - 1) > 0.001;
+          let pinned = false;
+          try {
+            await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
+              width: size.w,
+              height: size.h,
+              deviceScaleFactor: size.dpr,
+              mobile: false,
+            });
+            pinned = true;
+            if (!contents.isDestroyed() && zoomed) {
+              contents.setZoomFactor(1);
+            }
+            return await tab.cdp.screenshot({
+              format: options.format,
+              quality: options.quality,
+              ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+              clip: {
+                x: 0,
+                y: 0,
+                width: size.w,
+                height: size.h,
+                scale: 1 / (size.dpr > 0 ? size.dpr : 1),
+              },
+            });
+          } catch {
+            // Pin failed or the capture under it did: fall through to the
+            // plain paths below rather than reporting a missed screenshot as a
+            // locked-path error.
+          } finally {
+            if (pinned) {
+              await tab.cdp
+                .send("Emulation.clearDeviceMetricsOverride")
+                .catch(() => undefined);
+              if (!contents.isDestroyed() && zoomed) {
+                try {
+                  // Authority over a snapshot: what the page's factor should
+                  // be answers for layout events that moved it mid-capture.
+                  this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
+                } catch {
+                  // A dying page has nothing to restore.
+                }
+              }
+            }
+          }
+        }
+      }
+      // A page the user switched away from, or one in a minimised window, has no
+      // compositor frames: the CDP path would stall until its timeout, while the
+      // renderer still paints into an offscreen surface (measured: 41ms and a full
+      // image against a 5s timeout). Decide before priming — priming captures the
+      // *host*, which is exactly the thing that never answers in that state.
+      //
+      // A clip makes this moot: the executor forces the compositor path for a
+      // clipped capture, because the renderer path cannot take a rectangle.
+      const preferRenderer = !this.isOnScreen(tab) && !clip;
+      if (preferRenderer) {
+        // The renderer stops painting a page whose window it believes is not
+        // shown (a headless run parks the window at opacity 0). `invalidate`
+        // demands one frame anyway; without it `capturePage` copies whatever
+        // stale surface the renderer last kept — measured: a mostly transparent
+        // image at a wrong size, for a page the tool had just read text from.
+        try {
+          if (!tab.view.webContents.isDestroyed()) tab.view.webContents.invalidate();
+          await new Promise((resolve) => setTimeout(resolve, 80));
+        } catch {
+          // A dying page fails the capture below with its own reason.
+        }
+      } else {
+        // The embedder has to have painted before its guest can.
+        await this.options.guests?.primeForCapture?.();
+      }
+      return tab.cdp.screenshot({
+        format: options.format,
+        quality: options.quality,
+        preferRenderer,
+        ...(clip ? { clip } : {}),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      });
+    })());
+    /*
+     * A page without its own root background composites over nothing, and the
+     * frame behind it keeps alpha 0 wherever nothing drew — which is every
+     * region between boxes, and all of it on an empty-looking page. A person
+     * looking at the same page in a browser sees white, because the widget
+     * under the page lays white under the canvas; no capture path carries that
+     * base, so this is where it gets put in. PNG only: JPEG has no alpha, and
+     * a parse failure leaves the capture untouched rather than destroying it.
+     */
+    const buffer = options.format === "jpeg" ? raw : flattenPngOntoWhite(raw);
     mkdirSync(this.options.shotDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const extension = options.format === "jpeg" ? "jpg" : "png";
@@ -5474,6 +5602,132 @@ export class EmbeddedBrowser {
         ? { data: buffer.toString("base64"), mimeType: extension === "jpg" ? "image/jpeg" : "image/png" }
         : {}),
     };
+  }
+
+  /** The page's current zoom factor, or 1 when it cannot be read. */
+  private zoomFactorOf(tab: TabRecord): number {
+    try {
+      const factor = tab.view.webContents.getZoomFactor();
+      return factor > 0 ? factor : 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  /**
+   * One clipped capture taken while the page's layout is pinned by a
+   * device-metrics override, returned as the finished image.
+   *
+   * The plain compositor surface covers only the widget-sized slice of a
+   * zoomed page's layout viewport (measured: at a 0.93 fit scale the pixels
+   * past the widget height read back as transparent, which is a black picture
+   * of a bottom-of-page element). Pinning the layout to the page's own viewport
+   * size makes the surface cover all of it for this one capture — which is why
+   * the whole capture lives inside this method: a rectangle carried out would
+   * be captured after the pin was gone.
+   *
+   * The pin's metrics mirror what the page already sees — its viewport size and
+   * its zoomed pixel ratio — so the re-layout inside the pin is the layout the
+   * page had anyway. The Electron zoom factor is neutralised for the pin: left
+   * up, it stacked with the override and re-laid the page a second time (the
+   * scrollbar alone moved every element), so the rectangle measured under it
+   * framed a stale spot. With the factor at 1 the override alone owns the
+   * geometry, and the element is measured there, after the pin.
+   *
+   * The pin is a moment: it is cleared before returning and the zoom factor is
+   * put back. If the pin is refused (a navigating page, a dead session) the
+   * capture falls back to the plain path — sized for the display ratio, the
+   * same answer the pre-lock code gave.
+   */
+  private async captureClipUnderLayoutLock(
+    tab: TabRecord,
+    spec: TargetInput,
+    options: {
+      format?: "png" | "jpeg";
+      quality?: number;
+      timeoutMs?: number;
+    },
+  ): Promise<Buffer> {
+    const contents = tab.view.webContents;
+    const fallbackClip = async (): Promise<{
+      clip: { x: number; y: number; width: number; height: number; scale: number };
+    }> => {
+      const box = await this.withDialogHint(tab, () =>
+        tab.cdp.evaluate<{
+          clip: { x: number; y: number; width: number; height: number } | null;
+          devicePixelRatio: number;
+        }>(buildElementRectExpression(spec)),
+      );
+      if (!box?.clip) {
+        throw new Error(`元素不在可视区域内，无法截取：${describeTarget(spec)}`);
+      }
+      const zoom = this.zoomFactorOf(tab);
+      const displayRatio = zoom > 0 ? box.devicePixelRatio / zoom : box.devicePixelRatio;
+      return {
+        clip: {
+          ...box.clip,
+          scale: 1 / (displayRatio > 0 ? displayRatio : 1),
+        },
+      };
+    };
+    const probe = await tab.cdp.evaluate<{
+      viewportWidth: number;
+      viewportHeight: number;
+      devicePixelRatio: number;
+    }>(
+      "(() => ({ viewportWidth: innerWidth, viewportHeight: innerHeight, devicePixelRatio: devicePixelRatio || 1 }))()",
+    );
+    try {
+      await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: probe.viewportWidth,
+        height: probe.viewportHeight,
+        deviceScaleFactor: probe.devicePixelRatio,
+        mobile: false,
+      });
+      if (!contents.isDestroyed()) contents.setZoomFactor(1);
+    } catch {
+      // Pin refused: measure in the ordinary layout; the caller captures there.
+      const { clip } = await fallbackClip();
+      return tab.cdp.screenshot({
+        format: options.format,
+        quality: options.quality,
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        clip,
+      });
+    }
+    try {
+      const box = await this.withDialogHint(tab, () =>
+        tab.cdp.evaluate<{
+          clip: { x: number; y: number; width: number; height: number } | null;
+          devicePixelRatio: number;
+        }>(buildElementRectExpression(spec)),
+      );
+      if (!box?.clip) {
+        throw new Error(`元素不在可视区域内，无法截取：${describeTarget(spec)}`);
+      }
+      return await tab.cdp.screenshot({
+        format: options.format,
+        quality: options.quality,
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        clip: {
+          ...box.clip,
+          scale: 1 / (box.devicePixelRatio > 0 ? box.devicePixelRatio : 1),
+        },
+      });
+    } finally {
+      await tab.cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => undefined);
+      // Restored through the authority, not a snapshot: `applyZoom` answers
+      // "what should this page's factor be" (the fit scale a fixed viewport
+      // owns, else the zoom override, else the workspace default), which stays
+      // right even if a layout event moved the factor while the pin held.
+      if (!contents.isDestroyed()) {
+        try {
+          this.applyZoom(tab, tab.zoomOverride ?? this.defaultZoom);
+        } catch {
+          // The page died under the capture; nothing to restore.
+        }
+      }
+    }
   }
 
   /**

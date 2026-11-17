@@ -12,15 +12,18 @@
  *   absent" — the difference between `null` and an error.
  * - A clipped screenshot is smaller than the viewport and matches the element's
  *   own area, which is what proves the rectangle was applied rather than ignored.
+ *   The pixels are also checked: a capture that "succeeds" as a black or
+ *   transparent frame answers no question at all, and size alone cannot see it.
  * - A target outside the viewport is refused instead of quietly returning the
  *   full page.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./lib/e2e-ports.mjs";
+import { analyzePngFile, contentProblem } from "./lib/png-content.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -137,10 +140,12 @@ async function waitForMcp() {
 
 /** Reads a PNG's pixel size from its IHDR chunk, without an image library. */
 function pngSize(path) {
-  const bytes = readFileSync(path);
-  if (bytes.length < 24) return null;
-  if (bytes.toString("ascii", 12, 16) !== "IHDR") return null;
-  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  try {
+    const stat = analyzePngFile(path);
+    return { width: stat.width, height: stat.height };
+  } catch {
+    return null;
+  }
 }
 
 try {
@@ -252,6 +257,18 @@ try {
     typeof full.path === "string" && full.bytes > 0 && fullSize !== null,
     { path: full.path, bytes: full.bytes, fullSize },
   );
+  /*
+   * The page is white with dark text and coloured boxes, so a real capture has
+   * tonal spread and many colours; a black or transparent frame has neither.
+   * This is the assertion the size check could not make — the historical
+   * failure was a capture that came back the right size with every label gone.
+   */
+  const fullStat = analyzePngFile(full.path);
+  check(
+    "the viewport screenshot carries real content, not a black or empty frame",
+    contentProblem(fullStat, { minUniqueColors: 16, minLuminanceStd: 10 }) === null,
+    fullStat,
+  );
 
   const clipped = await call("screenshot_browser_tab", { tabId, selector: "#target-box" });
   const clippedSize = pngSize(clipped.path);
@@ -266,6 +283,22 @@ try {
       Math.abs(clippedSize.width - 200) <= 2 &&
       Math.abs(clippedSize.height - 80) <= 2,
     { clippedSize, expected: { width: 200, height: 80 } },
+  );
+  /*
+   * The box is solid green, so the correct picture is almost single-coloured —
+   * a flat green area with nothing else in it. What must hold is that green
+   * dominates (a mis-framed clip brings page background or a scrollbar in),
+   * nothing is transparent (an unrasterised region reads back alpha-0 and
+   * viewers fill it with black), and the frame is not flat black. Tonal spread
+   * and colour count would punish exactly the shape a correct capture has.
+   */
+  const clippedStat = analyzePngFile(clipped.path);
+  check(
+    "the clipped screenshot shows the element itself, not a black or empty frame",
+    clippedStat.transparentFraction <= 0.01 &&
+      clippedStat.greenFraction >= 0.5 &&
+      clippedStat.meanLuminance > 4,
+    clippedStat,
   );
   check(
     "the clipped image is much smaller than the viewport capture",

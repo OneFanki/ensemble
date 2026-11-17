@@ -28,6 +28,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow } from "./lib/e2e-cdp.mjs";
+import { analyzePngFile, contentProblem } from "./lib/png-content.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -273,6 +274,8 @@ try {
   // 4. A screenshot must come back, and must not wait out the 4s compositor
   //    deadline. A minimised window produces no frames, so the renderer path is
   //    the only one that can answer — taking it late still stalls every call.
+  //    The pixels are checked too: "an image arrived" is not "the image shows
+  //    the page", and a black frame passes every size assertion.
   const shotStart = Date.now();
   let shot = null;
   let shotError = null;
@@ -288,6 +291,14 @@ try {
     (shot?.bytes ?? 0) > 1000 && shotMs < 2500,
     { bytes: shot?.bytes, ms: shotMs },
   );
+  if (shot?.path) {
+    const stat = analyzePngFile(shot.path);
+    check(
+      "the minimised-window screenshot shows the page, not a black or empty frame",
+      contentProblem(stat, { minUniqueColors: 8, minLuminanceStd: 4 }) === null,
+      stat,
+    );
+  }
 
   // 5. Restoring must bring the page back, not leave a blank stage.
   const restored = await main.evaluate(`(async () => {

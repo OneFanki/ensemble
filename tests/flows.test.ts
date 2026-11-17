@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeLoginOutcome,
   interpolate,
   interpolateStep,
+  resolveFlowUrl,
   resolveParams,
   summarizeStep,
   validateFlow,
@@ -226,5 +228,76 @@ describe("step summaries", () => {
     expect(summarizeStep({ action: "read", label: "订单号", as: "orderNo" }).detail).toBe(
       "→ orderNo",
     );
+  });
+});
+
+describe("flow url resolution", () => {
+  // 站点往往不装在域名根上：`/` 开头的路径落在站点的路径前缀下，而不是
+  // `new URL` 标准语义的域名根——那会让每一个首跑的流程都踩坑。
+  const APP = "http://127.0.0.1:44060/app";
+
+  it("joins root-relative paths onto the site's path prefix", () => {
+    expect(resolveFlowUrl("/list", APP)).toBe("http://127.0.0.1:44060/app/list");
+  });
+
+  it("keeps working when the site is at the domain root", () => {
+    expect(resolveFlowUrl("/list", "http://127.0.0.1:44060/")).toBe(
+      "http://127.0.0.1:44060/list",
+    );
+    expect(resolveFlowUrl("/list", "http://127.0.0.1:44060")).toBe("http://127.0.0.1:44060/list");
+  });
+
+  it("resolves bare relative segments by URL rules", () => {
+    // 无尾斜杠的 base 的目录是它的上级，标准语义替换最后一段。
+    expect(resolveFlowUrl("list", APP)).toBe("http://127.0.0.1:44060/list");
+    expect(resolveFlowUrl("list", "http://127.0.0.1:44060/app/")).toBe(
+      "http://127.0.0.1:44060/app/list",
+    );
+  });
+
+  it("allows climbing out of a prefix with ../", () => {
+    // URL 常规：无尾斜杠的 base 最后一段是文件，`../` 先弹它再上溯。
+    expect(resolveFlowUrl("../up", "http://127.0.0.1:44060/app/sub")).toBe(
+      "http://127.0.0.1:44060/up",
+    );
+    // 尾斜杠让 `sub/` 成为目录，`../` 只上溯一级。
+    expect(resolveFlowUrl("../up", "http://127.0.0.1:44060/app/sub/")).toBe(
+      "http://127.0.0.1:44060/app/up",
+    );
+    // `/` 开头的路径先拼上站点前缀，段内 `..` 再规范化。
+    expect(resolveFlowUrl("/list/../detail", APP)).toBe("http://127.0.0.1:44060/app/detail");
+  });
+
+  it("passes absolute addresses through untouched", () => {
+    expect(resolveFlowUrl("http://other.example.com:8080/x?y=1", APP)).toBe(
+      "http://other.example.com:8080/x?y=1",
+    );
+    expect(resolveFlowUrl("https://other.example.com/x", APP)).toBe("https://other.example.com/x");
+  });
+
+  it("keeps query strings and fragments of the joined path", () => {
+    expect(resolveFlowUrl("/list?page=2#row", APP)).toBe(
+      "http://127.0.0.1:44060/app/list?page=2#row",
+    );
+  });
+
+  it("throws a readable error instead of a URL stack trace", () => {
+    expect(() => resolveFlowUrl("/list", "not a url")).toThrow("无法解析地址：/list");
+  });
+});
+
+describe("login outcome line", () => {
+  it("says submitted when the form was submitted for the caller", () => {
+    expect(describeLoginOutcome(true)).toBe("已填入并提交，等待跳转");
+  });
+
+  it("tells the caller to click submit when the site does not auto-submit", () => {
+    expect(describeLoginOutcome(false)).toBe(
+      "已填入；站点未开自动提交，需自行点击提交或开 update_site 的 autoSubmit",
+    );
+  });
+
+  it("reports missing fields before anything about submission", () => {
+    expect(describeLoginOutcome(true, ["验证码"])).toBe("已填入账号密码，缺少字段：验证码");
   });
 });

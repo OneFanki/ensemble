@@ -108,10 +108,12 @@ import {
   ZOOM_STEPS,
 } from "@shared/embedded";
 import {
+  describeLoginOutcome,
   type FlowRunResult,
   type FlowStep,
   type FlowStepResult,
   interpolateStep,
+  resolveFlowUrl,
 } from "@shared/flows";
 import {
   flowScriptValueToString,
@@ -4952,7 +4954,7 @@ export class EmbeddedBrowser {
       const target = this.targetOf(step);
       switch (step.action) {
         case "navigate": {
-          const url = this.resolveFlowUrl(step.url ?? "", options.baseUrl);
+          const url = resolveFlowUrl(step.url ?? "", options.baseUrl);
           await tab.view.webContents.loadURL(url).catch(() => {
             // An error page is the feedback; the navigation itself did happen.
           });
@@ -5001,11 +5003,7 @@ export class EmbeddedBrowser {
         case "login": {
           const filled = await this.fillLogin(tabId);
           if (!filled.ok) throw new Error(`无法填充登录：${filled.reason ?? "unknown"}`);
-          return {
-            detail: filled.missingFields?.length
-              ? `已填入账号密码，缺少字段：${filled.missingFields.join("、")}`
-              : "已填入账号密码",
-          };
+          return { detail: describeLoginOutcome(filled.submitted, filled.missingFields) };
         }
         case "wait": {
           /*
@@ -5255,16 +5253,6 @@ export class EmbeddedBrowser {
       ...(step.role ? { role: step.role } : {}),
       ...(step.exact ? { exact: true } : {}),
     };
-  }
-
-  /** A step's url may be absolute or a path relative to the flow's site. */
-  private resolveFlowUrl(url: string, baseUrl: string): string {
-    if (/^https?:\/\//i.test(url)) return url;
-    try {
-      return new URL(url, baseUrl).toString();
-    } catch {
-      throw new Error(`无法解析地址：${url}`);
-    }
   }
 
   /**

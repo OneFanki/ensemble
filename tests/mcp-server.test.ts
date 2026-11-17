@@ -405,6 +405,47 @@ describe("MCP tools", () => {
     expect(service.snapshot().sites).toHaveLength(0);
   });
 
+  it("rewrites a bad step action into a step-numbered message", async () => {
+    const env = await rpc(
+      toolCall("create_site", { name: "流程校验环境", baseUrl: "http://localhost:3000" }),
+    );
+    const site = JSON.parse(env.json.result.content[0].text);
+
+    const bad = await rpc(
+      toolCall("save_flow", {
+        siteId: site.id,
+        name: "打错的动作",
+        steps: [{ action: "clck", text: "创建租户" }],
+      }),
+    );
+    expect(bad.json.result.isError).toBe(true);
+    const message = bad.json.result.content[0].text;
+    expect(message).toContain("第 1 步（action）只支持 navigate/fill");
+    expect(message).toContain("收到 clck");
+  });
+
+  it("rewrites a bad wait condition with its step number too", async () => {
+    const env = await rpc(
+      toolCall("create_site", { name: "流程校验环境二", baseUrl: "http://localhost:3000" }),
+    );
+    const site = JSON.parse(env.json.result.content[0].text);
+
+    const bad = await rpc(
+      toolCall("save_flow", {
+        siteId: site.id,
+        name: "打错的条件",
+        steps: [
+          { action: "navigate", url: "/login" },
+          { action: "wait", condition: "visable", label: "登录按钮" },
+        ],
+      }),
+    );
+    expect(bad.json.result.isError).toBe(true);
+    const message = bad.json.result.content[0].text;
+    expect(message).toContain("第 2 步（condition）只支持 visible/hidden");
+    expect(message).toContain("收到 visable");
+  });
+
   it("keeps delete disabled by default and requires an explicit confirm", async () => {
     const env = await rpc(
       toolCall("create_site", { name: "可删环境", baseUrl: "http://localhost:3000" }),

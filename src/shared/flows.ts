@@ -186,6 +186,44 @@ export function interpolateStep(step: FlowStep, vars: Record<string, string>): F
 }
 
 /**
+ * Resolves a flow step's address against the flow's site.
+ *
+ * 站点往往不装在域名根上（baseUrl 带路径，例如 `…/app`），而步骤写的是
+ * 「站点内的位置」，所以 `/` 开头的路径按站点根拼接：`/list` + `…/app`
+ * 落在 `…/app/list`，而不是 `new URL` 标准语义给出的 `…/list`。不以 `/`
+ * 开头的相对段按 URL 常规解析（相对 base 的目录，`../` 可上溯），绝对
+ * 地址原样。
+ */
+export function resolveFlowUrl(url: string, baseUrl: string): string {
+  const target = url.trim();
+  if (/^https?:\/\//i.test(target)) return target;
+  try {
+    if (target.startsWith("/")) {
+      const base = new URL(baseUrl);
+      const prefix = base.pathname.replace(/\/+$/, "");
+      // `new URL` 顺手把拼接结果里的 `.`/`..` 规范化掉，上溯不会逃出语义。
+      return new URL(`${base.origin}${prefix}${target}`).toString();
+    }
+    return new URL(target, baseUrl).toString();
+  } catch {
+    throw new Error(`无法解析地址：${url}`);
+  }
+}
+
+/**
+ * One line describing what a login step did, so the caller knows what to
+ * expect next: a redirect (submitted) or a button still to click.
+ */
+export function describeLoginOutcome(submitted?: boolean, missingFields?: string[]): string {
+  if (missingFields?.length) {
+    return `已填入账号密码，缺少字段：${missingFields.join("、")}`;
+  }
+  return submitted
+    ? "已填入并提交，等待跳转"
+    : "已填入；站点未开自动提交，需自行点击提交或开 update_site 的 autoSubmit";
+}
+
+/**
  * Checks one step in isolation.
  *
  * Every message names the field that is missing rather than saying "invalid

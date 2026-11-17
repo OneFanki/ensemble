@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname } from "node:path";
+import { ZodError } from "zod";
 import type { ElementTarget, WaitResult } from "@core/cdp/inspect";
 import type { WorkspaceService } from "@core/service";
 import { JsonStore } from "@core/storage/json-store";
@@ -22,7 +23,7 @@ import {
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
 } from "@shared/embedded";
-import type { Flow, FlowRunResult, FlowStep } from "@shared/flows";
+import type { Flow, FlowDraft, FlowRunResult, FlowStep } from "@shared/flows";
 import {
   FLOW_ACTIONS,
   FLOW_TIMEOUT_DEFAULT_MS,
@@ -645,6 +646,48 @@ function object(
   required: string[] = [],
 ): Record<string, unknown> {
   return { type: "object", properties, required, additionalProperties: false };
+}
+
+/** 按 issue 的 path 从原始入参里取回收到的值；字符串直接展示，其余 JSON 化。 */
+function receivedValue(args: unknown, path: (string | number | symbol)[]): string {
+  let current: unknown = args;
+  for (const key of path) {
+    if (current === null || typeof current !== "object") return String(current);
+    current = (current as Record<string | number | symbol, unknown>)[key];
+  }
+  return typeof current === "string" ? current : JSON.stringify(current);
+}
+
+/**
+ * save_flow 的入参解析。
+ *
+ * 步骤的 action 与 condition 是枚举，写错时 zod 的原文
+ * （"Invalid option: expected one of …"）既不指出第几步也不是业务语言，
+ * 和 validateFlow 的「第 N 步（…）…」风格脱节；这两类错误在这里重写成
+ * 同一句话式，其余字段的错误保持 zod 原样。
+ */
+function parseFlowDraft(args: unknown): FlowDraft {
+  try {
+    return flowDraftSchema.parse(args);
+  } catch (error) {
+    if (!(error instanceof ZodError)) throw error;
+    const rewritten = error.issues.map((issue): string | undefined => {
+      if (issue.code !== "invalid_value") return undefined;
+      const [steps, index, field] = issue.path;
+      if (steps !== "steps" || typeof index !== "number") return undefined;
+      if (field === "action") {
+        return `第 ${index + 1} 步（action）只支持 ${FLOW_ACTIONS.join("/")}，收到 ${receivedValue(args, issue.path)}`;
+      }
+      if (field === "condition") {
+        return `第 ${index + 1} 步（condition）只支持 ${WAIT_CONDITIONS.join("/")}，收到 ${receivedValue(args, issue.path)}`;
+      }
+      return undefined;
+    });
+    if (!rewritten.some((message) => message !== undefined)) throw error;
+    throw new Error(
+      error.issues.map((issue, position) => rewritten[position] ?? issue.message).join("；"),
+    );
+  }
 }
 
 /**
@@ -2596,7 +2639,9 @@ export class McpServer {
                 exact: { type: "boolean", description: "文字必须完全相等" },
                 note: string("这一步在做什么，写给人看"),
                 value: string("要填入的值，可用 {{参数}}"),
-                url: string("navigate 的地址，可写相对站点根目录的路径"),
+                url: string(
+                  "navigate 的地址。绝对 http(s) 地址原样；以 / 开头时按站点根路径拼接（站点 baseUrl 带路径前缀时不会丢失，例如站点是 …/app 则 /list 落在 …/app/list）；其余相对段按 URL 常规解析，支持 ../ 上溯",
+                ),
                 option: string("select 要选的选项文字"),
                 key: string(
                   "press 的按键：Enter / Escape / Tab / Backspace / Delete / ArrowUp / ArrowDown / ArrowLeft / ArrowRight / 空格",
@@ -2620,7 +2665,7 @@ export class McpServer {
           },
           ["siteId", "name", "steps"],
         ),
-        run: (args) => service.saveFlow(flowDraftSchema.parse(args)),
+        run: (args) => service.saveFlow(parseFlowDraft(args)),
       },
       {
         name: "delete_flow",

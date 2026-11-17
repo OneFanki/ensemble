@@ -68,6 +68,20 @@ export interface CdpExecutor {
     params?: Record<string, unknown>,
     options?: { timeoutMs?: number },
   ): Promise<T>;
+  /**
+   * Runs a command without counting as AI activity.
+   *
+   * `send` marks the page active first: AI-facing commands must wake a page the
+   * sleep sweep froze. Observers must not — a pure read of the page's state
+   * (performance sampling) that kept the page awake would be the sampler
+   * changing the thing it measures, and a page would never return to sleep
+   * while anyone was watching it.
+   */
+  sendQuiet<T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<T>;
   lifecycle(state: "frozen" | "active"): Promise<void>;
   evaluate<T>(
     expression: string,
@@ -425,6 +439,22 @@ export class EmbeddedCdp implements CdpExecutor {
     } finally {
       this.pending -= 1;
     }
+  }
+
+  /**
+   * Same transport as {@link send}.
+   *
+   * This carrier has no activity hook to skip — the wake-on-traffic behaviour
+   * lives in the guest executor — so quiet only means "identical, by contract".
+   * Declaring it here rather than letting the caller fall back to `send` keeps
+   * the observer's intent true on both carriers.
+   */
+  async sendQuiet<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    return this.send<T>(method, params, options);
   }
 
   /**

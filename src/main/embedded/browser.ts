@@ -7335,7 +7335,9 @@ export class EmbeddedBrowser {
       owner,
     };
     try {
-      await tab.cdp.send("Performance.enable");
+      // Quiet channel: enabling the counters is observation, and a sampling
+      // start must not wake the page it is about to measure.
+      await tab.cdp.sendQuiet("Performance.enable");
     } catch {
       // A page that cannot be sampled reports an empty series rather than an
       // error: the panel is still useful for reading the device tab.
@@ -7358,9 +7360,19 @@ export class EmbeddedBrowser {
       const interval = now - tab.perf.firstAt;
       tab.perf.firstAt = now;
       try {
-        const response = await tab.cdp.send<{ metrics?: Array<{ name: string; value: number }> }>(
-          "Performance.getMetrics",
-        );
+        /*
+         * The heartbeat rides the quiet channel, and that is what lets a
+         * sampled page go back to sleep. `send` marks CDP traffic as AI
+         * activity, so the sampler's own 5 Hz read used to keep re-arming the
+         * sleep grace — an AI read started the sampler, the sampler kept the
+         * page awake, and "the page returns to sleep once AI traffic stops"
+         * never happened until sampling itself timed out. Watching must not
+         * hold the page awake: a frozen page just stops producing new
+         * readings, and the AI idle timer still retires the sampler.
+         */
+        const response = await tab.cdp.sendQuiet<{
+          metrics?: Array<{ name: string; value: number }>;
+        }>("Performance.getMetrics");
         const raw: RawMetrics = {};
         for (const item of response?.metrics ?? []) {
           (raw as Record<string, number>)[item.name] = item.value;

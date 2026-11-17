@@ -153,6 +153,27 @@ export class GuestCdp implements CdpExecutor {
     return this.target.send<T>(this.guest(), method, params, options);
   }
 
+  /**
+   * Sends without marking the page active — the observer's channel.
+   *
+   * `send` wakes a sleeping page first, which is right for AI commands and
+   * wrong for pure observation: the performance sampler's own heartbeat went
+   * through `send`, so its 5 Hz `Performance.getMetrics` kept re-arming the
+   * sleep grace and the page stayed awake for as long as anyone sampled it.
+   * An observation must not change what it observes — a page an agent read
+   * once has to be able to fall back asleep while the sampler keeps running.
+   *
+   * `lifecycle()` skips `touch()` for the mirrored reason: the sleep sweep's
+   * own freeze must not count as activity.
+   */
+  async sendQuiet<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    return this.target.send<T>(this.guest(), method, params, options);
+  }
+
   lifecycle(state: "frozen" | "active"): Promise<void> {
     // No `touch()` here on purpose: the sleep sweep calls this to freeze a page,
     // and marking its own command as AI activity would keep the page awake

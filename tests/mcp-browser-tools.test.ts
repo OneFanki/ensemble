@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FLOW_ACTIONS, WAIT_CONDITIONS } from "../src/shared/flows";
 import type { EmbeddedSurface } from "../src/main/mcp/server";
 import {
   describeToolAction,
@@ -320,6 +321,7 @@ function fakeSurface(): EmbeddedSurface {
     },
     defaultViewId: () => "view-1",
     layoutTargetView: () => "view-1",
+    surfaceName: () => "embedded",
     openView: async (viewId) => {
       calls.push({ method: "openView", args: [viewId] });
       return { views: [{ id: "view-1", name: "视图", layoutId: "2x2" }] };
@@ -407,6 +409,7 @@ describe("browser tools are advertised", () => {
     const names = json.result.tools.map((tool: { name: string }) => tool.name);
     for (const expected of [
       "list_browser_tabs",
+      "read_browser_capabilities",
       "open_browser_tab",
       "navigate_browser_tab",
       "read_browser_page",
@@ -940,6 +943,112 @@ describe("browser tool calls", () => {
     const entry = JSON.parse(log[log.length - 1]!);
     expect(entry.tool).toBe("list_browser_tabs");
     expect(entry.ok).toBe(true);
+  });
+});
+
+describe("capability reporting", () => {
+  /**
+   * The shared fake plus every optional member. This is the "all present"
+   * pole of the report; the plain `fakeSurface()` is the other pole, because
+   * it only implements the optional methods some of its tests actually drive.
+   */
+  function fullSurface(): EmbeddedSurface {
+    return {
+      ...fakeSurface(),
+      actionFacts: () => ({ origin: "", title: "" }),
+      measurePerformance: async () => ({}),
+      readPerfHistory: async () => ({}),
+      setMuted: () => ({}),
+      muteForAi: () => {},
+      openViewContainer: () => "view-1",
+      addInitScript: async () => ({ scriptId: "s1" }),
+      listInitScripts: () => [],
+      removeInitScript: async () => {},
+      cancelScript: async () => {},
+    };
+  }
+
+  it("answers the static enums without touching the surface when no tabId is given", async () => {
+    await startServer(fakeSurface());
+    const { json } = await rpc(toolCall("read_browser_capabilities", {}));
+    const payload = toolPayload(json) as Record<string, unknown>;
+    // Compared against the imported constants, not a copied literal: the enum
+    // lists are allowed to grow, and this assertion follows them.
+    expect(payload).toEqual({
+      waitConditions: [...WAIT_CONDITIONS],
+      flowActions: [...FLOW_ACTIONS],
+      flowCdpStep: { available: true, gatedTierSetting: "flowCdpExtended" },
+    });
+    expect(payload).not.toHaveProperty("surface");
+    expect(payload).not.toHaveProperty("capabilities");
+    // No tab resolved, no surface method asked for: the static half has no
+    // page to answer for.
+    expect(calls).toHaveLength(0);
+  });
+
+  it("answers the static enums on a host with no surface at all", async () => {
+    await startServer();
+    const { json } = await rpc(toolCall("read_browser_capabilities", {}));
+    expect(json.result.isError).toBeUndefined();
+    const payload = toolPayload(json) as { waitConditions: string[]; flowActions: string[] };
+    expect(payload.waitConditions).toEqual([...WAIT_CONDITIONS]);
+    expect(payload.flowActions).toEqual([...FLOW_ACTIONS]);
+  });
+
+  it("reports the surface name and measured capabilities for a tab", async () => {
+    await startServer(fullSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(toolCall("read_browser_capabilities", { tabId: "tab-1" }));
+    const payload = toolPayload(json) as {
+      surface: string;
+      capabilities: Record<string, boolean>;
+      waitConditions: string[];
+    };
+    expect(payload.surface).toBe("embedded");
+    expect(Object.values(payload.capabilities).every(Boolean)).toBe(true);
+    // Existence checks on the surface object only: a capability report must
+    // not drive the page it names.
+    expect(calls.filter((call) => call.method !== "createTab")).toHaveLength(0);
+  });
+
+  it("reports false for the optional methods the host did not implement", async () => {
+    // The shared fake implements readPageActivity / readRequests / setEmulation
+    // and none of the other optional members — the shape of a surface whose
+    // carrier cannot sample, emulate or inject.
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
+    const { json } = await rpc(
+      toolCall("read_browser_capabilities", { tabId: "tab-1" }),
+    );
+    const payload = toolPayload(json) as {
+      surface: string;
+      capabilities: Record<string, boolean>;
+    };
+    expect(payload.surface).toBe("embedded");
+    expect(payload.capabilities).toMatchObject({
+      readPageActivity: true,
+      readRequests: true,
+      setEmulation: true,
+      measurePerformance: false,
+      readPerfHistory: false,
+      setMuted: false,
+      openViewContainer: false,
+      addInitScript: false,
+      listInitScripts: false,
+      removeInitScript: false,
+      cancelScript: false,
+    });
+  });
+
+  it("reports the surface as unknown when the host does not name itself", async () => {
+    // `surfaceName` is optional: a host that skips it still gets a full and
+    // usable report, only without a label to tell built-in from external.
+    const { surfaceName: _unnamed, ...rest } = fullSurface();
+    await startServer(rest as EmbeddedSurface);
+    const { json } = await rpc(toolCall("read_browser_capabilities", { tabId: "tab-1" }));
+    const payload = toolPayload(json) as { surface: string; capabilities: Record<string, boolean> };
+    expect(payload.surface).toBe("unknown");
+    expect(payload.capabilities).toBeTruthy();
   });
 });
 

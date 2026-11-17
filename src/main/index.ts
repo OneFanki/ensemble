@@ -4483,6 +4483,8 @@ if (!gotLock) {
       },
       embedded: {
         state: () => ensureEmbeddedBrowser().state(),
+        // 能力清单工具原样上报的名字：MCP 的浏览器工具都走内置表面。
+        surfaceName: () => "embedded",
         createTab: async (input) => {
           const browser = ensureEmbeddedBrowser();
           const viewId = browser.defaultViewId();

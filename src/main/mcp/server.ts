@@ -468,6 +468,13 @@ export interface EmbeddedSurface {
   defaultTabId(requested?: string): string;
   /** Id of the view on stage, so layout tools do not need one spelled out. */
   defaultViewId(): string | undefined;
+  /**
+   * 这块表面自己的名字，例如 "embedded"。
+   *
+   * 能力清单工具把它原样报给调用方，用来区分内置与外部等不同宿主实现。
+   * 可选：没实现时工具报 "unknown"，清单的其余部分照常工作。
+   */
+  surfaceName?(): string;
   /** View a layout call should use; may group loose tabs into a new one. */
   layoutTargetView(layoutId?: string): string | undefined;
   /** Opens a saved view definition as a container on the built-in surface. */
@@ -508,6 +515,76 @@ export interface EmbeddedSurface {
    * that moment, so it resumes unaffected.
    */
   cancelScript?(tabId: string): Promise<void>;
+}
+
+/**
+ * The names of every optional member of {@link EmbeddedSurface}.
+ *
+ * Derived from the interface itself: a member whose type includes `undefined`
+ * (that is what `?` means to the type system) lands in this union. When a new
+ * optional method is added to the interface, {@link surfaceCapabilities} stops
+ * compiling until its report covers it — the completeness of the capability
+ * report is guarded by the compiler, not by someone remembering.
+ */
+type OptionalSurfaceMethod = Exclude<
+  {
+    [K in keyof EmbeddedSurface]-?: undefined extends EmbeddedSurface[K] ? K : never;
+  }[keyof EmbeddedSurface],
+  "surfaceName"
+>;
+
+/**
+ * Reports which optional surface methods exist, by checking the object.
+ *
+ * The answer has to come from the surface itself, not from a table written
+ * beside the interface: a host without CDP (an external browser, a future
+ * CLI carrier) implements fewer methods, and a static table would keep
+ * promising capabilities that object never had. Every browser tool already
+ * guards the same methods with `if (!method) throw` — this is the one place
+ * a caller can ask before trying.
+ */
+function surfaceCapabilities(surface: EmbeddedSurface): Record<OptionalSurfaceMethod, boolean> {
+  const present = (method: OptionalSurfaceMethod): boolean =>
+    typeof surface[method] === "function";
+  return {
+    aiPageContext: present("aiPageContext"),
+    actionFacts: present("actionFacts"),
+    readPageActivity: present("readPageActivity"),
+    readRequests: present("readRequests"),
+    setEmulation: present("setEmulation"),
+    measurePerformance: present("measurePerformance"),
+    readPerfHistory: present("readPerfHistory"),
+    setMuted: present("setMuted"),
+    muteForAi: present("muteForAi"),
+    openViewContainer: present("openViewContainer"),
+    addInitScript: present("addInitScript"),
+    listInitScripts: present("listInitScripts"),
+    removeInitScript: present("removeInitScript"),
+    cancelScript: present("cancelScript"),
+  };
+}
+
+/**
+ * The enums that do not depend on a surface: wait conditions, flow actions,
+ * and the tier story of the flow's raw CDP step.
+ *
+ * Imported from the shared constants — the same source the zod schemas and the
+ * tool input schemas derive from. A hand-copied list would drift the first
+ * time a condition or action type was added.
+ */
+function staticCapabilities() {
+  return {
+    waitConditions: [...WAIT_CONDITIONS],
+    flowActions: [...FLOW_ACTIONS],
+    flowCdpStep: {
+      // Derived, not asserted: remove `cdp` from FLOW_ACTIONS and this flips
+      // without anyone editing this file.
+      available: FLOW_ACTIONS.includes("cdp"),
+      // The gated tier is unlocked by this setting; the deny tier is not a
+      // setting (see `core/cdp/flow-whitelist.ts`).
+      gatedTierSetting: "flowCdpExtended",
+    },
+  };
 }
 
 const string = (description: string) => ({ type: "string", description });
@@ -3220,6 +3297,27 @@ export class McpServer {
         kind: "read",
         inputSchema: object({}),
         run: () => surface().state(),
+      },
+      {
+        name: "read_browser_capabilities",
+        description:
+          "查询这个标签页所在表面支持什么。capabilities 逐项报告表面的可选能力（键为能力名，false 表示当前宿主没有实现，对应的工具会报「不支持」），surface 是表面标识（如 embedded）；waitConditions 是 wait_browser 可用的条件，flowActions 是流程步骤的动作类型，flowCdpStep 说明流程原始 CDP 步骤的档位。省略 tabId 只返回枚举部分，不判定表面。",
+        kind: "read",
+        inputSchema: object({ tabId: tabIdProp() }),
+        run: (args) => {
+          if (typeof args["tabId"] !== "string" || !args["tabId"]) {
+            return staticCapabilities();
+          }
+          // 与其它浏览器工具同一条解析路径：没有标签页时同样报错，而不是发一份
+          // 没有宿主可对号的能力清单。
+          tabId(args);
+          const current = surface();
+          return {
+            surface: current.surfaceName?.() ?? "unknown",
+            capabilities: surfaceCapabilities(current),
+            ...staticCapabilities(),
+          };
+        },
       },
       {
         name: "open_browser_view",

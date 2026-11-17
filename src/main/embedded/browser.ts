@@ -7,6 +7,9 @@ import {
   buildCheckExpression,
   buildClickHitExpression,
   buildDragPointsExpression,
+  buildDragProbeExpression,
+  buildDragReorderExpression,
+  buildDragResultExpression,
   buildElementInfoExpression,
   buildElementPointExpression,
   buildElementRectExpression,
@@ -4047,8 +4050,13 @@ export class EmbeddedBrowser {
     selector?: string;
     /** 直连定位命中多个时的非致命提醒；句柄与显式 nth 路径不产生。 */
     warning?: string;
-    /** Where the events actually landed; `onTarget: false` means they missed. */
+    /**
+     * 命中判定，以按下瞬间为基准：`onTarget` 只在按下时刻与松开后回读都不在
+     * 目标上才为 false。`tag`/`text` 是按下时刻实际接收按下的元素。
+     */
     hit?: { onTarget: boolean; tag?: string; text?: string };
+    /** 松开后的回读；点击处理里替换过 DOM 时它与 hit 不同，不代表点击没生效。 */
+    hitAfter?: { onTarget: boolean; tag?: string; text?: string };
   }> {
     const tab = this.requireTab(tabId);
     const effective = await this.resolveActionTarget(tab, target);
@@ -4063,17 +4071,31 @@ export class EmbeddedBrowser {
     }
     const px = point.x;
     const py = point.y;
-    await this.withDialogHint(tab, () => tab.cdp.clickAt(px, py));
-    // An overlay, a late scroll or a re-render can redirect the events. Reading
-    // the hit back turns "the site ignored my click" from a guess into a fact
-    // the caller can act on.
-    let hit: { onTarget: boolean; tag?: string; text?: string } | undefined;
+    /*
+     * clickAt 在 mousePressed 之前读一次命中（按下时刻），这里在松开之后再读
+     * 一次作回验。页面在点击处理里替换 DOM 时（按钮换掉自己、行被重渲染），
+     * 回读看到的是新元素——按按下时刻的读数那样判成 miss，就是 T4 里那种
+     * 「点击明明生效了却报 onTarget:false」的误报。所以 onTarget 取两者的或：
+     * 两次都不在目标上才算真 miss。回读仍保留为 hitAfter，供调用方看出
+     * 「点击后 DOM 动过」这个事实。
+     */
+    const pressHit = await this.withDialogHint(tab, () => tab.cdp.clickAt(px, py));
+    let hitAfter: { onTarget: boolean; tag?: string; text?: string } | undefined;
     try {
-      hit = await tab.cdp.evaluate(buildClickHitExpression(point.x, point.y));
+      hitAfter = await tab.cdp.evaluate(buildClickHitExpression(point.x, point.y));
     } catch {
       // Navigation right after the click destroys the context; the click still
       // happened, so the result is reported without hit facts.
     }
+    const onTarget = pressHit?.onTarget === true || hitAfter?.onTarget === true;
+    const hitTag = pressHit?.tag ?? hitAfter?.tag;
+    const hitText = pressHit?.text ?? hitAfter?.text;
+    const haveHit = pressHit !== null || hitAfter !== undefined;
+    const hit: { onTarget: boolean; tag?: string; text?: string } = {
+      onTarget,
+      ...(hitTag ? { tag: hitTag } : {}),
+      ...(hitText ? { text: hitText } : {}),
+    };
     const warning = multiMatchWarning(effective, point.matchCount);
     return {
       ok: true,
@@ -4081,7 +4103,8 @@ export class EmbeddedBrowser {
       ...(point.text ? { text: point.text } : {}),
       ...(point.selector ? { selector: point.selector } : {}),
       ...(warning ? { warning } : {}),
-      ...(hit ? { hit } : {}),
+      ...(haveHit ? { hit } : {}),
+      ...(hitAfter ? { hitAfter } : {}),
     };
   }
 
@@ -4129,9 +4152,13 @@ export class EmbeddedBrowser {
    * instead of the page. Without one, the viewport scrolls. `deltaY` is positive
    * downwards.
    *
-   * The reported `scrolled` is read back after the wheel event: a page that is
-   * already at its end moves nowhere, and a flow that then looks for new content
-   * would be waiting on a scroll that never happened.
+   * `scrolled` is the *real* displacement, read back from the page after the
+   * wheel: before the dispatch, every scrollable element on the chain under the
+   * point (plus the document scroller) is snapshotted; after the wheel stops
+   * moving, the same elements are read again and the report is the largest
+   * per-element difference. A page already at its end moves nowhere and reports
+   * `{ x: 0, y: 0 }` / `moved: false`, so a flow does not wait for content a
+   * no-op scroll will never reveal.
    */
   async scroll(
     tabId: string,
@@ -4146,26 +4173,40 @@ export class EmbeddedBrowser {
      * Which element actually scrolls is not knowable from the call.
      *
      * `scrollTop` on the document is one answer; a nested container is another,
-     * and a wheel event over that container moves *it*, not the page. Reading only
-     * `window.scrollY` therefore reported `moved: false` for the exact case this
-     * tool exists for. So the observer is injected first: it walks up from
-     * whatever sits under the point and records the scroll position of the first
-     * scrollable ancestor (or the document), then reports the change.
+     * and a wheel event over that container moves *it*, not the page. Reading a
+     * single guessed container therefore reported `moved: false` for scrolls
+     * that had in fact happened — scroll chaining can move a different element
+     * than the one the walk-up finds first, and a body-scrolled page never shows
+     * up in a walk that stops at `body`. So the snapshot covers the whole chain
+     * of scrollable ancestors under the point, plus the document scroller, and
+     * the report is whichever element actually moved the most.
      */
-    const observer = `
+    const collectProbe = (px: number, py: number) => `
       (() => {
-        if (window.__ensembleScrollProbe) return window.__ensembleScrollProbe.read();
-        const read = () => {
-          const target = window.__ensembleScrollProbe?.element;
-          if (target && target !== document.scrollingElement) {
-            return { x: target.scrollLeft, y: target.scrollTop };
+        const chain = [];
+        const seen = new Set();
+        let node = document.elementFromPoint(${JSON.stringify(px)}, ${JSON.stringify(py)});
+        while (node && node.nodeType === 1 && !seen.has(node)) {
+          seen.add(node);
+          const style = getComputedStyle(node);
+          const scrollsY = /^(auto|scroll|overlay)$/.test(style.overflowY) && node.scrollHeight > node.clientHeight;
+          const scrollsX = /^(auto|scroll|overlay)$/.test(style.overflowX) && node.scrollWidth > node.clientWidth;
+          if (scrollsY || scrollsX) chain.push(node);
+          node = node.parentElement;
+        }
+        const root = document.scrollingElement || document.documentElement;
+        if (!chain.includes(root)) chain.push(root);
+        if (document.body && !chain.includes(document.body)) {
+          const bodyStyle = getComputedStyle(document.body);
+          if (/^(auto|scroll|overlay)$/.test(bodyStyle.overflowY) && document.body.scrollHeight > document.body.clientHeight) {
+            chain.push(document.body);
           }
-          const root = document.scrollingElement || document.documentElement;
-          return { x: root.scrollLeft, y: root.scrollTop };
+        }
+        window.__ensembleScrollProbe = {
+          els: chain,
+          read: () => window.__ensembleScrollProbe.els.map((el) => ({ x: el.scrollLeft, y: el.scrollTop })),
         };
-        const probe = { element: null, read };
-        window.__ensembleScrollProbe = probe;
-        return read();
+        return window.__ensembleScrollProbe.read();
       })()
     `;
 
@@ -4183,25 +4224,6 @@ export class EmbeddedBrowser {
       x = point.x;
       y = point.y;
       warning = multiMatchWarning(scrollTarget, point.matchCount);
-      // Point the probe at the scrollable ancestor of the target the caller named,
-      // so the before/after reading is about the thing they asked to move.
-      await tab.cdp.evaluate(`
-        (() => {
-          ${observer};
-          const el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
-          let node = el;
-          while (node && node !== document.body) {
-            const style = getComputedStyle(node);
-            if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) {
-              window.__ensembleScrollProbe.element = node;
-              return true;
-            }
-            node = node.parentElement;
-          }
-          window.__ensembleScrollProbe.element = null;
-          return false;
-        })()
-      `);
     } else {
       // The viewport's centre: a wheel at a corner can land on a scrollbar or
       // outside the content area of a page that pads its body.
@@ -4210,25 +4232,58 @@ export class EmbeddedBrowser {
       );
       x = Math.round(size.width / 2);
       y = Math.round(size.height / 2);
-      await tab.cdp.evaluate(`(() => { ${observer}; window.__ensembleScrollProbe.element = null; return true; })()`);
     }
-    const before = await tab.cdp.evaluate<{ x: number; y: number }>(
-      `window.__ensembleScrollProbe.read()`,
+    const before = await tab.cdp.evaluate<Array<{ x: number; y: number }>>(
+      collectProbe(Math.round(x), Math.round(y)),
     );
     await this.withDialogHint(tab, () => tab.cdp.scrollAt(x, y, options.deltaX ?? 0, options.deltaY ?? 0));
-    // A wheel event is queued against the compositor, not applied synchronously.
-    // Reading in the same tick measured the pre-scroll position and reported
-    // `moved: false` for a scroll that had in fact happened.
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    const after = await tab.cdp.evaluate<{ x: number; y: number }>(
-      `window.__ensembleScrollProbe.read()`,
-    );
+    const after = await this.waitForScrollToSettle(tab);
+    // Displacement per element on the chain; the report is the one that moved
+    // most. Reading a single fixed container is how a chained scroll (inner list
+    // already at its end, so the page itself moves) got reported as nothing.
+    let scrolled = { x: 0, y: 0 };
+    const span = Math.max(before.length, after.length);
+    for (let index = 0; index < span; index += 1) {
+      const was = before[index] ?? { x: 0, y: 0 };
+      const now = after[index] ?? { x: 0, y: 0 };
+      const dx = now.x - was.x;
+      const dy = now.y - was.y;
+      if (Math.abs(dx) + Math.abs(dy) > Math.abs(scrolled.x) + Math.abs(scrolled.y)) {
+        scrolled = { x: dx, y: dy };
+      }
+    }
     return {
       ok: true,
-      scrolled: after,
-      moved: after.x !== before.x || after.y !== before.y,
+      scrolled,
+      moved: scrolled.x !== 0 || scrolled.y !== 0,
       ...(warning ? { warning } : {}),
     };
+  }
+
+  /**
+   * Reads the scroll probe repeatedly until the positions stop changing.
+   *
+   * A wheel event is queued against the compositor, not applied synchronously,
+   * and pages with `scroll-behavior: smooth` (or their own wheel handlers) scroll
+   * as an animation: a single read 80ms later measured the pre-scroll position,
+   * or a mid-animation one, and reported `moved: false` for a scroll that had in
+   * fact happened. Two identical reads in a row is the honest stop condition.
+   */
+  private async waitForScrollToSettle(tab: TabRecord): Promise<Array<{ x: number; y: number }>> {
+    const read = async (): Promise<Array<{ x: number; y: number }>> =>
+      tab.cdp.evaluate<Array<{ x: number; y: number }>>("window.__ensembleScrollProbe.read()");
+    const deadline = Date.now() + 1_200;
+    let previous = await read().catch(() => []);
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const current = await read().catch(() => []);
+      const settled =
+        previous.length === current.length &&
+        previous.every((p, i) => p.x === current[i]?.x && p.y === current[i]?.y);
+      if (settled) return current;
+      previous = current;
+    }
+    return previous;
   }
 
   /**
@@ -4342,9 +4397,14 @@ export class EmbeddedBrowser {
    *
    * Both ends resolve in one page call so they describe the same layout: a
    * re-render between two round trips could move the target and the press would
-   * start from a stale coordinate. `moved: false` reports a page whose drag
-   * handler never fired, which is the difference between "the drop did nothing"
-   * and "the drag never started".
+   * start from a stale coordinate.
+   *
+   * The dispatch sequence succeeding means nothing on its own, so the page is
+   * asked afterwards whether the drag actually arrived: capture-phase listeners
+   * record every `dragstart` / `dragover` / `drop` the page receives, with the
+   * drop's coordinates. `dropped: false`, or a drop whose coordinates are far
+   * from the release point, is reported as a warning instead of a bare ok —
+   * a drag the page never received must not read as success.
    */
   async drag(
     tabId: string,
@@ -4356,6 +4416,14 @@ export class EmbeddedBrowser {
     toTag?: string;
     fromText?: string;
     toText?: string;
+    /** 页内是否真的收到了 drop。 */
+    dropped?: boolean;
+    /** 最后一个 drop 事件的坐标；没收到 drop 时缺省。 */
+    dropAt?: { x: number; y: number };
+    /** drop 坐标是否落在终点附近（80px 内）；坐标异常时为 false。 */
+    droppedAtTarget?: boolean;
+    /** 拖拽元素在父容器里的位置变了——排序类页面的成功信号。 */
+    reordered?: boolean;
     warning?: string;
   }> {
     const tab = this.requireTab(tabId);
@@ -4369,6 +4437,7 @@ export class EmbeddedBrowser {
         toTag?: string;
         fromText?: string;
         toText?: string;
+        fromIndex?: number;
         fromMatchCount?: number;
         toMatchCount?: number;
       }>(buildDragPointsExpression(from, to)),
@@ -4376,18 +4445,67 @@ export class EmbeddedBrowser {
     if (!points.ok || !points.from || !points.to) {
       throw new Error(`无法拖拽：${points.reason ?? "unknown"}`);
     }
+    // 先装探针再派发：capture 阶段的 document 监听能看见页面收到的每一个
+    // 拖拽事件，动作之后回读才有「页面到底收到了什么」的事实。
+    await tab.cdp.evaluate(buildDragProbeExpression());
     await this.withDialogHint(tab, () => tab.cdp.dragFromTo(points.from!, points.to!));
+    let probe: {
+      ok: boolean;
+      started?: number;
+      over?: number;
+      last?: { x: number; y: number };
+      drops?: Array<{ x: number; y: number }>;
+    } | undefined;
+    try {
+      probe = await tab.cdp.evaluate(buildDragResultExpression());
+    } catch {
+      // 导航紧跟拖拽销毁了上下文；拖拽本身可能已发生，结果按探针缺失报告。
+    }
+    const lastDrop = probe?.drops?.at(-1);
+    const dropped = (probe?.drops?.length ?? 0) > 0;
+    const DROP_RADIUS = 80;
+    const droppedAtTarget =
+      dropped && lastDrop
+        ? Math.hypot(lastDrop.x - points.to.x, lastDrop.y - points.to.y) <= DROP_RADIUS
+        : false;
+    // 重排提示：拖拽前记录了起点元素在父容器里的位置，现在重跑定位再比一次。
+    let reordered: boolean | undefined;
+    if (typeof points.fromIndex === "number" && points.fromIndex >= 0) {
+      try {
+        const after = await tab.cdp.evaluate<{ ok: boolean; reordered?: boolean }>(
+          buildDragReorderExpression(from, points.fromIndex),
+        );
+        if (after.ok) reordered = after.reordered === true;
+      } catch {
+        // 元素没了或定位失败——没有提示好过报错，重排只是提示不是结论。
+      }
+    }
     // 两端都可能多匹配：各自生成提醒，都有时拼成一条，保持返回值只有 warning 一个附加字段。
     const warnings = [
       multiMatchWarning(from, points.fromMatchCount),
       multiMatchWarning(to, points.toMatchCount),
     ].filter((item): item is string => Boolean(item));
+    if (!probe) {
+      warnings.push("拖拽后无法读回页面状态（可能跳转了），无法确认 drop 是否送达");
+    } else if (!dropped) {
+      warnings.push(
+        probe.started
+          ? "页面收到了 dragstart 但没有 drop——松开可能没送达，或目标不接受放置"
+          : "页面没有收到任何拖拽事件——起点元素可能不可拖拽（缺 draggable）或没有拖拽处理",
+      );
+    } else if (!droppedAtTarget && lastDrop) {
+      warnings.push(
+        `drop 坐标 (${lastDrop.x}, ${lastDrop.y}) 不在终点 (${points.to.x}, ${points.to.y}) 附近，页面可能从别的位置取了坐标`,
+      );
+    }
     return {
       ok: true,
       ...(points.fromTag ? { fromTag: points.fromTag } : {}),
       ...(points.toTag ? { toTag: points.toTag } : {}),
       ...(points.fromText ? { fromText: points.fromText } : {}),
       ...(points.toText ? { toText: points.toText } : {}),
+      ...(probe ? { dropped, ...(lastDrop ? { dropAt: lastDrop } : {}), droppedAtTarget } : {}),
+      ...(reordered !== undefined ? { reordered } : {}),
       ...(warnings.length ? { warning: warnings.join("；") } : {}),
     };
   }

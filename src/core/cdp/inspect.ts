@@ -741,25 +741,28 @@ export function buildElementPointExpression(target: TargetInput): string {
 }
 
 /**
- * Reads back where a click landed and clears the target marker.
+ * The shared body of the two hit reads: what `elementFromPoint` answers at one
+ * instant, walked through open shadow roots, matched against the target marker.
  *
- * `onTarget` is false when something else received the events — an overlay, a
- * late scroll, a re-render between resolve and dispatch. The caller reports the
- * actually-hit element so the model can react to facts instead of guessing
- * whether a silent page means a broken handler or a missed click.
+ * `clearMarker` splits the two callers. The press-time read must keep the
+ * marker, because the post-release read still needs it; the post-release read
+ * clears it, so a page whose DOM survives the click does not accumulate
+ * attributes.
  */
-export function buildClickHitExpression(x: number, y: number): string {
+function hitProbeBody(x: number, y: number, clearMarker: boolean): string {
+  const px = JSON.stringify(x);
+  const py = JSON.stringify(y);
   return `(() => {
     // elementFromPoint stops at a shadow host; descend through open roots so a
     // click that reached a shadow-internal element reads as on-target.
-    let el = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+    let el = document.elementFromPoint(${px}, ${py});
     for (let depth = 0; el && el.shadowRoot && depth < 8; depth += 1) {
-      const inner = el.shadowRoot.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)});
+      const inner = el.shadowRoot.elementFromPoint(${px}, ${py});
       if (!inner || inner === el) break;
       el = inner;
     }
     const marked = el ? el.closest("[data-ens-click]") : null;
-    document.querySelectorAll("[data-ens-click]").forEach((n) => n.removeAttribute("data-ens-click"));
+    ${clearMarker ? 'document.querySelectorAll("[data-ens-click]").forEach((n) => n.removeAttribute("data-ens-click"));' : ""}
     return {
       onTarget: Boolean(marked),
       ...(el ? { tag: el.tagName.toLowerCase(), text: (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80) } : {}),
@@ -767,16 +770,63 @@ export function buildClickHitExpression(x: number, y: number): string {
   })()`;
 }
 
-/** Focuses a field so the caller can type into it with `Input.insertText`. */
+/**
+ * Reads where the press is *about to* land, before it is dispatched.
+ *
+ * Runs between the pointer move and `mousePressed`, so what `elementFromPoint`
+ * answers at this instant is what Chromium's own hit test will resolve the press
+ * to. A page that swaps its DOM inside the click's handler changes what a
+ * read-back after `mouseReleased` sees — the replacement element — while the
+ * click still went to the old one and worked. The press-time read is therefore
+ * the trusted baseline for `onTarget`, and the post-release read only
+ * corroborates it.
+ *
+ * Leaves the marker in place; `buildClickHitExpression` clears it.
+ */
+export function buildPressHitExpression(x: number, y: number): string {
+  return hitProbeBody(x, y, false);
+}
+
+/**
+ * Reads back where a click landed and clears the target marker.
+ *
+ * This is the *post-release* corroboration: `onTarget` is false when something
+ * else received the events after the press — an overlay raised in between, a
+ * re-render that replaced the element the press went to. That fact is useful
+ * (the page's DOM moved under the pointer) but it is not evidence the click
+ * failed; the press-time read is the baseline. The caller reports both so the
+ * model can react to facts instead of guessing whether a silent page means a
+ * broken handler or a missed click.
+ */
+export function buildClickHitExpression(x: number, y: number): string {
+  return hitProbeBody(x, y, true);
+}
+
+/**
+ * Focuses a field so the caller can type into it with `Input.insertText`.
+ *
+ * Deliberately does NOT call `el.select()`: a selection set from page script is
+ * invisible to the IME commit that `Input.insertText` performs, so typing then
+ * appended after the old value instead of replacing it — including when the
+ * caller had just pressed Ctrl+A and the field had a real, working selection
+ * that this would have clobbered into an append. Clearing is `selectAll()`'s job
+ * (an editing command the IME commit does respect); insertion at a caret needs
+ * no selection at all.
+ */
 export function buildFocusExpression(target: TargetInput): string {
   return `(() => {${HELPERS}
     const found = resolveTarget(${targetSource(target)});
     if (!found.el) return { ok: false, reason: found.reason };
     const el = found.el;
     if (!isVisible(el)) return { ok: false, reason: "not-visible" };
+    // Focus is replayed even when the field is already focused, on purpose: the
+    // focus pass is what re-syncs the input pipeline's selection state with the
+    // DOM selection. After a scripted Ctrl+A the pipeline holds a stale caret
+    // while the DOM holds the selection (measured on Electron 45); skipping the
+    // replay leaves the pipeline stale, and the IME commit that follows appends
+    // after the old value instead of replacing it.
     if (typeof el.focus === "function") el.focus();
     if (el.disabled || el.readOnly) return { ok: false, reason: "disabled" };
-    if (typeof el.select === "function" && typeof el.value === "string") el.select();
     const tag = el.tagName.toLowerCase();
     // The caller needs to know a field is a password before typing into it, so
     // the audit log can mask a value whose parameter name does not say "secret".
@@ -1214,9 +1264,90 @@ export function buildDragPointsExpression(from: TargetInput, to: TargetInput): s
       toTag: end.el.tagName.toLowerCase(),
       fromText: textOf(start.el).slice(0, 60),
       toText: textOf(end.el).slice(0, 60),
+      // Where the dragged element sits inside its parent, so the caller can
+      // compare after the drop and hint "the page reordered itself". A hint, not
+      // a contract: libraries that rebuild nodes on drop resolve to a fresh
+      // element, and an index that moved still says the right thing.
+      fromIndex: start.el.parentElement
+        ? Array.from(start.el.parentElement.children).indexOf(start.el)
+        : -1,
       fromMatchCount: start.matchCount,
       toMatchCount: end.matchCount,
     };
+  })()`;
+}
+
+/**
+ * Installs document-level drag observers and resets their counts.
+ *
+ * The dispatch sequence succeeding means nothing by itself: a drop the page
+ * never receives looks identical to one its handler ignored. Capture-phase
+ * listeners on `document` see every drag event the page gets, including ones
+ * nothing else handles, so the caller can later answer "did a drop with real
+ * coordinates arrive" as a fact. Idempotent — a second install just clears the
+ * previous counts rather than stacking listeners.
+ */
+export function buildDragProbeExpression(): string {
+  return `(() => {
+    const existing = window.__ensembleDragProbe;
+    if (existing) {
+      existing.started = 0;
+      existing.over = 0;
+      existing.drops.length = 0;
+      return true;
+    }
+    const probe = { started: 0, over: 0, drops: [] };
+    window.__ensembleDragProbe = probe;
+    document.addEventListener("dragstart", () => { probe.started += 1; }, true);
+    document.addEventListener("dragover", (event) => {
+      probe.over += 1;
+      probe.last = { x: event.clientX, y: event.clientY };
+    }, true);
+    document.addEventListener("drop", (event) => {
+      event.preventDefault();
+      probe.drops.push({ x: event.clientX, y: event.clientY });
+    }, true);
+    return true;
+  })()`;
+}
+
+/**
+ * Reads the drag observers back after the dispatch.
+ *
+ * `drops` is capped at five — one drag produces one drop, and more than that
+ * means the page synthesized extras; five rows are plenty to see that. The
+ * last `dragover` point is read too: a drag whose drop never fires but whose
+ * `dragover` reached the target is a different failure (release not delivered)
+ * from one whose events never started (the drag threshold never crossed).
+ */
+export function buildDragResultExpression(): string {
+  return `(() => {
+    const probe = window.__ensembleDragProbe;
+    if (!probe) return { ok: false, reason: "no-probe" };
+    return {
+      ok: true,
+      started: probe.started,
+      over: probe.over,
+      last: probe.last,
+      drops: probe.drops.slice(0, 5),
+    };
+  })()`;
+}
+
+/**
+ * Re-resolves the dragged element and reports whether it changed places.
+ *
+ * Compared against the parent index recorded before the drag. Best-effort: the
+ * element (or its replacement, matched by the same locator) must still resolve,
+ * otherwise the caller gets no `reordered` hint rather than an error — a drag
+ * that removed the node entirely is not a failed tool call.
+ */
+export function buildDragReorderExpression(from: TargetInput, fromIndexBefore: number): string {
+  return `(() => {${HELPERS}
+    const found = resolveTarget(${targetSource(from)});
+    if (!found.el || !found.el.parentElement) return { ok: false };
+    const index = Array.from(found.el.parentElement.children).indexOf(found.el);
+    return { ok: true, index, reordered: index !== ${fromIndexBefore} };
   })()`;
 }
 

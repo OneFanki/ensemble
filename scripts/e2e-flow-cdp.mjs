@@ -203,16 +203,25 @@ try {
       allowed.run?.reason,
     );
 
-    const screenshot = await runSteps([
+    /*
+     * A raw command that answers reliably in a headless run. `Page.captureScreenshot`
+     * used to be the example, but a culled guest (minimised / unseen window — pages
+     * freeze now even when nobody watches) produces no compositor frames, and that
+     * command's known behaviour is to never reply rather than fail. The wrapped
+     * screenshot action falls back to the renderer path for exactly this reason; a
+     * raw command is sent as-is. The point here is the *reporting*, so any
+     * allow-tier command that returns is the honest subject.
+     */
+    const reported = await runSteps([
       { action: "navigate", url: PAGE_URL },
-      { action: "cdp", method: "Page.captureScreenshot", params: { format: "png" } },
+      { action: "cdp", method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x: 5, y: 5 } },
     ]);
     check(
       "the run reports the raw commands it used",
-      screenshot.run?.ok === true &&
-        Array.isArray(screenshot.run?.rawCdp) &&
-        screenshot.run.rawCdp[0] === "Page.captureScreenshot",
-      { ok: screenshot.run?.ok, rawCdp: screenshot.run?.rawCdp, reason: screenshot.run?.reason },
+      reported.run?.ok === true &&
+        Array.isArray(reported.run?.rawCdp) &&
+        reported.run.rawCdp[0] === "Input.dispatchMouseEvent",
+      { ok: reported.run?.ok, rawCdp: reported.run?.rawCdp, reason: reported.run?.reason },
     );
 
     // --- 2. the forbidden tier is refused -----------------------------------

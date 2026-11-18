@@ -191,12 +191,14 @@ try {
     listed,
   );
 
-  // A tab added by hand joins the view the user is looking at.
+  // A tab the AI opens stays off the stage: it lands in its own instance,
+  // joins no view and must not disturb the layout the person is looking at.
+  // It is still fully addressable (id / instanceId) for later tools.
   const added = await call("open_browser_tab", { url: PAGE_URL });
   check(
-    "a new tab joins the active view",
-    added.viewId === container.id,
-    { viewId: added.viewId, container: container.id },
+    "an AI-opened tab stays out of the on-stage view",
+    added.viewId === undefined && typeof added.instanceId === "string",
+    { viewId: added.viewId, instanceId: added.instanceId, container: container.id },
   );
 
   // Closing the view removes its tabs, leaving the surface with what was there

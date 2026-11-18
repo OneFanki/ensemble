@@ -106,13 +106,21 @@ try {
   await wait(2000);
 
   // --- 1. The tab reaches the window's top edge ----------------------------
+  // The chrome is two rows now: the instance rail is the window's first row
+  // and the page tab strip sits directly beneath it. The top-edge goal is
+  // unchanged — the first row owns the window's top edge — plus the strip must
+  // sit flush under the rail with no dead band between them.
   const geometry = await client.evaluate(`(() => {
+    const rail = document.querySelector('.browser > .rail');
     const strip = document.querySelector('.tabstrip');
     const tab = document.querySelector('.tabstrip .tab');
-    if (!strip || !tab) return null;
+    if (!rail || !strip || !tab) return null;
+    const railBox = rail.getBoundingClientRect();
     const stripBox = strip.getBoundingClientRect();
     const tabBox = tab.getBoundingClientRect();
     return {
+      railTop: Math.round(railBox.top),
+      railHeight: Math.round(railBox.height),
       stripTop: Math.round(stripBox.top),
       stripHeight: Math.round(stripBox.height),
       tabTop: Math.round(tabBox.top),
@@ -121,7 +129,12 @@ try {
       gapBelow: Math.round(stripBox.bottom - tabBox.bottom),
     };
   })()`);
-  check("the tab strip starts at the window's top", geometry?.stripTop === 0, geometry);
+  check("the first row (instance rail) owns the window's top edge", geometry?.railTop === 0, geometry);
+  check(
+    "the tab strip sits flush beneath the instance rail",
+    geometry?.stripTop === geometry?.railHeight,
+    geometry,
+  );
   check(
     "the tab itself reaches the window's top edge",
     geometry?.gapAbove === 0 && geometry?.tabHeight === geometry?.stripHeight,

@@ -198,6 +198,29 @@ try {
       `document.querySelector('[data-tab-id="${tabId}"] [data-audio]')?.dataset.audio ?? null`,
     );
 
+  /*
+   * The AI's page opens off-stage by design: it must not disturb what the
+   * person is looking at. The speaker control lives on the tab strip, which
+   * lists the staged instance's pages — so the visible half of this suite
+   * brings the page on stage the way a person would, by selecting it (its
+   * instance) in the instance rail.
+   */
+  const bringOnStage = async (pageId) => {
+    await client.evaluate(
+      `(async () => { await window.ensemble.activateEmbeddedTab(${JSON.stringify(pageId)}); return true; })()`,
+    );
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const present = await client.evaluate(
+        `Boolean(document.querySelector('[data-tab-id="${pageId}"]'))`,
+      );
+      if (present) return true;
+      await wait(150);
+    }
+    return false;
+  };
+  check("the AI page can be brought on stage", await bringOnStage(tabId));
+
   /** Starts the page's tone through the page target, with a user gesture. */
   async function playTone() {
     const debugPort = await waitForDebugPort(userData);

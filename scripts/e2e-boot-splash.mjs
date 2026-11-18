@@ -58,7 +58,9 @@ const wait = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, 
 
 const SAMPLE = `(() => {
   const boot = document.querySelector('.boot');
-  const shell = document.querySelector('.app-shell > .shell');
+  // The pane is the shell's one full-height child (browser stage or the
+  // management pane); it is what the splash has to cover.
+  const shell = document.querySelector('.app-shell > .pane');
   const rect = (element) => element ? element.getBoundingClientRect().toJSON() : null;
   return {
     boot: boot

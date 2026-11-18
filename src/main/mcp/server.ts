@@ -1161,6 +1161,153 @@ export function previewActivityResult(output: unknown): string | undefined {
     : text;
 }
 
+/*
+ * ---------- 返回体瘦身 ----------
+ *
+ * AI 的上下文是稀缺资源：一个 base64 图标就是几千 token，一段脚本可以返回一兆
+ * 字节。下面这些投影在 MCP 出口把返回值收敛成调用方真正需要决策的形状；存储与
+ * 渲染层 IPC 的字段不受影响。
+ */
+
+/**
+ * 书签的 MCP 出口形状。
+ *
+ * `favicon` 是主进程内联的 data: URL，单个就有几 KB——它只在渲染层的新标签页
+ * 有意义。MCP 返回里以 `hasFavicon` 报告存在性，内容永不随列表出走。
+ */
+function bookmarkSummary(bookmark: {
+  id: string;
+  name: string;
+  url: string;
+  favicon?: string;
+  folderId?: string;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  return {
+    id: bookmark.id,
+    name: bookmark.name,
+    url: bookmark.url,
+    hasFavicon: Boolean(bookmark.favicon),
+    ...(bookmark.folderId ? { folderId: bookmark.folderId } : {}),
+    order: bookmark.order,
+    createdAt: bookmark.createdAt,
+    updatedAt: bookmark.updatedAt,
+  };
+}
+
+/** 流程步骤里单个字符串字段的保留长度：判断流程能不能直接跑，预览就够。 */
+const FLOW_FIELD_PREVIEW_CHARS = 200;
+/** list_flows / save_flow 返回的步骤数上限；超出截断并标注 stepsTruncated。 */
+const FLOW_STEPS_MAX = 60;
+/** list_flows 返回的流程条数上限；超出截断并标注 truncated。 */
+const FLOWS_LIST_MAX = 50;
+
+/** 截断一段可能很长的步骤文本，并注明省略了多少。 */
+function clipFlowText(value: string): string {
+  if (value.length <= FLOW_FIELD_PREVIEW_CHARS) return value;
+  return `${value.slice(0, FLOW_FIELD_PREVIEW_CHARS)}…（省略 ${value.length - FLOW_FIELD_PREVIEW_CHARS} 字符）`;
+}
+
+/** 递归收窄 cdp 步骤的 params 之类任意结构，避免一个步骤带出几 KB 协议参数。 */
+function boundFlowValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") {
+    return value.length > FLOW_FIELD_PREVIEW_CHARS ? clipFlowText(value) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 10).map((item) => boundFlowValue(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    if (depth >= 3) return "[…]";
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 20)) {
+      out[key] = boundFlowValue(item, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** 一个流程的 MCP 出口形状：步骤值截断、步骤数封顶。 */
+function flowSummary(flow: Flow) {
+  const steps = flow.steps.length > FLOW_STEPS_MAX ? flow.steps.slice(0, FLOW_STEPS_MAX) : flow.steps;
+  return {
+    id: flow.id,
+    siteId: flow.siteId,
+    name: flow.name,
+    description: flow.description,
+    params: flow.params ?? [],
+    steps: steps.map((step) => {
+      const out: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(step)) {
+        if (value === undefined) continue;
+        out[key] = typeof value === "string" ? clipFlowText(value) : boundFlowValue(value, 0);
+      }
+      return out;
+    }),
+    stepsTotal: flow.steps.length,
+    ...(flow.steps.length > FLOW_STEPS_MAX ? { stepsTruncated: true } : {}),
+    createdAt: flow.createdAt,
+    updatedAt: flow.updatedAt,
+  };
+}
+
+/**
+ * MCP 出口的浏览器页摘要。
+ *
+ * `EmbeddedTab` 是渲染层的完整页记录：favicon 的 data: URL、存储分区、窗口几何、
+ * DevTools 宽度都在上面。AI 判断「操作哪个页、这个页属于谁、现在是什么状态」
+ * 只需要下面这些字段——列表里每个 tab 少几 KB， favicon 与分区绝不出走。
+ */
+const TAB_SUMMARY_FIELDS = [
+  "id",
+  "label",
+  "url",
+  "title",
+  "identityId",
+  "siteId",
+  "instanceId",
+  "viewId",
+  "clean",
+  "profileId",
+  "muted",
+  "audible",
+  "loading",
+] as const;
+
+function projectTab(tab: unknown): Record<string, unknown> {
+  const record = (tab ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of TAB_SUMMARY_FIELDS) {
+    if (record[key] !== undefined) out[key] = record[key];
+  }
+  return out;
+}
+
+function projectState(state: unknown) {
+  const record = (state ?? {}) as Record<string, unknown>;
+  return {
+    tabs: Array.isArray(record.tabs) ? record.tabs.map((tab) => projectTab(tab)) : [],
+    views: Array.isArray(record.views)
+      ? record.views.map((view) => {
+          const v = (view ?? {}) as Record<string, unknown>;
+          return {
+            ...(typeof v.id === "string" ? { id: v.id } : {}),
+            ...(typeof v.name === "string" ? { name: v.name } : {}),
+            ...(typeof v.layoutId === "string" ? { layoutId: v.layoutId } : {}),
+            ...(Array.isArray(v.slotTabs) ? { slotTabs: v.slotTabs } : {}),
+          };
+        })
+      : [],
+    ...(typeof record.activeTabId === "string" ? { activeTabId: record.activeTabId } : {}),
+    ...(typeof record.activeViewId === "string" ? { activeViewId: record.activeViewId } : {}),
+  };
+}
+
+/** evaluate_browser_page 返回值的字节上限；超过拒绝返回并提示缩小表达式。 */
+export const EVALUATE_RESULT_MAX_BYTES = 64_000;
+
 function timingSafeToken(actual: string, expected: string): boolean {
   const left = Buffer.from(actual, "utf8");
   const right = Buffer.from(expected, "utf8");
@@ -2617,12 +2764,17 @@ export class McpServer {
       {
         name: "list_flows",
         description:
-          "列出已保存的流程。可按 siteId 过滤。流程是一串可复用的操作步骤，属于某个站点；返回内容包含参数与步骤，便于判断能不能直接跑。",
+          "列出已保存的流程。可按 siteId 过滤。流程是一串可复用的操作步骤，属于某个站点；返回内容包含参数与步骤，便于判断能不能直接跑。步骤的超长值只保留前 200 字符（标注省略长度）；步骤多于 60 条时只返回前 60 条并标 stepsTruncated；流程多于 50 条时返回前 50 条并标 truncated。运行 run_flow 用的是保存的完整定义，不受这里的预览截断影响。",
         kind: "read",
         inputSchema: object({ siteId: string("只看该站点的流程") }),
         run: (args) => {
           const siteId = args["siteId"];
-          return service.snapshot().flows.filter((flow) => !siteId || flow.siteId === siteId);
+          const all = service.snapshot().flows.filter((flow) => !siteId || flow.siteId === siteId);
+          return {
+            flows: all.slice(0, FLOWS_LIST_MAX).map(flowSummary),
+            total: all.length,
+            ...(all.length > FLOWS_LIST_MAX ? { truncated: true } : {}),
+          };
         },
       },
       {
@@ -2693,7 +2845,7 @@ export class McpServer {
           },
           ["siteId", "name", "steps"],
         ),
-        run: (args) => service.saveFlow(parseFlowDraft(args)),
+        run: (args) => flowSummary(service.saveFlow(parseFlowDraft(args))),
       },
       {
         name: "delete_flow",
@@ -2713,12 +2865,15 @@ export class McpServer {
       {
         name: "list_bookmarks",
         description:
-          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认档案里已有的登录。",
+          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认档案里已有的登录。图标内容不回传，只有 hasFavicon 标记是否存在。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
-          return { bookmarks: snapshot.bookmarks, folders: snapshot.bookmarkFolders };
+          return {
+            bookmarks: snapshot.bookmarks.map(bookmarkSummary),
+            folders: snapshot.bookmarkFolders,
+          };
         },
       },
       {
@@ -2736,14 +2891,16 @@ export class McpServer {
           ["url"],
         ),
         run: (args) =>
-          service.saveBookmark({
-            ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
-            name: typeof args["name"] === "string" ? args["name"] : "",
-            url: String(args["url"] ?? ""),
-            ...(typeof args["folderId"] === "string" && args["folderId"]
-              ? { folderId: args["folderId"] }
-              : {}),
-          }),
+          bookmarkSummary(
+            service.saveBookmark({
+              ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
+              name: typeof args["name"] === "string" ? args["name"] : "",
+              url: String(args["url"] ?? ""),
+              ...(typeof args["folderId"] === "string" && args["folderId"]
+                ? { folderId: args["folderId"] }
+                : {}),
+            }),
+          ),
       },
       {
         name: "delete_bookmark",
@@ -3454,7 +3611,7 @@ export class McpServer {
           "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；没有 clean 的页面属于某个档案，`profileId: \"default\"` 就是默认档案。",
         kind: "read",
         inputSchema: object({}),
-        run: () => surface().state(),
+        run: () => projectState(surface().state()),
       },
       {
         name: "read_browser_capabilities",
@@ -3492,7 +3649,7 @@ export class McpServer {
           const opened = await surface().openView(String(args["viewId"] ?? ""), {
             muted: true,
           });
-          return opened;
+          return projectState(opened);
         },
       },
       {
@@ -3519,16 +3676,18 @@ export class McpServer {
           if (identityId && !identity) throw new Error(`身份不存在：${identityId}`);
           const siteId = (typeof args["siteId"] === "string" && args["siteId"]) || identity?.siteId;
           const label = typeof args["label"] === "string" ? args["label"] : identity?.name;
-          return surface().createTab({
-            url: rawUrl,
-            // An AI-opened page is an AI page operation from its first frame:
-            // a site that autoplays should not surprise the user.
-            muted: true,
-            ...(identityId ? { identityId } : {}),
-            ...(siteId ? { siteId } : {}),
-            ...(label ? { label } : {}),
-            ...(identity?.color ? { color: identity.color } : {}),
-          });
+          return projectTab(
+            await surface().createTab({
+              url: rawUrl,
+              // An AI-opened page is an AI page operation from its first frame:
+              // a site that autoplays should not surprise the user.
+              muted: true,
+              ...(identityId ? { identityId } : {}),
+              ...(siteId ? { siteId } : {}),
+              ...(label ? { label } : {}),
+              ...(identity?.color ? { color: identity.color } : {}),
+            }),
+          );
         },
       },
       {
@@ -3561,7 +3720,14 @@ export class McpServer {
                 "如果确实要去这里，请让用户在地址栏打开，或先把它存成书签。",
             );
           }
-          return surface().navigate(id, target);
+          return surface().navigate(id, target).then((moved) => {
+            const result = (moved ?? {}) as { tab?: unknown; cancelled?: unknown; note?: unknown };
+            return {
+              tab: projectTab(result.tab),
+              ...(typeof result.cancelled === "string" ? { cancelled: result.cancelled } : {}),
+              ...(typeof result.note === "string" ? { note: result.note } : {}),
+            };
+          });
         },
       },
       {
@@ -4230,7 +4396,7 @@ export class McpServer {
       {
         name: "evaluate_browser_page",
         description:
-          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。timeoutMs 是你给这段脚本的预算（默认 30000，最大 300000）：到点后调用会返回 timedOut 而不是报错，页里的脚本可能仍在运行——可以继续用 wait_browser 观察结果，或用 cancel_browser_script 尝试中止。",
+          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。返回值超过 64KB 会被拒绝（报错并说明），请在表达式里先聚合或分页，不要把整页数据原样带出。timeoutMs 是你给这段脚本的预算（默认 30000，最大 300000）：到点后调用会返回 timedOut 而不是报错，页里的脚本可能仍在运行——可以继续用 wait_browser 观察结果，或用 cancel_browser_script 尝试中止。",
         kind: "run",
         inputSchema: object(
           {
@@ -4251,11 +4417,25 @@ export class McpServer {
               : undefined;
           const started = Date.now();
           try {
-            return await surface().evaluate(
+            const result = await surface().evaluate(
               tabId(args),
               String(args["expression"] ?? ""),
               timeoutMs === undefined ? {} : { timeoutMs },
             );
+            /*
+             * 尺寸护栏。表达式的返回值原样进上下文：一句没聚合的脚本可以带出
+             * 一兆字节的行数据，把整个会话的上下文吞掉。超过上限时拒绝返回并
+             * 指出缩法——脚本还在，收窄表达式重跑就行。
+             */
+            const serialized = JSON.stringify(result ?? null);
+            const bytes = serialized === undefined ? 0 : Buffer.byteLength(serialized, "utf8");
+            if (bytes > EVALUATE_RESULT_MAX_BYTES) {
+              throw new Error(
+                `返回值约 ${Math.round(bytes / 1000)}KB，超过 ${EVALUATE_RESULT_MAX_BYTES / 1000}KB 上限，本次结果已丢弃。` +
+                  "请在表达式里先聚合或分页（只取需要的字段、用 slice/length/过滤收窄），再返回小结果。",
+              );
+            }
+            return result;
           } catch (error) {
             /*
              * A deadline is not a failure, and reporting it as one is what made
@@ -4362,7 +4542,7 @@ export class McpServer {
               ? args["viewId"]
               : surface().layoutTargetView(layoutId);
           if (!viewId) throw new Error("当前没有打开的标签页");
-          return surface().setLayout(layoutId, viewId);
+          return projectState(surface().setLayout(layoutId, viewId));
         },
       },
       {
@@ -4537,7 +4717,7 @@ export class McpServer {
               : surface().defaultViewId();
           if (!viewId) throw new Error("当前没有打开的视图");
           const id = typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : null;
-          return surface().pinTab(index, id, viewId);
+          return projectState(surface().pinTab(index, id, viewId));
         },
       },
       {
@@ -4803,7 +4983,7 @@ export class McpServer {
         description: "关闭内置浏览器的一个标签页。只关页面，不影响该身份的登录态。",
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
-        run: (args) => surface().closeTab(String(args["tabId"] ?? "")),
+        run: (args) => projectState(surface().closeTab(String(args["tabId"] ?? ""))),
       },
       {
         name: "move_browser_tab",
@@ -4830,14 +5010,17 @@ export class McpServer {
           const edge = args["edge"];
           const viewId = typeof args["viewId"] === "string" ? args["viewId"] : "";
           if (anchor && (edge === "before" || edge === "after" || edge === "middle")) {
-            return surface().moveTab(tabIdValue, {
-              kind: "tab",
-              tabId: anchor,
-              edge: edge as "before" | "after" | "middle",
-            });
+            return projectState(
+              surface().moveTab(tabIdValue, {
+                kind: "tab",
+                tabId: anchor,
+                edge: edge as "before" | "after" | "middle",
+              }),
+            );
           }
-          if (viewId) return surface().moveTab(tabIdValue, { kind: "view", viewId });
-          if (args["loose"] === true) return surface().moveTab(tabIdValue, { kind: "loose" });
+          if (viewId) return projectState(surface().moveTab(tabIdValue, { kind: "view", viewId }));
+          if (args["loose"] === true)
+            return projectState(surface().moveTab(tabIdValue, { kind: "loose" }));
           throw new Error("需要提供 beforeOrAfter + edge、viewId，或 loose: true 之一");
         },
       },
@@ -4851,7 +5034,7 @@ export class McpServer {
         // already be playing; mute it if the user has not asked for sound.
         pageTarget: (args) =>
           typeof args["pageId"] === "string" && args["pageId"] ? args["pageId"] : undefined,
-        run: (args) => surface().activate(String(args["pageId"] ?? "")),
+        run: (args) => projectState(surface().activate(String(args["pageId"] ?? ""))),
       },
     ];
   }

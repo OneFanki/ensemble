@@ -102,7 +102,8 @@ function fakeSurface(): EmbeddedSurface {
     navigate: async (tabId, url) => {
       calls.push({ method: "navigate", args: [tabId, url] });
       tabs = tabs.map((tab) => (tab.id === tabId ? { ...tab, url } : tab));
-      return tabs.find((tab) => tab.id === tabId);
+      // 与真实桥同一形状：整只页记录挂在 `tab` 下，拦截信息在同级。
+      return { tab: tabs.find((tab) => tab.id === tabId) };
     },
     closeTab: (tabId) => {
       calls.push({ method: "closeTab", args: [tabId] });
@@ -1202,5 +1203,75 @@ describe("MCP result projection", () => {
     const preview = previewActivityResult("x".repeat(10_000));
     expect(preview?.length).toBeLessThanOrEqual(4_001);
     expect(preview?.endsWith("…")).toBe(true);
+  });
+
+  it("tab 投影不回传图标、几何与缩放，保留决策字段", async () => {
+    // 表面给出的页记录带着渲染层需要的全部字段（图标 data: URL、窗口几何、
+    // 分区、缩放）；MCP 出口只应放行 AI 决策需要的那些。渲染层形状见
+    // shared/embedded.ts 的 EmbeddedTab，这里取它的代表字段。
+    const heavyTab = {
+      id: "tab-1",
+      label: "页面",
+      url: "https://example.test/",
+      title: "示例",
+      favicon: "data:image/png;base64,AAAA" + "B".repeat(4000),
+      partition: "persist:embedded-identity",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+      cell: { x: 0, y: 0, width: 400, height: 300 },
+      zoom: 100,
+      devtoolsWidth: 300,
+      loading: false,
+    };
+    const heavy: EmbeddedSurface = {
+      ...fakeSurface(),
+      state: () => ({ tabs: [heavyTab], views: [] }),
+    };
+    await startServer(heavy);
+    const { json } = await rpc(toolCall("list_browser_tabs", {}));
+    const text = json.result.content[0].text;
+    for (const forbidden of ["favicon", "data:image", "bounds", "partition", "zoom", "devtoolsWidth"]) {
+      expect(text).not.toContain(forbidden);
+    }
+    const payload = JSON.parse(text) as { tabs: Array<Record<string, unknown>> };
+    expect(payload.tabs[0]).toMatchObject({ id: "tab-1", url: "https://example.test/", title: "示例" });
+  });
+
+  it("navigate 返回的 tab 也是投影，拦截标记原样保留", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "https://example.test/", label: "页面" }));
+    const { json } = await rpc(toolCall("navigate_browser_tab", { tabId: "tab-1", url: "https://example.test/next" }));
+    const text = json.result.content[0].text;
+    expect(text).not.toContain("partition");
+    const payload = JSON.parse(text) as { tab: { url?: string } };
+    expect(payload.tab.url).toBe("https://example.test/next");
+  });
+
+  it("evaluate 返回超过 64KB 时拒绝并提示缩法", async () => {
+    const big: EmbeddedSurface = {
+      ...fakeSurface(),
+      evaluate: async () => ({ rows: "x".repeat(120_000) }),
+    };
+    await startServer(big);
+    await rpc(toolCall("open_browser_tab", { url: "https://example.test/", label: "页面" }));
+    const { json } = await rpc(
+      toolCall("evaluate_browser_page", { tabId: "tab-1", expression: "scrape()" }),
+    );
+    expect(json.result.isError).toBe(true);
+    const message = json.result.content[0].text as string;
+    expect(message).toContain("64KB");
+    expect(message).toContain("聚合或分页");
+    // 丢弃的结果一个字节都不进上下文。
+    expect(JSON.stringify(json.result)).not.toContain("xxxxx");
+  });
+
+  it("evaluate 正常大小的返回不受护栏影响", async () => {
+    await startServer(fakeSurface());
+    await rpc(toolCall("open_browser_tab", { url: "https://example.test/", label: "页面" }));
+    const { json } = await rpc(
+      toolCall("evaluate_browser_page", { tabId: "tab-1", expression: "1 + 1" }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const payload = JSON.parse(json.result.content[0].text) as { value: number };
+    expect(payload.value).toBe(42);
   });
 });

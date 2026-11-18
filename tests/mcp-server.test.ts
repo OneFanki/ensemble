@@ -580,6 +580,132 @@ describe("MCP tools", () => {
   });
 });
 
+describe("MCP 返回体瘦身", () => {
+  /**
+   * AI 的上下文是稀缺资源：一个 base64 图标几千 token，一段脚本可以返回一兆
+   * 字节。这里守住四个出口形状：书签不带图标内容、流程步骤值截断、流程列表
+   * 封顶，以及超长步骤列表的截断标注。
+   */
+
+  it("list_bookmarks 用 hasFavicon 报告图标存在，不回传图标内容", async () => {
+    const site = await rpc(
+      toolCall("create_site", { name: "书签环境", baseUrl: "http://localhost:3000" }),
+    );
+    const created = JSON.parse(site.json.result.content[0].text) as { id: string };
+    const saved = await rpc(
+      toolCall("save_bookmark", { name: "示例页", url: "http://localhost:3000/app" }),
+    );
+    const bookmark = JSON.parse(saved.json.result.content[0].text) as { id: string };
+    service.setBookmarkFavicon(bookmark.id, "data:image/png;base64,AAAA" + "B".repeat(4000));
+
+    const listed = await rpc(toolCall("list_bookmarks"));
+    const text = listed.json.result.content[0].text;
+    expect(text).not.toContain("data:image");
+    const payload = JSON.parse(text) as { bookmarks: Array<Record<string, unknown>> };
+    const found = payload.bookmarks.find((item) => item.id === bookmark.id);
+    expect(found?.hasFavicon).toBe(true);
+    // 存储层不受影响：favicon 仍在工作区里，渲染层照常显示。
+    expect(service.snapshot().bookmarks.find((item) => item.id === bookmark.id)?.favicon).toBe(
+      "data:image/png;base64,AAAA" + "B".repeat(4000),
+    );
+    expect(created.id).toBeTruthy();
+  });
+
+  it("save_bookmark 返回同形状投影（更新带图标的书签也不回传内容）", async () => {
+    const saved = await rpc(
+      toolCall("save_bookmark", { name: "示例页", url: "http://localhost:3000/app" }),
+    );
+    const bookmark = JSON.parse(saved.json.result.content[0].text) as { id: string };
+    service.setBookmarkFavicon(bookmark.id, "data:image/png;base64,CCCC");
+
+    const renamed = await rpc(
+      toolCall("save_bookmark", { id: bookmark.id, name: "示例页·改", url: "http://localhost:3000/app" }),
+    );
+    const text = renamed.json.result.content[0].text;
+    expect(text).not.toContain("data:image");
+    const payload = JSON.parse(text) as { name: string; hasFavicon: boolean };
+    expect(payload.name).toBe("示例页·改");
+    expect(payload.hasFavicon).toBe(true);
+  });
+
+  it("list_flows 截断超长步骤值并标注省略长度", async () => {
+    const site = await rpc(
+      toolCall("create_site", { name: "流程环境", baseUrl: "http://localhost:3000" }),
+    );
+    const created = JSON.parse(site.json.result.content[0].text) as { id: string };
+    await rpc(
+      toolCall("save_flow", {
+        siteId: created.id,
+        name: "长值流程",
+        steps: [{ action: "fill", label: "备注", value: "y".repeat(800) }],
+      }),
+    );
+    const listed = await rpc(toolCall("list_flows"));
+    const payload = JSON.parse(listed.json.result.content[0].text) as {
+      flows: Array<{ steps: Array<{ value?: string }> }>;
+      total: number;
+      truncated?: boolean;
+    };
+    expect(payload.truncated).toBeUndefined();
+    expect(payload.total).toBe(1);
+    const step = payload.flows[0]?.steps[0];
+    expect(step?.value).toContain("…（省略");
+    expect((step?.value ?? "").length).toBeLessThan(300);
+    // 保存的完整定义不受预览截断影响。
+    expect(service.snapshot().flows[0]?.steps[0]?.value).toHaveLength(800);
+  });
+
+  it("list_flows 封顶 50 条流程，超出时报 total 与 truncated", async () => {
+    const site = await rpc(
+      toolCall("create_site", { name: "流程封顶环境", baseUrl: "http://localhost:3000" }),
+    );
+    const created = JSON.parse(site.json.result.content[0].text) as { id: string };
+    for (let index = 0; index < 52; index += 1) {
+      await rpc(
+        toolCall("save_flow", {
+          siteId: created.id,
+          name: `流程 ${index}`,
+          steps: [{ action: "navigate", url: "/" }],
+        }),
+      );
+    }
+    const listed = await rpc(toolCall("list_flows"));
+    const payload = JSON.parse(listed.json.result.content[0].text) as {
+      flows: unknown[];
+      total: number;
+      truncated?: boolean;
+    };
+    expect(payload.total).toBe(52);
+    expect(payload.truncated).toBe(true);
+    expect(payload.flows).toHaveLength(50);
+  });
+
+  it("save_flow 返回投影形状，超 60 步截断并标 stepsTruncated", async () => {
+    const site = await rpc(
+      toolCall("create_site", { name: "步骤封顶环境", baseUrl: "http://localhost:3000" }),
+    );
+    const created = JSON.parse(site.json.result.content[0].text) as { id: string };
+    const steps = Array.from({ length: 70 }, (_, index) => ({
+      action: "fill" as const,
+      label: `字段 ${index}`,
+      value: "z".repeat(30),
+    }));
+    const saved = await rpc(
+      toolCall("save_flow", { siteId: created.id, name: "长流程", steps }),
+    );
+    const payload = JSON.parse(saved.json.result.content[0].text) as {
+      steps: unknown[];
+      stepsTotal: number;
+      stepsTruncated?: boolean;
+    };
+    expect(payload.stepsTotal).toBe(70);
+    expect(payload.stepsTruncated).toBe(true);
+    expect(payload.steps).toHaveLength(60);
+    // 存储仍是完整 70 步。
+    expect(service.snapshot().flows[0]?.steps).toHaveLength(70);
+  });
+});
+
 describe("account bundle tools", async () => {
   /**
    * The bundle tools need file IO, which lives in the main process, so they are

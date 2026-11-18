@@ -251,11 +251,18 @@ try {
   if (!flow.ok) throw new Error("cannot continue without a saved flow");
   const flowId = flow.value.id;
 
+  // list_flows 的返回是 { flows, total, truncated }——flows 为摘要（步骤封顶、
+  // 字段截断），短流程的步骤完整保留。
   const listed = await call("list_flows", { siteId: site.id });
-  check("list_flows returns it with its steps", listed.length === 1 && listed[0].steps.length === 8, {
-    flows: listed.length,
-    steps: listed[0]?.steps?.length,
-  });
+  check(
+    "list_flows returns it with its steps",
+    listed.flows?.length === 1 && listed.flows[0]?.steps?.length === 8 && listed.total === 1,
+    {
+      flows: listed.flows?.length,
+      steps: listed.flows[0]?.steps?.length,
+      total: listed.total,
+    },
+  );
 
   // 3. Run it. No tabId: the tool opens one as the site's first account.
   const run = await tryCall("run_flow", {

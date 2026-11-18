@@ -522,7 +522,7 @@ const SHOTS = [
   { name: "profiles", locale: "zh", view: "profiles" },
   { name: "profiles-en", locale: "en", view: "profiles" },
   { name: "profiles-light", locale: "zh", view: "profiles", theme: "light" },
-  { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-main"] },
+  { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-arrow"] },
   {
     // The chooser's second tab: the same panel, answering "which cookie jar"
     // instead of "whose login". Shown separately because one shot cannot show
@@ -530,7 +530,7 @@ const SHOTS = [
     name: "env-menu-profiles",
     locale: "zh",
     view: "browser",
-    clicks: [".toolbar .split-main", '.open-menu .mode[data-mode="profiles"]'],
+    clicks: [".toolbar .split-arrow", '.open-menu .mode[data-mode="profiles"]'],
   },
   {
     // The AI policy editor: four scopes, the address list, and the two ways to

@@ -1278,6 +1278,9 @@ const TAB_SUMMARY_FIELDS = [
   "siteId",
   "instanceId",
   "viewId",
+  // 该页是否是它所在实例当前显示的页。不能从 state 级 activeTabId 推导：
+  // 那是整个表面的键盘焦点，多实例运行时两者回答的是不同问题。
+  "active",
   "clean",
   "profileId",
   "muted",
@@ -1310,6 +1313,9 @@ function projectState(state: unknown) {
           return {
             ...(typeof v.id === "string" ? { id: v.id } : {}),
             ...(typeof v.name === "string" ? { name: v.name } : {}),
+            // Links the open container back to its saved view definition; the
+            // tool chain (set_browser_layout / compose_view / reopen) keys on it.
+            ...(typeof v.viewDefinitionId === "string" ? { viewDefinitionId: v.viewDefinitionId } : {}),
             ...(typeof v.layoutId === "string" ? { layoutId: v.layoutId } : {}),
             ...(Array.isArray(v.slotTabs) ? { slotTabs: v.slotTabs } : {}),
           };

@@ -23,6 +23,16 @@ interface PopoutBridge {
 
 const bridge = (window as unknown as { ensemblePopout: PopoutBridge }).ensemblePopout;
 
+/*
+ * 底色跟随主进程的主题。
+ *
+ * 弹窗入口刻意不走 Vue 应用，也就没有 workspace store 可读；主题由创建窗口的
+ * 主进程作为 query 参数带进来（`popout.html?theme=dark`），这里只把结论写到
+ * `<html>` 上，颜色本身留在 CSS 里。它只覆盖页面加载出第一帧之前的那一层底色。
+ */
+const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+document.documentElement.dataset["theme"] = requestedTheme === "light" ? "light" : "dark";
+
 let node: WebviewElement | null = null;
 /** 尺寸定过一次就上报，换代后新节点重新上报。 */
 let laidOutReported = false;

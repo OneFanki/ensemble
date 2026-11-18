@@ -5,14 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>页面窗口</title>
     <style>
-      /* 弹窗只承载页面：背景与页面节点铺满内容区，没有任何宿主 UI。 */
+      /*
+       * 弹窗只承载页面：底色与页面节点铺满内容区，没有任何宿主 UI。
+       *
+       * 底色跟随当前主题，由 `popout-main.ts` 按 URL 的 `theme` 参数写到
+       * `--popout-backdrop` 上（与主窗口 `setBackgroundColor` 同一组值）。它只
+       * 负责页面加载出第一帧之前的那一层——之后页面自己绘制。写死深色在浅色
+       * 主题下就是一块黑窗。
+       */
+      :root {
+        --popout-backdrop: #0b0d10;
+      }
+      html[data-theme="light"] {
+        --popout-backdrop: #f3efe6;
+      }
       html,
       body {
         margin: 0;
         padding: 0;
         height: 100%;
         overflow: hidden;
-        background: #101317;
+        background: var(--popout-backdrop);
       }
       webview {
         display: flex;

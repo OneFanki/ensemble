@@ -124,6 +124,7 @@ import { EmbeddedBrowser, type GuestHost } from "./embedded/browser";
 import { BrowserGuestManager } from "./embedded/guests";
 import { PopoutManager } from "./embedded/popout";
 import type { EmbeddedTab } from "@shared/embedded";
+import { isBlankTab } from "@shared/embedded";
 import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
 import { fixRealmEncoding, HttpAuthCoordinator } from "./http-auth";
@@ -455,18 +456,27 @@ let popouts: PopoutManager | null = null;
  * 创建一个拆出窗口。
  *
  * 它只是页面容器：安全三件套与主窗口一致，`webviewTag` 供它承载 guest 节点，
- * preload 只暴露 guest 生命周期通道，没有任何其它能力。显式挂到主窗口
- * （`parent`）——不挂的话主窗口销毁后弹窗会残留（2026-11-18 spike 实测）。
+ * preload 只暴露 guest 生命周期通道，没有任何其它能力。
+ *
+ * 不挂 `parent`。挂上之后弹窗是主窗口的 owned window：主窗口最小化或被收起时
+ * 它跟着不可见，而拆窗的意义恰恰相反——主窗口收起来，这一页还要在。窗口生命
+ * 周期因此彻底解耦，「不留孤儿」改由显式登记承担：主窗口销毁时
+ * `popouts.dockAll()` 回收全部弹窗（见 `createWindow` 的 `closed` 钩子），退出
+ * 路径上的同一句在 {@link shutdownAndQuit}。
+ *
+ * 底色按当前主题取，同时作为 query 参数传给页面：弹窗在页面加载出第一帧之前
+ * 只有一层空底色，浅色主题下写死深色就是一块黑。
  */
 async function createPopoutWindow(tabId: string): Promise<BrowserWindow> {
+  const theme = settingsCache?.theme ?? "system";
+  const dark = isDarkTheme(theme);
   const win = new BrowserWindow({
     width: 1100,
     height: 760,
     minWidth: 420,
     minHeight: 320,
-    ...(mainWindow && !mainWindow.isDestroyed() ? { parent: mainWindow } : {}),
     show: !headless,
-    backgroundColor: isDarkTheme(settingsCache?.theme ?? "system") ? "#0b0d10" : "#f3efe6",
+    backgroundColor: dark ? "#0b0d10" : "#f3efe6",
     title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
@@ -485,10 +495,11 @@ async function createPopoutWindow(tabId: string): Promise<BrowserWindow> {
   win.once("closed", () => {
     guestManager.uninstallHost(hostedContents);
   });
+  const query = `theme=${dark ? "dark" : "light"}`;
   const loadPromise =
     isDev && process.env["ELECTRON_RENDERER_URL"]
-      ? win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}popout.html`)
-      : win.loadFile(join(__dirname, "../renderer/popout.html"));
+      ? win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}popout.html?${query}`)
+      : win.loadFile(join(__dirname, "../renderer/popout.html"), { query: { theme: dark ? "dark" : "light" } });
   await loadPromise.catch(() => undefined);
   // 弹窗尺寸变化时重新记录页面 bounds（截图路径与在屏判断读它）。
   win.on("resize", () => {
@@ -501,12 +512,17 @@ async function createPopoutWindow(tabId: string): Promise<BrowserWindow> {
 /**
  * 拆出编排：先登记弹窗（挂载路由按登记表走），再换代挂载；失败时把弹窗
  * 收掉，不留半套窗口（场景启动原子性约束同样适用于这里）。
+ *
+ * 空白页在这里直接拒绝。判定放在主进程而不是只做在菜单里：界面禁用只是
+ * 提示，把动作从 AI 或任何别的入口送进来时，它就是唯一还站着的闸门。空白页
+ * 没有可搬的像素，换代的唯一结果是多出一个空窗口，还占着该实例的唯一弹窗名额。
  */
 async function popOutBrowserTab(tabId: string): Promise<{ windowId: number }> {
   const browser = ensureEmbeddedBrowser();
   const manager = popouts;
   if (!manager) throw new Error("拆出窗口不可用");
   const info = browser.describeTab(tabId);
+  if (isBlankTab(info)) throw new Error("空白页没有内容可以拆出");
   const win = await manager.popOut(tabId, info.instanceId);
   try {
     await browser.remountCarrier(tabId, "popout");
@@ -2536,6 +2552,22 @@ async function createWindow(): Promise<void> {
     }
     event.preventDefault();
     void shutdownAndQuit();
+  });
+
+  /*
+   * 主窗口真的没了，弹窗不能留成孤儿。
+   *
+   * 这曾是 `parent: mainWindow` 的全部理由，代价是两条生命周期被绑在一起：主
+   * 窗口最小化时弹窗跟着不可见，而「主窗口收起来、这一页还在」正是拆窗要的。
+   * 现在换成这一句显式登记——只在主窗口真的销毁时（`destroy` 路径，不是上面
+   * 的 hide）回收，销毁顺序与退出时一致：先拆出的窗口，后页面载体。
+   *
+   * `dockAll` 而不是逐个 `destroy`：它还负责把页面换回主舞台。此刻主窗口已不
+   * 存在，换代只会失败，所以这里不等结果，`dockAll` 内部的登记撤销与关窗照常
+   * 完成。
+   */
+  mainWindow.on("closed", () => {
+    void popouts?.dockAll().catch(() => undefined);
   });
 
   /*

@@ -10,7 +10,7 @@ import { BrowserWindow, type WebContents } from "electron";
  *
  * 职责只有窗口簿记；「卸下旧节点 → 在新窗口重建节点」的换代序列在
  * {@link EmbeddedBrowser.remountCarrier}（browser.ts），窗口创建所需的环境知识
- * （路径、图标、父窗口）由 options 注入。
+ * （路径、图标、主题）由 options 注入。
  *
  * 实测依据（2026-11-18，Electron 45.2.1，spike）：
  * - `<webview>` 节点无法跨窗口迁移：节点从宿主 DOM 移除即销毁 guest，
@@ -18,15 +18,20 @@ import { BrowserWindow, type WebContents } from "electron";
  *   节点上原样可用。
  * - 弹窗最小化时 `capturePage()` 仍出图，guest 的 `Page.captureScreenshot`
  *   不回复（无帧不答）——与主窗口已知的截图路径选择一致。
- * - 弹窗必须显式挂到主窗口（`parent`），否则主窗口销毁后弹窗残留。
+ * - **弹窗不挂 `parent`。** 挂上之后它是主窗口的 owned window：主窗口最小化时
+ *   弹窗跟着不可见（实测同一 spike 里 child.isVisible() 由 true 变 false），
+ *   而拆窗要的正是「主窗口收起来，这一页还在」。不留孤儿的意图由
+ *   {@link PopoutManager.dockAll} 承担：主窗口销毁与退出两条路径各调一次，
+ *   回收不依赖窗口之间的父子关系。
  */
 export interface PopoutManagerOptions {
   /**
    * 创建弹窗窗口。
    *
    * 实现方负责安全三件套（`sandbox` / `contextIsolation` / 非 `nodeIntegration`）、
-   * `webviewTag: true`、专用 preload、`parent: 主窗口`（退出回收链路）与开发态
-   * 加载地址。
+   * `webviewTag: true`、专用 preload 与开发态加载地址。**不要**挂 `parent`：
+   * 生命周期由本类的登记表管理；窗口之间的父子关系会让主窗口的最小化连带
+   * 弹窗不可见。
    */
   createWindow(tabId: string): Promise<BrowserWindow>;
   /**

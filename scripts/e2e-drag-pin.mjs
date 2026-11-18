@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 /**
- * Drag-and-drop of a page into a view cell, end to end.
+ * Drag-and-drop of a page tab, end to end.
  *
- * Reported: dragging a page from the run dock onto a cell did not land — the
- * cell stayed empty and a blank tab appeared in the view instead. The three
- * questions that separates:
+ * The drag this suite follows used to start at a run-dock row and land in a
+ * view cell; both surfaces are retired with the grid (ADR 0012). The drop
+ * domain that remains is the page strip: dragging a tab onto another tab of
+ * the same instance reorders that instance's tab list. The three questions
+ * the old suite separated carry over unchanged:
  *
- * 1. Does the palette carry the id the drop handler reads?
- * 2. Does the drop reach the cell at all (a live page takes the pointer, but a
- *    drop is dispatched by the HTML drag protocol, not by hit-testing)?
- * 3. Does the main process's pin actually put *that* page in the cell, or does it
+ * 1. Does the drag palette carry the id the drop handler reads?
+ * 2. Does the target accept the drag at all (a dragover that never calls
+ *    preventDefault kills the gesture before any drop)?
+ * 3. Does the drop actually commit *that* page to that spot, or does it
  *    create something else?
  *
  * The drag is synthesised with a real `DataTransfer` and real drag events, so
  * the same handlers run as for a person dragging with a mouse. A test that
- * called `pinEmbeddedTab` directly would pass on a build where the drop handler
- * is broken.
+ * called the reorder API directly would pass on a build where the handlers
+ * are broken.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -87,163 +89,154 @@ try {
   check("app window appeared", true);
   await wait(3400);
 
-  // One view with two cells. Cell 1 holds a real page (a blank page would hide
-  // the bug: the drop cover only matters where a live page is under the pointer).
+  // One instance with three pages: enough to reorder without touching the
+  // list's edges, with the root page back on stage when the gesture runs.
   const setup = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    await api.createEmbeddedView({ layoutId: "2x1", name: "落点" });
-    const state = await api.getEmbeddedState();
-    const viewId = state.activeViewId;
-    const tab = await api.openEmbeddedTabInSlot(viewId, 0, { url: "https://example.test/first" });
-    return { viewId, pageId: tab.id };
-  })()`);
-  await wait(2400);
-
-  // The dock row for the page that is running.
-  const before = await client.evaluate(`(() => {
-    const rows = [...document.querySelectorAll('.dock .view-block .rows .tab-row')];
-    const row = rows[0];
-    const empty = document.querySelector('.slot-empty');
-    const header = document.querySelector('.slot-header');
+    const state = await api.openEmbeddedIdentity('${uuid(2)}');
+    await new Promise((r) => setTimeout(r, 2400));
+    const root = state.tabs.find((t) => t.identityId === '${uuid(2)}');
+    await api.openEmbeddedTabInInstance(root.instanceId);
+    await new Promise((r) => setTimeout(r, 1200));
+    await api.openEmbeddedTabInInstance(root.instanceId);
+    await new Promise((r) => setTimeout(r, 1200));
+    await api.activateEmbeddedTab(root.id);
+    await new Promise((r) => setTimeout(r, 900));
+    const after = await api.getEmbeddedState();
     return {
-      rows: rows.length,
-      rowTabId: row?.dataset.tabId ?? null,
-      draggable: row?.getAttribute('draggable') ?? null,
-      emptySlot: Boolean(empty),
-      slotHeaders: document.querySelectorAll('.slot-header').length,
-      headerRect: header ? (() => {
-        const r = header.getBoundingClientRect();
-        return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
-      })() : null,
+      rootId: root.id,
+      instanceId: root.instanceId,
+      pages: after.tabs.filter((t) => t.instanceId === root.instanceId).map((t) => t.id),
+      allTabs: after.tabs.length,
     };
   })()`);
-  check("the dock has a draggable row", before?.rows >= 1 && before?.draggable === "true", before);
-  check("the view has an empty cell to drop into", before?.emptySlot === true, before);
+  check("the instance holds three pages, root on stage", setup?.pages?.length === 3, setup);
+
+  const strip = await client.evaluate(`(() => {
+    const tabs = [...document.querySelectorAll('.tabstrip .tab')];
+    return {
+      tabs: tabs.map((el) => el.getAttribute('data-tab-id')),
+      draggable: tabs.map((el) => el.getAttribute('draggable')),
+    };
+  })()`);
+  check(
+    "the strip's page tabs are draggable",
+    strip?.tabs?.length === 3 && strip?.draggable?.every((v) => v === "true"),
+    strip,
+  );
 
   // --- The real gesture -----------------------------------------------------
-  // A DataTransfer is created in the page, filled by the dragstart handler, then
-  // read by the drop handler — the same object flows through both, as it does
-  // for a mouse drag.
-  const dropped = await client.evaluate(`(async () => {
-    const row = document.querySelector('.dock .view-block .rows .tab-row');
-    if (!row) return { error: 'missing row' };
-
-    // Start the drag first: the cover only exists while a drag is in flight,
-    // which is exactly the ordering the real gesture has.
+  // A DataTransfer is created in the page, filled by the dragstart handler,
+  // then read back here — the same object flows through the whole gesture, as
+  // it does for a mouse drag.
+  const gesture = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+    const ids = () =>
+      [...document.querySelectorAll('.tabstrip .tab')].map((el) => el.getAttribute('data-tab-id'));
     const data = new DataTransfer();
-    const fire = (el, type) => {
-      const event = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data });
-      el.dispatchEvent(event);
-      return event.defaultPrevented;
+    const fire = (el, type, x) => {
+      const ev = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data, clientX: x, clientY: 10 });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    const strip = [...document.querySelectorAll('.tabstrip .tab')];
+    if (strip.length < 2) return { error: 'need two page tabs' };
+    const source = strip[0];
+    const target = strip[1];
+
+    // Idle: with no drag in flight the same dragover must be refused —
+    // otherwise a stray dragover could park an insertion hint on the strip.
+    const idleRefused = !fire(target, 'dragover', 10);
+
+    const started = fire(source, 'dragstart', 10);
+    await wait(60);
+    const palette = {
+      types: [...data.types],
+      pageId: data.getData('application/x-ensemble-page'),
+      textId: data.getData('text/plain'),
     };
 
-    const dragStartPrevented = fire(row, 'dragstart');
-    await new Promise((r) => requestAnimationFrame(r));
+    // A tab does not accept a drop onto itself.
+    const selfOver = fire(source, 'dragover', 10);
 
-    const covers = document.querySelectorAll('.slot-drop-cover');
-    const empties = document.querySelectorAll('.slot-empty');
-    const target = covers[1] ?? empties[0] ?? null;
-    if (!target) return { error: 'no drop target', covers: covers.length, empties: empties.length };
+    // The real target accepts the drag, and marks the edge the pointer is on.
+    const r = target.getBoundingClientRect();
+    const overRight = fire(target, 'dragover', r.left + r.width * 0.75);
+    await wait(40);
+    const hintRight = target.className;
+    const overLeft = fire(target, 'dragover', r.left + r.width * 0.25);
+    await wait(40);
+    const hintLeft = target.className;
 
-    const palette = [...data.types];
-    const textId = data.getData('text/plain');
-    const pageId = data.getData('application/x-ensemble-page');
+    const before = ids();
+    // The edge is whatever the last dragover left, so aim the gesture the way
+    // a mouse does: a final dragover on the right half, then the drop.
+    const overForDrop = fire(target, 'dragover', r.left + r.width * 0.75);
+    await wait(40);
+    // Drop on the right half: the dragged page lands after its target.
+    const dropped = fire(target, 'drop', r.left + r.width * 0.75);
+    await wait(60);
+    const pool = document.querySelector('.guest-pool');
+    const afterDrop = { shielded: pool?.dataset.shielded ?? null };
+    fire(source, 'dragend', 10);
+    await wait(1400);
 
-    fire(target, 'dragenter');
-    const overPrevented = fire(target, 'dragover');
-    fire(target, 'drop');
-    fire(row, 'dragend');
-
-    await new Promise((r) => setTimeout(r, 1800));
     const state = await window.ensemble.getEmbeddedState();
-    const view = state.views.find((item) => item.id === ${JSON.stringify(setup.viewId)});
+    const after = ids();
     return {
-      dragStartPrevented,
-      overPrevented,
-      covers: covers.length,
+      idleRefused,
+      started,
       palette,
-      textId,
-      pageId,
-      slotTabs: view?.slotTabs ?? null,
-      viewPages: state.tabs.filter((t) => t.viewId === view?.id).map((t) => ({ id: t.id, url: t.url, blank: !t.url || t.url === 'about:blank' })),
+      selfOver,
+      overRight,
+      hintRight,
+      overLeft,
+      hintLeft,
+      before,
+      overForDrop,
+      dropped,
+      afterDrop,
+      after,
+      tabCount: state.tabs.length,
     };
   })()`);
 
-  check("the drag palette carries the page id", Boolean(dropped?.textId), dropped);
-  check("occupied cells grow a drop cover while dragging", (dropped?.covers ?? 0) >= 1, dropped);
-  check("the drop target accepted the drag", dropped?.overPrevented === true, dropped);
+  check("a dragover with no drag in flight is refused", gesture?.idleRefused === true, gesture);
   check(
-    "the dropped page occupies the second cell",
-    dropped?.slotTabs?.[1] === dropped?.textId,
-    dropped,
+    "the drag palette carries the page id",
+    gesture?.palette?.pageId === strip?.tabs?.[0] &&
+      gesture?.palette?.textId === gesture?.palette?.pageId &&
+      gesture?.palette?.types?.includes("application/x-ensemble-page"),
+    gesture?.palette,
+  );
+  check("a tab refuses a drop onto itself", gesture?.selfOver === false, gesture);
+  check("the drop target accepts the drag", gesture?.overRight === true && gesture?.overLeft === true, gesture);
+  check(
+    "the insertion mark follows the pointer's half",
+    String(gesture?.hintRight ?? "").includes("drop-after") &&
+      !String(gesture?.hintRight ?? "").includes("drop-before") &&
+      String(gesture?.hintLeft ?? "").includes("drop-before") &&
+      !String(gesture?.hintLeft ?? "").includes("drop-after"),
+    { hintRight: gesture?.hintRight, hintLeft: gesture?.hintLeft },
+  );
+  check("the drop itself is accepted", gesture?.dropped === true, gesture);
+  check(
+    "the dropped page lands after its target",
+    gesture?.after?.[0] === gesture?.before?.[1] &&
+      gesture?.after?.[1] === gesture?.before?.[0] &&
+      JSON.stringify(gesture?.after?.slice(2)) === JSON.stringify(gesture?.before?.slice(2)),
+    { before: gesture?.before, after: gesture?.after },
   );
   check(
-    "no blank page was added to the view",
-    (dropped?.viewPages ?? []).every((page) => page.blank === false),
-    dropped?.viewPages,
-  );
-
-  // --- The reported shape: aim at the *page area*, not the 26px band ---------
-  //
-  // This is what a person actually does — the cell is a large rectangle and the
-  // band is a sliver at its top. The cover has to span the whole cell, because a
-  // drop that only lands on the band is a drop that mostly misses.
-  //
-  // The drag stays in flight for the measurement: the cover exists only while a
-  // drag is happening, so it has to be read between `dragstart` and `dragend`.
-  const aimed = await client.evaluate(`(async () => {
-    const row = document.querySelector('.dock .view-block .rows .tab-row');
-    if (!row) return { error: 'no dock row' };
-
-    // Any occupied cell will do — the previous drop moved the page into the
-    // second one, and the cover exists over occupied cells.
-    const data = new DataTransfer();
-    const fire = (el, type) => {
-      const event = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: data });
-      el.dispatchEvent(event);
-      return event.defaultPrevented;
-    };
-    fire(row, 'dragstart');
-    await new Promise((r) => requestAnimationFrame(r));
-
-    const covers = [...document.querySelectorAll('.slot-drop-cover')];
-    if (!covers.length) {
-      fire(row, 'dragend');
-      return { error: 'no cover while dragging' };
-    }
-    const cover = covers[0];
-    const rect = cover.getBoundingClientRect();
-    const header = document.querySelector('.slot-header')?.getBoundingClientRect();
-
-    // The element a hit test sees at a point deep inside the cell's page area.
-    const cx = Math.round(rect.x + rect.width / 2);
-    const cy = Math.round(rect.y + rect.height * 0.75);
-    const atPoint = document.elementFromPoint(cx, cy);
-
-    const accepted = fire(atPoint ?? cover, 'dragover');
-    fire(row, 'dragend');
-
-    return {
-      covers: covers.length,
-      cover: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) },
-      header: header ? { y: Math.round(header.y), h: Math.round(header.height) } : null,
-      spansCell: header ? rect.height > header.height * 3 : false,
-      coveredBy: atPoint?.className ?? null,
-      accepted,
-      point: { cx, cy },
-    };
-  })()`);
-  check(
-    "the drop cover spans the whole cell, not just its header band",
-    aimed?.spansCell === true && (aimed?.cover?.h ?? 0) > 100,
-    aimed,
+    "the reorder adds no page and no blank",
+    gesture?.tabCount === setup?.allTabs && gesture?.after?.length === gesture?.before?.length,
+    { before: gesture?.before, after: gesture?.after, allTabs: setup?.allTabs, tabCount: gesture?.tabCount },
   );
   check(
-    "a drop aimed at the page area is received by the cell, not the page",
-    String(aimed?.coveredBy ?? "").includes("slot-drop-cover"),
-    aimed,
+    "the drag signal clears when the drop commits",
+    gesture?.afterDrop?.shielded === "0",
+    gesture?.afterDrop,
   );
-  check("that target accepts the drag", aimed?.accepted === true, aimed);
 
   client.close();
 } catch (error) {

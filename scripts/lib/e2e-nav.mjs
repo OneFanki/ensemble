@@ -3,33 +3,37 @@
  *
  * Two different shapes, so two different paths:
  *
- * - **Assets** (sites, identities, views, flows, tags, bookmarks) live beside a
- *   navigation column, and that column only exists while there is something to
- *   navigate from — so a run that starts on the browser opens the workbench
- *   through the app menu first.
- * - **Settings** covers the window. It has no column and its own tab bar, so the
- *   path is the menu row plus a click on the tab inside the page.
+ * - **Assets** (sites, identities, flows, tags, bookmarks, …) are reached from
+ *   the browser page's instance rail: the [管理] button at its right end opens
+ *   a menu naming every destination. The rail only exists on the browser page,
+ *   so a run that starts elsewhere goes back to the browser first — every
+ *   management page carries the band back-arrow (`[data-nav="browser"]`).
+ * - **Settings** covers the window. It has no rail and its own tab bar, so the
+ *   path is the same menu plus a click on the tab inside the page.
  *
  * Repeating that in ten suites is how the selectors drift apart; the snippets
  * here are the single copy.
  */
 
-/** Opens the column if it is not up. Shared by every asset destination. */
-const ensureColumn = `
-  if (!document.querySelector('.sidebar-nav')) {
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((done) => setTimeout(done, 400));
-    document.querySelector('[data-menu-item="workspace"]')?.click();
-    await new Promise((done) => setTimeout(done, 700));
+/** Returns to the browser page when another page is showing. */
+const ensureBrowser = `
+  if (!document.querySelector('.instance-rail') && !document.querySelector('.rail')) {
+    if (document.querySelector('.page.settings')) {
+      document.querySelector('.settings-head .back')?.click();
+      await new Promise((done) => setTimeout(done, 600));
+    } else {
+      document.querySelector('[data-nav="browser"]')?.click();
+      await new Promise((done) => setTimeout(done, 600));
+    }
   }
 `;
 
 /**
  * Opens one of the app's pages.
  *
- * `nav` is a sidebar row's `data-nav` value (`browser`, `sites`, `identities`,
- * `views`, `flows`, `tags`, `bookmarks`) or a settings section spelled
- * `settings-<id>` (`settings-general`, `settings-mcp`, …).
+ * `nav` is a management menu item's `data-manage-item` value (`sites`,
+ * `identities`, `flows`, `tags`, `bookmarks`, `settings`) or a settings section
+ * spelled `settings-<id>` (`settings-general`, `settings-mcp`, …).
  *
  * The waits are real: the menu is a Vue render away from existing, and the row
  * it opens is another render away from being clickable. Reading the DOM in the
@@ -41,15 +45,10 @@ export function openNav(nav) {
     const section = nav === "settings" ? null : nav.slice("settings-".length);
     return `(async () => {
       if (!document.querySelector('.page.settings')) {
-        // Settings has its own row at the bottom of the column; from the browser
-        // the column is not up yet, so open the workbench first.
-        if (!document.querySelector('.sidebar-nav')) {
-          document.querySelector('[data-app-menu]')?.click();
-          await new Promise((done) => setTimeout(done, 400));
-          document.querySelector('[data-menu-item="workspace"]')?.click();
-          await new Promise((done) => setTimeout(done, 700));
-        }
-        document.querySelector('[data-nav="settings"]')?.click();
+        ${ensureBrowser}
+        document.querySelector('[data-manage-btn]')?.click();
+        await new Promise((done) => setTimeout(done, 400));
+        document.querySelector('[data-manage-item="settings"]')?.click();
         await new Promise((done) => setTimeout(done, 700));
       }
       const wanted = ${JSON.stringify(section)};
@@ -62,12 +61,16 @@ export function openNav(nav) {
     })()`;
   }
   return `(async () => {
-    ${ensureColumn}
-    const row = document.querySelector('[data-nav="${nav}"]');
+    ${ensureBrowser}
+    const row = document.querySelector('[data-manage-btn]');
     if (!row) return false;
-    if (!row.classList.contains('active')) row.click();
+    row.click();
+    await new Promise((done) => setTimeout(done, 400));
+    const item = document.querySelector('[data-manage-item="${nav}"]');
+    if (!item) return false;
+    item.click();
     await new Promise((done) => setTimeout(done, 500));
-    return Boolean(document.querySelector('.sidebar-nav'));
+    return true;
   })()`;
 }
 
@@ -81,7 +84,7 @@ export async function goTo(client, nav, wait = 400) {
  * Back to the browser page.
  *
  * Two ways out, because the two shapes have two ways in: settings carries its own
- * back button, everything else has the column's browser row.
+ * back button, every other management page has the band back-arrow.
  */
 export function backToBrowser() {
   return `(async () => {
@@ -91,6 +94,7 @@ export function backToBrowser() {
       return true;
     }
     document.querySelector('[data-nav="browser"]')?.click();
+    await new Promise((done) => setTimeout(done, 300));
     return true;
   })()`;
 }

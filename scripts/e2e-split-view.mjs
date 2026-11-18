@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of the same-account split.
+ * End-to-end check of one instance, several pages, one stage.
  *
- * The gesture: drag one page tab from a cell's strip onto another cell. The
- * result is one browser instance shown in two cells, each cell displaying a
- * different page — cookies shared because the instance is shared. Opening a
- * second instance would be a second session and a second login, which is exactly
- * what this exists to avoid.
+ * The gesture this suite used to guard — dragging a page tab onto another cell
+ * to show one browser in two cells — is retired (ADR 0012: the stage is
+ * single-cell; side-by-side comparison moves to separate windows and the
+ * operating system's own split). What the split existed to protect, though, is
+ * still the contract worth testing: **pages of one instance share one
+ * session**, because the instance is the thing that owns the cookies.
  *
- * It also guards the two ways this breaks silently:
+ * So the suite now proves, on the single stage:
  *
- * 1. Clicking a page in one cell's strip moves the *instance's* active page, so
- *    without pinning the page to the cell the other cell follows along and both
- *    halves show the same picture.
- * 2. `resolveSlotTabs` de-duplicates instances, so a split gets collapsed back to
- *    one cell on the next layout pass unless the repeat is declared deliberate.
+ * 1. A second page of the same instance runs in the same session partition —
+ *    a cookie the first page's request earned shows up in the second page's
+ *    request. A second *instance* would be a second login, which is exactly
+ *    what this must not be.
+ * 2. The stage shows exactly one page at a time: the active page holds the
+ *    whole stage, everything else is parked off window.
+ * 3. Switching pages moves the stage, and closing the shown page hands the
+ *    stage to a survivor instead of leaving a dead reference.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -25,20 +29,22 @@ import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
-const DEBUG_PORT = "0";
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-split-"));
 
+// The page echoes every cookie it received into its title, so a session shared
+// between two pages is visible in the state the chrome already reports.
 const page = createServer((req, res) => {
+  res.setHeader("set-cookie", "splitprobe=shared-session; path=/");
+  const cookie = req.headers.cookie ?? "";
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(`<!doctype html><title>分屏 ${req.url}</title><h1>${req.url}</h1>`);
+  res.end(`<!doctype html><title>同实例 ${req.url} ${cookie ? `[${cookie}]` : ""}</title><h1>${req.url}</h1>`);
 });
 await new Promise((done) => page.listen(0, "127.0.0.1", done));
 const baseUrl = `http://127.0.0.1:${page.address().port}`;
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
-const viewId = "22222222-2222-4222-8222-222222222222";
-const ids = ["a", "b"].map(
+const ids = ["a"].map(
   (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
 );
 
@@ -67,7 +73,7 @@ writeFileSync(
     sites: [
       {
         id: siteId,
-        name: "分屏站点",
+        name: "同实例站点",
         baseUrl,
         loginPath: "/",
         autoSubmit: false,
@@ -77,21 +83,8 @@ writeFileSync(
         updatedAt: now,
       },
     ],
-    identities: [identity(ids[0], "账号甲", "amber"), identity(ids[1], "账号乙", "teal")],
-    views: [
-      {
-        // Two cells, one member: the second cell is the split target.
-        id: viewId,
-        siteId,
-        name: "分屏验证",
-        identityIds: [ids[0]],
-        layoutId: "2x1",
-        slotAssignments: { [ids[0]]: 0 },
-        paths: {},
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
+    identities: [identity(ids[0], "账号甲", "amber")],
+    views: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
@@ -138,364 +131,119 @@ try {
 
   const opened = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const state = await api.openEmbeddedView('${viewId}');
+    const state = await api.openEmbeddedIdentity('${ids[0]}');
     await new Promise((r) => setTimeout(r, 2400));
-    const view = state.views.find((item) => item.id === state.activeViewId);
-    const rootId = view.slotTabs.find(Boolean);
-    const page = state.tabs.find((t) => t.id === rootId);
-    // A second page inside the same instance: this is what gets split off.
-    await api.openEmbeddedTabInInstance(page.instanceId);
+    const root = state.tabs.find((t) => t.identityId === '${ids[0]}');
+    // A second page inside the same instance: one session, two tabs. The "+"
+    // opens a blank first; navigate it so its request proves the shared cookie.
+    const blank = await api.openEmbeddedTabInInstance(root.instanceId);
+    const created = blank.tabs.filter((t) => t.instanceId === root.instanceId).find((t) => t.id !== root.id);
+    await api.navigateEmbeddedTab(created.id, '${baseUrl}/second');
     await new Promise((r) => setTimeout(r, 1800));
-    const next = await api.getEmbeddedState();
-    const pages = next.tabs.filter((t) => t.instanceId === page.instanceId);
+    const pages = blank.tabs.filter((t) => t.instanceId === root.instanceId);
     return {
-      container: view.id,
-      slots: view.slotTabs,
-      instanceId: page.instanceId,
-      pages: pages.map((t) => ({ id: t.id, label: t.label })),
+      instanceId: root.instanceId,
+      pages: pages.map((t) => ({ id: t.id, title: t.title, active: t.active })),
+      activeTabId: blank.activeTabId,
+      chips: [...document.querySelectorAll('[data-instance-chip]')].map((el) =>
+        el.getAttribute('data-instance-chip'),
+      ),
     };
   })()`);
   check(
-    "the view opens with one instance in one cell and a spare cell",
-    Boolean(opened?.container) &&
-      opened?.slots?.filter(Boolean).length === 1 &&
-      Boolean(opened?.slots?.[1]) === false,
-    opened,
-  );
-  check(
-    "the instance gets a second page to split off",
-    opened?.pages?.length === 2,
+    "the instance gets a second page in the same session",
+    opened?.pages?.length === 2 && opened?.chips?.includes(opened?.instanceId),
     opened,
   );
 
-  // The gesture: with the cell showing page A, drag page B's tab onto cell 2.
-  const split = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const before = await api.getEmbeddedState();
-    const view = before.views.find((v) => v.id === '${opened?.container ?? ""}');
-    const pages = before.tabs.filter((t) => t.instanceId === '${opened?.instanceId ?? ""}');
-    // Opening the second page made it the instance's active one, which is what
-    // any "+" does. Go back to page A first: the scenario is "I am looking at A,
-    // and I want B beside it".
-    await api.activateEmbeddedTab(pages[0].id);
-    await new Promise((r) => setTimeout(r, 600));
-    const source = pages[1];
-    const drag = new DataTransfer();
-    drag.setData('text/plain', source.id);
-    drag.setData('application/x-ensemble-page', source.id);
-    // The second cell is *empty*, so it draws as a dashed .slot-empty body rather
-    // than a header band — a header only exists above a live page.
-    const target = [...document.querySelectorAll('.slot-empty')][0];
-    target?.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: drag }));
-    target?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: drag }));
-    await new Promise((r) => setTimeout(r, 1600));
-    const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
+  // The stage is single-cell: exactly one page of the instance is active, and
+  // every other page is parked off window (no rect of its own).
+  const single = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const onStage = state.tabs.filter((t) => t.active && (t.bounds?.width ?? 0) > 0);
+    const blankActive = state.tabs.filter((t) => t.active && !t.bounds);
+    const parked = state.tabs.filter((t) => !t.active);
     return {
-      pageA: pages[0].id,
-      pageB: pages[1].id,
-      slots: next.slotTabs,
-      slotPages: next.slotPages ?? null,
-      sourcePage: source.id,
-      firstCellShows: next.slotPages?.[0] ?? null,
-      secondCellShows: next.slotPages?.[1] ?? null,
-      cellsWithSameInstance: next.slotTabs.filter((id) => id === next.slotTabs[0]).length,
+      onStage: onStage.map((t) => t.id),
+      blankActive: blankActive.length,
+      parkedWidths: parked.map((t) => t.bounds?.width ?? 0),
+      activeCount: state.tabs.filter((t) => t.active).length,
     };
   })()`);
   check(
-    "dropping a page tab on another cell puts the instance in both cells",
-    split?.cellsWithSameInstance === 2,
-    split,
-  );
-  check(
-    "each cell pins its own page",
-    split?.secondCellShows === split?.pageB && split?.firstCellShows === split?.pageA,
-    split,
+    "exactly one page holds the stage; the rest are parked off window",
+    single?.activeCount === 2 &&
+      single?.onStage?.length + single?.blankActive === 1 &&
+      single?.parkedWidths?.every((width) => width === 0),
+    single,
   );
 
-  // The picture: two cells, two pages, same instance.
-  const shown = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const active = state.views.find((v) => v.id === state.activeViewId);
-    const strips = [...document.querySelectorAll('.slot-tabs')];
+  // Session sharing: the second request must carry the cookie the first earned.
+  const shared = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const pages = state.tabs.filter((t) => t.identityId === '${ids[0]}');
+    const navigated = pages.find((t) => (t.title ?? "").includes("/second"));
     return {
-      strips: strips.length,
-      currentPerStrip: strips.map((strip) =>
-        strip.querySelector('.slot-tab.current')?.getAttribute('data-tab-id') ?? null,
-      ),
-      slotPages: active.slotPages ?? null,
-      activePages: state.tabs.filter((t) => t.active).map((t) => t.id),
+      pageTitles: pages.map((t) => t.title),
+      shared: Boolean(navigated && (navigated.title ?? "").includes("splitprobe=shared-session")),
     };
   })()`);
   check(
-    "both cells draw a strip and mark a different page as current",
-    shown?.strips === 2 &&
-      shown?.currentPerStrip?.[0] &&
-      shown?.currentPerStrip?.[1] &&
-      shown.currentPerStrip[0] !== shown.currentPerStrip[1],
-    shown,
+    "pages of one instance share one session (cookie carries across tabs)",
+    shared?.shared === true,
+    shared,
   );
 
-  /**
-   * A split cell is pinned to one page, so its strip is a label, not a switcher.
-   *
-   * The first version of this test clicked "the other page" inside cell 2 — which
-   * no longer exists there, by design. That absence *is* the behaviour worth
-   * asserting: the way to change what a split cell shows is to un-split it (or
-   * drag a different page onto it), and that is what makes the two strips
-   * distinguishable at all.
-   */
-  const pinned = await client.evaluate(`(async () => {
+  // Switching pages moves the whole stage: the target becomes the selected tab
+  // and holds the stage (a real rect). `active` is per-instance, so the flat
+  // list shows one active tab per instance — the stage answers for the whole
+  // surface, which is what activeTabId and bounds describe.
+  const switched = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const before = { cell0: view.slotPages?.[0] ?? null, cell1: view.slotPages?.[1] ?? null };
-    const strips = [...document.querySelectorAll('.slot-tabs')];
-    // Cell 2 lists only its own page; the sibling's page is not offered here.
-    const offered = [...strips[1].querySelectorAll('.slot-tab')].map(
-      (el) => el.getAttribute('data-tab-id'),
-    );
-    // Clicking the pill that *is* there must not move the cell's pin.
-    strips[1].querySelector('.slot-tab')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 1000));
-    const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
-    return {
-      before,
-      offered,
-      onlyOwnPage: offered.length === 1 && offered[0] === before.cell1,
-      siblingPageOffered: offered.includes(before.cell0),
-      after: { cell0: next.slotPages?.[0] ?? null, cell1: next.slotPages?.[1] ?? null },
-    };
-  })()`);
-  check(
-    "a split cell offers only its own page, not the sibling's",
-    pinned?.onlyOwnPage === true && pinned?.siblingPageOffered === false,
-    pinned,
-  );
-  check(
-    "clicking the pill in a split cell leaves both cells where they are",
-    pinned?.after?.cell0 === pinned?.before?.cell0 &&
-      pinned?.after?.cell1 === pinned?.before?.cell1,
-    pinned,
-  );
-
-  /**
-   * The chrome has to say which cell shows which page.
-   *
-   * Reported symptom: after a split both cells drew the full page list, so the
-   * two strips were identical and neither cell told you what it was showing. And
-   * the dock nested the same pages under themselves while the header said 1/2
-   * with two full cells — the count and the nesting described different things.
-   */
-  const chrome = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const strips = [...document.querySelectorAll('.slot-tabs')];
-    // Scope to the active view: the loose tab block shares the view-block
-    // class and has its own rows, one of which is off-stage and marked with a dot.
-    const dockRows = [...document.querySelectorAll('.view-block.active .rows > .instance')];
-    return {
-      strips: strips.length,
-      pillsPerStrip: strips.map((strip) => strip.querySelectorAll('.slot-tab').length),
-      activePerStrip: strips.map(
-        (strip) => strip.querySelector('.slot-tab.current')?.getAttribute('data-tab-id') ?? null,
-      ),
-      unsplitButtons: document.querySelectorAll('.slot-tab-merge').length,
-      addButtons: document.querySelectorAll('.slot-tab-add').length,
-      dockRows: dockRows.length,
-      dockSlots: dockRows.map((row) => row.querySelector('.slot-no')?.textContent?.trim() ?? ''),
-      dockNestedPages: dockRows.map((row) => row.querySelectorAll('.page-row').length),
-      dockPageBadges: dockRows.map(
-        (row) => row.querySelector('.pages-badge')?.textContent?.trim() ?? '',
-      ),
-      dockCount: document.querySelector('.view-block.active .view-count')?.textContent?.trim() ?? '',
-      expected: { cell0: view.slotPages?.[0] ?? null, cell1: view.slotPages?.[1] ?? null },
-    };
-  })()`);
-  check(
-    "each split cell's strip lists only its own page",
-    chrome?.strips === 2 &&
-      chrome?.pillsPerStrip?.every((count) => count === 1) &&
-      chrome?.activePerStrip?.[0] !== chrome?.activePerStrip?.[1],
-    chrome,
-  );
-  check(
-    "a split cell swaps the new-page button for an unsplit control",
-    chrome?.unsplitButtons === 2 && chrome?.addButtons === 0,
-    chrome,
-  );
-  check(
-    "the dock draws one row per cell, each with its own slot number",
-    chrome?.dockRows === 2 &&
-      chrome?.dockSlots?.[0] === "1" &&
-      chrome?.dockSlots?.[1] === "2",
-    chrome,
-  );
-  check(
-    "no dock row lists a window's internal pages",
-    chrome?.dockNestedPages?.every((count) => count === 0),
-    chrome,
-  );
-  check(
-    "a row says how many pages its window holds, as a count only",
-    chrome?.dockPageBadges?.every((badge) => badge === "2"),
-    chrome,
-  );
-  check(
-    "the dock's view count matches the two occupied cells",
-    chrome?.dockCount === "2/2",
-    chrome,
-  );
-
-  // A layout pass must not collapse the split back to one cell.
-  const survive = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    // Force a re-layout through a geometry change, the same path a dock resize
-    // or a stage report takes.
-    const before = view.slotRects ?? null;
-    await api.setEmbeddedViewSlots(view.id, [
-      { x: 0, y: 0, width: 0.42, height: 1 },
-      { x: 0.42, y: 0, width: 0.58, height: 1 },
-    ]);
+    const pages = state.tabs.filter((t) => t.instanceId === '${opened?.instanceId ?? ""}');
+    const target = pages.find((t) => (t.bounds?.width ?? 0) === 0);
+    await api.activateEmbeddedTab(target.id);
     await new Promise((r) => setTimeout(r, 900));
     const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
+    const onStage = after.tabs.find((t) => t.id === target.id);
     return {
-      before,
-      slots: next.slotTabs,
-      slotPages: next.slotPages ?? null,
-      duplicates: next.slotTabs.filter((id) => id && id === next.slotTabs[0]).length,
+      target: target.id,
+      selectedId: after.activeTabId,
+      stageWidth: onStage?.bounds?.width ?? 0,
+      strip: [...document.querySelectorAll('.tabstrip .tab')].map((el) =>
+        el.getAttribute('data-tab-id'),
+      ),
     };
   })()`);
   check(
-    "a re-layout keeps both cells on the same instance",
-    survive?.duplicates === 2,
-    survive,
-  );
-  check(
-    "the page pins survive the re-layout too",
-    Boolean(survive?.slotPages?.[1]),
-    survive,
+    "switching pages moves the stage, and the strip marks the new page",
+    switched?.selectedId === switched?.target &&
+      (switched?.stageWidth ?? 0) > 0 &&
+      switched?.strip?.includes(switched?.target),
+    switched,
   );
 
-  /**
-   * Regression: dragging the page a cell is *showing* onto its own sibling.
-   *
-   * Before the fix both cells ended up naming the dropped page — the freeze
-   * pass pinned it into the source cell while the drop pinned it into the
-   * target, and one page cannot fill two cells: the second setBounds won, the
-   * first cell went dark, and both strips carried the same pill. The sibling
-   * must land on the instance's other page instead, which here means the two
-   * cells swap pages.
-   */
-  const draggedBack = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const cell0 = view.slotPages?.[0] ?? null;
-    const cell1 = view.slotPages?.[1] ?? null;
-    const drag = new DataTransfer();
-    drag.setData('text/plain', cell1);
-    drag.setData('application/x-ensemble-page', cell1);
-    const header = [...document.querySelectorAll('.slot-header')][0];
-    header?.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: drag }));
-    header?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: drag }));
-    await new Promise((r) => setTimeout(r, 1600));
-    const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
-    return {
-      cell0,
-      cell1,
-      slots: next.slotTabs,
-      slotPages: next.slotPages ?? null,
-      duplicates: next.slotTabs.filter((id) => id && id === next.slotTabs[0]).length,
-    };
-  })()`);
-  check(
-    "dragging a shown page onto its sibling keeps one page per cell",
-    draggedBack?.duplicates === 2 &&
-      draggedBack?.slotPages?.[0] === draggedBack?.cell1 &&
-      draggedBack?.slotPages?.[1] === draggedBack?.cell0,
-    draggedBack,
-  );
-
-  // Closing the pinned page must not leave the cell pointing at a dead page —
-  // nor leave it pointing at the sibling's page, which would be the same picture
-  // twice and exactly the duplicate this feature exists to prevent.
+  // Closing the shown page hands the stage to the survivor.
   const closed = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const pinned = view.slotPages?.[1];
-    await api.closeEmbeddedTab(pinned);
+    const shown = state.tabs.find((t) => t.active);
+    await api.closeEmbeddedTab(shown.id);
     await new Promise((r) => setTimeout(r, 1300));
     const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
     return {
-      closed: pinned,
-      slots: next.slotTabs,
-      slotPages: next.slotPages ?? null,
-      alive: after.tabs.some((t) => t.id === pinned),
+      closed: shown.id,
+      alive: after.tabs.some((t) => t.id === shown.id),
+      activeNow: after.tabs.filter((t) => t.active).map((t) => t.id),
+      remaining: after.tabs.map((t) => t.id),
     };
   })()`);
   check(
-    "closing a pinned page clears the pin instead of leaving a dead reference",
-    closed?.alive === false && !closed?.slotPages?.[1],
+    "closing the shown page hands the stage to the survivor",
+    closed?.alive === false && closed?.activeNow?.length === 1,
     closed,
   );
-  check(
-    "the split cell is released rather than showing its sibling's page twice",
-    Boolean(closed?.slots?.[1]) === false,
-    closed,
-  );
-
-  /**
-   * Regression, single-page branch: with nothing else to show, dragging the
-   * instance's only page to another cell has to *move* the instance. The old
-   * freeze pass pinned the shown page into both cells — impossible to honour,
-   * and the loser rendered as an empty cell. Released here means the source
-   * cell lets go and the instance now lives where it was dropped.
-   */
-  const draggedAlone = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const pageId = view.slotTabs.find(Boolean);
-    const drag = new DataTransfer();
-    drag.setData('text/plain', pageId);
-    drag.setData('application/x-ensemble-page', pageId);
-    const empty = [...document.querySelectorAll('.slot-empty')][0];
-    empty?.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: drag }));
-    empty?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: drag }));
-    await new Promise((r) => setTimeout(r, 1600));
-    const after = await api.getEmbeddedState();
-    const next = after.views.find((v) => v.id === view.id);
-    return {
-      pageId,
-      slots: next.slotTabs,
-      slotPages: next.slotPages ?? null,
-      alive: after.tabs.some((t) => t.id === pageId),
-      headers: document.querySelectorAll('.slot-header').length,
-    };
-  })()`);
-  check(
-    "dragging an instance's only page to another cell moves it there",
-    draggedAlone?.slots?.[0] === null &&
-      draggedAlone?.slots?.[1] === draggedAlone?.pageId &&
-      draggedAlone?.alive === true,
-    draggedAlone,
-  );
-  check(
-    "the vacated cell draws no header band after the move",
-    draggedAlone?.headers === 1,
-    draggedAlone,
-  );
-
 
   client.close();
 } catch (error) {

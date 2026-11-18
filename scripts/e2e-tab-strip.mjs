@@ -3,16 +3,14 @@
  * End-to-end check of the window-level tab strip: drag to reorder, middle-click
  * to close.
  *
- * Reordering is the dock's `dropTab` reorder arriving through the strip. Three
- * things a click cannot prove are checked here: the order really changes (left
- * half of a tab lands before it, right half after), a page of another window is
- * refused instead of being spliced into this window's tabs, and a split view
- * keeps both of its cells — the reorder used to rebuild the slot table from the
- * tab order, which collapsed the deliberate duplicate and dropped the page pins.
+ * The stage is single-cell (ADR 0012), so the strip lists exactly one
+ * instance's pages — the instance on stage. Three things a click cannot prove
+ * are checked here: the order really changes (left half of a tab lands before
+ * it, right half after), a page of another instance is never spliced into this
+ * strip, and switching the instance on stage swaps the whole strip as a set.
  *
- * Middle-click is checked on both strips (the window strip and a cell's strip),
- * together with the case that must not close: a right-button `auxclick`, which
- * Chromium fires for every non-primary button.
+ * Middle-click closes, together with the case that must not close: a
+ * right-button `auxclick`, which Chromium fires for every non-primary button.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -35,7 +33,6 @@ const baseUrl = `http://127.0.0.1:${pagePort}`;
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
-const viewId = "22222222-2222-4222-8222-222222222222";
 const ids = ["a", "b"].map(
   (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
 );
@@ -76,21 +73,7 @@ writeFileSync(
       },
     ],
     identities: [identity(ids[0], "账号甲", "amber"), identity(ids[1], "账号乙", "teal")],
-    views: [
-      {
-        // Two windows and a spare cell: the spare cell is the split target, the
-        // second window is where a foreign page comes from.
-        id: viewId,
-        siteId,
-        name: "标签条验证",
-        identityIds: [ids[0], ids[1]],
-        layoutId: "3x1",
-        slotAssignments: { [ids[0]]: 0, [ids[1]]: 1 },
-        paths: {},
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
+    views: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
@@ -160,12 +143,11 @@ try {
       [...document.querySelectorAll('.tabstrip .tab')].map((el) => el.getAttribute('data-tab-id'));
 
     const api = window.ensemble;
-    const state = await api.openEmbeddedView('${viewId}');
+    const state = await api.openEmbeddedIdentity('${ids[0]}');
     await new Promise((r) => setTimeout(r, 2400));
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    const root = state.tabs.find((t) => t.id === view.slotTabs[0]);
-    // Two more pages in the first window, then back to its first page so the
-    // strip shows this window and the cell shows its root.
+    const root = state.tabs.find((t) => t.identityId === '${ids[0]}');
+    // Two more pages in this instance, then back to its first page so the
+    // strip shows the instance with its root as the current tab.
     await api.openEmbeddedTabInInstance(root.instanceId);
     await new Promise((r) => setTimeout(r, 1200));
     await api.openEmbeddedTabInInstance(root.instanceId);
@@ -174,21 +156,14 @@ try {
     await new Promise((r) => setTimeout(r, 900));
     const next = await api.getEmbeddedState();
     return {
-      slots: view.slotTabs,
       root: root.id,
       instanceId: root.instanceId,
-      other: view.slotTabs[1] ?? null,
       pages: next.tabs.filter((t) => t.instanceId === root.instanceId).map((t) => t.id),
       strip: window.__strip(),
     };
   })()`);
   check(
-    "the view opens with two windows and a spare cell",
-    opened?.slots?.filter(Boolean).length === 2 && !opened?.slots?.[2],
-    opened,
-  );
-  check(
-    "the window strip lists the focused window's three pages in tab order",
+    "the window strip lists the on-stage instance's three pages in tab order",
     opened?.pages?.length === 3 && same(opened?.strip, opened?.pages),
     opened,
   );
@@ -244,89 +219,72 @@ try {
   );
 
   /*
-   * A page of the other window, dragged from its cell's strip onto this strip.
-   * The strip lists one browser's pages; accepting it would splice two windows'
-   * tab lists together and pull the page into this window's view slot.
+   * A second instance joins in the background. The strip lists one browser's
+   * pages; the new instance's page must not splice itself into the strip, and
+   * the single stage shows one of them at a time.
    */
-  const foreign = await client.evaluate(`(async () => {
+  const second = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const was = window.__strip();
-    const beforeState = await api.getEmbeddedState();
-    const slotsBefore = beforeState.views.find((v) => v.id === beforeState.activeViewId).slotTabs;
-    const source = document.querySelector('.slot-tab[data-tab-id="${opened?.other ?? ""}"]');
-    const target = document.querySelectorAll('.tabstrip .tab')[0];
-    const drag = source ? await window.__stripDrag(source, target, 'before') : null;
-    await new Promise((r) => setTimeout(r, 900));
-    const state = await api.getEmbeddedState();
+    const state = await api.openEmbeddedIdentity('${ids[1]}');
+    await new Promise((r) => setTimeout(r, 2400));
+    const other = state.tabs.find((t) => t.identityId === '${ids[1]}');
+    const strip = window.__strip();
     return {
-      found: Boolean(source),
-      drag,
       was,
-      strip: window.__strip(),
-      slotsBefore,
-      slotsAfter: state.views.find((v) => v.id === state.activeViewId).slotTabs,
+      other: other?.id ?? null,
+      strip,
+      activeId: state.activeTabId,
+      rootInstanceId: '${opened?.instanceId ?? ""}',
+      otherInstancePages: other ? state.tabs.filter((t) => t.instanceId === other.instanceId).map((t) => t.id) : [],
+      railChips: [...document.querySelectorAll('[data-instance-chip]')].map((el) => el.getAttribute('data-instance-chip')),
     };
   })()`);
   check(
-    "a page of another window gets no insertion mark and changes nothing",
-    foreign?.found === true &&
-      foreign?.drag?.hinted === false &&
-      same(foreign?.strip, foreign?.was) &&
-      same(foreign?.slotsAfter, foreign?.slotsBefore),
-    foreign,
+    "the strip swaps as a set when the selection moves to another instance",
+    second?.otherInstancePages?.length === 1 &&
+      same(second?.strip, second?.otherInstancePages) &&
+      second?.activeId === second?.other,
+    second,
+  );
+  check(
+    "the instance rail lists both instances",
+    Array.isArray(second?.railChips) &&
+      second.railChips.includes(second?.rootInstanceId) &&
+      second.railChips.includes(second?.otherInstancePages?.[0]),
+    second,
   );
 
   /*
-   * Split, then reorder. Dragging a page of the focused window onto the spare
-   * cell puts that window in two cells with a page pinned to each; a reorder in
-   * the strip afterwards must leave both cells and both pins alone.
+   * The strip is one instance's tab list: whatever is on it, every entry belongs
+   * to the same browser window. That is what makes a drag-between-strips
+   * impossible — a foreign page has no pill on this strip to drag.
    */
-  const split = await client.evaluate(`(async () => {
-    const api = window.ensemble;
+  const foreign = await client.evaluate(`(async () => {
+    const beforeState = await window.ensemble.getEmbeddedState();
     const strip = window.__strip();
-    const source = document.querySelector('.tabstrip .tab[data-tab-id="' + strip[1] + '"]');
-    const drag = new DataTransfer();
-    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: drag }));
-    const empty = document.querySelector('.slot-empty');
-    empty?.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: drag }));
-    empty?.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: drag }));
-    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: drag }));
-    await new Promise((r) => setTimeout(r, 1600));
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    return { strip: window.__strip(), slots: view.slotTabs, pins: view.slotPages ?? null };
+    const instanceIds = [
+      ...new Set(strip.map((id) => beforeState.tabs.find((t) => t.id === id)?.instanceId)),
+    ];
+    return { strip, instanceIds };
   })()`);
   check(
-    "dropping a strip tab on the spare cell splits the window into two cells",
-    split?.slots?.[0] === opened?.root && split?.slots?.[2] === opened?.root,
-    split,
+    "the strip never mixes pages of two instances",
+    Array.isArray(foreign?.instanceIds) && foreign.instanceIds.length === 1,
+    foreign,
   );
 
-  const reorderSplit = await client.evaluate(`(async () => {
+  // Switching back: the strip restores the first instance's page set and order.
+  const back = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const was = window.__strip();
-    const tabs = [...document.querySelectorAll('.tabstrip .tab')];
-    const drag = await window.__stripDrag(tabs[2], tabs[0], 'before');
+    await api.activateEmbeddedTab('${opened?.root ?? ""}');
     await new Promise((r) => setTimeout(r, 900));
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    return {
-      was,
-      drag,
-      strip: window.__strip(),
-      slots: view.slotTabs,
-      pins: view.slotPages ?? null,
-    };
+    return { strip: window.__strip(), expected: ${JSON.stringify(opened?.pages ?? [])} };
   })()`);
   check(
-    "reordering a split window's tabs moves the tab",
-    same(reorderSplit?.strip, [reorderSplit?.was?.[2], reorderSplit?.was?.[0], reorderSplit?.was?.[1]]),
-    reorderSplit,
-  );
-  check(
-    "reordering a split window's tabs keeps both cells and both pins",
-    same(reorderSplit?.slots, split?.slots) && same(reorderSplit?.pins, split?.pins),
-    { split, reorderSplit },
+    "switching the instance on stage restores its own strip",
+    same(back?.strip, back?.expected),
+    back,
   );
 
   // A right-button auxclick must not close: Chromium fires auxclick for it too.
@@ -341,28 +299,22 @@ try {
   })()`);
   check("a right-button auxclick leaves the tab open", rightClick?.alive === true, rightClick);
 
-  // Middle-click a strip tab that is neither current nor pinned to a cell.
+  // Middle-click a strip tab that is not the current one.
   const middle = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const beforeState = await api.getEmbeddedState();
-    const view = beforeState.views.find((v) => v.id === beforeState.activeViewId);
-    const pinned = new Set((view.slotPages ?? []).filter(Boolean));
     const current = document.querySelector('.tabstrip .tab.active')?.getAttribute('data-tab-id');
-    const id = window.__strip().find((item) => item !== current && !pinned.has(item));
+    const id = window.__strip().find((item) => item !== current);
     const tab = document.querySelector('.tabstrip .tab[data-tab-id="' + id + '"]');
     const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 1 });
     tab.dispatchEvent(press);
     tab.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
     await new Promise((r) => setTimeout(r, 1200));
     const state = await api.getEmbeddedState();
-    const next = state.views.find((v) => v.id === state.activeViewId);
     return {
       id,
       pressPrevented: press.defaultPrevented,
       alive: state.tabs.some((t) => t.id === id),
       strip: window.__strip(),
-      slotsBefore: view.slotTabs,
-      slotsAfter: next.slotTabs,
     };
   })()`);
   check(
@@ -374,35 +326,6 @@ try {
     "middle-clicking a tab in the window strip closes it",
     Boolean(middle?.id) && middle?.alive === false && !middle?.strip?.includes(middle?.id),
     middle,
-  );
-  check(
-    "closing an unpinned page leaves the split cells as they were",
-    same(middle?.slotsAfter, middle?.slotsBefore),
-    middle,
-  );
-
-  // Middle-click the other window's only page, in its cell's strip.
-  const cellMiddle = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const id = '${opened?.other ?? ""}';
-    const pill = document.querySelector('.slot-tab[data-tab-id="' + id + '"]');
-    pill?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 1 }));
-    pill?.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
-    await new Promise((r) => setTimeout(r, 1200));
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((v) => v.id === state.activeViewId);
-    return {
-      found: Boolean(pill),
-      alive: state.tabs.some((t) => t.id === id),
-      slots: view.slotTabs,
-    };
-  })()`);
-  check(
-    "middle-clicking a page in a cell's strip closes it",
-    cellMiddle?.found === true &&
-      cellMiddle?.alive === false &&
-      !cellMiddle?.slots?.includes(opened?.other),
-    cellMiddle,
   );
 
   client.close();

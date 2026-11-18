@@ -15,6 +15,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { goTo } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-messages-"));
@@ -160,26 +161,32 @@ try {
     captureRow ?? afterLogin,
   );
 
-  // 2) The two entry points agree that something is unread. The rail keeps the
-  // count (it is a list); the toolbar bell only carries a red dot, because a
-  // number there widened the button and pushed it out of line with the icons
-  // beside it — so the bell is asserted on the dot, not on a number.
-  await client.evaluate(`document.querySelector('.layout-btn')?.click()`);
-  await wait(900);
-  const entryPoints = await client.evaluate(`(() => ({
-    navLabel: document.querySelector('[data-nav="messages"] .nav-label')?.textContent?.trim() ?? '',
-    navCount: document.querySelector('[data-nav="messages"] .nav-count')?.textContent?.trim() ?? '',
-    bell: Boolean(document.querySelector('[data-messages-bell]')),
-    bellDot: Boolean(document.querySelector('[data-messages-bell] .bell-dot')),
-    bellCount: document.querySelector('.bell-count')?.textContent?.trim() ?? '',
-  }))()`);
+  // 2) The two entry points agree that something is unread. The management
+  // menu carries the message centre's door (a row, so it can name the page);
+  // the toolbar bell only carries a red dot, because a number there widened
+  // the button and pushed it out of line with the icons beside it — so the
+  // bell is asserted on the dot, not on a number.
+  const entryPoints = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-manage-btn]')?.click();
+    await wait(400);
+    const item = document.querySelector('[data-manage-item="messages"]');
+    const out = {
+      menuItem: Boolean(item),
+      menuLabel: item?.textContent?.trim() ?? '',
+      bell: Boolean(document.querySelector('[data-messages-bell]')),
+      bellDot: Boolean(document.querySelector('[data-messages-bell] .bell-dot')),
+    };
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    await wait(300);
+    return out;
+  })()`);
   check(
-    "the rail row carries the unread count and the bell a red dot",
-    entryPoints?.navLabel === "消息" &&
-      entryPoints?.navCount === "1" &&
+    "the management menu carries messages, and the bell a red dot",
+    entryPoints?.menuItem === true &&
+      entryPoints?.menuLabel === "消息" &&
       entryPoints?.bell === true &&
-      entryPoints?.bellDot === true &&
-      entryPoints?.bellCount === "",
+      entryPoints?.bellDot === true,
     entryPoints,
   );
 
@@ -351,8 +358,7 @@ try {
   // 3) The page lists the row, and its actions live in a layer rather than on
   // the row: the row is one target that opens the detail, and the detail is the
   // only thing that executes.
-  await client.evaluate(`document.querySelector('[data-nav="messages"]')?.click()`);
-  await wait(600);
+  await goTo(client, "messages", 700);
   const rendered = await client.evaluate(`(() => ({
     rows: document.querySelectorAll('[data-message-kind]').length,
     kinds: [...document.querySelectorAll('[data-message-kind]')].map((el) => el.dataset.messageKind),
@@ -487,17 +493,15 @@ try {
   // but offers no action, because there is nothing left to act on. The list has
   // to be re-read first: `stale` is decided by the main process when the history
   // is fetched, and the row on screen still carries the pre-invalidation copy.
-  await client.evaluate(`document.querySelector('[data-nav="messages"]')?.click()`);
-  await wait(500);
+  await goTo(client, "messages", 600);
   const staleFlag = await client.evaluate(
     `(async () => (await window.ensemble.listMessages()).find((item) => item.kind === 'login-capture')?.stale ?? null)()`,
   );
   // The page's own store refreshes on the next mount; re-entering it is what a
   // user would do, and it is also the cheapest way to make the assertion honest.
-  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
-  await wait(400);
-  await client.evaluate(`document.querySelector('[data-nav="messages"]')?.click()`);
-  await wait(700);
+  // The shared navigation leaves the page for the browser first, so this is a
+  // real remount.
+  await goTo(client, "messages", 800);
   const staleLayer = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     document.querySelector('[data-message-kind]')?.click();

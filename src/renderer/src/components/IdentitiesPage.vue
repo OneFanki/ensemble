@@ -36,8 +36,6 @@ const emit = defineEmits<{
   newIdentity: [siteId?: string];
   editIdentity: [id: string];
   sessionHealth: [];
-  /** Opens the view form with these accounts already chosen. */
-  createView: [identityIds: string[]];
 }>();
 
 const store = useWorkspaceStore();
@@ -142,13 +140,6 @@ async function launchSelectedExternal(engineId: string) {
  * back to" — so the selection also routes into the view form, where it gets a
  * name, a layout and a place in the views page.
  */
-function createViewFromSelection() {
-  const ids = [...selected.value];
-  if (ids.length === 0) return;
-  emit("createView", ids);
-  endSelecting();
-}
-
 /** Site choices for the batch re-link dialog. */
 const siteOptions = computed(() =>
   store.sites.map((site) => ({
@@ -567,13 +558,6 @@ function extraFacts(identity: Identity): string[] {
       <AppButton :disabled="selected.size === 0" data-batch-link-site @click="openLinkSite">
         <Link2 :size="12" />
         {{ $t("app.batchLinkSite") }}
-      </AppButton>
-      <!-- Saving the selection as a view is the durable version of the batch
-           launch: same picking gesture, but the group gets a name, a layout and
-           a row on the views page instead of a scratch container. -->
-      <AppButton :disabled="selected.size === 0" data-batch-create-view @click="createViewFromSelection">
-        <LayoutGrid :size="12" />
-        {{ $t("app.batchCreateView") }}
       </AppButton>
       <!-- Sharing accounts is a selection action too: pick the ones a colleague
            needs, not the whole workspace. -->

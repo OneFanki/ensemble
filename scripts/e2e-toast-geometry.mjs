@@ -11,7 +11,7 @@
  * 1. `offsetParent` of a fixed element is null unless the containing block was
  *    stolen by an ancestor — the direct hijack detector.
  * 2. The stack's right edge must sit exactly at `viewport - 18`, inside the
- *    viewport on every side, clear of the sidebar, with full card text unclipped.
+ *    viewport on every side, clear of the header rows, with full card text unclipped.
  *
  * A mock site signs in-and-fails on purpose (the check endpoint always answers
  * 401), so a batch launch produces the same warning toasts the user saw.
@@ -184,20 +184,6 @@ try {
   })()`);
   check("batch launched", launched?.ok === true && launched.tabs >= names.length, launched);
 
-  // Open the workbench before measuring.
-  //
-  // The claim below is "clear of the sidebar", so the sidebar has to be on
-  // screen. A batch used to land in the workbench by itself because the default
-  // layout was 2×2; the default is now "no layout", which is a single-cell stage
-  // and therefore browse mode. Opening the column is a click, and it keeps this
-  // assertion about what it says it is about instead of quietly weakening it.
-  await client.evaluate(`(async () => {
-    const button = document.querySelector('.tabstrip .layout-btn');
-    if (button && !button.classList.contains('is-bench')) button.click();
-    await new Promise((done) => setTimeout(done, 900));
-    return Boolean(document.querySelector('.sidebar'));
-  })()`);
-
   // Wait out the login-failure reports (fill ≈2s + 20s confirm deadline).
   //
   // The budget is deliberately generous. Each identity gets its own confirm
@@ -210,13 +196,13 @@ try {
       const doc = document.documentElement;
       const stack = document.querySelector('.toast-stack');
       const rect = stack?.getBoundingClientRect();
-      const dock = document.querySelector('.sidebar')?.getBoundingClientRect();
+      const rail = document.querySelector('.rail')?.getBoundingClientRect();
       return {
         count: document.querySelectorAll('.toast').length,
         viewportW: doc.clientWidth,
         offsetParent: stack?.offsetParent ? (stack.offsetParent.className || stack.offsetParent.tagName) : null,
         stack: rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null,
-        dock: dock ? { left: dock.left, right: dock.right } : null,
+        rail: rail ? { top: rail.top, bottom: rail.bottom } : null,
       };
     })()`);
     if (toasts.count >= names.length) break;
@@ -248,19 +234,21 @@ try {
     { stack: toasts.stack, viewportH },
   );
   // The stack sits over the page now, so the geometry claim is about the
-  // viewport, not about the dock: fixed to the bottom-right corner of the
-  // window, clear of the sidebar, and readable end to end.
+  // window's own chrome: fixed to the bottom-right corner, below the header
+  // rows (the instance rail is the first of them; the navigation column this
+  // check used to clear is retired with the grid, ADR 0012), and readable end
+  // to end.
   //
   // It used to be confined to the dock's rectangle because a native page view
   // painted over every HTML layer. The carrier is a `<webview>` guest now — an
   // ordinary composited layer — which is why the stack can float over the page
   // at all.
   check(
-    "toast stack floats over the page, clear of the sidebar",
-    Boolean(toasts.stack && toasts.dock) &&
-      toasts.stack.left >= (toasts.dock?.right ?? 0) - 1 &&
+    "toast stack floats over the page, clear of the header rows",
+    Boolean(toasts.stack && toasts.rail) &&
+      toasts.stack.top >= (toasts.rail?.bottom ?? 0) - 1 &&
       toasts.stack.right <= toasts.viewportW,
-    { stack: toasts.stack, dock: toasts.dock, viewportW: toasts.viewportW },
+    { stack: toasts.stack, rail: toasts.rail, viewportW: toasts.viewportW },
   );
 
   client.close();

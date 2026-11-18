@@ -8,14 +8,16 @@ import type { AppSettings } from "@shared/types";
  * `lastView` has two definitions and they must agree.
  *
  * `AppSettings["lastView"]` is what the interface may switch to; the zod enum in
- * `settingsPatchSchema` is what the main process will accept. They drifted: two
- * views existed in the type and not in the schema, so choosing either of them
- * made saving the setting fail with a raw validation error in a toast — visible
- * only if a person happened to navigate there and looked at the corner.
+ * `settingsPatchSchema` is what the main process will accept. They drifted once:
+ * views existed in the type and not in the schema, so choosing one made saving
+ * the setting fail with a raw validation error in a toast.
  *
  * The type cannot be enumerated at runtime, so this pins the members by name and
  * both sides are checked against the same list: adding a view to one and not the
  * other is what fails, whichever side is forgotten.
+ *
+ * The retired "views" page (P1-3) is out of the list on both sides; a workspace
+ * still storing it falls back to the browser page on restore.
  */
 const VIEWS = [
   "browser",
@@ -23,7 +25,6 @@ const VIEWS = [
   "ai",
   "sites",
   "identities",
-  "views",
   "flows",
   "tags",
   "bookmarks",
@@ -38,6 +39,8 @@ describe("lastView", () => {
       expect(settingsPatchSchema.safeParse({ lastView: view }).success, view).toBe(true);
     }
     expect(settingsPatchSchema.safeParse({ lastView: "nope" }).success).toBe(false);
+    // The retired page is rejected: restoring it would land on a blank pane.
+    expect(settingsPatchSchema.safeParse({ lastView: "views" }).success).toBe(false);
   });
 
   it("has the same members on both sides", () => {
@@ -50,12 +53,21 @@ describe("lastView", () => {
     expect(declared.sort()).toEqual([...VIEWS].sort());
   });
 
-  it("only names views that the sidebar can actually open", () => {
-    // A saved `lastView` that no page handles restores the shell to a blank pane.
-    const sidebar = read("src/renderer/src/components/AppSidebar.vue");
-    const union = sidebar.slice(sidebar.indexOf("export type AppView"), sidebar.indexOf("defineProps"));
-    const views = [...union.matchAll(/\| "([a-z-]+)"/g)].map((match) => match[1]);
-    expect(views.sort()).toEqual([...VIEWS].sort());
+  it("only names pages the shell can actually open", () => {
+    // A saved `lastView` that no page handles restores the shell to a blank
+    // pane. The shell's own `View` union is the list of what it can open —
+    // plus "settings", which covers the window and is deliberately never
+    // persisted as the view to restore.
+    const shell = read("src/renderer/src/App.vue");
+    const union = shell.slice(
+      shell.indexOf("type View ="),
+      shell.indexOf("const store = useWorkspaceStore"),
+    );
+    const pages = [...union.matchAll(/\| "([a-z-]+)"/g)].map((match) => match[1]);
+    expect(pages).toContain("settings");
+    expect(pages.filter((page) => page !== "settings").sort()).toEqual([...VIEWS].sort());
+    // The views page is retired: no page may answer "views" again.
+    expect(pages).not.toContain("views");
   });
 });
 

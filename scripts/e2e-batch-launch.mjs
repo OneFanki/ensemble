@@ -513,17 +513,18 @@ try {
       steps: frames
         .map((frame) => frame.onScreen)
         .filter((count, index, all) => index === 0 || count !== all[index - 1]),
-      // A frame with neither pages nor cells is the failure this guards: the
-      // switch to the browser page landing on a stage that has nothing on it.
-      blankFrames: frames.filter((frame) => frame.onScreen === 0 && frame.cells === 0).length,
+      // The single stage shows the first member and nothing else; a frame with
+      // neither that page nor the launch marker is the failure this guards:
+      // the switch to the browser page landing on a stage that says nothing.
+      blankFrames: frames.filter((frame) => frame.onScreen === 0 && !frame.marker).length,
       // The launch marker: present while the batch runs (the slow page keeps it
       // alive for over a second), gone after it settles.
       markerFrames: frames.filter((frame) => frame.marker).length,
       markerSample: frames.find((frame) => frame.marker)?.marker ?? null,
       markerAtEnd: frames.at(-1)?.marker ?? null,
-      // Any row ADDED to the loose group during the batch is the leak this
+      // Any row ADDED to the flat list during the batch is the leak this
       // suite guards: a page that briefly looked unassigned before its pin
-      // landed. The starter tab legitimately lives there from before.
+      // landed.
       looseSamples: frames
         .map((frame) => frame.looseRows.join("|"))
         .filter((text, index, all) => index === 0 || text !== all[index - 1]),
@@ -536,16 +537,16 @@ try {
     arrival,
   );
   check(
-    "no batch page ever flashes under the loose group mid-launch",
+    "no batch page ever flashes as loose mid-launch",
     // One distinct composition across the whole launch: rows may not appear
     // there, whatever they were before the batch is what they stay.
     Array.isArray(arrival?.looseSamples) && arrival.looseSamples.length === 1,
     arrival,
   );
   check(
-    "the batch lights the stage cell by cell and never leaves it blank",
+    "the single stage holds the first member while the rest land behind it",
     Array.isArray(arrival?.steps) &&
-      arrival.steps.at(-1) === 4 &&
+      arrival.steps.at(-1) === 1 &&
       arrival?.blankFrames === 0,
     arrival,
   );

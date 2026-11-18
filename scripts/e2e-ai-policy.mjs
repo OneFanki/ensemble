@@ -463,177 +463,100 @@ try {
   );
 
 
-  // --- The dock reports the count, so the user sees it without the log ---
+  // --- The rail reports AI activity, so the user sees it without the log ---
   //
-  // The dock belongs to the workbench, so this part of the check has to be in
-  // that mode: in browse mode the rows do not exist and every reading below
-  // would come back empty for a reason that has nothing to do with the badge.
-  await client.evaluate(`(async () => {
+  // The count badge is retired: the rail's chip carries a state dot now —
+  // breathing while the AI is acting, steady when it acted within the last
+  // half hour, and nothing otherwise. What the badge answered ("did the AI
+  // touch this instance, and when?") the dot still answers, per instance; the
+  // exact per-action numbers live in the audit log and the unit tests that
+  // map log timestamps to states. A third, untouched instance is opened here
+  // as the control for "no activity, no dot".
+  const dots = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    const btn = document.querySelector('.tabstrip .layout-btn');
-    if (btn && !btn.classList.contains('is-bench')) btn.click();
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (document.querySelector('.dock .tab-row')) return true;
-      await wait(200);
-    }
-    return false;
-  })()`);
-  //
-  // Two claims, not one: the number is there, and its explanation is drawn by
-  // the app rather than being a native `title`. The second claim has a hard
-  // constraint behind it — the dock and each view block clip their overflow,
-  // while native page views paint over everything on the stage — so the hint
-  // must stay on one line *inside the dock*, at its narrowest, in both
-  // languages. A translation that outgrows the panel would silently lose its
-  // beginning, which is exactly the sort of bug a "the tooltip renders" check
-  // would wave through.
-  const messageSource = readFileSync(
-    resolve("src/renderer/src/i18n/messages.ts"),
-    "utf8",
-  );
-  const englishHint = [...messageSource.matchAll(/aiActionCount: "([^"]+)"/g)]
-    .map((match) => match[1])
-    .pop();
-  const badge = await client.evaluate(`(async () => {
-    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
-    // The badge of the daily tab specifically, not just the first one in the
-    // dock: the count is per tab now, so the assertion has to name its tab.
-    // The daily tab is the busiest one (denied and granted clicks, a read, a
-    // screenshot), so it is the one whose tooltip and width budget matter.
-    const scope = ${JSON.stringify(dailyTabId)};
-    let el = null;
-    for (let attempt = 0; attempt < 8 && !el; attempt += 1) {
-      el = document.querySelector('[data-tab-id="' + scope + '"] .ai-badge');
-      if (!el) await wait(300);
-    }
-    if (!el) return { found: false };
-
-    const number = el.textContent.trim();
-
-    // Worst case first: drag the column to its minimum width. The column is on
-    // the left, so narrowing means dragging its right edge towards the window
-    // edge; the handle is the column's now, not the dock's.
-    const handle = document.querySelector('.sidebar-resize');
-    if (handle) {
-      const grip = handle.getBoundingClientRect();
-      const at = { bubbles: true, pointerId: 1, isPrimary: true };
-      handle.dispatchEvent(new PointerEvent('pointerdown', { ...at, clientX: grip.left }));
-      window.dispatchEvent(new PointerEvent('pointermove', { ...at, clientX: grip.left - 400 }));
-      window.dispatchEvent(new PointerEvent('pointerup', { ...at, clientX: grip.left - 400 }));
-      await wait(400);
-    }
-
-    el.dispatchEvent(new MouseEvent('mouseenter'));
-    await wait(150);
-    const tip = el.querySelector('.ai-tip');
-    const tipBox = tip?.getBoundingClientRect();
-    const box = el.getBoundingClientRect();
-
-    // Every ancestor that clips would cut a hint anchored inside the panel.
-    const clippedBy = [];
-    for (let node = el.parentElement; node; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
-      const r = node.getBoundingClientRect();
-      const inside = Boolean(tipBox)
-        && tipBox.left >= r.left - 0.5 && tipBox.right <= r.right + 0.5
-        && tipBox.top >= r.top - 0.5 && tipBox.bottom <= r.bottom + 0.5;
-      if (!inside) clippedBy.push(node.className || node.tagName);
-    }
-
-    // The other language, measured on the same element so the font, padding and
-    // border are exactly what ships: swap the text, read the width, put it back.
-    const shown = tip?.textContent ?? '';
-    let otherWidth = 0;
-    if (tip) {
-      tip.textContent = ${JSON.stringify(englishHint ?? "")};
-      otherWidth = Math.round(tip.getBoundingClientRect().width);
-      tip.textContent = shown;
-    }
-
-    const rect = {
-      number,
-      nativeTitle: el.getAttribute('title'),
-      hasTip: Boolean(tip),
-      tipText: tip?.textContent.trim() ?? null,
-      dockWidth: Math.round(document.querySelector('.sidebar')?.getBoundingClientRect().width ?? 0),
-      tipWidth: Math.round(tipBox?.width ?? 0),
-      otherLanguageWidth: otherWidth,
-      roomToTheLeft: Math.round(box.left - (document.querySelector('.dock')?.getBoundingClientRect().left ?? 0)),
-      clippedBy,
+    const api = window.ensemble;
+    await api.openEmbeddedTab({});
+    await wait(1200);
+    const state = await api.getEmbeddedState();
+    const instanceOf = (tabId) => state.tabs.find((t) => t.id === tabId)?.instanceId ?? null;
+    const dailyInstance = instanceOf(${JSON.stringify(dailyTabId)});
+    const identityInstance = instanceOf(${JSON.stringify(identityTabId)});
+    const untouchedInstance = instanceOf(state.tabs.find((t) => t.id === state.activeTabId)?.id ?? "");
+    const dotOf = (instanceId) =>
+      document
+        .querySelector('[data-instance-chip="' + instanceId + '"]')
+        ?.querySelector('[data-ai-dot]')
+        ?.getAttribute('data-ai-dot') ?? null;
+    const before = {
+      daily: dotOf(dailyInstance),
+      identity: dotOf(identityInstance),
+      untouched: dotOf(untouchedInstance),
+      chips: document.querySelectorAll('[data-instance-chip]').length,
     };
 
-    el.dispatchEvent(new MouseEvent('mouseleave'));
-    await wait(200);
-    return { found: true, ...rect, closedOnLeave: !el.querySelector('.ai-tip') };
+    // The dot explains itself with the drawn tooltip, not a native title.
+    const dot = document
+      .querySelector('[data-instance-chip="' + dailyInstance + '"]')
+      ?.querySelector('[data-ai-dot]');
+    dot?.dispatchEvent(new PointerEvent('pointerenter'));
+    await wait(800);
+    const tip = document.querySelector('.app-tooltip');
+    const tipBox = tip?.getBoundingClientRect();
+    const tipRead = {
+      nativeTitle: dot?.getAttribute('title') ?? null,
+      visible: tip?.classList.contains('visible') ?? false,
+      tipText: tip?.textContent?.trim() ?? '',
+      insideWindow: tipBox
+        ? tipBox.left >= 0 &&
+          tipBox.right <= window.innerWidth &&
+          tipBox.top >= 0 &&
+          tipBox.bottom <= window.innerHeight
+        : false,
+      pointerEvents: tip ? getComputedStyle(tip).pointerEvents : null,
+    };
+    dot?.dispatchEvent(new PointerEvent('pointerleave'));
+    await wait(300);
+    return { before, tipRead, tipClosed: !document.querySelector('.app-tooltip.visible') };
   })()`);
   check(
-    "the dock shows how many AI actions this page has seen",
-    badge?.found === true && Number.parseInt(badge?.number ?? "", 10) >= 3,
-    { found: badge?.found, number: badge?.number },
+    "the chip of the instance the AI acted on carries a dot",
+    dots?.before?.daily === "active" || dots?.before?.daily === "recent",
+    dots?.before,
   );
-  // The badge and the audit log must agree. This is the check that answers the
-  // question the badge exists for — "is this number real?" — and it is also what
-  // proves the count is per tab rather than per origin: the audit lines carry
-  // the tab id, and only the actions aimed at *this* tab may show up on its row.
-  // Refusals count too, so the two totals have to match exactly. The badge
-  // under test is the daily tab's row, which took four page actions (two
-  // refused clicks, a granted click, a refused type).
+  // The dot and the audit log must agree. This is the check that answers the
+  // question the dot exists for — "is this state real?" — and it is also what
+  // proves the state is per instance rather than per origin: the audit lines
+  // carry the tab id, and only instances whose tabs were touched may show a
+  // dot. Refusals recorded an activity too, so the daily instance (two refused
+  // clicks, a granted click, a refused type) and the identity instance (one
+  // granted click) both read as acted-on.
   const loggedForDaily = audit.filter((line) => line.tabId === dailyTabId).length;
-  check(
-    "the badge equals the number of audited actions on that tab",
-    Number.parseInt(badge?.number ?? "", 10) === loggedForDaily,
-    { badge: badge?.number, loggedForDaily },
-  );
-  // The reason the key changed: two tabs of one site used to show the same
-  // number, which read as if the AI had worked on both. The identity tab took
-  // exactly one (granted) click, so its own badge must show exactly that —
-  // neither the daily tab's history nor anyone else's.
-  const dailyBadge = Number.parseInt(badge?.number ?? "", 10);
-  const identityBadge = await client.evaluate(
-    `(async () => {
-      const scope = ${JSON.stringify(identityTabId)};
-      const row = document.querySelector('[data-tab-id="' + scope + '"] .ai-badge');
-      return row ? Number.parseInt(row.textContent.trim(), 10) : 0;
-    })()`,
-  );
   const loggedForIdentity = audit.filter((line) => line.tabId === identityTabId).length;
   check(
-    "two tabs of one site count separately",
-    Number(dailyBadge) === loggedForDaily
-      && Number(identityBadge) === loggedForIdentity
-      && Number(identityBadge) !== Number(dailyBadge),
-    { dailyBadge, loggedForDaily, identityBadge, loggedForIdentity },
+    "the dot agrees with the audit log: activity means a dot",
+    (loggedForDaily > 0) === Boolean(dots?.before?.daily) &&
+      (loggedForIdentity > 0) === Boolean(dots?.before?.identity),
+    { dots: dots?.before, loggedForDaily, loggedForIdentity },
   );
   check(
-    "the count explains itself with a drawn tooltip, not a native title",
-    badge?.nativeTitle === null && badge?.hasTip === true
-      && Boolean(badge?.tipText) && badge?.closedOnLeave === true,
-    {
-      nativeTitle: badge?.nativeTitle,
-      hasTip: badge?.hasTip,
-      tipText: badge?.tipText,
-      closedOnLeave: badge?.closedOnLeave,
-    },
+    "an instance the AI never touched carries no dot",
+    dots?.before?.untouched === null && (dots?.before?.chips ?? 0) >= 3,
+    dots?.before,
   );
-  // The hint is anchored inside a scrolling, clipping panel, so "it renders" is
-  // only half the claim: at the dock's narrowest it must still fit, the whole
-  // panel must have it, and the longer language must fit too. A tooltip cut off
-  // at either end is not a tooltip — it is a truncated sentence the user cannot
-  // read.
   check(
-    "the tooltip fits inside the dock even at its narrowest, in both languages",
-    badge?.dockWidth === 240
-      && Array.isArray(badge?.clippedBy) && badge.clippedBy.length === 0
-      && badge.tipWidth > 0 && badge.tipWidth <= badge.roomToTheLeft
-      && badge.otherLanguageWidth > 0 && badge.otherLanguageWidth <= badge.roomToTheLeft,
-    {
-      dockWidth: badge?.dockWidth,
-      tipWidth: badge?.tipWidth,
-      otherLanguageWidth: badge?.otherLanguageWidth,
-      roomToTheLeft: badge?.roomToTheLeft,
-      clippedBy: badge?.clippedBy,
-    },
+    "the dot explains itself with a drawn tooltip, not a native title",
+    dots?.tipRead?.nativeTitle === null &&
+      dots?.tipRead?.visible === true &&
+      String(dots?.tipRead?.tipText).includes("AI 最后动作") &&
+      dots?.tipRead?.pointerEvents === "none",
+    dots?.tipRead,
+  );
+  // The rail sits on the window's top row, so the tooltip has the whole window
+  // to open into; a hint clipped by the window edge is not a hint.
+  check(
+    "the tooltip opens inside the window and closes on leave",
+    dots?.tipRead?.insideWindow === true && dots?.tipClosed === true,
+    dots?.tipRead,
   );
 
   client?.close();

@@ -608,22 +608,6 @@ async function submitMaster() {
             </SettingGroup>
 
             <SettingGroup :title="$t('app.browsingTitle')">
-              <SettingRow :label="$t('app.defaultLayout')" :hint="$t('app.defaultLayoutNote')">
-              <div class="select-slot">
-                <SelectField
-                  :model-value="store.settings.layout"
-                  :options="
-                    store.layoutPresets.map((preset) => ({
-                      value: preset.id,
-                      label: store.presetName(preset),
-                    }))
-                  "
-                  @update:model-value="
-                    store.saveSettings({ layout: $event ?? store.settings.layout })
-                  "
-                />
-              </div>
-              </SettingRow>
               <SettingRow :label="$t('app.browserZoomSetting')" :hint="$t('app.browserZoomNote')">
               <div class="interval">
                 <TextField

@@ -4206,16 +4206,20 @@ function registerIpc(workspace: WorkspaceService): void {
       throw new Error(t("error.batchMixedSites"));
     }
     // A batch is the one launch that is about a layout: one scratch container,
-    // laid out with the current default layout, gone from the workspace when
-    // closed. The whole run — creation, pinning, rollback — lives in the main
-    // process so a renderer navigation cannot interrupt it halfway.
+    // gone from the workspace when closed. The whole run — creation, pinning,
+    // rollback — lives in the main process so a renderer navigation cannot
+    // interrupt it halfway.
+    //
+    // The stage is single-cell (ADR 0012): the container is always the one-slot
+    // Free layout, the first member takes the stage, and the rest stay alive
+    // off stage — their logins keep running and the MCP tools keep driving
+    // them; only the pixels wait. An out-of-range slot is a skip, not an
+    // error, so the members beyond slot 0 simply never get pinned.
     //
     // The container is broadcast ahead of the pages and outside the hold:
     // the switch below lands on a stage that already shows the batch taking
-    // shape (empty cells ready to fill) instead of whatever was on stage
-    // before, and every pinned page then lights its cell as it lands.
-    const layout = service.settingsSnapshot().layout;
-    const state = browser.createView({ layoutId: layout });
+    // shape instead of whatever was on stage before.
+    const state = browser.createView({ layoutId: "free" });
     const viewId = state.activeViewId;
     if (!viewId) throw new Error("批量启动容器创建失败");
     browser.focusPage();

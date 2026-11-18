@@ -1110,6 +1110,16 @@ export const messages = {
       aiOriginAllow: "允许此站点",
       aiOriginRevoke: "撤销权限",
       aiActionCount: "AI 在本页的操作次数",
+      aiDotLastAction: "AI 最后动作 · {time}",
+      railLabel: "运行中的实例",
+      railFoldMore: "还有 {count} 个实例",
+      railLaunch: "启动",
+      railLaunchPick: "选择要启动的账号",
+      railLaunchGo: "启动（{count}）",
+      railRunning: "运行中",
+      railManage: "管理",
+      backToBrowser: "返回浏览器",
+      noIdentitiesYet: "还没有账号。在管理 → 账号里添加。",
 
       // AI panel and activity log
       aiPanelOffHint: "AI 客户端还没有接到这里。开启后可以连接 Claude Code、Cursor 这类工具。",
@@ -2342,6 +2352,16 @@ export const messages = {
       aiOriginAllow: "Allow this site",
       aiOriginRevoke: "Revoke",
       aiActionCount: "AI actions on this page",
+      aiDotLastAction: "AI last acted · {time}",
+      railLabel: "Running instances",
+      railFoldMore: "{count} more instances",
+      railLaunch: "Launch",
+      railLaunchPick: "Pick accounts to launch",
+      railLaunchGo: "Launch ({count})",
+      railRunning: "Running",
+      railManage: "Manage",
+      backToBrowser: "Back to the browser",
+      noIdentitiesYet: "No accounts yet. Add one under Manage → Accounts.",
 
       // AI panel and activity log
       aiPanelOffHint: "No AI client is connected yet. Turn this on to connect Claude Code, Cursor and similar tools.",

@@ -24,8 +24,7 @@ import { describe, expect, it } from "vitest";
 const read = (path: string): string => readFileSync(join(process.cwd(), path), "utf8");
 
 const browser = read("src/renderer/src/components/BrowserPage.vue");
-const dock = read("src/renderer/src/components/RunDock.vue");
-const sidebar = read("src/renderer/src/components/AppSidebar.vue");
+const rail = read("src/renderer/src/components/InstanceRail.vue");
 const directive = read("src/renderer/src/directives/tooltip.ts");
 
 describe("hover labels", () => {
@@ -73,53 +72,22 @@ describe("hover labels", () => {
     }
   });
 
-  it("gives every icon-only dock control a label through the directive", () => {
-    /*
-     * The dock's two icon-only controls are `IconButton`s now, so the label
-     * arrives as `ariaLabel` and the component turns it into the drawn hint.
-     * Asserting the raw `v-tooltip` string here would fail on the component doing
-     * exactly what it is for; what still matters is that both controls carry the
-     * label at all, and that no native `title` crept back in.
-     */
-    expect(dock).toContain(":ariaLabel=\"t('app.browserCollapseDock')\"");
-    expect(dock).toContain('v-tooltip="t(\'app.browserExpandDock\')"');
-    expect(dock).toContain(":ariaLabel=\"t('app.browserCloseView')\"");
-    // The remaining `:title`s in this file are a page URL (a different job: the
-    // OS tooltip lets a long address be read) and the rename dialog's title
-    // prop. Only a control's hint is the offence, and those live in the markup
-    // — the dialog's `:title` is one prop among many on `<Modal>`.
-    const controls = dock.slice(dock.indexOf("<template>"));
-    const dialogStart = controls.indexOf("<Modal");
-    const dialogEnd = controls.lastIndexOf("</Modal>");
-    const pageMarkup = dialogStart >= 0
-      ? controls.slice(0, dialogStart) + controls.slice(dialogEnd)
-      : controls;
-    expect(pageMarkup).not.toMatch(/:title="t\('app\./);
-    // The collapsed strip's tiles carry a computed label with a placement, since
-    // they sit against the column's edge.
-    expect(dock).toContain("placement: 'top'");
+  it("gives every instance-rail control a label through the directive", () => {
+    // The rail is the window's first row: the [+ 启动] and [管理] buttons carry
+    // drawn labels, and each instance chip's hint is the account name — the
+    // fact a truncated label hides. No native `title` may creep back in: every
+    // hint on the rail is the app's own drawn layer.
+    expect(rail).toContain('v-tooltip="t(\'app.railLaunch\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.railManage\')"');
+    expect(rail).toContain('v-tooltip="item.account"');
+    expect(rail).not.toMatch(/:title="t\('app\./);
+    expect(rail).not.toMatch(/\s:title="/);
   });
 
-  it("labels the column's resize handle, which the dock no longer owns", () => {
-    // The handle moved to the sidebar when the dock stopped being the whole
-    // right-hand column: one box owns the width, so one box owns the grip.
-    expect(sidebar).toContain('v-tooltip="t(\'app.browserResizeDock\')"');
-    expect(dock).not.toContain("dock-resize");
-  });
-
-  it("labels every navigation row in the column", () => {
-    // Rows collapse to icons, so the label is all that is left at 46px. The
-    // first row shows the pages themselves, so it is named after them —
-    // "workbench" is the column, not this destination.
-    expect(sidebar).toContain('v-tooltip="t(\'app.browser\')"');
-    expect(sidebar).toContain("v-tooltip=\"entry.label\"");
-  });
-
-  it("names the sidebar toggle after the workbench it opens", () => {
-    // The grid glyph only shows or hides the column, never changes the layout;
-    // its copy names what appears, which is the workbench.
-    expect(browser).toContain("t('app.layoutOpenWorkbench')");
-    expect(browser).toContain("t('app.layoutCollapseWorkbench')");
+  it("labels the AI state dot with the time of the last action", () => {
+    // A colour-coded dot with no text is unreadable to a screen reader and
+    // guesswork to everyone else; the hint names what the dot means.
+    expect(rail).toContain('v-tooltip="item.dotTip"');
   });
 
   it("labels the guide entry in the app menu", () => {

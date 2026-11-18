@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * End-to-end checks for page resolution: scope, and the 2×2 splitter.
+ * End-to-end checks for page resolution: scope, per page.
  *
- * Two things went wrong here and looked unrelated:
+ * Resolution had one meaning and no scope. Picking a size in a tab's context
+ * menu looked like it applied to everything, because the menu stayed open over
+ * a frozen picture and the stage never showed the result until it was
+ * dismissed. The fix split it in two: a workspace default in the toolbar, and
+ * a per-page choice (inherit / adaptive / pinned) in the tab menu, which now
+ * closes on pick so the change is visible immediately.
  *
- * 1. Resolution had one meaning and no scope. Picking a size in a tab's context
- *    menu looked like it applied to everything, because the menu stayed open over
- *    a frozen picture and the stage never showed the result until it was
- *    dismissed. The fix split it in two: a workspace default in the toolbar, and
- *    a per-page choice (inherit / adaptive / pinned) in the tab menu, which now
- *    closes on pick so the change is visible immediately.
- * 2. In a 2×2 the horizontal divider only covered the right half. Handles were
- *    keyed by boundary position in a Map, and both bottom cells share one y, so
- *    the second overwrote the first. Dragging near the left edge hit the stage.
+ * The 2x2 splitter this suite used to drive is retired with the grid
+ * (ADR 0012); the pages under measurement now sit in two instances behind the
+ * one stage, which is exactly the reading that matters: scope is per page,
+ * not per cell.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -40,7 +40,6 @@ const baseUrl = `http://127.0.0.1:${pagePort}`;
 
 const now = new Date().toISOString();
 const siteId = "11111111-1111-4111-8111-111111111111";
-const viewId = "22222222-2222-4222-8222-222222222222";
 const ids = ["a", "b", "c", "d"].map(
   (c) => `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`,
 );
@@ -86,19 +85,7 @@ writeFileSync(
       identity(ids[2], "账号丙", "violet"),
       identity(ids[3], "账号丁", "rose"),
     ],
-    views: [
-      {
-        id: viewId,
-        siteId,
-        name: "探针视图",
-        identityIds: ids,
-        layoutId: "2x2",
-        slotAssignments: { [ids[0]]: 0, [ids[1]]: 1, [ids[2]]: 2, [ids[3]]: 3 },
-        paths: {},
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
+    views: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
@@ -143,68 +130,18 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
+  // Two instances, each holding one page of this site: everything below reads
+  // per-page viewport state, which the single stage carries fine. The 2x2
+  // splitter this suite used to drive is retired with the grid (ADR 0012);
+  // its retirement is guarded in the chrome-geometry suite.
   await client.evaluate(`(async () => {
-    await window.ensemble.openEmbeddedView('${viewId}');
-    await new Promise((r) => setTimeout(r, 2800));
+    const api = window.ensemble;
+    await api.openEmbeddedIdentity('${ids[0]}');
+    await new Promise((r) => setTimeout(r, 2200));
+    await api.openEmbeddedIdentity('${ids[1]}');
+    await new Promise((r) => setTimeout(r, 2200));
     return true;
   })()`);
-
-  // --- 2x2 horizontal divider must span the full stage width -----------------
-  const geom = await client.evaluate(`(() => {
-    const stage = document.querySelector('.stage').getBoundingClientRect();
-    const handles = [...document.querySelectorAll('.divider')].map((el) => {
-      const r = el.getBoundingClientRect();
-      return {
-        axis: el.classList.contains('horizontal') ? 'y' : 'x',
-        x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height),
-      };
-    });
-    return { stage: { x: Math.round(stage.x), w: Math.round(stage.width), h: Math.round(stage.height) }, handles };
-  })()`);
-  check(
-    "a 2x2 view has both a vertical and a horizontal divider",
-    geom?.handles?.some((h) => h.axis === "x") && geom?.handles?.some((h) => h.axis === "y"),
-    geom,
-  );
-  const horizontal = geom?.handles?.find((h) => h.axis === "y");
-  check(
-    "the horizontal divider spans the whole stage width",
-    horizontal && geom.stage && Math.abs(horizontal.w - geom.stage.w) <= 2,
-    { horizontal, stageWidth: geom?.stage?.w },
-  );
-
-  // Drag the horizontal divider on its LEFT half.
-  const drag = await client.evaluate(`(async () => {
-    const stage = document.querySelector('.stage').getBoundingClientRect();
-    const view = await window.ensemble.getEmbeddedState();
-    const active = view.views.find((v) => v.id === view.activeViewId);
-    const before = active.slotRects ?? null;
-    const handle = [...document.querySelectorAll('.divider.horizontal')][0];
-    if (!handle) return { found: false };
-    const r = handle.getBoundingClientRect();
-    const x = stage.x + stage.width * 0.25;
-    const y = r.y + r.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: x, clientY: y }));
-    window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY: y + 60 }));
-    await new Promise((res) => setTimeout(res, 200));
-    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: x, clientY: y + 60 }));
-    await new Promise((res) => setTimeout(res, 700));
-    const next = await window.ensemble.getEmbeddedState();
-    const after = next.views.find((v) => v.id === next.activeViewId)?.slotRects ?? null;
-    return {
-      found: true,
-      hitIsDivider: Boolean(hit && hit.classList?.contains('divider')),
-      before,
-      after,
-      moved: JSON.stringify(before) !== JSON.stringify(after),
-    };
-  })()`);
-  check(
-    "dragging the left half of the horizontal divider re-splits the view",
-    drag?.found === true && drag?.moved === true,
-    drag,
-  );
 
   // --- viewport: inherit -> pin -> inherit -> adaptive -----------------------
   const scope = await client.evaluate(`(async () => {
@@ -213,7 +150,7 @@ try {
     const tabA = state.tabs.find((t) => t.label === '账号甲');
     const tabB = state.tabs.find((t) => t.label === '账号乙');
     const read = (s) => s.tabs
-      .filter((t) => t.viewId)
+      .filter((t) => t.label === '账号甲' || t.label === '账号乙')
       .map((t) => ({
         label: t.label,
         viewport: t.viewport ?? null,
@@ -383,6 +320,10 @@ try {
     const api = window.ensemble;
     const state = await api.getEmbeddedState();
     const tab = state.tabs.find((t) => t.label === '账号乙');
+    // The measured page has to be the one on stage: off stage there is no
+    // rect, and a parked page renders nothing worth measuring.
+    await api.activateEmbeddedTab(tab.id);
+    await new Promise((r) => setTimeout(r, 700));
     // "inherit", not "adaptive": this page has to follow the workspace default
     // for the measurement below to mean anything. Adaptive is an explicit
     // opt-out, so setting it here and then expecting 1280 contradicted the
@@ -391,14 +332,20 @@ try {
     await api.saveAppSettings({ browserViewport: { width: 1280, height: 720 } });
     await new Promise((r) => setTimeout(r, 900));
     const pinned = await api.getEmbeddedState();
-    return { tabId: tab.id, cellWidth: pinned.tabs.find((t) => t.id === tab.id)?.bounds?.width ?? null };
+    const staged = pinned.tabs.find((t) => t.id === pinned.activeTabId);
+    return { tabId: tab.id, cellWidth: staged?.bounds?.width ?? null };
   })()`);
   await wait(600);
   const pinnedTarget = await targetReporting(1280);
   const withViewport = pinnedTarget ? await readSize(pinnedTarget) : null;
-  await client.evaluate(`(async () => {
+  // The width to compare against is the one the stage grants *after* the
+  // clear: while the default is active the rect is the pinned size (1280),
+  // and only clearing it hands the stage's own width back.
+  const clearedWidth = await client.evaluate(`(async () => {
     await window.ensemble.saveAppSettings({ browserViewport: null });
     await new Promise((r) => setTimeout(r, 1000));
+    const state = await window.ensemble.getEmbeddedState();
+    return state.tabs.find((t) => t.id === state.activeTabId)?.bounds?.width ?? null;
   })()`);
   await wait(600);
   const afterClear = pinnedTarget ? await readSize(pinnedTarget) : null;
@@ -406,9 +353,8 @@ try {
     "clearing the default hands the zoom factor back, not just the state",
     withViewport?.w === 1280 &&
       Boolean(afterClear?.w) &&
-      afterClear.w < 1000 &&
-      Math.abs(afterClear.w - (zoomReset?.cellWidth ?? 0)) <= 4,
-    { withViewport, afterClear, cellWidth: zoomReset?.cellWidth },
+      Math.abs(afterClear.w - (clearedWidth ?? 0)) <= 4,
+    { withViewport, afterClear, clearedWidth },
   );
 
   // --- the tab menu closes on pick so the change is visible immediately -----
@@ -418,9 +364,7 @@ try {
     const tab = state.tabs.find((t) => t.label === '账号乙');
     await api.activateEmbeddedTab(tab.id);
     await new Promise((r) => setTimeout(r, 900));
-    const row = [...document.querySelectorAll('.slot-tab')].find(
-      (el) => el.getAttribute('data-tab-id') === tab.id,
-    );
+    const row = document.querySelector('.tabstrip .tab[data-tab-id="' + tab.id + '"]');
     const box = row?.getBoundingClientRect();
     row?.dispatchEvent(new MouseEvent('contextmenu', {
       bubbles: true, clientX: Math.round(box.x + 10), clientY: Math.round(box.y + 8),

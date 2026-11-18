@@ -81,7 +81,7 @@
 | `FormField` | 标题在上 + 一个控件 | `label` / `#label` 插槽、`hint`、`as`、`grow`、`plain` |
 | `Checkbox` | 复选框 + 文案 | `v-model`、`disabled` |
 | `EmptyState` | 空列表的整套框架 | `text`、`note`、`#icon` 与默认动作槽 |
-| `InputShell` | 带描边的输入容器 + 聚焦扫光 | `size`（toolbar/hero）、`as` |
+| `InputShell` | 输入容器：静止描边 + 聚焦时两条水平边从左向右铺开 | `size`（toolbar/hero）、`as` |
 
 这条规则是踩出来的，两次：
 

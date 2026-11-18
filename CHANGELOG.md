@@ -51,6 +51,7 @@
 
 #### 优化
 
+- **地址栏与搜索框的聚焦效果改为一笔画到底**。原来是描边绕外框跑一整圈（500ms）、再等 350ms 才淡入稳定态，点进去将近一秒才「亮好」。现在改成上下两条边同时从左端向右铺开，170ms 到位，铺满即是终态，没有第二段。竖边不再绘制——输入框本来就嵌在一行里，四面封口会读成第二个边框。
 - **MCP 返回体瘦身**。列表返回封顶：`list_flows` 流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截到前 200 字符、超 60 步截到 60（`run_flow` 用完整定义，不受预览截断影响）；书签只回 `hasFavicon` 标记，图标内容不再进上下文；浏览器状态类返回只保留决策字段，图标 data: URL、窗口几何、缩放等渲染层数据不出走；`evaluate_browser_page` 返回值超过 64KB 时拒绝返回并说明，先在表达式里聚合或分页再取小结果。
 - **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
 - **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
@@ -107,6 +108,7 @@ pages that pop out to their own window, and new rules for freezing and update no
 
 #### Improved
 
+- **The address bar and search box now light up in one stroke.** The old focus state ran a border dash a full lap around the outline (500ms) and then waited another 350ms for the settled stroke to fade in — nearly a second before a click looked finished. Now the top and bottom edges fill from the left end at the same time, 170ms, and the filled state *is* the settled state: there is no second stage. The vertical edges are no longer drawn — the field already sits inside a row, and closing all four sides read as a second border.
 - **Slimmer MCP payloads.** List returns are capped: `list_flows` returns the first 50 flows and marks `truncated` beyond that, with step values clipped to 200 characters and flows to 60 steps (`run_flow` keeps using the full definition, unaffected by the preview clipping); bookmarks come back as a `hasFavicon` flag instead of icon bytes; browser-state returns keep only decision fields — icon data: URLs, window geometry, zoom and other renderer-only data never leave the app; and `evaluate_browser_page` refuses results over 64 KB with a note — aggregate or paginate inside the expression and fetch a small result.
 - **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
 - **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.

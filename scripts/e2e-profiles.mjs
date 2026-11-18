@@ -359,8 +359,10 @@ try {
   `,
   );
   check(
+    // 书签的入口在管理窗格的「更多」组（W2-A），应用菜单不保留页面入口；
+    // 这里两行都应为 0。
     "the toolbar menu has no profiles row",
-    menu?.profilesRow === 0 && menu?.bookmarksRow === 1,
+    menu?.profilesRow === 0 && menu?.bookmarksRow === 0,
     menu,
   );
   await inApp(client, `document.body.click(); await new Promise((r) => setTimeout(r, 300));`);

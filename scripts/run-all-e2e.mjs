@@ -36,18 +36,31 @@ for (const file of files) {
     child.stderr.on("data", (chunk) => (out += chunk));
     child.on("close", (code) => done({ code, out }));
   });
+  // Three summary formats exist because the suites grew independently. Missing
+  // one is not cosmetic: a suite whose format is unrecognised prints "no
+  // summary" and still counts as clean, so its failures would be invisible in
+  // the one place that claims "all e2e passed". `checks passed` is the newest
+  // spelling (bookmark-flyout / popout / http-auth) and was the gap.
   const summary = /SUMMARY (\d+\/\d+)/.exec(result.out)?.[1]
     ?? /(\d+\/\d+) assertions passed/.exec(result.out)?.[1]
+    ?? /(\d+\/\d+) checks passed/.exec(result.out)?.[1]
     ?? "no summary";
   const failures = [...result.out.matchAll(/^FAIL (.+)$/gm)].map((match) => match[1]);
-  rows.push({ file, code: result.code, summary, failures });
+  // A summary of `5/6` is a failed run even when every line it printed was a
+  // pass and the exit code is 0: some suites report a shortfall only in the
+  // tally. "no summary" is also not clean — an unrecognised format must not be
+  // a way to pass, which is exactly how one format stayed unchecked.
+  const tally = summary === "no summary" ? null : summary.split("/").map(Number);
+  const shortfall = tally === null || tally[0] !== tally[1];
+  rows.push({ file, code: result.code, summary, failures, shortfall });
   console.log(
-    `${result.code === 0 && failures.length === 0 ? "ok  " : "FAIL"} ${file.padEnd(30)} ${summary.padEnd(18)} ${Math.round((Date.now() - started) / 1000)}s`,
+    `${result.code === 0 && failures.length === 0 && !shortfall ? "ok  " : "FAIL"} ${file.padEnd(30)} ${summary.padEnd(18)} ${Math.round((Date.now() - started) / 1000)}s`,
   );
   for (const failure of failures) console.log(`       x ${failure}`);
+  if (shortfall && summary === "no summary") console.log("       x no recognisable summary line");
 }
 
-const broken = rows.filter((row) => row.code !== 0 || row.failures.length > 0);
+const broken = rows.filter((row) => row.code !== 0 || row.failures.length > 0 || row.shortfall);
 console.log(`\n${rows.length - broken.length}/${rows.length} suites clean`);
 if (skipped.length) {
   // Said out loud rather than silently omitted: "all e2e passed" would otherwise

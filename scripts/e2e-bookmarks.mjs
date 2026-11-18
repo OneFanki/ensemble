@@ -204,12 +204,25 @@ try {
     const leaving = first.querySelector(':scope > .bb-flyout');
     const firstClosedAfterSibling =
       !leaving || leaving.classList.contains('bb-pop-leave-active');
-    await wait(260);
+    // Poll for the removal instead of sleeping a fixed 260ms. The exit
+    // animation is 100ms, so a fixed wait left only 160ms of headroom — enough
+    // on an idle machine and not enough when this suite runs inside the
+    // 61-suite sweep, where it showed up as a one-off failure that never
+    // reproduced alone. A deadline is the same assertion without the assumption
+    // about how busy the machine is.
+    let firstGone = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (!first.querySelector(':scope > .bb-flyout')) {
+        firstGone = true;
+        break;
+      }
+      await wait(50);
+    }
     return {
       ok: true,
       firstOpen,
       firstClosedAfterSibling,
-      firstGone: !first.querySelector(':scope > .bb-flyout'),
+      firstGone,
       secondOpen: Boolean(second.querySelector(':scope > .bb-flyout')),
     };
   })()`);

@@ -9,12 +9,20 @@
 
 补齐 AI 操作页面的能力：动作缺口、网络观察、环境模拟、元素句柄、流程编排脚本与
 能力查询；修掉几处会让页面「看起来死了」的阻塞，并把流程的原始 CDP 步骤做成有
-档位判定的逃生口。
+档位判定的逃生口。同一波把浏览器界面收成单舞台：顶部实例行、管理窗格、账号即
+档案，页面可拆出到独立窗口，冻结与更新提示也换上新的规则。
 
 ### 中文
 
 #### 新增
 
+- **单舞台与顶部实例行**。主界面收成一个舞台加顶部两行：第一行是实例行——头像色块、账号名、站点图标与 AI 三态点，行尾是 [+ 启动] 与 [管理]；第二行是上台实例的页面标签，溢出折叠为「+N」。点谁谁上台，其余实例在后台保持登录运行、AI 照常驱动。视图页与分组、布局编排入口撤除，工作区数据里的 `views` 字段原样保留、读写不丢。[+ 启动] 可勾选多个账号一次拉起：第一个上台，其余后台待命。AI 状态是一枚三态点——正在操作呼吸、30 分钟内动过常亮、其余无标，悬停显示最后动作时间，明细在 AI 记录页。
+- **新建会话直达空白**。主按钮点开就是一张空白页：不预选站点、不弹账号面板；要按站点或账号开页时，再从选择面板走明确的一步。
+- **管理窗格**。站点、账号、AI 记录、设置收进一个独立窗格，流程是 AI 记录页里的一个标签；主界面的常驻入口只有 [+ 启动] 与 [管理] 两个——从浏览器一键进管理，从管理一键回浏览器。
+- **档案并入账号**。每个账号的登录数据（Cookie、会话）各自独立保存，新建账号不再问隔离：说明与「清除会话数据」收进账号表单的高级折叠项，默认收起。没有账号的页面——新标签页、书签、地址栏输入——统一落在默认档案。检测到自建档案时，设置页出现一次性迁移向导：可合并到默认档案（磁盘数据保留，已登录页面需重新登录），也可选择保留并不再提示。
+- **实例拆出到独立窗口**。页面可拆到独立的 OS 窗口，配合系统分屏与多显示器并排观察；再点一次收回主舞台，同一实例同时只允许一个拆出窗口。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留。MCP 侧新增 `pop_out_browser_tab`（run 档）。
+- **冻结按「用户可见」判定**。窗口最小化或隐藏到托盘时，台上页面照常冻结；批量启动落在后台的实例与 AI 开出的页面闲置后同样入冻。豁免原因随页面状态可见（`sleepExempt`：台上可见 / 有声 / AI 在操作 / 策略等），AI 据此判断谁在占资源；实例行条目带冻结标识（全部页冻结灰标、部分冻结半标），退出时打点记录冻结状态。
+- **更新提示汇总区间版本**。更新弹窗把当前版本到最新版本之间的每个 release 各展示一节，升序排列，最多 10 节，更早的折叠为一句计数；单个版本没有说明时显示占位文案。
 - **补齐动作缺口**：悬停、滚动、组合键、前进/后退/刷新、JS 弹窗的读与答、文件上传、拖拽、复选框设值、元素信息读取、元素裁剪截图。每一项都配了 e2e，断言的是「页面真的变了」而不是「工具返回了 ok」。
 - **流程的原始 CDP 步骤**：`cdp` 步骤可以跑协议层命令，但要先过三档白名单——只作用于当前页面的默认开放，改网络与设备模拟的需要在设置里开启，跨身份与影响整个进程的一律拒绝且不可解锁。一趟流程用超过两次会提示可能缺一个封装动作。
 - **`run_flow` 的 `timeoutMs`**：默认 120 秒、上限 10 分钟，由调用方指定。
@@ -43,6 +51,7 @@
 
 #### 优化
 
+- **MCP 返回体瘦身**。列表返回封顶：`list_flows` 流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截到前 200 字符、超 60 步截到 60（`run_flow` 用完整定义，不受预览截断影响）；书签只回 `hasFavicon` 标记，图标内容不再进上下文；浏览器状态类返回只保留决策字段，图标 data: URL、窗口几何、缩放等渲染层数据不出走；`evaluate_browser_page` 返回值超过 64KB 时拒绝返回并说明，先在表达式里聚合或分页再取小结果。
 - **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
 - **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
 - **e2e 的内联 CDP 客户端归零**。截图、DOM 解析与代理脚本里剩下的 3 份内联客户端也改用 `scripts/lib/e2e-cdp.mjs`，脚本目录里的 WebSocket 连接代码只剩公共客户端这一份。
@@ -57,10 +66,19 @@
 Fills in what an AI can do to a page — the missing actions, network observation,
 environment emulation, element handles, flow scripting and capability queries —
 fixes several ways a page could look dead, and turns a flow's raw CDP step into a
-tiered escape hatch.
+tiered escape hatch. The same wave collapses the browser surface into a single
+stage: an instance rail on top, a manage pane, profiles folded into accounts,
+pages that pop out to their own window, and new rules for freezing and update notes.
 
 #### Added
 
+- **One stage, an instance rail on top.** The main window is a single stage with two rows above it: the first is the instance rail — avatar block, account name, site icon and the AI status dot, with [+ Launch] and [Manage] at the end; the second is the on-stage instance's page tabs, overflowing into "+N". Click an instance to bring it on stage; the rest keep running signed-in in the background, still drivable by AI. The views page and its grouping and layout choreography are gone (the `views` field in workspace data is kept untouched, and read-write round-trips lose nothing). [+ Launch] takes a multi-select: the first account lands on stage, the rest wait in the background. The AI status is a three-state dot — breathing while operating, steady when active within 30 minutes, nothing otherwise — and hovering shows the last action time; details live on the AI activity page.
+- **New sessions start blank.** The primary button opens a blank page directly: no site preselected, no account panel; picking a site or account is an explicit step from the chooser when wanted.
+- **The manage pane.** Sites, accounts, AI activity and settings live in one pane, with flows as a tab inside AI activity; the main surface keeps exactly two permanent entries — [+ Launch] and [Manage] — one click each way.
+- **Profiles fold into accounts.** Every account already keeps its own cookies and session data, so creating an account no longer asks about isolation: the note and "clear session data" live in a collapsed advanced fold of the account form. Account-less surfaces — new tabs, bookmarks, typed addresses — all land in the default profile. When created profiles exist, Settings offers a one-time merge wizard: merge into the default profile (data stays on disk; signed-in pages will need to sign in again), or keep them and never ask again.
+- **Pop an instance out to its own window.** A page can move to its own OS window for side-by-side comparison via system split screen or multiple monitors; clicking again docks it back, and one popped-out window per instance. Popping out reloads the page: SPA in-memory state is not kept, but signed-in state and storage stay with the session partition. New MCP tool `pop_out_browser_tab` (run tier).
+- **Freezing follows user visibility.** With the window minimized or hidden to the tray, the on-stage page freezes as usual; background members of a batch launch and pages opened by AI freeze after idle like anything else. Exemption reasons are published per page (`sleepExempt`: on-stage visible / audible / AI active / policy …), so AI can tell what is holding resources; the instance rail carries a freeze badge (grey when every page is frozen, half when some are), and quit-time telemetry records the freeze state.
+- **The update dialog summarizes the whole range.** Every release between the installed version and the latest gets its own section, oldest first, up to ten sections with earlier ones folded into a count; a release without notes shows a placeholder.
 - **The missing actions**: hover, scroll, key combinations, back/forward/reload, reading and answering JS dialogs, file upload, drag, setting a checkbox, element info, and element-clipped screenshots. Each has an e2e that asserts the *page* changed rather than the tool returning `ok`.
 - **A flow's raw CDP step**: a `cdp` step can run protocol commands, but only through a three-tier list — commands that act on the current page are open, network and device emulation need a setting, and anything that crosses identities or affects the whole process is refused and cannot be unlocked. More than two raw commands in one flow produces a note that an action is probably missing.
 - **`run_flow`'s `timeoutMs`**: defaults to two minutes, capped at ten, chosen by the caller.
@@ -89,6 +107,7 @@ tiered escape hatch.
 
 #### Improved
 
+- **Slimmer MCP payloads.** List returns are capped: `list_flows` returns the first 50 flows and marks `truncated` beyond that, with step values clipped to 200 characters and flows to 60 steps (`run_flow` keeps using the full definition, unaffected by the preview clipping); bookmarks come back as a `hasFavicon` flag instead of icon bytes; browser-state returns keep only decision fields — icon data: URLs, window geometry, zoom and other renderer-only data never leave the app; and `evaluate_browser_page` refuses results over 64 KB with a note — aggregate or paginate inside the expression and fetch a small result.
 - **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
 - **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.
 - **No inline CDP clients are left in e2e.** The last 3 inlined copies — the screenshot, DOM-resolver and proxy scripts — now use `scripts/lib/e2e-cdp.mjs` too; the scripts directory holds exactly one WebSocket client.

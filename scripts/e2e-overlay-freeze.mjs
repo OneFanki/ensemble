@@ -97,14 +97,12 @@ try {
 
   const opened = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const view = await api.createEmbeddedView({ layoutId: "2x1", name: "覆盖验证" });
-    const state = await api.openEmbeddedTabInSlot(view.activeViewId, 0);
-    const active = state.views.find((item) => item.id === view.activeViewId);
-    const tabId = active?.slotTabs?.[0];
+    const tab = await api.openEmbeddedTab({});
+    const tabId = tab.id;
     // A blank page has no native pixels to freeze (the app draws its new-tab
     // surface there), so this check needs a real page on stage. Poll the state
     // instead of sleeping a fixed time: on a slow start the page is still blank
-    // when the dialog opens, freeze returns no images, and the assertion fails
+    // when the menu opens, freeze returns no images, and the assertion fails
     // for a reason that has nothing to do with overlays.
     if (tabId) await api.navigateEmbeddedTab(tabId, ${JSON.stringify(`http://127.0.0.1:${PAGE_PORT}/`)});
     let url = "";
@@ -115,64 +113,67 @@ try {
       await new Promise((r) => setTimeout(r, 200));
     }
     await new Promise((r) => setTimeout(r, 600));
-    return { viewId: view.activeViewId, tabId, url };
+    return { tabId, url };
   })()`);
   check(
     "a page is on stage",
-    Boolean(opened?.viewId) && String(opened?.url).startsWith(`http://127.0.0.1:${PAGE_PORT}`),
+    String(opened?.url).startsWith(`http://127.0.0.1:${PAGE_PORT}`),
     opened,
   );
 
-  // The view header's × asks for confirmation; that dialog must sit above the
-  // page. With a native view that means freezing the stage into images first —
-  // a native view is never behind HTML, whatever its z-index says. A guest is a
-  // node in this document, so the dialog simply stacks and nothing is frozen.
+  // The page tab's context menu asks for the stage to be covered before it
+  // opens; that menu must sit above the page. With a native view that means
+  // freezing the stage into images first — a native view is never behind HTML,
+  // whatever its z-index says. A guest is a node in this document, so the menu
+  // simply stacks and nothing is frozen.
   const dialog = await client.evaluate(`(async () => {
     const carrier = (await window.ensemble.getEmbeddedState()).carrier ?? "native";
-    const close = [...document.querySelectorAll('.view-block .block-head button')].find(
-      (button) => button.getAttribute('aria-label') === '关闭整个视图',
-    );
-    close?.click();
+    const tab = document.querySelector('.tabstrip .tab');
+    const labels = [];
+    let closeButtonFound = false;
+    if (tab) {
+      closeButtonFound = true;
+      tab.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 40 }));
+    }
     await new Promise((r) => setTimeout(r, 1500));
-    // A confirmation is an AlertDialog (role "alertdialog"), not a form dialog:
-    // a destructive question must not be dismissable by clicking the backdrop.
-    const modal = document.querySelector('[role="alertdialog"], [role="dialog"]');
-    const labels = [...document.querySelectorAll('.view-block .block-head button')].map((b) => b.getAttribute('aria-label') || b.className);
+    // The tab menu is role "menu" and hangs off the click point.
+    const modal = document.querySelector('.tab-menu');
     const frozen = document.querySelectorAll('.frozen').length;
     const stage = document.querySelector('.stage');
     const rect = modal?.getBoundingClientRect();
     const hit = rect
       ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + 12)
       : null;
-    // The stage sits directly behind the dialog. Asking who owns a point inside
-    // it is how a guest carrier proves the page did not paint over the dialog.
-    const stageBox = stage?.getBoundingClientRect();
-    const pageOnTop = stageBox
+    // The menu floats over the page it was opened from. Asking who owns a
+    // point *inside the menu's own rect* is how a guest carrier proves the
+    // page did not paint over the menu there — a small menu does not cover the
+    // stage's centre, so the centre is the page's own area by design.
+    const pageOnTop = rect
       ? document
           .elementsFromPoint(
-            Math.round(stageBox.left + stageBox.width / 2),
-            Math.round(stageBox.top + stageBox.height / 2),
+            Math.round(rect.left + rect.width / 2),
+            Math.round(rect.top + 12),
           )
-          .some((el) => el.tagName.toLowerCase() === "webview")
+          .some((el) => el.tagName.toLowerCase() === "webview" && !modal.contains(el))
       : false;
     return {
       modal: Boolean(modal),
       frozen,
       hasStage: Boolean(stage),
       topIsInDialog: Boolean(hit && modal?.contains(hit)),
-      closeButtonFound: true,
+      closeButtonFound,
       labels,
       carrier,
       pageOnTop,
     };
   })()`);
-  check("the close-view confirmation opens", dialog?.modal === true, dialog);
+  check("the tab menu opens over the stage", dialog?.modal === true, dialog);
   check(
-    "the page is not drawn over the confirmation",
+    "the page is not drawn over the menu",
     dialog?.carrier === "guest" ? dialog?.pageOnTop === false : dialog?.frozen === 1,
     dialog,
   );
-  check("the dialog is the topmost element", dialog?.topIsInDialog === true, dialog);
+  check("the menu is the topmost element", dialog?.topIsInDialog === true, dialog);
 
   // --- Flat mode (loose tab): the frozen picture must sit exactly where the
   // live view was, including the 26px instance-tab-strip band. Freezing at the
@@ -180,10 +181,12 @@ try {
   // jumped up whenever an overlay opened over a flat stage (2026-10-30). ---
   const flat = await client.evaluate(`(async () => {
     const api = window.ensemble;
+    // A genuinely flat stage: the single-cell surface with no container — close
+    // the menu, then make sure every page is a plain loose tab.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 400));
     const before = await api.getEmbeddedState();
-    // A genuinely flat stage: close the view ("+" would otherwise join it —
-    // that is the dock's contract), then open a loose tab.
-    if (before.activeViewId) await api.closeEmbeddedView(before.activeViewId, "all");
     const loose = await api.openEmbeddedTab({});
     await api.navigateEmbeddedTab(loose.id, ${JSON.stringify(`http://127.0.0.1:${PAGE_PORT}/flat`)});
     for (let attempt = 0; attempt < 60; attempt += 1) {

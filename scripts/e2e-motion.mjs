@@ -23,6 +23,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { goTo } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -168,18 +169,9 @@ try {
 
   // --- 对话框：淡入 + 上浮 + 微缩 ----------------------------------------
   //
-  // The identity dialog lives on the identities page, which is a destination
-  // beside the navigation column — so the way in is the menu's workbench row and
-  // then the column's row, not the settings page (that one covers the column).
-  await client.evaluate(`(async () => {
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    document.querySelector('[data-menu-item="workspace"]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    document.querySelector('[data-nav="identities"]')?.click();
-    await new Promise((r) => setTimeout(r, 800));
-    return true;
-  })()`);
+  // The identity dialog lives on the identities page, which is reached through
+  // the rail's [管理] menu — the shared path in scripts/lib/e2e-nav.mjs.
+  await goTo(client, "identities", 900);
 
   const dialogFrames = await client.evaluate(
     sampleFrames(
@@ -241,25 +233,17 @@ try {
   // clickable), and the shell is actually on that page. Both are asserted
   // rather than assumed — a trigger found while a dialog was still up belongs
   // to the dialog, and closing it took the trigger with it.
-  const arrived = await client.evaluate(`(async () => {
+  await client.evaluate(`(async () => {
     const scrim = document.querySelector('[role="dialog"] .close')
       ?? document.querySelector('[role="dialog"]');
     scrim?.click();
     await new Promise((r) => setTimeout(r, 400));
-    // Settings covers the window and is entered from the column's bottom row;
-    // the section is a tab inside the page rather than a row in the column.
-    if (!document.querySelector('.page.settings')) {
-      if (!document.querySelector('.sidebar-nav')) {
-        document.querySelector('[data-app-menu]')?.click();
-        await new Promise((r) => setTimeout(r, 400));
-        document.querySelector('[data-menu-item="workspace"]')?.click();
-        await new Promise((r) => setTimeout(r, 700));
-      }
-      document.querySelector('[data-nav="settings"]')?.click();
-      await new Promise((r) => setTimeout(r, 700));
-    }
-    document.querySelector('.page.settings [data-section="engines"]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
+    return true;
+  })()`);
+  // Settings covers the window; the engines section is a tab inside the page,
+  // and the path in is the rail's management menu.
+  await goTo(client, "settings-engines", 900);
+  const arrived = await client.evaluate(`(async () => {
     return {
       dialog: Boolean(document.querySelector('[role="dialog"]')),
       settings: Boolean(document.querySelector('.page.settings')),
@@ -351,26 +335,20 @@ try {
   // `saveAppSettings` directly produces no toast at all. This drives the real
   // path instead: close the popover, reopen the identity dialog, fill the form
   // and save — the action a user takes, and the one that reports back.
+  // The select panel is still open and would swallow the next clicks; close
+  // it, then leave settings and stand on the identities page via the menu.
+  await client.evaluate(`(() => {
+    document.body.click();
+    return true;
+  })()`);
+  await wait(300);
+  await goTo(client, "identities", 900);
   const toastFrames = await client.evaluate(`(async () => {
     const frames = [];
-    // The select panel is still open and would swallow the next clicks.
-    document.body.click();
-    // The identity dialog is on a page beside the column, so leave settings
-    // first — the column only exists outside it.
-    document.querySelector('.settings-head .back')?.click();
-    await new Promise((r) => setTimeout(r, 600));
-    if (!document.querySelector('.sidebar-nav')) {
-      document.querySelector('[data-app-menu]')?.click();
-      await new Promise((r) => setTimeout(r, 400));
-      document.querySelector('[data-menu-item="workspace"]')?.click();
-      await new Promise((r) => setTimeout(r, 700));
-    }
-    document.querySelector('[data-nav="identities"]')?.click();
-    await new Promise((r) => setTimeout(r, 600));
     const create = [...document.querySelectorAll('button')].find((el) =>
       /新建/.test(el.textContent || ''),
     );
-    if (!create) return { error: 'no create button', nav: document.querySelector('.nav-item.active')?.dataset.nav ?? null };
+    if (!create) return { error: 'no create button', page: document.querySelector('.page.settings') ? 'settings' : 'browser' };
     create.click();
     await new Promise((r) => setTimeout(r, 500));
     const read = () => {

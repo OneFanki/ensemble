@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of the empty slot's "add a page here" button.
+ * End-to-end check of the empty stage's "new tab" answer.
  *
- * An empty slot has to look like a place a page belongs and put the new page in
- * that exact cell, focused — otherwise the follow-up ("type an address") starts
- * from the wrong tab.
+ * The empty slot's dashed "add a page here" cell is retired with the multi-cell
+ * stage (ADR 0012). What it existed to guarantee, though, is still the contract:
+ * with nothing running, the stage has to look like a place a page belongs and
+ * put the new page there, focused — so the follow-up ("type an address") starts
+ * from the right tab.
+ *
+ * The single stage answers this with its own empty state (a "new tab" action on
+ * the stage) plus the toolbar's "+" and the address bar, which navigates the
+ * page it opens.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { freePort } from "./lib/e2e-ports.mjs";
-import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-slot-"));
-const port = await freePort();
 const electronBinary =
   process.platform === "win32"
     ? resolve("node_modules/electron/dist/electron.exe")
@@ -86,65 +90,64 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
-  const created = await client.evaluate(`(async () => {
+  const empty = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const state = await api.createEmbeddedView({ layoutId: "2x1", name: "空槽位验证" });
-    await new Promise((r) => setTimeout(r, 700));
+    // Close the tab a fresh start opens, so the stage is genuinely empty —
+    // the state the old dashed cells and the new empty state both answer.
+    const state = await api.getEmbeddedState();
+    for (const tab of state.tabs) await api.closeEmbeddedTab(tab.id);
+    await new Promise((r) => setTimeout(r, 900));
     return {
-      viewId: state.activeViewId,
-      slots: state.views[0]?.slotTabs,
-      bodies: document.querySelectorAll('.slot-empty').length,
-      buttons: [...document.querySelectorAll('.slot-add')].map((el) => el.textContent.trim()),
-      indexes: [...document.querySelectorAll('.slot-empty-index')].map((el) => el.textContent.trim()),
-      emptyHeaders: document.querySelectorAll('.slot-header.empty').length,
+      emptyState: document.querySelectorAll('.stage-empty').length,
+      newTabAction: document.querySelector('.stage-empty-action')?.textContent?.trim() ?? null,
+      launch: Boolean(document.querySelector('[data-launch-btn]')),
+      manage: Boolean(document.querySelector('[data-manage-btn]')),
+      address: document.querySelector('.address input')?.value ?? null,
+      cells: document.querySelectorAll('.slot-empty').length,
     };
   })()`);
-  check("view created with two empty slots", created?.slots?.length === 2, created);
-  check("the stage draws one dashed cell per empty slot", created?.bodies === 2, created);
-  check("each empty cell offers an add button", created?.buttons?.length === 2, created?.buttons);
+  check("a workspace with nothing running shows the stage's empty state", empty?.emptyState === 1, empty);
+  check("the empty state offers the new-tab action", Boolean(empty?.newTabAction), empty);
   check(
-    "an empty cell has no header band; its number sits inside the cell",
-    created?.emptyHeaders === 0 && created?.indexes?.join(",") === "1,2",
-    created,
+    "the rail keeps the two standing entrances available",
+    empty?.launch === true && empty?.manage === true,
+    empty,
   );
+  check("a blank page leaves the address bar empty", empty?.address === "", empty?.address);
+  check("no dashed empty cell is drawn on the single stage", empty?.cells === 0, empty);
 
-  // Click the second cell's button: the page must land in slot 2, not slot 1.
+  // The stage's own action creates one page, on the stage, focused.
   const clicked = await client.evaluate(`(async () => {
     const before = await window.ensemble.getEmbeddedState();
-    const buttons = [...document.querySelectorAll('.slot-add')];
-    buttons[1]?.click();
+    document.querySelector('.stage-empty-action')?.click();
     await new Promise((r) => setTimeout(r, 1500));
     const state = await window.ensemble.getEmbeddedState();
-    const view = state.views.find((item) => item.id === state.activeViewId);
     return {
-      slots: view?.slotTabs,
-      focused: view?.focusedTabId,
-      active: state.activeTabId,
-      // Relative to the launch page that is still on the surface.
+      // Relative to the empty stage: exactly one page appears.
       tabs: state.tabs.length - before.tabs.length,
+      active: state.activeTabId,
+      stageTab: Boolean(document.querySelector('.stage-empty')),
       address: document.querySelector('.address input')?.value ?? null,
+      strip: [...document.querySelectorAll('.tabstrip .tab')].map((el) =>
+        el.getAttribute('data-tab-id'),
+      ),
     };
   })()`);
-  check("clicking the second empty cell creates one page", clicked?.tabs === 1, clicked);
+  check("clicking the empty stage's action creates one page", clicked?.tabs === 1, clicked);
   check(
-    "the page is pinned to the cell that was clicked",
-    clicked?.slots?.[0] === null && Boolean(clicked?.slots?.[1]),
-    clicked?.slots,
+    "the new page takes the stage and the strip lists it",
+    clicked?.active === clicked?.strip?.[0] && clicked?.stageTab === false,
+    clicked,
   );
-  check(
-    "the new page takes focus",
-    clicked?.focused === clicked?.slots?.[1] && clicked?.active === clicked?.slots?.[1],
-    { focused: clicked?.focused, active: clicked?.active },
-  );
-  check("a blank page leaves the address bar empty", clicked?.address === "", clicked?.address);
+  check("the new page starts with an empty address bar", clicked?.address === "", clicked?.address);
 
   const titles = await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
-    const row = document.querySelector('.dock .tab-row .tab-label')?.textContent?.trim();
+    const row = document.querySelector('.tabstrip .tab .tab-label')?.textContent?.trim();
     return { row, label: state.tabs[0]?.label, title: state.tabs[0]?.title };
   })()`);
   check(
-    "the dock falls back to the tab label until the page reports a title",
+    "the strip falls back to the tab label until the page reports a title",
     titles?.row === "新标签页" && titles?.row === titles?.label,
     titles,
   );

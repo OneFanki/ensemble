@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * End-to-end checks for the bookmark-bar flyout panels and the dock badge.
+ * End-to-end checks for the bookmark-bar flyout panels.
  *
  * Each check below was a real defect:
  *
@@ -13,9 +13,9 @@
  *    sit inside the viewport aligned with its row.
  * 3. Scrolling the parent panel must collapse the chain back to it — a fixed
  *    child would otherwise keep pointing at rows that have moved away.
- * 4. The dock badge used to hang outside the expand button (`top: -4px`), and
- *    the collapsed strip starts on the window's top row, so the clipped half
- *    was what users saw. It sits inside the button now.
+ * 4. The run dock whose collapsed badge this suite once measured is retired
+ *    with the grid (ADR 0012); what must hold now is that it stays retired and
+ *    the instance rail is the header's first row.
  *
  * Everything runs headless: a real window is parked outside every display so
  * the compositor still produces frames.
@@ -248,25 +248,23 @@ try {
     { subAfterScroll, rootStillOpen },
   );
 
-  // --- 4. The dock badge stays inside the collapsed strip ------------------
-  // `shellMode` is not restored from settings at startup (the shell reads it
-  // once), so the sidebar is opened the way a user opens it: the layout button.
-  await client.evaluate(`document.querySelector('.layout-btn')?.click(); true`);
-  await waitFor(client, "Boolean(document.querySelector('.dock .collapse-btn'))");
-  await client.evaluate(`document.querySelector('.dock .collapse-btn')?.click(); true`);
-  await waitFor(client, "Boolean(document.querySelector('.dock .mini .badge'))");
-  const badge = await client.evaluate(`(() => {
-    const expand = document.querySelector('.dock .mini .expand');
-    const badge = expand?.querySelector('.badge');
-    if (!expand || !badge) return null;
-    const outer = expand.getBoundingClientRect();
-    const inner = badge.getBoundingClientRect();
-    return { badgeTop: inner.top, badgeBottom: inner.bottom, expandTop: outer.top, expandBottom: outer.bottom };
+  // --- 4. The retired column stays retired; the rail owns the top row -------
+  const shell = await client.evaluate(`(() => {
+    const rail = document.querySelector('.rail')?.getBoundingClientRect();
+    return {
+      dock: Boolean(document.querySelector('.dock')),
+      layoutBtn: Boolean(document.querySelector('.layout-btn')),
+      railTop: rail ? Math.round(rail.top) : null,
+      railInsideWindow: rail ? rail.left >= 0 && rail.right <= window.innerWidth : false,
+    };
   })()`);
   check(
-    "the collapsed dock's badge sits inside its button",
-    Boolean(badge) && badge.badgeTop >= badge.expandTop && badge.badgeBottom <= badge.expandBottom,
-    badge,
+    "the dock stays retired and the rail spans the window's top",
+    shell?.dock === false &&
+      shell?.layoutBtn === false &&
+      shell?.railTop === 0 &&
+      shell?.railInsideWindow === true,
+    shell,
   );
 
   client.close();

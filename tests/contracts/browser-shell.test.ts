@@ -37,8 +37,8 @@ const SETTING_GROUP = readFileSync(
   join(process.cwd(), "src", "renderer", "src", "components", "ui", "SettingGroup.vue"),
   "utf8",
 );
-const SIDEBAR = readFileSync(
-  join(process.cwd(), "src", "renderer", "src", "components", "AppSidebar.vue"),
+const RAIL = readFileSync(
+  join(process.cwd(), "src", "renderer", "src", "components", "InstanceRail.vue"),
   "utf8",
 );
 
@@ -173,33 +173,20 @@ describe("a setting group's heading is separated from its rows", () => {
 });
 
 /**
- * The navigation column scrolls vertically only.
+ * The instance rail is the window's first row and has no scroller of its own.
  *
- * A lone `overflow-y: auto` leaves the other axis at `visible`, and CSS promotes
- * that to `auto` — so the column grew a horizontal scroller nobody asked for. In
- * the 46px collapsed rail it fired every time: the items are exactly 34px and so
- * is the scroller's content box, so a sub-pixel rounding or the gutter of a thin
- * vertical scrollbar put `scrollWidth` one past `clientWidth`, and one pixel is
- * enough to paint a scrollbar under the last icon.
- *
- * `overflow-x` has to be stated, not implied. The assertion names it for the
- * same reason the bug existed: the absence of a declaration is invisible in
- * review, and the wrong axis is one property away.
+ * The row folds its overflow into a "+N" button, so nothing in it scrolls: a
+ * hidden horizontal scroller would let entries drift halfway out of the band
+ * while the fold claims there are only N more.
  */
-describe("the sidebar's navigation scroller", () => {
-  it("pins the horizontal axis instead of letting it be promoted", () => {
-    const nav = ruleBody(SIDEBAR, ".sidebar-nav");
-    expect(nav).toMatch(/overflow-x:\s*hidden/);
-    expect(nav).toMatch(/overflow-y:\s*auto/);
+describe("the instance rail", () => {
+  it("clips instead of scrolling, so folding is the only overflow answer", () => {
+    const box = ruleBody(RAIL, ".rail-box");
+    expect(box).toMatch(/overflow:\s*hidden/);
+    expect(box).not.toMatch(/overflow-x:\s*auto/);
   });
 
-  it("keeps collapsed items at their own width", () => {
-    // `align-self: stretch` looks like the tidier fix and is not: the collapsed
-    // column centres its items, so stretching sizes them from the content box,
-    // and once a vertical scrollbar takes its gutter the 34px tiles shrink to
-    // whatever is left.
-    const item = ruleBody(SIDEBAR, ".sidebar.collapsed .nav-item");
-    expect(item).toMatch(/width:\s*34px/);
-    expect(item).not.toMatch(/align-self:\s*stretch/);
+  it("is a token-sized band like the tab strip, so the two rows read as one header", () => {
+    expect(ruleBody(RAIL, ".rail")).toMatch(/height:\s*var\(--titlebar-height\)/);
   });
 });

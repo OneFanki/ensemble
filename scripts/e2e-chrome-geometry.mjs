@@ -1,27 +1,28 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of the window's top-right corner and the run dock's grouping.
+ * End-to-end check of the window's top rows and the single-stage geometry.
  *
- * Three reported problems, all of them in the same corner of the screen:
+ * The shell this suite measures is the single-stage one (ADR 0012): the
+ * navigation column and the run dock are gone, the window's first row is the
+ * instance rail and its second row is the on-stage instance's page strip, and
+ * the stage fills whatever is left. Three families of bugs are worth
+ * re-checking here, because each was invisible in the DOM — the elements
+ * existed, they were just in the wrong place or drawn in a colour that does
+ * not show:
  *
- * 1. **创建视图 and the collapse button were invisible with the dock open.** The
- *    native caption buttons are painted over the app's own frame, and the dock is
- *    the surface that meets that corner in bench mode. Its first row landed
- *    underneath them: not faint, not clipped — covered by a window button, which
- *    means unreadable and unclickable. Measured before the fix at y=12–34 against
- *    a caption band of y=0–34.
- * 2. **The tab strip kept a 138px hole.** The reservation was unconditional, so
- *    with the dock on the right the strip reserved a band for buttons that were
- *    not over it, leaving dead space between the last tab and the dock.
- * 3. **Two dock groups read as one list.** With the boxes removed, nothing was
- *    left between them but an 8px gap, so the lower group's header looked like one
- *    more row. The rule that was added had to be visible in both themes, which
- *    `--line`/`--line-soft` are not: both are tuned for white surfaces and are
- *    lighter than the dock's own background in the light theme.
- *
- * Everything here is geometry read from the real window, because every one of
- * these bugs was invisible in the DOM — the elements existed, they were just in
- * the wrong place or drawn in a colour that does not show.
+ * 1. **The top rows must stay clear of the native caption buttons.** The
+ *    buttons are painted over the app's own frame at the top-right, and the
+ *    strip is the surface that meets that corner. Its caption reservation has
+ *    to hold in the new shell just as it did in the old one.
+ * 2. **The two header rows must read as two rows.** The rail is the first row
+ *    and the strip the second; a rail that starts a row lower, or a stage that
+ *    stops where the retired column used to end, reads as one mangled header.
+ *    The on-stage rail chip must also read apart from the idle ones in both
+ *    themes — a fill that only differs by string, not by visibility, is the
+ *    same bug the dock's group rule used to have in the light theme.
+ * 3. **Dragging a page tab must shield the stage.** While the drag runs, a
+ *    live page must not be able to take the pointer; when it ends, the pointer
+ *    must come back.
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -30,6 +31,7 @@ import { join, resolve } from "node:path";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { goTo, backToBrowser } from "./lib/e2e-nav.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-chrome-"));
 const uuid = (i) =>
@@ -93,30 +95,20 @@ try {
   check("app window appeared", true);
   await wait(3400);
 
-  // A workbench with two accounts in one view, plus a loose tab: none of the
-  // geometry below exists until the shell is actually up.
-  await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    await api.createEmbeddedView({ layoutId: "2x1", name: "权限矩阵" });
-    const state = await api.getEmbeddedState();
-    const viewId = state.activeViewId;
-    await api.openEmbeddedTabInSlot(viewId, 0);
-    await api.openEmbeddedTabInSlot(viewId, 1);
-    return true;
-  })()`);
-  await wait(2200);
+  // The app opens with one blank page already on stage; one more call adds the
+  // second instance that the rail comparisons below need. None of the geometry
+  // under test exists until the shell is actually up.
   await client.evaluate(`(async () => {
     await window.ensemble.openEmbeddedTab({});
     return true;
   })()`);
-  await wait(1500);
+  await wait(2200);
 
-  // --- 1. The sidebar owns the window's left edge ---------------------------
+  // --- 1. The rail owns the window's top edge -------------------------------
   //
-  // The column moved from the right to the left, which is what makes it one
-  // navigation surface instead of a dock plus a separate console rail. That
-  // move is the thing to assert: the column's right edge is where the page
-  // starts, and the caption band at the very top belongs to the column now.
+  // The navigation column is retired: the window's first row is the instance
+  // rail, its second row is the on-stage instance's page strip, and the stage
+  // fills everything below. That stacking is what these reads assert.
   const layout = await client.evaluate(`(() => {
     const controls = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--window-controls-width') || '0',
@@ -130,109 +122,128 @@ try {
     return {
       controlsWidth: controls,
       innerWidth: window.innerWidth,
-      platform: document.querySelector('.sidebar')?.dataset.platform ?? null,
+      browser: Boolean(document.querySelector('.browser')),
       sidebar: box('.sidebar'),
-      dockHead: box('.dock-head'),
+      dock: box('.dock'),
+      rail: box('.rail'),
       tabstrip: box('.tabstrip'),
-      nav: box('.sidebar-nav'),
       pane: box('.pane'),
       stage: box('.stage'),
-      bench: document.querySelector('.browser')?.classList.contains('bench') ?? false,
     };
   })()`);
-
   check("the window reports how wide its caption buttons are", layout?.controlsWidth > 0, layout);
-  check("the workbench is open", layout?.bench === true, layout);
-  check("the sidebar is on the left", layout?.sidebar?.x === 0, layout);
   check(
-    "the sidebar reaches the window's top edge",
-    layout?.sidebar?.y === 0 && layout?.sidebar?.h > 0,
+    "the shell is the single-stage browser page",
+    layout?.browser === true && layout?.sidebar === null && layout?.dock === null,
     layout,
   );
-  // The corner used to hold a blank 34px band: the column reserved the caption
-  // area even though the OS paints its buttons on the right. The first row is
-  // now the column's own title bar, and it has to line up with the tab strip
-  // beside it — a column that starts a full title bar lower reads as a hole.
+  check("the rail is the window's first row", layout?.rail?.y === 0 && layout?.rail?.h > 0, layout);
+  // The rail is the first row and the strip the second: the strip's top edge
+  // has to sit on the rail's bottom edge, or one of them is hiding the other.
   check(
-    "the column's first row is the top row, level with the tab strip",
-    layout?.dockHead?.y === 0 &&
-      layout?.tabstrip?.y === 0 &&
-      layout?.dockHead?.h === layout?.tabstrip?.h,
+    "the strip starts where the rail ends",
+    layout?.rail && layout?.tabstrip
+      ? Math.abs(layout.rail.y + layout.rail.h - layout.tabstrip.y) <= 1
+      : false,
     layout,
   );
   check(
-    "the pane starts where the sidebar ends",
-    layout?.pane?.x === layout?.sidebar?.w,
+    "the stage spans the window's full width",
+    layout?.stage?.x === 0 && layout?.stage?.w === layout?.innerWidth,
     layout,
   );
   check(
-    "the stage is as wide as the pane",
-    layout?.stage?.w === layout?.pane?.w,
+    "the pane is as wide as the window",
+    layout?.pane?.x === 0 && layout?.pane?.w === layout?.innerWidth,
     layout,
   );
 
-  // --- 2. The caption reservation lives on the left, not the tab strip ------
+  // `active` is per-instance, so the flat list shows one active tab per
+  // instance; the single stage answers for the whole window through
+  // `activeTabId`. A blank page holds the stage without a rect (there is no
+  // native view to place), so the held tab is allowed to lack bounds — what
+  // must not happen is a second instance's active page carrying a rect too.
+  const staged = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const held = state.tabs.find((t) => t.id === state.activeTabId);
+    const parkedActives = state.tabs
+      .filter((t) => t.id !== state.activeTabId && t.active)
+      .map((t) => t.bounds?.width ?? 0);
+    return {
+      heldId: held?.id ?? null,
+      instances: new Set(state.tabs.map((t) => t.instanceId)).size,
+      parkedActives,
+    };
+  })()`);
+  check(
+    "exactly one page holds the stage",
+    staged?.heldId != null && staged?.parkedActives?.every((width) => width === 0),
+    staged,
+  );
+  check("both instances stay alive behind the one stage", staged?.instances === 2, staged);
+
+  // --- 2. The caption reservation lives on the page strip -------------------
   //
-  // The window buttons are painted over the *right* end. With the column on the
-  // left, nothing else competes for it — so the strip keeps its reservation in
-  // both shells, and the column never needs one.
+  // The window buttons are painted over the *right* end of the strip. The
+  // reservation survives the retirement of the column: the strip keeps it, and
+  // there is no column left that could ever need one.
   const reservation = await client.evaluate(`(() => {
     const strip = document.querySelector('.tabstrip');
-    const sidebar = document.querySelector('.sidebar');
     return {
       stripPaddingRight: strip ? getComputedStyle(strip).paddingRight : null,
-      sidebarPaddingRight: sidebar ? getComputedStyle(sidebar).paddingRight : null,
       stripRight: strip ? Math.round(strip.getBoundingClientRect().right) : null,
       innerWidth: window.innerWidth,
     };
   })()`);
   check(
-    "the tab strip reserves the caption band",
+    "the page strip reserves the caption band",
     Number.parseFloat(reservation?.stripPaddingRight ?? "0") >=
       (layout?.controlsWidth ?? 0) - 4,
     reservation,
   );
 
-  // --- 2b. Showing the sidebar does not rearrange the stage -----------------
+  // --- 2b. The single-stage invariants hold as instances arrive -------------
   //
-  // The glyph beside the first tab is the sidebar's switch. It used to also give
-  // a one-cell view a 2×1 layout on the way in, so turning the column on split
-  // the stage and nothing put it back. The two answers are separate now: this one
-  // controls whether the column is on screen, the layout picker controls cells.
-  const noRearrange = await client.evaluate(`(async () => {
+  // The layout glyph and the cell dividers are retired with the grid. What
+  // this section used to guard — toggling the column must not split the
+  // stage — becomes a straight invariant: another instance joins, the stage
+  // stays one cell, and nothing that could draw a second one comes back.
+  const invariants = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     const api = window.ensemble;
-    // A one-cell view, the case that used to get split.
-    const created = await api.createEmbeddedView({ name: "单格" });
-    await wait(700);
-    const viewId = created.activeViewId;
-    const before = (await api.getEmbeddedState()).views.find((v) => v.id === viewId);
-    const btn = document.querySelector('.tabstrip .layout-btn');
-    // Hide, then show, through the button itself.
-    btn?.click();
-    await wait(700);
-    const hidden = !document.querySelector('.sidebar');
-    btn?.click();
-    await wait(800);
-    const after = (await api.getEmbeddedState()).views.find((v) => v.id === viewId);
+    await api.openEmbeddedTab({});
+    await wait(1200);
+    const state = await api.getEmbeddedState();
+    const parkedActives = state.tabs
+      .filter((t) => t.id !== state.activeTabId && t.active)
+      .map((t) => t.bounds?.width ?? 0);
     return {
-      shownAgain: Boolean(document.querySelector('.sidebar')),
-      hidden,
-      // Cell count, not filled cells: a fresh view has empty slots and the split
-      // is exactly what would show up as more of them.
-      slotsBefore: before?.slotTabs?.length ?? null,
-      slotsAfter: after?.slotTabs?.length ?? null,
-      layoutAfter: after?.layoutId ?? null,
+      layoutBtn: Boolean(document.querySelector('.tabstrip .layout-btn')),
+      dividers: document.querySelectorAll('.divider').length,
+      slotHeaders: document.querySelectorAll('.slot-header').length,
+      heldId: state.tabs.find((t) => t.id === state.activeTabId)?.id ?? null,
+      parkedActives,
+      instances: new Set(state.tabs.map((t) => t.instanceId)).size,
+      chips: document.querySelectorAll('[data-instance-chip]').length,
     };
   })()`);
-  check("the glyph hides and shows the column", noRearrange?.hidden === true && noRearrange?.shownAgain === true, noRearrange);
   check(
-    "showing the column does not split the stage",
-    noRearrange?.slotsAfter === 1 && noRearrange?.layoutAfter === "free",
-    noRearrange,
+    "the layout glyph and the cell dividers stay retired",
+    invariants?.layoutBtn === false &&
+      invariants?.dividers === 0 &&
+      invariants?.slotHeaders === 0,
+    invariants,
+  );
+  check(
+    "a third instance joins the rail without growing the stage a cell",
+    invariants?.heldId != null &&
+      invariants?.parkedActives?.every((width) => width === 0) &&
+      invariants?.instances === 3 &&
+      invariants?.chips === 3,
+    invariants,
   );
 
-  // --- 3. The app menu replaces the bare gear -------------------------------
+  // --- 3. The app menu lives in the toolbar ---------------------------------
   const entry = await client.evaluate(`(() => {
     const inToolbar = document.querySelector('.toolbar [data-app-menu]');
     const icon = inToolbar?.querySelector('svg');
@@ -247,11 +258,13 @@ try {
   check("the app menu is named", Boolean(entry?.label), entry);
   check("the app menu has no native title", entry?.nativeTitle === null, entry);
 
-  // --- 4. The menu carries a second door into the workbench -----------------
+  // --- 4. The menu no longer carries the retired workbench door -------------
   //
-  // The grid glyph beside the first tab is the quiet entry; someone who has
-  // never seen this app has no reason to try it, and the workbench is the whole
-  // product. The menu row is that door, and it has to actually land somewhere.
+  // The menu row that opened the workbench column went out with the column;
+  // the [管理] button at the rail's right end is the one door to the
+  // management pages now. What must hold instead: the row is gone, the menu
+  // still anchors inside the window, and an open menu still lets the header's
+  // empty space be clicked through to the window.
   const menu = await client.evaluate(`(async () => {
     const button = document.querySelector('[data-app-menu]');
     if (!button) return { error: 'no menu button' };
@@ -268,8 +281,8 @@ try {
     };
   })()`);
   check(
-    "the menu offers the workbench as a row",
-    Array.isArray(menu?.rows) && menu.rows.includes("workspace"),
+    "the menu no longer offers the retired workbench entry",
+    Array.isArray(menu?.rows) && menu.rows.length > 0 && !menu.rows.includes("workspace"),
     menu,
   );
   check("the menu stays inside the window", menu?.insideWindow === true, menu);
@@ -281,12 +294,8 @@ try {
 
   // --- 4a. Every launch point carries its own browser list ------------------
   //
-  // There used to be one global "launch target" switch in this menu, and its
-  // regression story is why it is gone: deleting the row from the title bar left
-  // every page still reading the stored value, so the app stayed on whatever
-  // surface it was last set to and nothing looked broken. A launch now names its
-  // surface at the moment of launching, so what has to hold is different — the
-  // menu must no longer carry the mode, and the launch control must list the
+  // A launch names its surface at the moment of launching: the menu must not
+  // carry a mode, and the accounts page's launch control must list the
   // built-in surface plus every real browser the scan found.
   const menuAfterMode = await client.evaluate(`(() => {
     document.querySelector('[data-app-menu]')?.click();
@@ -302,13 +311,9 @@ try {
     menuAfterMode,
   );
 
+  await goTo(client, "identities", 700);
   const chooser = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    // Close whatever the menu check left open, then go where the control lives.
-    document.querySelector('[data-app-menu]')?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    document.querySelector('[data-nav="identities"]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
     const workspace = await api.getWorkspace();
     const trigger = document.querySelector('[data-launch-menu]');
     if (!trigger) return { error: 'no launch control on the accounts page' };
@@ -318,18 +323,15 @@ try {
     const rows = panel
       ? [...panel.querySelectorAll('[data-engine]')].map((el) => ({
           id: el.dataset.engine,
-          label: el.textContent.replace(/\\\\s+/g, ' ').trim(),
+          label: el.textContent.replace(/\\s+/g, ' ').trim(),
           disabled: el.disabled,
         }))
       : [];
     trigger.click();
-    // Back to the browser page: the rest of this suite measures the stage, and
-    // leaving the account list up would turn every later check into a failure
-    // about a page it did not expect.
-    document.querySelector('[data-nav="browser"]')?.click();
-    await new Promise((r) => setTimeout(r, 600));
     return { rows, engines: workspace.engines.map((engine) => ({ id: engine.id, status: engine.status })) };
   })()`);
+  await client.evaluate(backToBrowser());
+  await wait(600);
   const embeddedRow = chooser?.rows?.find((row) => row.id === "embedded");
   check(
     "the launch control lists the built-in surface first and every scanned browser after it",
@@ -375,7 +377,13 @@ try {
   await client.evaluate(`document.querySelector('[data-app-menu]')?.click()`);
   await wait(300);
 
-  // --- 5. Groups are separated, in both themes -----------------------------
+  // --- 5. The on-stage chip reads apart, in both themes ---------------------
+  //
+  // The dock's group rules went out with the dock. What still has to read
+  // apart is what the new header puts side by side: the on-stage rail chip
+  // against the idle ones, in dark and light both. A bare string difference
+  // would accept "both null", so the assertion also refuses transparent fills.
+  const themeFills = [];
   for (const theme of ["dark", "light"]) {
     // Set the renderer's own switch: the CSS under test is keyed on
     // `data-theme`, and going through the settings UI would test that path
@@ -385,202 +393,77 @@ try {
       await new Promise((r) => requestAnimationFrame(r));
       return true;
     })()`);
-    const groups = await client.evaluate(`(() => {
-      // Relative luminance, so the comparison is about how far apart two colours
-      // read rather than about whether their strings differ. This is the whole
-      // point of the assertion: \`--line-soft\` over the dock's \`--bg\` in the
-      // light theme is a *lighter* colour on a light surface — two different
-      // strings, and still invisible.
-      //
-      // The rule is semi-transparent (it is mixed from \`--text\`), so it has to be
-      // composited over the surface before it is measured. Reading the declared
-      // colour instead would compare a 16%-alpha value against an opaque one and
-      // get the answer wrong in the dark theme.
-      const parse = (color) => {
-        const nums = (color.match(/[\\d.]+/g) ?? []).map(Number);
-        if (nums.length < 3) return null;
-        // \`color(srgb r g b / a)\` carries 0–1 channels; the legacy functions
-        // carry 0–255. Both put alpha last when it is present.
-        const scale = color.startsWith("color(") ? 255 : 1;
-        return {
-          r: nums[0] * scale,
-          g: nums[1] * scale,
-          b: nums[2] * scale,
-          a: nums.length > 3 ? nums[3] : 1,
-        };
+    const probe = await client.evaluate(`(() => {
+      const fill = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? getComputedStyle(el).backgroundColor : null;
       };
-      const luminance = (c) => {
-        const channel = (value) => {
-          const v = value / 255;
-          return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-        };
-        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+      return {
+        rail: fill('.rail'),
+        onStage: fill('[data-instance-chip][data-on-stage="1"]'),
+        idle: fill('[data-instance-chip][data-on-stage="0"]'),
+        strip: fill('.tabstrip'),
       };
-      const over = (top, bottom) => ({
-        r: top.a * top.r + (1 - top.a) * bottom.r,
-        g: top.a * top.g + (1 - top.a) * bottom.g,
-        b: top.a * top.b + (1 - top.a) * bottom.b,
-        a: 1,
-      });
-      const contrast = (top, bottom) => {
-        const fill = top.a < 1 ? over(top, bottom) : top;
-        const la = luminance(fill);
-        const lb = luminance(bottom);
-        return Math.round(((Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)) * 100) / 100;
-      };
-
-      const dock = document.querySelector(".dock");
-      const dockColor = dock ? parse(getComputedStyle(dock).backgroundColor) : null;
-      const blocks = [...document.querySelectorAll(".dock .view-block")];
-      return blocks.map((el) => {
-        const style = getComputedStyle(el);
-        const head = el.querySelector(".block-head");
-        const headStyle = head ? getComputedStyle(head) : null;
-        const rule = parse(style.borderTopColor);
-        const headFill = headStyle ? parse(headStyle.backgroundColor) : null;
-        return {
-          borderTopWidth: Number.parseFloat(style.borderTopWidth),
-          borderTopColor: style.borderTopColor,
-          paddingTop: Number.parseFloat(style.paddingTop),
-          headBackground: headStyle?.backgroundColor ?? null,
-          dockBackground: dockColor,
-          ruleContrast: rule && dockColor ? contrast(rule, dockColor) : null,
-          headContrast: headFill && dockColor ? contrast(headFill, dockColor) : null,
-        };
-      });
     })()`);
-
-    check(`${theme}: the dock has two groups to separate`, groups?.length >= 2, groups);
-    // The boundary exists only between blocks, so the first has none.
+    const transparent = (c) => c === null || c === "rgba(0, 0, 0, 0)" || c === "transparent";
+    check(`${theme}: the rail renders with a surface of its own`, !transparent(probe?.rail), probe);
     check(
-      `${theme}: a later group draws a rule at its top`,
-      groups?.[1]?.borderTopWidth > 0 && groups?.[1]?.paddingTop > 0,
-      groups?.[1],
+      `${theme}: the on-stage chip reads apart from the idle one`,
+      !transparent(probe?.onStage) && probe?.onStage !== probe?.idle,
+      probe,
     );
-    // 1.25:1 is the floor that separates the shipped rule from the token that
-    // failed in the light theme (1.15:1). The working rule measures ≈1.37:1.
-    check(
-      `${theme}: the rule reads against the dock, not just differs from it`,
-      (groups?.[1]?.ruleContrast ?? 0) >= 1.25,
-      groups?.[1],
-    );
-    check(
-      `${theme}: every group header reads as a band`,
-      groups?.every((group) => (group.headContrast ?? 0) >= 1.03),
-      groups?.map((group) => ({ bg: group.headBackground, ratio: group.headContrast })),
-    );
+    themeFills.push({ theme, ...probe });
   }
+  check(
+    "the theme switch reaches the header rows",
+    themeFills[0]?.rail !== themeFills[1]?.rail || themeFills[0]?.strip !== themeFills[1]?.strip,
+    themeFills.map((t) => ({ theme: t.theme, rail: t.rail, strip: t.strip })),
+  );
 
-  // --- 6. The cell boundary can be dragged ---------------------------------
+  // --- 6. Dragging a page tab shields the stage -----------------------------
   //
-  // Never covered before, which is why it shipped broken. The handler has to
-  // survive the pointer leaving the handle and entering a live page — so the
-  // gesture is driven through CDP's real input pipeline rather than with
-  // synthetic DOM events. A synthetic `dispatchEvent` still reaches the window
-  // listeners even when a guest would have taken the pointer, which is exactly
-  // the bug: it passes on a broken build.
-  const dividerBox = await client.evaluate(`(async () => {
+  // Tab reorder is an HTML5 drag, which CDP's mouse pipeline does not drive —
+  // so, as in the tab-strip suite, the gesture goes through the real Vue
+  // handlers with synthetic DragEvents. What this adds over that suite is the
+  // shield: while a drag runs, a live page must not be able to take the
+  // pointer, and the pointer must come back when the drag ends.
+  const dragShield = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((done) => setTimeout(done, ms));
     const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const view = state.views.find((item) => item.id === state.activeViewId);
-    if (!view) return { error: "no active view" };
-    await api.setEmbeddedViewSlots(view.id, [
-      { x: 0, y: 0, width: 0.5, height: 1 },
-      { x: 0.5, y: 0, width: 0.5, height: 1 },
-    ]);
-    await new Promise((r) => setTimeout(r, 900));
-    const handle = document.querySelector(".divider.vertical");
-    if (!handle) return { error: "no vertical divider" };
-    const rect = handle.getBoundingClientRect();
-    return {
-      viewId: view.id,
-      x: Math.round(rect.x + rect.width / 2),
-      y: Math.round(rect.y + rect.height / 2),
-      beforeWidth: (await api.getEmbeddedState()).views.find((v) => v.id === view.id)?.slotRects?.[0]?.width ?? null,
-    };
-  })()`);
-
-  if (dividerBox?.error) {
-    check("the view has a vertical cell boundary", false, dividerBox);
-  } else {
-    check("the view has a vertical cell boundary", true, dividerBox);
-    // Real mouse input: press on the handle, move past it into the page beside
-    // it, release.
-    //
-    // What this can and cannot prove: CDP's `Input.dispatchMouseEvent` reaches
-    // the renderer's main frame, so the move stream keeps arriving even without
-    // the pointer shield — the gesture therefore passes on a build where the
-    // shield is missing, and this test cannot be the evidence for it. What it
-    // does cover is the rest of the chain: handler wired, rects computed, IPC
-    // applied. The shield's own effect is asserted below on the state, which is
-    // the only place the difference is visible.
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: dividerBox.x,
-      y: dividerBox.y,
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-    });
-    // The shield has to be up during the gesture, or a real mouse would have
-    // handed the pointer to a page at the first move.
-    const duringDrag = await client.evaluate(`(() => {
-      const pool = document.querySelector('.guest-pool');
-      return {
-        shielded: pool?.dataset.shielded ?? null,
-        holds: pool?.dataset.shieldHolds ?? null,
-      };
-    })()`);
-    check(
-      "a page cannot take the pointer while the boundary is being dragged",
-      duringDrag?.shielded === "1",
-      duringDrag,
-    );
-    for (const step of [30, 80, 130]) {
-      await client.send("Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        x: dividerBox.x + step,
-        y: dividerBox.y,
-        button: "left",
-        buttons: 1,
-      });
-      await wait(90);
+    // The strip shows only the on-stage instance's pages, and each instance
+    // opened so far holds exactly one — give the held instance a second page
+    // so there is something to drag.
+    let tabs = [...document.querySelectorAll('.tabstrip .tab')];
+    if (tabs.length < 2) {
+      const state = await api.getEmbeddedState();
+      const held = state.tabs.find((t) => t.id === state.activeTabId);
+      if (!held) return { error: 'no page holds the stage' };
+      await api.openEmbeddedTabInInstance(held.instanceId);
+      await wait(1400);
+      tabs = [...document.querySelectorAll('.tabstrip .tab')];
     }
-    await client.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: dividerBox.x + 130,
-      y: dividerBox.y,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
+    if (tabs.length < 2) return { error: 'need two page tabs to drag' };
+    const pool = document.querySelector('.guest-pool');
+    const read = () => ({
+      shielded: pool?.dataset.shielded ?? null,
+      holds: pool?.dataset.shieldHolds ?? null,
     });
-    await wait(1200);
-
-    const afterResize = await client.evaluate(`(async () => {
-      const state = await window.ensemble.getEmbeddedState();
-      const view = state.views.find((item) => item.id === state.activeViewId);
-      const pool = document.querySelector('.guest-pool');
-      return {
-        afterWidth: view?.slotRects?.[0]?.width ?? null,
-        shielded: pool?.dataset.shielded ?? null,
-        holds: pool?.dataset.shieldHolds ?? null,
-      };
-    })()`);
-    const moved =
-      dividerBox.beforeWidth !== null && afterResize?.afterWidth !== null
-        ? Math.round((afterResize.afterWidth - dividerBox.beforeWidth) * 1000) / 1000
-        : null;
-    check("dragging the boundary actually moves it", (moved ?? 0) > 0.05, {
-      beforeWidth: dividerBox.beforeWidth,
-      afterWidth: afterResize?.afterWidth,
-      moved,
-    });
-    check(
-      "releasing the drag gives the pages their pointer back",
-      afterResize?.shielded === "0" && afterResize?.holds === "0",
-      afterResize,
-    );
-  }
+    const before = read();
+    const drag = new DataTransfer();
+    tabs[0].dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: drag }));
+    await wait(120);
+    const during = read();
+    tabs[0].dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: drag }));
+    await wait(300);
+    const after = read();
+    return { before, during, after };
+  })()`);
+  check("dragging a page tab raises the shield over the stage", dragShield?.during?.shielded === "1", dragShield);
+  check(
+    "ending the drag gives the pages their pointer back",
+    dragShield?.after?.shielded === "0" && dragShield?.after?.holds === "0",
+    dragShield,
+  );
 
   // Restore the theme the throwaway profile started with.
   await client.evaluate(`document.documentElement.dataset.theme = 'dark'`);

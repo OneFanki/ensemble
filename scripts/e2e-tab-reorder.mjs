@@ -1,23 +1,30 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of tab drag-and-drop in the running dock.
+ * Selection must not reorder lists, end to end.
  *
- * Covers the two things a click cannot prove: rows actually reorder (after a
- * synthetic drag), and a view keeps its container when its tabs are dragged
- * out. Driven through the renderer's own DevTools connection, so the real Vue
- * handlers build the drop payload.
+ * The rows this suite used to drag lived in the run dock; the dock and its
+ * view blocks are retired with the grid (ADR 0012). The contract the suite
+ * guards survives on the two lists the shell still has:
+ *
+ * - **The instance rail**: rows used to be derived from the slot table, so
+ *   focusing an instance wrote a slot entry and that instance jumped to the
+ *   front. A click looked like a reshuffle. The rail must inherit the fix,
+ *   not the bug.
+ * - **The page strip**: activating a page, or leaving the instance and
+ *   coming back, must not rewrite the instance's tab order.
+ *
+ * The drag-reorder itself is covered where the gesture still lives — the
+ * strip (e2e-drag-pin, e2e-tab-strip).
  */
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { freePort } from "./lib/e2e-ports.mjs";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-reorder-"));
-const port = await freePort();
 const electronBinary =
   process.platform === "win32"
     ? resolve("node_modules/electron/dist/electron.exe")
@@ -61,19 +68,7 @@ writeFileSync(
         },
       ],
       identities,
-      views: [
-        {
-          id: "33333333-3333-4333-8333-333333333333",
-          siteId,
-          name: "排序验证",
-          identityIds: identities.map((identity) => identity.id),
-          layoutId: "3x1",
-          slotAssignments: {},
-          paths: {},
-          createdAt: now,
-          updatedAt: now,
-        },
-      ],
+      views: [],
       instances: [],
       manualEngines: [],
       layoutPresets: [],
@@ -117,44 +112,6 @@ function check(name, ok, detail) {
   console.log(ok ? "PASS" : "FAIL", name, detail === undefined ? "" : JSON.stringify(detail));
 }
 
-/**
- * Drags the row at `from` onto the target row's top band.
- *
- * A synthetic DataTransfer plus the real Vue handlers is the closest thing to a
- * user drag that does not need OS-level mouse input over a native view.
- */
-const DRAG_SCRIPT = (from, to) => `(async () => {
-  const rows = [...document.querySelectorAll('.dock .tab-row')].filter((row) => !row.classList.contains('ext'));
-  const source = rows[${from}];
-  const target = rows[${to}];
-  if (!source || !target) return { error: 'rows missing', count: rows.length };
-  const dt = new DataTransfer();
-  source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
-  const rect = target.getBoundingClientRect();
-  const at = { clientX: rect.left + 20, clientY: rect.top + 2 };
-  target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-  target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-  source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
-  await new Promise((r) => setTimeout(r, 350));
-  return { ok: true };
-})()`;
-
-const DETACH_SCRIPT = (index) => `(async () => {
-  const rows = [...document.querySelectorAll('.dock .tab-row')].filter((row) => !row.classList.contains('ext'));
-  const source = rows[${index}];
-  const block = document.querySelector('.dock .view-block.loose');
-  if (!source || !block) return { error: 'targets missing', count: rows.length };
-  const dt = new DataTransfer();
-  source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
-  const rect = block.getBoundingClientRect();
-  const at = { clientX: rect.left + 10, clientY: rect.top + 10 };
-  block.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-  block.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-  source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
-  await new Promise((r) => setTimeout(r, 350));
-  return { ok: true };
-})()`;
-
 try {
   let client;
   try {
@@ -168,178 +125,112 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
-  // Launch leaves one blank page on the surface; the assertions below count rows
-  // of this suite's own tabs, so start from nothing.
+  // Launch leaves one blank page on the surface; the assertions below count
+  // chips and tabs of this suite's own, so start from nothing.
   await client.evaluate(`(async () => {
     for (const tab of (await window.ensemble.getEmbeddedState()).tabs) {
       await window.ensemble.closeEmbeddedTab(tab.id);
     }
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 400));
     return true;
   })()`);
 
-  // Loose tabs first: the view is not on stage, so only the flat strip renders.
-  //
-  // The rows live in the run dock, and the dock belongs to the workbench — it is
-  // not on screen in browse mode. Enter that mode before reading any row.
-  await client.evaluate(`(async () => {
-    const btn = document.querySelector('.tabstrip .layout-btn');
-    if (btn && !btn.classList.contains('is-bench')) btn.click();
-    await new Promise((r) => setTimeout(r, 900));
-    return true;
-  })()`);
-  await client.evaluate(`(async () => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      if (document.querySelector('.dock .tab-row')) return true;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    return false;
-  })()`);
-
-  const loose = await client.evaluate(`(async () => {
+  // Two instances, one stage. The rail order is the order the instances
+  // arrived in; nothing below may rewrite it.
+  const seeded = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const a = await api.openEmbeddedTab({ viewId: null });
-    const b = await api.openEmbeddedTab({ viewId: null });
-    await new Promise((r) => setTimeout(r, 500));
-    return { a: a.id, b: b.id };
+    const first = await api.openEmbeddedTab({});
+    await new Promise((r) => setTimeout(r, 1000));
+    const second = await api.openEmbeddedTab({});
+    await new Promise((r) => setTimeout(r, 1000));
+    return { first: first.instanceId, second: second.instanceId };
   })()`);
-  check("two loose tabs created", Boolean(loose?.a && loose?.b), loose);
+  check("two instances created", Boolean(seeded?.first && seeded?.second), seeded);
 
-  const dragLoose = await client.evaluate(DRAG_SCRIPT(1, 0));
-  check("loose rows are draggable", dragLoose?.ok === true, dragLoose);
-
-  const looseOrder = await client.evaluate(`(async () => {
-    const state = await window.ensemble.getEmbeddedState();
-    return state.tabs.filter((tab) => !tab.viewId).map((tab) => tab.id);
-  })()`);
+  const railOrder = await client.evaluate(`(() =>
+    [...document.querySelectorAll('[data-instance-chip]')].map((el) =>
+      el.getAttribute('data-instance-chip'),
+    )
+  )()`);
   check(
-    "dragging the second loose tab above the first reorders them",
-    looseOrder?.[0] === loose.b,
-    { order: looseOrder, expectedFirst: loose.b },
+    "the rail lists both instances in creation order",
+    JSON.stringify(railOrder) === JSON.stringify([seeded?.first, seeded?.second]),
+    { railOrder, seeded },
   );
 
   /*
-   * Selecting a row must not move it.
+   * Selecting an instance must not move it to the front.
    *
-   * Rows used to be derived from the slot table, so focusing an instance wrote
-   * a slot entry and that instance jumped to the top of the list. A click looked
-   * like a reshuffle, and because every click rewrote the order, the order the
-   * user had just dragged into place was gone. Row order now comes from the
-   * workspace's instance list; a slot only supplies the row's number.
+   * This is the suite's founding bug, read on the list that replaced the
+   * dock's rows: click the *last* chip — if selection reordered anything,
+   * that is the chip that would have moved.
    */
-  const selectionOrder = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const read = async () => {
-      const state = await api.getEmbeddedState();
-      const rows = [...document.querySelectorAll('.dock .tab-row')]
-        .filter((row) => !row.classList.contains('ext'))
-        .map((row) => row.getAttribute('data-tab-id'));
-      return { tabs: state.tabs.filter((tab) => !tab.viewId).map((tab) => tab.id), rows };
+  const clickLast = await client.evaluate(`(async () => {
+    const chips = [...document.querySelectorAll('[data-instance-chip]')];
+    chips[chips.length - 1]?.click();
+    await new Promise((done) => setTimeout(done, 800));
+    const state = await window.ensemble.getEmbeddedState();
+    const held = state.tabs.find((t) => t.id === state.activeTabId);
+    return {
+      heldInstance: held?.instanceId ?? null,
+      railAfter: [...document.querySelectorAll('[data-instance-chip]')].map((el) =>
+        el.getAttribute('data-instance-chip'),
+      ),
     };
-    const before = await read();
-    // Click the *last* row: if selection reordered anything, that is the row
-    // that would have moved to the front.
-    const rows = [...document.querySelectorAll('.dock .tab-row')].filter(
-      (row) => !row.classList.contains('ext'),
-    );
-    rows[rows.length - 1]?.click();
-    await new Promise((done) => setTimeout(done, 500));
-    return { before, after: await read() };
   })()`);
+  check("clicking a chip focuses that instance", clickLast?.heldInstance === seeded?.second, clickLast);
   check(
-    "clicking a row focuses it without reordering the list",
-    Array.isArray(selectionOrder?.before?.tabs) &&
-      selectionOrder.before.tabs.length > 1 &&
-      JSON.stringify(selectionOrder.before.tabs) === JSON.stringify(selectionOrder.after.tabs) &&
-      JSON.stringify(selectionOrder.before.rows) === JSON.stringify(selectionOrder.after.rows),
-    selectionOrder,
+    "selecting an instance does not reorder the rail",
+    JSON.stringify(clickLast?.railAfter) === JSON.stringify([seeded?.first, seeded?.second]),
+    clickLast,
   );
 
-  // Open the saved view; its three members become rows with slot numbers.
-  const opened = await client.evaluate(`(async () => {
+  // Give the held instance two more pages; the strip then lists three.
+  await client.evaluate(`(async () => {
     const api = window.ensemble;
-    await api.openEmbeddedView('33333333-3333-4333-8333-333333333333');
-    await new Promise((r) => setTimeout(r, 900));
     const state = await api.getEmbeddedState();
-    const view = state.views[0];
-    return { container: view.id, slots: view.slotTabs, tabs: state.tabs.map((tab) => tab.id) };
+    const held = state.tabs.find((t) => t.id === state.activeTabId);
+    await api.openEmbeddedTabInInstance(held.instanceId);
+    await new Promise((r) => setTimeout(r, 1100));
+    await api.openEmbeddedTabInInstance(held.instanceId);
+    await new Promise((r) => setTimeout(r, 1100));
+    return true;
   })()`);
-  check("view opened with three members", opened?.slots?.filter(Boolean).length === 3, opened);
 
-  const dragView = await client.evaluate(DRAG_SCRIPT(2, 0));
-  check("view rows are draggable", dragView?.ok === true, dragView);
+  const stripOrder = await client.evaluate(`(() =>
+    [...document.querySelectorAll('.tabstrip .tab')].map((el) => el.getAttribute('data-tab-id'))
+  )()`);
+  check("the held instance's strip lists its three pages", stripOrder?.length === 3, stripOrder);
 
-  const afterReorder = await client.evaluate(`(async () => {
-    const state = await window.ensemble.getEmbeddedState();
-    const view = state.views.find((item) => item.viewDefinitionId === '33333333-3333-4333-8333-333333333333');
-    const rows = [...document.querySelectorAll('.dock .view-block .rows .tab-row')].map(
-      (row) => row.querySelector('.tab-label')?.textContent?.trim(),
-    );
-    return { slots: view.slotTabs, rows };
+  // The same contract on the strip: activating the last page must not move it.
+  const activateLast = await client.evaluate(`(async () => {
+    const tabs = [...document.querySelectorAll('.tabstrip .tab')];
+    tabs[tabs.length - 1]?.click();
+    await new Promise((done) => setTimeout(done, 900));
+    return [...document.querySelectorAll('.tabstrip .tab')].map((el) => el.getAttribute('data-tab-id'));
   })()`);
   check(
-    "dragging the last view tab to the top moves it into slot 1",
-    afterReorder?.slots?.[0] === opened?.slots?.[2],
-    { slots: afterReorder?.slots, before: opened?.slots },
+    "activating a page does not reorder the strip",
+    JSON.stringify(activateLast) === JSON.stringify(stripOrder),
+    { before: stripOrder, after: activateLast },
   );
 
-  // Dragging a dock row straight onto a slot must replace that cell. This is the
-  // gesture users try first; the dock order must not matter.
-  const toSlot = await client.evaluate(`(async () => {
+  // Leave the instance and come back: the strip returns in the same order.
+  // That is what "the instance keeps its tab list" means in a one-stage shell.
+  const roundTrip = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    const state0 = await api.getEmbeddedState();
-    const view0 = state0.views.find((item) => item.viewDefinitionId === '33333333-3333-4333-8333-333333333333');
-    // The row whose page is in slot 3 is dragged onto slot 2's header.
-    const lastPageId = view0.slotTabs[2];
-    const rows = [...document.querySelectorAll('.dock .view-block .rows .tab-row')];
-    const source = rows[2];
-    const headers = [...document.querySelectorAll('.stage .slot-header')];
-    const target = headers[1];
-    if (!source || !target) return { error: 'missing', rows: rows.length, headers: headers.length };
-    const dt = new DataTransfer();
-    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
-    const rect = target.getBoundingClientRect();
-    const at = { clientX: rect.left + 10, clientY: rect.top + 8 };
-    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, ...at }));
-    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
-    await new Promise((r) => setTimeout(r, 800));
-    const state1 = await api.getEmbeddedState();
-    const view1 = state1.views.find((item) => item.id === view0.id);
-    return {
-      before: view0.slotTabs,
-      after: view1.slotTabs,
-      moved: lastPageId,
-      stageRestored: document.querySelectorAll('.stage .frozen').length === 0,
-    };
+    const chips = [...document.querySelectorAll('[data-instance-chip]')];
+    chips[0]?.click();
+    await new Promise((done) => setTimeout(done, 900));
+    chips[chips.length - 1]?.click();
+    await new Promise((done) => setTimeout(done, 900));
+    return [...document.querySelectorAll('.tabstrip .tab')].map((el) => el.getAttribute('data-tab-id'));
   })()`);
   check(
-    "dropping a dock row on a slot replaces that cell",
-    Array.isArray(toSlot?.after) && toSlot.after[1] === toSlot.moved,
-    toSlot,
+    "leaving and returning keeps the strip order",
+    JSON.stringify(roundTrip) === JSON.stringify(stripOrder),
+    { before: stripOrder, after: roundTrip },
   );
-  check("the stage comes back to life after the drop", toSlot?.stageRestored === true, toSlot);
-
-  // Drag every member out; the container must survive as an empty view.
-  for (let index = 0; index < 3; index += 1) {
-    await client.evaluate(DETACH_SCRIPT(0));
-    await wait(200);
-  }
-  const emptied = await client.evaluate(`(async () => {
-    const state = await window.ensemble.getEmbeddedState();
-    const view = state.views.find((item) => item.viewDefinitionId === '33333333-3333-4333-8333-333333333333');
-    return {
-      kept: Boolean(view),
-      slots: view?.slotTabs,
-      loose: state.tabs.filter((tab) => !tab.viewId).length,
-    };
-  })()`);
-  check(
-    "dragging every tab out keeps the empty view",
-    emptied?.kept === true && emptied?.slots?.every((slot) => slot === null),
-    emptied,
-  );
-  check("all three members are loose now", emptied?.loose === 5, emptied);
 
   client.close();
 } catch (error) {

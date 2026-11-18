@@ -2,12 +2,11 @@
 /**
  * End-to-end checks for page resolution: scope, per page.
  *
- * Resolution had one meaning and no scope. Picking a size in a tab's context
- * menu looked like it applied to everything, because the menu stayed open over
- * a frozen picture and the stage never showed the result until it was
- * dismissed. The fix split it in two: a workspace default in the toolbar, and
- * a per-page choice (inherit / adaptive / pinned) in the tab menu, which now
- * closes on pick so the change is visible immediately.
+ * Resolution is a workspace default (the toolbar's monitor button) applied to
+ * every page that inherits it, plus a per-page capability that the MCP surface
+ * still exposes (`set_browser_viewport` / `reset_browser_viewport`). The tab
+ * menu used to carry a third copy of the same control; it no longer does, and
+ * this suite pins that the default still reaches the pages that inherit it.
  *
  * The 2x2 splitter this suite used to drive is retired with the grid
  * (ADR 0012); the pages under measurement now sit in two instances behind the
@@ -357,7 +356,13 @@ try {
     { withViewport, afterClear, clearedWidth },
   );
 
-  // --- the tab menu closes on pick so the change is visible immediately -----
+  // --- the tab menu no longer carries a resolution section ---------------
+  //
+  // Resolution is a workspace setting (the toolbar's monitor button) and a
+  // per-page capability the MCP surface still exposes; what the tab menu used
+  // to duplicate here was a second home for the same control. This assertion
+  // pins the menu's contract: opening it must not offer page resolution, and
+  // the menu must still close on a pick.
   const menu = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const state = await api.getEmbeddedState();
@@ -372,26 +377,28 @@ try {
     await new Promise((r) => setTimeout(r, 1400));
     const opened = Boolean(document.querySelector('.tab-menu'));
     const labels = [...document.querySelectorAll('.tab-menu-item')].map((el) => el.textContent.trim());
-    const inherit = [...document.querySelectorAll('.tab-menu-item')].find((el) => el.textContent.includes('跟随全局'));
-    inherit?.click();
+    const hasResolutionRows = labels.some((l) => l.includes('跟随全局') || l.includes('自适应'));
+    const popoutRow = [...document.querySelectorAll('.tab-menu-item')].find(
+      (el) => el.textContent.includes('拆出到独立窗口') || el.textContent.includes('收回主舞台'),
+    );
+    popoutRow?.click();
     await new Promise((r) => setTimeout(r, 1400));
     return {
       opened,
-      labels: labels.slice(0, 4),
+      labels,
+      hasResolutionRows,
+      hasPopoutRow: Boolean(popoutRow),
       stillOpen: Boolean(document.querySelector('.tab-menu')),
-      frozen: document.querySelectorAll('.stage .frozen').length,
     };
   })()`);
   check(
-    "the tab menu offers inherit and adaptive before the presets",
-    menu?.opened === true &&
-      menu?.labels?.some((l) => l.includes("跟随全局")) &&
-      menu?.labels?.some((l) => l.includes("自适应")),
+    "the tab menu offers no resolution section",
+    menu?.opened === true && menu?.hasResolutionRows === false,
     menu,
   );
   check(
-    "picking a resolution closes the menu so the stage shows the result",
-    menu?.stillOpen === false && menu?.frozen === 0,
+    "the tab menu offers the pop-out row and closes after the click",
+    menu?.hasPopoutRow === true && menu?.stillOpen === false,
     menu,
   );
 

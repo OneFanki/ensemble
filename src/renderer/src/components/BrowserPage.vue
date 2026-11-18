@@ -6,9 +6,6 @@ import {
   EMBEDDED_DEVTOOLS_HEAD,
   isBlankTab,
   tabDisplayTitle,
-  VIEWPORT_MAX_HEIGHT,
-  VIEWPORT_MAX_WIDTH,
-  VIEWPORT_MIN,
   VIEWPORT_PRESETS,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
@@ -41,6 +38,7 @@ import {
   Monitor,
   MoreHorizontal,
   Pin,
+  PictureInPicture2,
   Plus,
   Power,
   RefreshCw,
@@ -77,7 +75,6 @@ import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
 import PerformancePanel from "./PerformancePanel.vue";
 import TabIcon from "./TabIcon.vue";
-import TabPopOutButton from "./TabPopOutButton.vue";
 import AppButton from "./ui/AppButton.vue";
 import InputShell from "./ui/InputShell.vue";
 
@@ -584,22 +581,6 @@ const menuPageCount = computed(() => {
   return page ? store.instancePages(page.instanceId).length : 0;
 });
 
-/**
- * The menu page's viewport, read from live state rather than the snapshot taken
- * when the menu opened: applying a preset re-lays the page out and the menu
- * should follow to mark the new active row.
- */
-const menuViewport = computed(() => {
-  const id = tabMenu.value?.page.id;
-  return id ? store.state.tabs.find((tab) => tab.id === id)?.viewport : undefined;
-});
-
-/** What the page itself chose: absent means "inherit the workspace default". */
-const menuViewportOverride = computed(() => {
-  const id = tabMenu.value?.page.id;
-  return id ? store.state.tabs.find((tab) => tab.id === id)?.viewportOverride : undefined;
-});
-
 /** The menu page's sleep policy, read live so a change marks the new row. */
 const menuSleepPolicy = computed(() => {
   const id = tabMenu.value?.page.id;
@@ -621,9 +602,8 @@ async function toggleMenuMute(): Promise<void> {
 /**
  * Applies a sleep policy to the menu's page.
  *
- * Closing the menu is part of the action, like the viewport rows: the menu
- * floats over a frozen stage, and a policy change that stayed open would look
- * like it had done nothing.
+ * Closing the menu is part of the action: the menu floats over a frozen stage,
+ * and a policy change that stayed open would look like it had done nothing.
  */
 async function applySleepPolicy(policy: "auto" | "never"): Promise<void> {
   const page = tabMenu.value?.page;
@@ -631,9 +611,17 @@ async function applySleepPolicy(policy: "auto" | "never"): Promise<void> {
   if (page) await store.setSleepPolicy(page.id, policy);
 }
 
-const customWidth = ref("");
-const customHeight = ref("");
-const viewportError = ref<string | null>(null);
+/**
+ * 拆出到独立窗口，已拆出时收回主舞台。
+ *
+ * 只发动作，不等结果：`popout` 标记由主进程广播回来，菜单下一层打开时文案自然
+ * 就是新状态。空白页的那一行在模板里禁用，主进程同样会拒绝——这里不再重复判定。
+ */
+async function toggleTabPopout(): Promise<void> {
+  const page = tabMenu.value?.page;
+  closeTabMenu();
+  if (page) await store.popOutTab(page.id);
+}
 
 /**
  * Workspace-wide resolution, and the toolbar menu that sets it.
@@ -676,61 +664,6 @@ onBeforeUnmount(() => {
 async function applyGlobalViewport(size: { width: number; height: number } | null): Promise<void> {
   globalViewportOpen.value = false;
   await store.setDefaultViewport(size);
-}
-
-/**
- * Applies a viewport choice to the menu's page, then closes the menu.
- *
- * Closing is part of the behaviour, not an afterthought. The menu floats over a
- * frozen picture of the stage, and the views are parked while it is open — so
- * the re-layout this call causes cannot be seen until the stage comes back. A
- * menu that stays open after the click therefore looks like a menu that ignored
- * it: the row highlights, the page behind does not change, and the result only
- * appears once the user dismisses it. Picking a size is "show me this page at
- * that size", so the answer has to be on screen immediately.
- */
-async function applyViewport(
-  size: { width: number; height: number } | "adaptive" | "inherit",
-): Promise<void> {
-  const page = tabMenu.value?.page;
-  if (!page) return;
-  viewportError.value = null;
-  try {
-    await store.setViewport(page.id, size);
-  } catch (error) {
-    // A rejected size keeps the menu open: the message belongs next to the
-    // control that produced it.
-    viewportError.value = (error as Error).message;
-    return;
-  }
-  closeTabMenu();
-}
-
-async function applyCustomViewport(): Promise<void> {
-  const width = Number(customWidth.value);
-  const height = Number(customHeight.value);
-  if (
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
-    width < VIEWPORT_MIN ||
-    width > VIEWPORT_MAX_WIDTH ||
-    height < VIEWPORT_MIN ||
-    height > VIEWPORT_MAX_HEIGHT
-  ) {
-    viewportError.value = t("app.viewportRangeError", {
-      wMax: VIEWPORT_MAX_WIDTH,
-      hMax: VIEWPORT_MAX_HEIGHT,
-      min: VIEWPORT_MIN,
-    });
-    return;
-  }
-  await applyViewport({ width, height });
-  // `applyViewport` already closed the menu on success; clearing the inputs is
-  // only useful when the menu is still open with an error under it.
-  if (!viewportError.value) {
-    customWidth.value = "";
-    customHeight.value = "";
-  }
 }
 
 /**
@@ -1590,7 +1523,6 @@ function fillMessage(reason?: string): string {
               <VolumeX v-if="page.muted" :size="11" />
               <Volume2 v-else :size="11" />
             </span>
-            <TabPopOutButton :page="page" />
             <!-- Always rendered. A close affordance that exists only on the
                  current tab turns "close these four" into four hover round
                  trips; the resting state is quiet enough not to compete. -->
@@ -2525,71 +2457,24 @@ function fillMessage(reason?: string): string {
         </button>
         <div class="tab-menu-sep"></div>
         <!--
-          Resolution, per page. "Follow the workspace default" comes first
-          because it is the resting state: a page inherits unless the user chose
-          something for it. "Adaptive" is a real choice too — it pins "fill the
-          cell" against a default that says otherwise — which is why the two are
-          separate rows instead of one "off" switch.
+          Popping the page out. The label follows the state main broadcasts:
+          `popout` is main's decision, so this row only sends the toggle and lets
+          the next broadcast relabel it. Blank pages are disabled here for the
+          same reason the action itself refuses them — there is no content to
+          move, so a popout would only be an empty window.
         -->
-        <div class="menu-section-label">{{ t("app.viewportLabel") }}</div>
         <button
           type="button"
           role="menuitem"
           class="tab-menu-item"
-          :class="{ checked: menuViewportOverride === undefined }"
-          @click="applyViewport('inherit')"
+          :class="{ checked: tabMenu.page.popout }"
+          :disabled="isBlankTab(tabMenu.page)"
+          data-tab-popout
+          @click="toggleTabPopout"
         >
-          {{ t("app.viewportInherit") }}
+          <PictureInPicture2 :size="12" />
+          {{ tabMenu.page.popout ? t("app.tabPopIn") : t("app.tabPopOut") }}
         </button>
-        <button
-          type="button"
-          role="menuitem"
-          class="tab-menu-item"
-          :class="{ checked: menuViewportOverride === null }"
-          @click="applyViewport('adaptive')"
-        >
-          {{ t("app.viewportAdaptive") }}
-        </button>
-        <button
-          v-for="preset in VIEWPORT_PRESETS"
-          :key="preset.name"
-          type="button"
-          role="menuitem"
-          class="tab-menu-item mono"
-          :class="{
-            checked:
-              menuViewportOverride?.width === preset.width &&
-              menuViewportOverride?.height === preset.height,
-          }"
-          @click="applyViewport({ width: preset.width, height: preset.height })"
-        >
-          {{ preset.name }}
-        </button>
-        <div class="viewport-custom">
-          <input
-            v-model="customWidth"
-            class="viewport-input mono"
-            type="number"
-            :min="VIEWPORT_MIN"
-            :max="VIEWPORT_MAX_WIDTH"
-            :placeholder="$t('app.viewportWidth')"
-            @keydown.enter="applyCustomViewport"
-          />
-          <span class="viewport-x mono">×</span>
-          <input
-            v-model="customHeight"
-            class="viewport-input mono"
-            type="number"
-            :min="VIEWPORT_MIN"
-            :max="VIEWPORT_MAX_HEIGHT"
-            :placeholder="$t('app.viewportHeight')"
-            @keydown.enter="applyCustomViewport"
-          />
-          <button type="button" class="viewport-apply" @click="applyCustomViewport">
-            {{ t("app.viewportApply") }}
-          </button>
-        </div>
-        <p v-if="viewportError" class="viewport-error" role="alert">{{ viewportError }}</p>
         <div class="tab-menu-sep"></div>
         <!--
           Sleep policy, per page. "Follow default" is the resting choice: a page
@@ -4261,57 +4146,4 @@ function fillMessage(reason?: string): string {
   color: var(--accent-text);
 }
 
-.viewport-custom {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px 6px;
-}
-
-.viewport-input {
-  width: 52px;
-  padding: 3px 5px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  font-size: 10.5px;
-  color: var(--text);
-  outline: 0;
-  /* Hide the spinner buttons: the stepper eats half of a 52px field. */
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-
-.viewport-input::-webkit-outer-spin-button,
-.viewport-input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.viewport-x {
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.viewport-apply {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  padding: 3px 8px;
-  font-size: 10.5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.viewport-apply:hover {
-  color: var(--text);
-  border-color: var(--accent-text);
-}
-
-.viewport-error {
-  padding: 0 10px 6px;
-  font-size: 10px;
-  line-height: 1.35;
-  color: var(--danger, #e5484d);
-}
 </style>

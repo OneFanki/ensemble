@@ -19,6 +19,13 @@
  *    Chromium deliver input to an unfocused renderer.
  * 3. Screenshots still work, and do not wait out the compositor timeout.
  * 4. Restoring brings the page back on screen.
+ * 5. With the sleep grace compressed, the on-stage page of a minimised window
+ *    is a sleep candidate like any other (nothing is showing), and restoring
+ *    wakes it — before any command needs it.
+ *
+ * The sleep timings are shrunk through the same env knobs `e2e-tab-sleep` uses;
+ * every command already wakes a frozen page first, so the existing contracts
+ * hold with the sweep running hot.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -30,6 +37,8 @@ import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow } from "./lib/e2e-cdp.mjs";
 import { analyzePngFile, contentProblem } from "./lib/png-content.mjs";
 
+const SLEEP_GRACE_MS = 1_500;
+const SLEEP_SWEEP_MS = 200;
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
 const INSPECT_PORT = await freePort();
@@ -120,7 +129,16 @@ const app = spawn(
     `--remote-debugging-port=0`,
     `--inspect=${INSPECT_PORT}`,
   ],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  {
+    env: {
+      ...process.env,
+      // The sleep knobs are gated on this switch, same as e2e-tab-sleep uses.
+      ENSEMBLE_SLEEP_TEST: "1",
+      ENSEMBLE_SLEEP_GRACE_MS: String(SLEEP_GRACE_MS),
+      ENSEMBLE_SLEEP_SWEEP_MS: String(SLEEP_SWEEP_MS),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  },
 );
 let appLog = "";
 app.stdout.on("data", (c) => (appLog += c));
@@ -217,6 +235,24 @@ try {
     { nodes: baselineRead?.nodes?.length, value: baselineValue, baselineType },
   );
 
+  // Bring the page on stage first: the freeze/wake pair below is about the page
+  // the stage is holding, and an MCP-opened page no longer takes the stage by
+  // itself. `activateEmbeddedTab` is the same path a rail click uses. The
+  // inspector drives the main process, so the renderer call goes through
+  // `executeJavaScript` on the window found the same way the minimiser does.
+  const activated = await main.evaluate(`(async () => {
+    const electron = require("electron");
+    const win = electron.BrowserWindow.getAllWindows().find((w) =>
+      !w.isDestroyed() && w.webContents.getURL().includes("index.html"));
+    if (!win) return { error: "no window" };
+    const tabId = ${JSON.stringify(tabId)};
+    return await win.webContents.executeJavaScript(
+      'window.ensemble.activateEmbeddedTab(' + JSON.stringify(tabId) + ').then(() => true)',
+    );
+  })()`);
+  check("the page is brought on stage", activated === true, activated);
+  await wait(600);
+
   // Minimise the real window through the main process, the way the title bar's
   // own button does.
   const state = await main.evaluate(`(async () => {
@@ -300,7 +336,27 @@ try {
     );
   }
 
-  // 5. Restoring must bring the page back, not leave a blank stage.
+  // 5. With the grace compressed, the minimised window's on-stage page joins
+  //    the sleep candidates: the stage is showing nothing. `list_browser_tabs`
+  //    is a pure read — it must not itself wake the page it is reporting on.
+  const sleepDeadline = Date.now() + 12_000;
+  let minimizedSleep = null;
+  const exemptSeen = [];
+  while (Date.now() < sleepDeadline) {
+    const tabs = await call("list_browser_tabs");
+    minimizedSleep = (tabs?.tabs ?? []).find((t) => t.id === tabId) ?? null;
+    exemptSeen.push(minimizedSleep?.sleepExempt ?? null);
+    if (minimizedSleep?.sleeping === true) break;
+    await wait(300);
+  }
+  console.log("[minimize] exempt trace:", exemptSeen.join(","));
+  check(
+    "the on-stage page of a minimised window freezes too",
+    minimizedSleep?.sleeping === true,
+    minimizedSleep,
+  );
+
+  // 6. Restoring must bring the page back, wake it, and not leave a blank stage.
   const restored = await main.evaluate(`(async () => {
     const electron = require("electron");
     const win = electron.BrowserWindow.getAllWindows().find((w) =>
@@ -309,6 +365,16 @@ try {
     await new Promise((r) => setTimeout(r, 1500));
     return { minimized: win?.isMinimized() ?? null };
   })()`);
+  const tabsAfterRestore = await call("list_browser_tabs");
+  const tabAfterRestore = (tabsAfterRestore?.tabs ?? []).find((t) => t.id === tabId);
+  // `sleeping` is only published while frozen, so awake reads as the field
+  // being absent — and the exemption naming the visible stage proves the wake
+  // ran rather than the state merely going stale.
+  check(
+    "restoring wakes the frozen page",
+    !tabAfterRestore?.sleeping && tabAfterRestore?.sleepExempt === "on-stage-visible",
+    tabAfterRestore,
+  );
   const afterRestore = await call("evaluate_browser_page", {
     tabId,
     expression: "({ ready: document.readyState, title: document.title })",

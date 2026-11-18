@@ -121,6 +121,15 @@ export interface EmbeddedTab {
    */
   sleeping?: boolean;
   /**
+   * Why this awake page is not being frozen yet, as one short string.
+   *
+   * The same facts the sleep sweep reads, published so an AI can tell which
+   * pages are holding resources and why — and close the ones it no longer
+   * needs. Absent on a page that is already `sleeping`, and absent (with
+   * `sleeping` also absent) on a page the next sweep will freeze.
+   */
+  sleepExempt?: string;
+  /**
    * JavaScript dialog this page is blocked on, when one is up.
    *
    * While it is set the page answers nothing — no DOM read, no click, no

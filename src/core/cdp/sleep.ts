@@ -18,8 +18,14 @@ import type { TabSleepPolicy } from "@shared/embedded";
 
 /** The facts the manager knows about one page at sweep time. */
 export interface SleepCandidate {
-  /** The page occupies a cell on the visible stage. */
-  staged: boolean;
+  /**
+   * The user is looking at this page right now: it is the current page of an
+   * instance that holds a stage cell, and the window carrying that cell is
+   * visible and not minimised. Occupying a cell alone is not enough — a
+   * minimised or hidden window shows nothing, and a background member of a
+   * batch launch shares a container without being on stage at all.
+   */
+  userVisible: boolean;
   /** Its JavaScript is already suspended. */
   frozen: boolean;
   /** Its carrier exists and is not destroyed. */
@@ -41,6 +47,48 @@ export interface SleepCandidate {
 }
 
 /**
+ * Why a page is not being frozen right now, as one short string.
+ *
+ * Published per page so an AI can tell which pages are holding resources and
+ * why — the same facts the sweep reads, shaped for a tool result instead of a
+ * decision. `undefined` means "nothing exempts it": the next sweep freezes it.
+ */
+export type SleepExemptReason =
+  | "on-stage-visible"
+  | "audible"
+  | "ai-active"
+  | "policy"
+  | "loading"
+  | "crashed"
+  | "blank"
+  | "devtools"
+  | "frozen"
+  | "no-carrier";
+
+/**
+ * The first clause that keeps this page awake, or undefined when it should
+ * sleep. Clauses run in the same order `shouldSleepPage` used to read them, so
+ * the reason always names the rule that actually decided.
+ */
+export function sleepExemptReason(
+  candidate: SleepCandidate,
+  now: number,
+): SleepExemptReason | undefined {
+  if (!candidate.available) return "no-carrier";
+  if (candidate.frozen) return "frozen";
+  if (candidate.userVisible) return "on-stage-visible";
+  if (candidate.loading) return "loading";
+  if (candidate.crashed) return "crashed";
+  if (candidate.blank) return "blank";
+  if (candidate.devtoolsOpen) return "devtools";
+  if (candidate.audible) return "audible";
+  if (candidate.policy === "never") return "policy";
+  if (candidate.busy) return "ai-active";
+  if ((candidate.aiActiveUntil ?? 0) > now) return "ai-active";
+  return undefined;
+}
+
+/**
  * True when the page should be frozen now.
  *
  * `busy` is checked here as well as in the manager so the rule is complete on
@@ -48,10 +96,5 @@ export interface SleepCandidate {
  * page mid-script would turn a running command into a 30-second timeout.
  */
 export function shouldSleepPage(candidate: SleepCandidate, now: number): boolean {
-  if (!candidate.available || candidate.staged || candidate.frozen) return false;
-  if (candidate.loading || candidate.crashed || candidate.blank) return false;
-  if (candidate.devtoolsOpen || candidate.audible) return false;
-  if (candidate.policy === "never") return false;
-  if (candidate.busy) return false;
-  return (candidate.aiActiveUntil ?? 0) <= now;
+  return sleepExemptReason(candidate, now) === undefined;
 }

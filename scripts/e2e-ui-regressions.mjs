@@ -1322,48 +1322,49 @@ try {
   // item with an explicit height aligns at the cross-start: every placeholder
   // sat five pixels above the middle of the box.
   //
-  // Focus has to paint the shell's outline, not the field. The old treatment was
-  // a conic gradient with a glow clipped inside the box, so focusing washed a
-  // rotating light across the content; the replacement is one SVG dash on the
-  // outline, which also fixes the corner case where an absolutely positioned
-  // SVG keeps its intrinsic 300×150 size instead of the shell's.
+  // Focus has to paint the shell's edges, not the field. The old treatment was a
+  // conic gradient with a glow clipped inside the box, so focusing washed a
+  // rotating light across the content. Now the focus state is two straight rules
+  // on the horizontal edges whose width grows from zero, anchored left: the
+  // accent is already in the strip, so widening it *is* the draw.
   //
-  // The outline is SVG in every state, so the settled accent line is the exact
-  // same 2px stroke the dash travelled on. A CSS border underneath was a 1px
-  // second line, which made the final highlight look thinner than the sweep.
+  // The rules have no second stage. The SVG dash they replaced travelled a full
+  // lap and then a second stroke faded in behind it — nearly a second before a
+  // focus click looked finished, which is what the user rejected as 拖沓.
   const newTabField = await client.evaluate(`(async () => {
     const box = document.querySelector('.stage .blank-slot .nt-box');
     const input = box?.querySelector('.nt-input');
-    const trace = box?.querySelector('.sweep-line');
-    if (!box || !input || !trace) return null;
+    if (!box || !input) return null;
+    const readRule = (pseudo) => {
+      const style = getComputedStyle(box, pseudo);
+      return {
+        height: style.height,
+        backgroundImage: style.backgroundImage,
+        backgroundSize: style.backgroundSize,
+        backgroundPosition: style.backgroundPosition,
+        left: style.left,
+        right: style.right,
+      };
+    };
+    const resting = { top: readRule("::before"), bottom: readRule("::after") };
     input.focus();
-    await new Promise((r) => setTimeout(r, 150));
+    // Past the 170ms draw: the rules are at full width and stay there.
+    await new Promise((r) => setTimeout(r, 300));
     const b = box.getBoundingClientRect();
     const i = input.getBoundingClientRect();
-    const t = trace.getBoundingClientRect();
-    const style = getComputedStyle(trace);
-    const sweepWidth = style.strokeWidth;
-    // Past the 500ms lap and its tail: the settled stroke is fully in by now.
-    await new Promise((r) => setTimeout(r, 600));
-    const focus = getComputedStyle(box.querySelector('.shell-focus'));
+    const focused = { top: readRule("::before"), bottom: readRule("::after") };
     const outline = getComputedStyle(box.querySelector('.shell-outline'));
     return {
       centreGap: Math.abs((b.top + b.bottom) / 2 - (i.top + i.bottom) / 2),
-      focused: box.matches(':focus-within'),
-      traceInset: {
-        left: t.left - b.left,
-        top: t.top - b.top,
-        right: b.right - t.right,
-        bottom: b.bottom - t.bottom,
-      },
-      fill: style.fill,
-      stroke: style.stroke,
-      animated: style.animationName !== "none" && style.animationDuration !== "0s",
-      sweepWidth,
-      focusWidth: focus.strokeWidth,
-      focusOpacity: Number(focus.opacity),
+      matchesFocus: box.matches(':focus-within'),
+      resting,
+      focused,
       outlineWidth: outline.strokeWidth,
       borderWidth: getComputedStyle(box).borderTopWidth,
+      // The rules must sit on the two horizontal edges, not drift into the box
+      // or the rounded caps.
+      boxWidth: b.width,
+      radius: parseFloat(getComputedStyle(box).getPropertyValue('--shell-radius')) || 0,
     };
   })()`);
   check(
@@ -1372,21 +1373,25 @@ try {
     newTabField,
   );
   check(
-    "focus traces the outline instead of painting inside the field",
-    newTabField?.focused === true &&
-      newTabField?.fill === "none" &&
-      newTabField?.stroke !== "none" &&
-      newTabField?.animated === true &&
-      [newTabField.traceInset.left, newTabField.traceInset.top, newTabField.traceInset.right, newTabField.traceInset.bottom].every(
-        (inset) => inset > 0 && inset < 3,
-      ),
+    "the focus rules rest at zero width and draw to full width",
+    // `left center` resolves to `0% 50%`: the 0% is the anchor, and it is what
+    // makes the strip grow rightward rather than from the middle out.
+    newTabField?.matchesFocus === true &&
+      newTabField.resting.top.backgroundSize.startsWith("0%") &&
+      newTabField.resting.bottom.backgroundSize.startsWith("0%") &&
+      newTabField.focused.top.backgroundSize.startsWith("100%") &&
+      newTabField.focused.bottom.backgroundSize.startsWith("100%") &&
+      newTabField.focused.top.backgroundPosition.startsWith("0%") &&
+      newTabField.focused.bottom.backgroundPosition.startsWith("0%"),
     newTabField,
   );
   check(
-    "the settled focus line is the sweep's own stroke, with no CSS border",
-    newTabField?.focusOpacity === 1 &&
-      newTabField?.sweepWidth === "2px" &&
-      newTabField?.focusWidth === newTabField?.sweepWidth &&
+    "both focus rules are 2px accent strips inset by the shell radius",
+    newTabField?.focused.top.height === "2px" &&
+      newTabField?.focused.bottom.height === "2px" &&
+      newTabField.focused.top.backgroundImage.includes("gradient") &&
+      parseFloat(newTabField.focused.top.left) > 0 &&
+      Math.abs(parseFloat(newTabField.focused.top.left) - newTabField.radius) < 1 &&
       newTabField?.outlineWidth === "1px" &&
       parseFloat(newTabField?.borderWidth ?? "1") === 0,
     newTabField,

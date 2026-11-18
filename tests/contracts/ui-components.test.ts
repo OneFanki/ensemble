@@ -155,10 +155,27 @@ describe("the address bar and the new-tab search box are one control", () => {
     expect(shell).toContain("--accent");
   });
 
-  it("the sweep is one pass, not a loop", () => {
-    // The animation must end. A border that keeps moving while somebody types is
-    // motion in the corner of the eye for as long as the page is open.
+  it("the focus rules draw rightward and then stop", () => {
+    // Two straight strips whose background-size grows from zero: the accent is
+    // already in the strip, so widening it *is* the draw. There is no second
+    // stage — the dash this replaced had to travel a full lap and then fade a
+    // stroke in behind it, which is what made a focus click feel slow.
+    expect(shell).toContain("background-size: 0% 100%");
+    expect(shell).toContain("background-size: 100% 100%");
+    expect(shell).toContain("background-position: left center");
+    // A gradient narrower than its box hides by having nowhere to paint, so it
+    // must not also be tiled across the strip.
+    expect(shell).toContain("background-repeat: no-repeat");
+    // Nothing loops, and no SVG dash travels the perimeter any more.
     expect(shell).not.toContain("infinite");
-    expect(shell).toMatch(/animation:\s*sweep-border\s+\d+ms/);
+    expect(shell).not.toContain("sweep-line");
+    expect(shell).not.toContain("stroke-dashoffset");
+  });
+
+  it("the focus rules are the settled state, not a prelude to one", () => {
+    // The motion has to finish on the thing the field keeps. A delayed opacity
+    // fade on a separate stroke meant a click took two stages to look done.
+    expect(shell).not.toMatch(/transition-delay:\s*\d+m?s/);
+    expect(shell).toMatch(/transition:\s*background-size\s+170ms\s+linear/);
   });
 });

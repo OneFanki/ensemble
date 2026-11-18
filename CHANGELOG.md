@@ -9,19 +9,19 @@
 
 补齐 AI 操作页面的能力：动作缺口、网络观察、环境模拟、元素句柄、流程编排脚本与
 能力查询；修掉几处会让页面「看起来死了」的阻塞，并把流程的原始 CDP 步骤做成有
-档位判定的逃生口。同一波把浏览器界面收成单舞台：顶部实例行、管理窗格、账号即
-档案，页面可拆出到独立窗口，冻结与更新提示也换上新的规则。
+档位判定的逃生口。同一波把浏览器界面收成单舞台加左栏账号列：管理改成浮层，账号
+即档案，页面可拆出到独立窗口，冻结与更新提示也换上新的规则。
 
 ### 中文
 
 #### 新增
 
-- **单舞台与顶部实例行**。主界面收成一个舞台加顶部两行：第一行是实例行——头像色块、账号名、站点图标与 AI 三态点，行尾是 [+ 启动] 与 [管理]；第二行是上台实例的页面标签，溢出折叠为「+N」。点谁谁上台，其余实例在后台保持登录运行、AI 照常驱动。视图页与分组、布局编排入口撤除，工作区数据里的 `views` 字段原样保留、读写不丢。[+ 启动] 可勾选多个账号一次拉起：第一个上台，其余后台待命。AI 状态是一枚三态点——正在操作呼吸、30 分钟内动过常亮、其余无标，悬停显示最后动作时间，明细在 AI 记录页。
+- **单舞台与左栏账号列**。主界面收成一个舞台：窗口顶带是贯穿整宽的地址栏，左栏是竖向账号列（站点图标 + 账号名 + AI 三态点 + 冻结标识），点谁谁上台，其余实例在后台保持登录运行、AI 照常驱动。左栏底部是 [+ 启动] 与站点 / 账号 / 更多三个入口。视图页与分组、布局编排入口撤除，工作区数据里的 `views` 字段原样保留、读写不丢。[+ 启动] 可勾选多个账号一次拉起：第一个上台，其余后台待命。AI 状态是一枚三态点——正在操作呼吸、30 分钟内动过常亮、其余无标，悬停显示最后动作时间，明细在「更多」的 AI 记录里。
 - **新建会话直达空白**。主按钮点开就是一张空白页：不预选站点、不弹账号面板；要按站点或账号开页时，再从选择面板走明确的一步。
-- **管理窗格**。站点、账号、AI 记录、设置收进一个独立窗格，流程是 AI 记录页里的一个标签；主界面的常驻入口只有 [+ 启动] 与 [管理] 两个——从浏览器一键进管理，从管理一键回浏览器。
-- **档案并入账号**。每个账号的登录数据（Cookie、会话）各自独立保存，新建账号不再问隔离：说明与「清除会话数据」收进账号表单的高级折叠项，默认收起。没有账号的页面——新标签页、书签、地址栏输入——统一落在默认档案。检测到自建档案时，设置页出现一次性迁移向导：可合并到默认档案（磁盘数据保留，已登录页面需重新登录），也可选择保留并不再提示。
-- **实例拆出到独立窗口**。页面可拆到独立的 OS 窗口，配合系统分屏与多显示器并排观察；再点一次收回主舞台，同一实例同时只允许一个拆出窗口。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留。MCP 侧新增 `pop_out_browser_tab`（run 档）。
-- **冻结按「用户可见」判定**。窗口最小化或隐藏到托盘时，台上页面照常冻结；批量启动落在后台的实例与 AI 开出的页面闲置后同样入冻。豁免原因随页面状态可见（`sleepExempt`：台上可见 / 有声 / AI 在操作 / 策略等），AI 据此判断谁在占资源；实例行条目带冻结标识（全部页冻结灰标、部分冻结半标），退出时打点记录冻结状态。
+- **管理改成浮层**。站点、账号、书签、标签、消息、AI 记录从整页改成浮在页面上的浮层，页面不卸载、位置不动，可以一边看页面一边操作；同一族浮层之间直接切换，再点同一位入口或按 Esc 收起。设置仍是整页，走应用菜单。
+- **档案并入账号**。每个账号的登录数据（Cookie、会话）各自独立保存，新建账号不再问隔离：说明与「清除会话数据」收进账号表单的高级折叠项，默认收起。没有账号的页面——新标签页、书签、地址栏输入——统一落在默认会话。检测到自建档案时，设置页出现一次性迁移向导：可合并（磁盘数据保留，已登录页面需重新登录），也可选择保留并不再提示。
+- **实例拆出到独立窗口**。页面可从标签右键菜单拆到独立的 OS 窗口，配合系统分屏与多显示器并排观察；再点一次收回主舞台，同一实例同时只允许一个拆出窗口。空白页没有内容可搬，不提供拆出。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留。MCP 侧新增 `pop_out_browser_tab`（run 档）。
+- **冻结按「用户可见」判定**。窗口最小化或隐藏到托盘时，台上页面照常冻结；批量启动落在后台的实例与 AI 开出的页面闲置后同样入冻。豁免原因随页面状态可见（`sleepExempt`：台上可见 / 有声 / AI 在操作 / 策略等），AI 据此判断谁在占资源；左栏条目带冻结标识（全部页冻结灰标、部分冻结半标），退出时打点记录冻结状态。
 - **更新提示汇总区间版本**。更新弹窗把当前版本到最新版本之间的每个 release 各展示一节，升序排列，最多 10 节，更早的折叠为一句计数；单个版本没有说明时显示占位文案。
 - **补齐动作缺口**：悬停、滚动、组合键、前进/后退/刷新、JS 弹窗的读与答、文件上传、拖拽、复选框设值、元素信息读取、元素裁剪截图。每一项都配了 e2e，断言的是「页面真的变了」而不是「工具返回了 ok」。
 - **流程的原始 CDP 步骤**：`cdp` 步骤可以跑协议层命令，但要先过三档白名单——只作用于当前页面的默认开放，改网络与设备模拟的需要在设置里开启，跨身份与影响整个进程的一律拒绝且不可解锁。一趟流程用超过两次会提示可能缺一个封装动作。
@@ -68,17 +68,18 @@ Fills in what an AI can do to a page — the missing actions, network observatio
 environment emulation, element handles, flow scripting and capability queries —
 fixes several ways a page could look dead, and turns a flow's raw CDP step into a
 tiered escape hatch. The same wave collapses the browser surface into a single
-stage: an instance rail on top, a manage pane, profiles folded into accounts,
-pages that pop out to their own window, and new rules for freezing and update notes.
+stage with an account column on the left: management becomes a layer, profiles
+fold into accounts, pages pop out to their own window, and new rules for freezing
+and update notes.
 
 #### Added
 
-- **One stage, an instance rail on top.** The main window is a single stage with two rows above it: the first is the instance rail — avatar block, account name, site icon and the AI status dot, with [+ Launch] and [Manage] at the end; the second is the on-stage instance's page tabs, overflowing into "+N". Click an instance to bring it on stage; the rest keep running signed-in in the background, still drivable by AI. The views page and its grouping and layout choreography are gone (the `views` field in workspace data is kept untouched, and read-write round-trips lose nothing). [+ Launch] takes a multi-select: the first account lands on stage, the rest wait in the background. The AI status is a three-state dot — breathing while operating, steady when active within 30 minutes, nothing otherwise — and hovering shows the last action time; details live on the AI activity page.
+- **One stage, an account column on the left.** The main window is a single stage: the top band is a full-width address row, and the left column lists running accounts (site icon, account name, AI status dot and freeze badge). Click an entry to bring it on stage; the rest keep running signed-in in the background, still drivable by AI. The foot of the column carries [+ Launch] and three entries — Sites / Accounts / More. The views page and its grouping and layout choreography are gone (the `views` field in workspace data is kept untouched, and read-write round-trips lose nothing). [+ Launch] takes a multi-select: the first account lands on stage, the rest wait in the background. The AI status is a three-state dot — breathing while operating, steady when active within 30 minutes, nothing otherwise — and hovering shows the last action time; details live in AI activity under More.
 - **New sessions start blank.** The primary button opens a blank page directly: no site preselected, no account panel; picking a site or account is an explicit step from the chooser when wanted.
-- **The manage pane.** Sites, accounts, AI activity and settings live in one pane, with flows as a tab inside AI activity; the main surface keeps exactly two permanent entries — [+ Launch] and [Manage] — one click each way.
-- **Profiles fold into accounts.** Every account already keeps its own cookies and session data, so creating an account no longer asks about isolation: the note and "clear session data" live in a collapsed advanced fold of the account form. Account-less surfaces — new tabs, bookmarks, typed addresses — all land in the default profile. When created profiles exist, Settings offers a one-time merge wizard: merge into the default profile (data stays on disk; signed-in pages will need to sign in again), or keep them and never ask again.
-- **Pop an instance out to its own window.** A page can move to its own OS window for side-by-side comparison via system split screen or multiple monitors; clicking again docks it back, and one popped-out window per instance. Popping out reloads the page: SPA in-memory state is not kept, but signed-in state and storage stay with the session partition. New MCP tool `pop_out_browser_tab` (run tier).
-- **Freezing follows user visibility.** With the window minimized or hidden to the tray, the on-stage page freezes as usual; background members of a batch launch and pages opened by AI freeze after idle like anything else. Exemption reasons are published per page (`sleepExempt`: on-stage visible / audible / AI active / policy …), so AI can tell what is holding resources; the instance rail carries a freeze badge (grey when every page is frozen, half when some are), and quit-time telemetry records the freeze state.
+- **Management is a layer.** Sites, accounts, bookmarks, tags, messages and AI activity open as panes floating over the page rather than replacing it: the page stays mounted and keeps its rectangle, so it can be read beside the pane. Panes in the same family switch directly into one another, and clicking the same entry again or pressing Esc dismisses the pane. Settings is the one full-window page left, reached from the app menu.
+- **Profiles fold into accounts.** Every account already keeps its own cookies and session data, so creating an account no longer asks about isolation: the note and "clear session data" live in a collapsed advanced fold of the account form. Account-less surfaces — new tabs, bookmarks, typed addresses — all land in the default session. When created profiles exist, Settings offers a one-time merge wizard: merge them (data stays on disk; signed-in pages will need to sign in again), or keep them and never ask again.
+- **Pop an instance out to its own window.** A page can move to its own OS window from the tab's context menu for side-by-side comparison via system split screen or multiple monitors; clicking again docks it back, and one popped-out window per instance. A blank page has nothing to move and is not offered. Popping out reloads the page: SPA in-memory state is not kept, but signed-in state and storage stay with the session partition. New MCP tool `pop_out_browser_tab` (run tier).
+- **Freezing follows user visibility.** With the window minimized or hidden to the tray, the on-stage page freezes as usual; background members of a batch launch and pages opened by AI freeze after idle like anything else. Exemption reasons are published per page (`sleepExempt`: on-stage visible / audible / AI active / policy …), so AI can tell what is holding resources; the left column carries a freeze badge (grey when every page is frozen, half when some are), and quit-time telemetry records the freeze state.
 - **The update dialog summarizes the whole range.** Every release between the installed version and the latest gets its own section, oldest first, up to ten sections with earlier ones folded into a count; a release without notes shows a placeholder.
 - **The missing actions**: hover, scroll, key combinations, back/forward/reload, reading and answering JS dialogs, file upload, drag, setting a checkbox, element info, and element-clipped screenshots. Each has an e2e that asserts the *page* changed rather than the tool returning `ok`.
 - **A flow's raw CDP step**: a `cdp` step can run protocol commands, but only through a three-tier list — commands that act on the current page are open, network and device emulation need a setting, and anything that crosses identities or affects the whole process is refused and cannot be unlocked. More than two raw commands in one flow produces a note that an action is probably missing.

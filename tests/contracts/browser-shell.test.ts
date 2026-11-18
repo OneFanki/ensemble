@@ -38,7 +38,7 @@ const SETTING_GROUP = readFileSync(
   "utf8",
 );
 const RAIL = readFileSync(
-  join(process.cwd(), "src", "renderer", "src", "components", "InstanceRail.vue"),
+  join(process.cwd(), "src", "renderer", "src", "components", "AccountRail.vue"),
   "utf8",
 );
 
@@ -72,20 +72,37 @@ describe("the active tab and the toolbar share one surface", () => {
     expect(tab).not.toMatch(/border-bottom/);
   });
 
-  it("sizes the strip and the toolbar from tokens", () => {
-    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--titlebar-height\)/);
-    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--toolbar-height\)/);
+  it("sizes the top row and the page strip from their own tokens", () => {
+    // The address row is the window's top band, so it takes the titlebar token;
+    // the page strip sits under it inside the right column and has its own
+    // height. Giving the strip the titlebar token is what made the two bands
+    // fight over the caption area.
+    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--tabstrip-height\)/);
+    expect(ruleBody(BROWSER, ".tabstrip")).not.toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(TOKENS).toMatch(/--titlebar-height:\s*\d+px/);
-    expect(TOKENS).toMatch(/--toolbar-height:\s*\d+px/);
+    expect(TOKENS).toMatch(/--tabstrip-height:\s*\d+px/);
   });
 
-  it("keeps the native window buttons level with the strip", () => {
-    // The overlay is drawn at a fixed pixel height over the strip; if the two
-    // disagree the buttons either float above the band or overlap the tabs.
+  it("keeps the native window buttons level with the row that meets them", () => {
+    // The OS draws the caption buttons over the client area at `TITLEBAR_HEIGHT`
+    // pixels. Three things therefore have to name the same number, and the
+    // assertion is written against the *height of the row that meets the corner*,
+    // not against two literals agreeing: when the values matched but the row was
+    // something else, this test stayed green while the top row was 10px taller
+    // than the buttons that hang over it.
+    //
+    // 1. Main's constant, which positions the overlay.
+    // 2. The token the address row is sized from.
+    // 3. Settings' own band, so switching between the browser and settings does
+    //    not move the window buttons.
     const declared = /--titlebar-height:\s*(\d+)px/.exec(TOKENS)?.[1];
     const mirrored = /const TITLEBAR_HEIGHT = (\d+);/.exec(MAIN)?.[1];
     expect(declared).toBeDefined();
     expect(mirrored).toBe(declared);
+
+    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    expect(ruleBody(SETTINGS, ".settings-head")).toMatch(/height:\s*var\(--titlebar-height\)/);
   });
 });
 
@@ -173,20 +190,24 @@ describe("a setting group's heading is separated from its rows", () => {
 });
 
 /**
- * The instance rail is the window's first row and has no scroller of its own.
+ * The account column is the page area's left neighbour, not an overlay on it.
  *
- * The row folds its overflow into a "+N" button, so nothing in it scrolls: a
- * hidden horizontal scroller would let entries drift halfway out of the band
- * while the fold claims there are only N more.
+ * It is a column of running accounts: a fixed token width, its own vertical
+ * scroller, and no horizontal overflow — the accounts page and the strip stay
+ * to its right, and the stage's rectangle is what every page node is placed
+ * from, so a column that grew into the stage would move nothing but the
+ * pixels.
  */
-describe("the instance rail", () => {
-  it("clips instead of scrolling, so folding is the only overflow answer", () => {
-    const box = ruleBody(RAIL, ".rail-box");
-    expect(box).toMatch(/overflow:\s*hidden/);
-    expect(box).not.toMatch(/overflow-x:\s*auto/);
+describe("the account column", () => {
+  it("is a token-width column, not a band", () => {
+    const rail = ruleBody(RAIL, ".account-rail");
+    expect(rail).toMatch(/flex:\s*0 0 var\(--account-rail-width\)/);
+    expect(rail).toMatch(/width:\s*var\(--account-rail-width\)/);
   });
 
-  it("is a token-sized band like the tab strip, so the two rows read as one header", () => {
-    expect(ruleBody(RAIL, ".rail")).toMatch(/height:\s*var\(--titlebar-height\)/);
+  it("scrolls vertically in the list and never sideways", () => {
+    const list = ruleBody(RAIL, ".rail-list");
+    expect(list).toMatch(/overflow-y:\s*auto/);
+    expect(list).not.toMatch(/overflow-x:\s*auto/);
   });
 });

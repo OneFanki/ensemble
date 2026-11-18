@@ -55,17 +55,17 @@ describe("lastView", () => {
 
   it("only names surfaces the shell can actually open", () => {
     // A saved `lastView` that no page handles must not land on a blank pane.
-    // The shell has exactly two surfaces since the management pane (P1-2):
-    // the browser and the pane. The schema above keeps the pre-pane values so
+    // The shell has exactly two surfaces: the browser (with management layered
+    // over it) and the settings page. The schema above keeps the older values so
     // old workspaces round-trip, and App.vue restores every one of them to the
-    // browser — the pane is never a surface to launch on.
+    // browser — neither a layer nor settings is a surface to launch on.
     const shell = read("src/renderer/src/App.vue");
     const union = shell.slice(
       shell.indexOf("type View ="),
       shell.indexOf("const store = useWorkspaceStore"),
     );
     // The first member has no leading `|`, so the union is asserted as written.
-    expect(union).toContain('type View = "browser" | "manage"');
+    expect(union).toContain('type View = "browser" | "settings"');
     // The retired "views" page is out: no page may answer "views" again.
     expect(union).not.toContain("views");
   });

@@ -10,9 +10,9 @@ import type { HttpAuthChallenge } from "@shared/ipc";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
-import ManagePane, { type ManageSection } from "./components/ManagePane.vue";
+import ManageLayer, { type ManageLayerId, type MoreTab } from "./components/ManageLayer.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
-import type { SettingsSection } from "./components/SettingsPage.vue";
+import SettingsPage, { type SettingsSection } from "./components/SettingsPage.vue";
 import SiteDialog from "./components/SiteDialog.vue";
 import GuideDialog from "./components/GuideDialog.vue";
 import ToastStack from "./components/ToastStack.vue";
@@ -29,16 +29,17 @@ import { useWorkspaceStore } from "./stores/workspace";
 /**
  * Everything that can be on screen.
  *
- * The stage is single-cell (ADR 0012): the browser is the default surface and
- * the management pane (P1-2) is the only other one — sites, accounts, AI
- * activity and settings live inside it as sections, so a page is no longer a
- * destination of its own.
+ * The stage is single-cell (ADR 0012) and it never goes away: the browser —
+ * address row, account column, page strip, stage — is the shell. Management is
+ * layered over it (`layer`), and settings is the one page that still takes the
+ * whole window (`view`), because it changes the workspace rather than a thing
+ * in it.
  *
  * `views` is gone from here (P1-3): the saved-view pages and dialogs are
  * retired from the UI; the workspace data keeps the `views` field for
  * compatibility, with no page to open.
  */
-type View = "browser" | "manage";
+type View = "browser" | "settings";
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
@@ -46,13 +47,17 @@ const confirm = useConfirmStore();
 const navigation = useNavigationStore();
 const view = ref<View>("browser");
 /**
- * The management pane's section on screen.
+ * Which management layer is over the page, if any.
  *
- * The shell owns it so the pane remembers where the user was when it reopens,
- * and so the app menu, the AI panel and the bell can all ask for a specific
- * section without reaching into the pane.
+ * One value, not a set of booleans: the layers are alternatives, so switching
+ * is an assignment and two of them cannot be open at once by construction.
+ *
+ * The shell owns it so the column's buttons, the app menu, the AI panel and the
+ * bell can all name a destination without reaching into the layer.
  */
-const manageSection = ref<ManageSection>("sites");
+const layer = ref<ManageLayerId | null>(null);
+/** Which 「更多」 section is on screen; kept across open/close. */
+const moreTab = ref<MoreTab>("bookmarks");
 /**
  * Whether the opening splash is still covering the shell.
  *
@@ -208,15 +213,19 @@ onMounted(async () => {
   applyTheme(store.settings.theme);
   setLocale(resolvedLocale.value);
   // The browser is the only surface a launch restores to: it is where work
-  // sits. Management pages were never restored for the same reason, and the
-  // pane inherits that rule now that it holds them all.
+  // sits. A management layer is something the user opened, never a place to
+  // land on; settings is a page you go to change something.
   view.value = "browser";
+  layer.value = null;
   // The main process asks for the browser page when a tool or a shortcut opens a
-  // page in it, so the result is never hidden behind a management page. Already
-  // being there is the common case (a tab click inside the browser page), and
-  // re-entering the view would persist the same setting on every click.
+  // page in it, so the result is never hidden behind a management page or a
+  // layer. Already being on the browser with nothing over it is the common case
+  // (a tab click inside the browser page), so nothing is re-assigned then.
   window.ensemble.onEmbeddedPage(() => {
-    if (view.value !== "browser") switchView("browser");
+    if (view.value !== "browser" || layer.value !== null) {
+      layer.value = null;
+      switchView("browser");
+    }
   });
   // The main process restores the last view itself; the renderer only reports it
   // so the user knows why several windows just appeared.
@@ -292,55 +301,64 @@ function switchView(next: View) {
   view.value = next;
   /*
    * Nothing is persisted as the view to restore. The browser is where work
-   * sits, so a launch always lands there; the management pane is a place you
-   * go to change something, and opening the app on it would look like the app
-   * opened on the wrong screen. (The saved `lastView` setting stays in the
-   * schema for workspaces that carry one; its value is simply ignored.)
+   * sits, so a launch always lands there; settings is a place you go to change
+   * something, and opening the app on it would look like the app opened on the
+   * wrong screen. (The saved `lastView` setting stays in the schema for
+   * workspaces that carry one; its value is simply ignored.)
    */
 }
 
 /**
- * The browser toolbar's way into the management pane.
+ * The browser's ways into the workspace's pages.
  *
- * The caller names a destination; without one it lands on the settings section,
- * because the rows that still name a destination are the ones a user clicked on
- * purpose. Settings keeps the section the user left it at: reopening the pane
- * should not reset the tab they were reading.
+ * Three destinations are layers over the page (站点 / 账号 / 更多), and settings
+ * is the one full-window page left. The caller names a destination; without one
+ * it lands on settings, because the rows that still name one are the ones a
+ * user clicked on purpose.
  */
-function openConsole(
-  target: Extract<ManageSection, "sites" | "settings" | "ai" | "messages"> = "settings",
-) {
+function openConsole(target: "sites" | "identities" | "settings" | "messages" | "ai" = "settings") {
   if (target === "settings") {
     openSettings(settingsSection.value);
     return;
   }
-  openManage(target);
+  if (target === "messages" || target === "ai") {
+    moreTab.value = target;
+    openLayer("more");
+    return;
+  }
+  openLayer(target);
 }
 
 /**
- * Opens the management pane, optionally on a named section.
+ * Opens a management layer over the page.
  *
- * The section is kept when none is named, so [管理] and the pane's own close
- * arrow behave like two sides of one door: leave and return, and the pane is
- * where the user left it.
+ * Switching between layers is this same assignment, so two of them cannot be
+ * open at once: there is one value, and mounting follows it.
  */
-function openManage(section?: ManageSection) {
-  if (section) manageSection.value = section;
-  switchView("manage");
+function openLayer(next: ManageLayerId): void {
+  // Settings covers the window; a layer opening from inside it is a request to
+  // come back to the page first.
+  if (view.value !== "browser") view.value = "browser";
+  layer.value = next;
+}
+
+function closeLayer(): void {
+  layer.value = null;
 }
 
 /**
- * Opens the settings section of the management pane.
+ * Opens settings, the one page that still replaces the browser.
  *
  * The section travels as a request (with a counter) rather than as a prop the
- * page mirrors: the page stays mounted while the pane shows it, and coming back
- * to the same section after the user picked another one has to count as a new
+ * page mirrors: the page stays mounted while it is showing, and coming back to
+ * the same section after the user picked another one has to count as a new
  * request.
  */
 function openSettings(section: SettingsSection = "general") {
   settingsSection.value = section;
   settingsSectionSeq.value += 1;
-  openManage("settings");
+  layer.value = null;
+  switchView("settings");
 }
 
 /**
@@ -383,7 +401,7 @@ navigation.bind((next, tab) => {
     openSettings((tab as SettingsSection | undefined) ?? settingsSection.value);
     return;
   }
-  openManage(next as ManageSection);
+  openConsole(next as "sites" | "identities" | "messages" | "ai");
 });
 
 /**
@@ -706,42 +724,52 @@ async function handleLocale(locale: LocaleSetting) {
     </Transition>
 
     <!--
-      One pane for everything: the browser fills it, and the management pane
-      (站点 / 账号 / AI 记录 / 设置, with 书签 / 标签 / 消息 below a rule)
-      replaces it when [管理] is pressed. The stage is single-cell (ADR 0012)
-      and the instance rail is the window's first row; [管理] at its right end
-      is the pane's only entrance.
+      The pane holds the browser; settings is the one page that replaces it.
+      Management (站点 / 账号 / 更多) is a layer over the page, so the browser
+      stays mounted underneath — closing a layer costs one assignment, not a
+      remount of the page strip and the account column.
     -->
     <main class="pane">
       <BrowserPage
         v-if="view === 'browser'"
         :obscured="overlayOpen"
+        :layer="layer"
+        @update:layer="layer = $event"
         @open-console="openConsole"
-        @manage="openManage()"
         @open-guide="openGuide"
         @update-found="(result) => (updatePrompt = result)"
         @save-capture="saveCapturedLogin"
       />
-      <ManagePane
+      <SettingsPage
         v-else
-        :section="manageSection"
-        :settings-section="settingsSection"
-        :settings-section-seq="settingsSectionSeq"
-        @close="switchView('browser')"
-        @navigate="manageSection = $event"
+        :section="settingsSection"
+        :section-seq="settingsSectionSeq"
+        @back="switchView('browser')"
         @theme="handleTheme"
         @locale="handleLocale"
         @update-found="(result) => (updatePrompt = result)"
-        @new-site="openNewSite()"
-        @edit-site="openEditSite($event)"
-        @open-site="openSite"
-        @add-identity="openNewIdentity($event)"
-        @new-identity="openNewIdentity($event)"
-        @edit-identity="openEditIdentity($event)"
-        @session-health="healthOpen = true"
-        @save-capture="saveCapturedLogin"
       />
     </main>
+
+    <!--
+      The management layers, all through one shell: 站点 / 账号 / 更多. One value
+      selects which page is inside, so switching is an assignment and two layers
+      can never stack.
+    -->
+    <ManageLayer
+      :layer="layer"
+      :more-tab="moreTab"
+      @close="closeLayer"
+      @update-more-tab="moreTab = $event"
+      @new-site="openNewSite()"
+      @edit-site="openEditSite($event)"
+      @open-site="openSite"
+      @add-identity="openNewIdentity($event)"
+      @new-identity="openNewIdentity($event)"
+      @edit-identity="openEditIdentity($event)"
+      @session-health="healthOpen = true"
+      @save-capture="saveCapturedLogin"
+    />
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in

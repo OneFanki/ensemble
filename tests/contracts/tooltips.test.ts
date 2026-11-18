@@ -24,7 +24,7 @@ import { describe, expect, it } from "vitest";
 const read = (path: string): string => readFileSync(join(process.cwd(), path), "utf8");
 
 const browser = read("src/renderer/src/components/BrowserPage.vue");
-const rail = read("src/renderer/src/components/InstanceRail.vue");
+const rail = read("src/renderer/src/components/AccountRail.vue");
 const directive = read("src/renderer/src/directives/tooltip.ts");
 
 describe("hover labels", () => {
@@ -72,13 +72,15 @@ describe("hover labels", () => {
     }
   });
 
-  it("gives every instance-rail control a label through the directive", () => {
-    // The rail is the window's first row: the [+ 启动] and [管理] buttons carry
-    // drawn labels, and each instance chip's hint is the account name — the
-    // fact a truncated label hides. No native `title` may creep back in: every
-    // hint on the rail is the app's own drawn layer.
+  it("gives every account-column control a label through the directive", () => {
+    // The column is the left of the page area: the [+ 启动] button and the three
+    // management entries carry drawn labels, and each item's hint is the account
+    // name — the fact a truncated label hides. No native `title` may creep back
+    // in: every hint here is the app's own drawn layer.
     expect(rail).toContain('v-tooltip="t(\'app.railLaunch\')"');
-    expect(rail).toContain('v-tooltip="t(\'app.railManage\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.sites\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.identities\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.more\')"');
     expect(rail).toContain('v-tooltip="item.account"');
     expect(rail).not.toMatch(/:title="t\('app\./);
     expect(rail).not.toMatch(/\s:title="/);
@@ -109,12 +111,12 @@ describe("hover labels", () => {
     // Every `title` left in the toolbar would be a control whose hint the app
     // cannot draw. The two survivors below are page URLs, which is a different
     // job: the OS tooltip truncates a long URL and lets the user read it.
-    // The slice ends at the stage, not at a control inside the toolbar: a marker
-    // that moves out of the toolbar would make `indexOf` return -1, and slicing
-    // to -1 silently covers the rest of the file instead of failing.
+    // The slice ends at the work area, not at a control inside the toolbar: a
+    // marker that moves out of the toolbar would make `indexOf` return -1, and
+    // slicing to -1 silently covers the rest of the file instead of failing.
     const toolbar = browser.slice(
-      browser.indexOf('<div class="toolbar">'),
-      browser.indexOf('<div ref="stage"'),
+      browser.indexOf('<div class="toolbar"'),
+      browser.indexOf('<div class="work-area">'),
     );
     expect(toolbar.length).toBeGreaterThan(0);
     expect(toolbar).not.toMatch(/:title="t\(/);

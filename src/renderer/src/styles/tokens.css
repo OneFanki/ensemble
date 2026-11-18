@@ -153,9 +153,22 @@
   --shadow-dialog: 0 30px 80px rgb(0 0 0 / 55%);
   --shadow-tab: none;
 
-  /* Window geometry: strip + toolbar are the browser's own two rows. */
-  --titlebar-height: 34px;
-  --toolbar-height: 44px;
+  /*
+   * Window geometry.
+   *
+   * `--titlebar-height` is *the* window's top band: the address row. It is also
+   * the band the native caption buttons are drawn in, so it must equal
+   * `TITLEBAR_HEIGHT` in `src/main/index.ts` — the OS paints the buttons over
+   * the client area at that height, and a CSS-only change puts them off centre.
+   * One token for both quantities on purpose: when they were two values, the
+   * row that actually met the corner was never the row the constant described.
+   *
+   * The page strip is no longer the window's top edge (the address row is), so
+   * it has its own height. `--toolbar-height` is gone rather than kept as an
+   * alias: two names for one band is exactly how the two drifted apart.
+   */
+  --titlebar-height: 44px;
+  --tabstrip-height: 34px;
   --account-rail-width: 196px;
   --dock-width: 244px;
 

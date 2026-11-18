@@ -68,8 +68,8 @@ import { useWorkspaceStore } from "../stores/workspace";
 import BookmarkDialog from "./BookmarkDialog.vue";
 import DevicePanel from "./DevicePanel.vue";
 import AiPanel from "./AiPanel.vue";
+import AccountRail, { type AccountRailLayer } from "./AccountRail.vue";
 import PageSizeFrame from "./PageSizeFrame.vue";
-import InstanceRail from "./InstanceRail.vue";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
@@ -86,13 +86,15 @@ const { t } = useI18n();
 const props = defineProps<{
   /** An HTML overlay (for example the site menu) covers the stage. */
   obscured?: boolean;
+  /** Which management layer is open, if any; the shell owns the value. */
+  layer?: AccountRailLayer | null;
 }>();
 
 const emit = defineEmits<{
-  /** Open the management pane on a section; omitted means "settings". */
-  openConsole: [view?: "sites" | "settings" | "messages" | "ai"];
-  /** The rail's [管理] was pressed; the shell owns the pane. */
-  manage: [];
+  /** Open a shell-owned page or layer; omitted means "settings". */
+  openConsole: [view?: "sites" | "identities" | "settings" | "messages" | "ai"];
+  /** The account column asked for a management layer, or for it to close. */
+  "update:layer": [layer: AccountRailLayer | null];
   /** The app menu's guide entry; the shell owns the dialog. */
   openGuide: [];
   /** A manual update check from the menu found something to install. */
@@ -1441,119 +1443,16 @@ function fillMessage(reason?: string): string {
 <template>
   <section class="browser">
     <!--
-      The first row: one entry per running instance, ending with [+ 启动] and
-      [管理]. Clicking an entry puts that instance on the stage; the rest keep
-      running in the background. The rail owns the window's drag band too —
-      its empty stretches move the window, like a tab strip.
-    -->
-    <InstanceRail @manage="emit('manage')" />
-    <!--
-      The second row: the pages of the instance on stage.
+      The window's top band: the address row across the full width, with the
+      page actions and the app menu at its right end. It is the row that meets
+      the native caption buttons, so it is the row that reserves their width.
 
-      The stage is single-cell, so "the window's tabs" is exactly one browser's
-      pages — which is what a tab strip means. The active tab is painted in the
-      toolbar's colour with no bottom edge, so strip and toolbar read as one
-      surface.
+      Under it: the account column on the left and the page area on the right.
+      The column is a sibling of the stage, never an overlay — the stage's own
+      rectangle is what every page node, resize handle and DevTools split is
+      computed from.
     -->
-    <div class="tabstrip drag-region" :data-platform="platform">
-      <div class="tabs no-drag" role="tablist" :aria-label="t('app.browserTabs')">
-        <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
-          <button
-            v-for="page in windowPages"
-            :key="page.id"
-            type="button"
-            role="tab"
-            class="tab"
-            :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
-            :aria-selected="page.id === windowActivePageId"
-            :data-tab-id="page.id"
-            :data-sleep="sleepStateOf(page)"
-            :title="pageTitle(page)"
-            draggable="true"
-            @click="activateWindowPage(page.id)"
-            @mousedown="onWindowPageMouseDown"
-            @auxclick="onWindowPageAuxClick(page, $event)"
-            @dragstart="onWindowPageDragStart(page, $event)"
-            @dragend="onWindowPageDragEnd"
-            @dragover="onStripTabDragOver(page, $event)"
-            @dragleave="onStripTabDragLeave(page)"
-            @drop="onStripTabDrop(page, $event)"
-            @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
-          >
-            <!-- One icon slot, three states: loading, asleep, or the site. The
-                 spinner used to replace the close button, which left a loading
-                 tab with no way to close it and moved the close when it
-                 finished. -->
-            <span class="tab-fav">
-              <span
-                v-if="page.loading"
-                class="tab-loading"
-                :aria-label="t('app.browserLoading')"
-              ></span>
-              <Snowflake
-                v-else-if="page.sleeping"
-                :size="12"
-                class="tab-sleep"
-                :aria-label="t('app.tabSleeping')"
-              />
-              <TabIcon v-else :src="page.favicon" :size="13" />
-            </span>
-            <span class="tab-label">{{ store.titleOf(page) }}</span>
-            <Pin
-              v-if="!page.sleeping && page.sleepPolicy === 'never'"
-              :size="10"
-              class="tab-keep"
-              :aria-label="t('app.tabNeverSleep')"
-            />
-            <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
-                 图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
-            <span
-              v-if="page.everAudible"
-              class="tab-audio"
-              :class="{ muted: page.muted }"
-              role="button"
-              tabindex="0"
-              :data-audio="page.muted ? 'muted' : 'audible'"
-              :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-              v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-              @click.stop="void store.setMuted(page.id, !page.muted)"
-              @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
-              @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
-            >
-              <VolumeX v-if="page.muted" :size="11" />
-              <Volume2 v-else :size="11" />
-            </span>
-            <!-- Always rendered. A close affordance that exists only on the
-                 current tab turns "close these four" into four hover round
-                 trips; the resting state is quiet enough not to compete. -->
-            <span
-              class="tab-close"
-              role="button"
-              tabindex="0"
-              :aria-label="t('app.browserCloseTab')"
-              :data-close-tab="page.id"
-              @click.stop="store.closeTab(page.id)"
-              @keydown.enter.stop="store.closeTab(page.id)"
-              @keydown.space.prevent.stop="store.closeTab(page.id)"
-            >
-              <X :size="10" />
-            </span>
-          </button>
-        </TransitionGroup>
-      </div>
-      <button
-        type="button"
-        class="strip-add no-drag"
-        :aria-label="t('app.browserNewTabHere')"
-        v-tooltip="t('app.browserNewTabHere')"
-        @click="addWindowPage"
-      >
-        <Plus :size="14" />
-      </button>
-      <div class="strip-drag drag-region"></div>
-    </div>
-
-    <div class="toolbar">
+    <div class="toolbar" :data-platform="platform">
       <button
         type="button"
         class="icon"
@@ -2198,216 +2097,322 @@ function fillMessage(reason?: string): string {
       </div>
     </div>
 
-    <div ref="stage" class="stage">
-      <!--
-        The zoom readout, for a gesture the chrome never sees.
-
-        Ctrl +/-, Ctrl+wheel and Ctrl+0 are handled inside the page, so there is
-        nothing here to update — this overlay is the feedback, and it expires on
-        its own. Cheap and centred like every browser's: a short-lived label is
-        all the confirmation the gesture needs, and it must not take a row.
-      -->
-      <div v-if="zoomNotice" class="zoom-toast mono" data-zoom-toast>
-        {{ zoomNotice.zoom }}%
-      </div>
-      <!--
-        Find sits over the page, top-right, like every browser since Chrome.
-
-        It used to be its own row under the toolbar, which made the whole stage
-        jump down by its height whenever it opened and pushed the page layout
-        around — the one thing a transient control must not do. As an overlay it
-        costs nothing until it is used, and closing it leaves the page exactly
-        where it was.
-      -->
-      <div v-if="findOpen" class="findbar" data-find-bar>
-        <InputShell size="toolbar" class="find-shell">
-          <input
-            ref="findInput"
-            v-model="findText"
-            type="text"
-            :placeholder="t('app.browserFindPlaceholder')"
-            @input="runFind('reset')"
-            @keydown.enter.prevent="runFind('next')"
-            @keydown.shift.enter.prevent="runFind('prev')"
-            @keydown.esc.prevent="closeFindBar"
-          />
-        </InputShell>
-        <span class="count">
-          {{ findResult ? `${findResult.activeMatch} / ${findResult.matches}` : "—" }}
-        </span>
-        <button type="button" class="icon" :aria-label="t('app.browserFindPrev')" @click="runFind('prev')">
-          <ChevronUp :size="13" />
-        </button>
-        <button type="button" class="icon" :aria-label="t('app.browserFindNext')" @click="runFind('next')">
-          <ChevronDown :size="13" />
-        </button>
-        <button type="button" class="icon" :aria-label="t('app.browserFindClose')" @click="closeFindBar">
-          <X :size="13" />
-        </button>
-      </div>
-
-
-      <!-- A blank page has no node on the stage; the app draws it. -->
-      <div
-        v-for="surface in blankSurfaces"
-        :key="`blank-${surface.tab.id}`"
-        class="blank-slot"
-        :style="
-          surface.slot
-            ? {
-                left: `${surface.slot.x}px`,
-                top: `${surface.slot.y}px`,
-                width: `${surface.slot.width}px`,
-                height: `${surface.slot.height}px`,
-              }
-            : { inset: '0' }
-        "
-      >
-        <NewTabPage :tab="surface.tab" @open-bookmark="openBookmark" />
-      </div>
-
-      <!-- The page's own resize edges, over the guest and under the panels. -->
-      <PageSizeFrame
-        v-if="pageFrameTab"
-        :tab="pageFrameTab"
-        :stage-width="stageBox.width"
-        :stage-height="stageBox.height"
-        @resize="resizePage"
+    <div class="work-area">
+      <AccountRail
+        :active-layer="layer"
+        @open-layer="emit('update:layer', $event)"
+        @close-layer="emit('update:layer', null)"
       />
-
-      <!--
-        The stage is single-cell: one page fills it, and the account name lives
-        in the instance rail's first row. No header band, no cell geometry —
-        what is on stage is always the instance the rail has selected (ADR 0012).
-      -->
-
-      <!-- The seam between a page and its docked DevTools panel. Both sides are
-           native surfaces, so only a real gap between them leaves anywhere for
-           this to be seen and grabbed. -->
-      <div
-        v-for="grip in devtoolsGrips"
-        :key="`devtools-grip-${grip.key}`"
-        class="devtools-grip"
-        :style="{
-          left: `${grip.left}px`,
-          top: `${grip.top}px`,
-          width: `${grip.width}px`,
-          height: `${grip.height}px`,
-        }"
-        @pointerdown="startDevToolsResize(grip.tabId, $event)"
-      ></div>
-
-      <!--
-        The strip above a docked panel. The panel is a native surface, so the
-        close button cannot be drawn on top of it — it lives here instead, in the
-        26px the panel gives up at its top (see `EMBEDDED_DEVTOOLS_HEAD`).
-      -->
-      <div
-        v-for="panel in devtoolsPanels"
-        :key="`devtools-head-${panel.key}`"
-        class="devtools-head"
-        :style="{
-          left: `${panel.head.left}px`,
-          top: `${panel.head.top}px`,
-          width: `${panel.head.width}px`,
-          height: `${panel.head.height}px`,
-        }"
-      >
-        <!--
-          Three tabs, one rectangle.
-
-          The native front-end is a WebContentsView, so when one of our own
-          panels is showing it has to be parked off screen entirely — two owners
-          of one rect would fight, and the native one always wins. Switching is
-          therefore "which surface owns this rectangle", not "which layer is on
-          top".
-        -->
-        <div class="devtools-tabs" role="tablist">
+      <div class="content-col">
+        <div class="tabstrip">
+          <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
+            <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
+              <button
+                v-for="page in windowPages"
+                :key="page.id"
+                type="button"
+                role="tab"
+                class="tab"
+                :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
+                :aria-selected="page.id === windowActivePageId"
+                :data-tab-id="page.id"
+                :data-sleep="sleepStateOf(page)"
+                :title="pageTitle(page)"
+                draggable="true"
+                @click="activateWindowPage(page.id)"
+                @mousedown="onWindowPageMouseDown"
+                @auxclick="onWindowPageAuxClick(page, $event)"
+                @dragstart="onWindowPageDragStart(page, $event)"
+                @dragend="onWindowPageDragEnd"
+                @dragover="onStripTabDragOver(page, $event)"
+                @dragleave="onStripTabDragLeave(page)"
+                @drop="onStripTabDrop(page, $event)"
+                @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
+              >
+                <!-- One icon slot, three states: loading, asleep, or the site. The
+                     spinner used to replace the close button, which left a loading
+                     tab with no way to close it and moved the close when it
+                     finished. -->
+                <span class="tab-fav">
+                  <span
+                    v-if="page.loading"
+                    class="tab-loading"
+                    :aria-label="t('app.browserLoading')"
+                  ></span>
+                  <Snowflake
+                    v-else-if="page.sleeping"
+                    :size="12"
+                    class="tab-sleep"
+                    :aria-label="t('app.tabSleeping')"
+                  />
+                  <TabIcon v-else :src="page.favicon" :size="13" />
+                </span>
+                <span class="tab-label">{{ store.titleOf(page) }}</span>
+                <Pin
+                  v-if="!page.sleeping && page.sleepPolicy === 'never'"
+                  :size="10"
+                  class="tab-keep"
+                  :aria-label="t('app.tabNeverSleep')"
+                />
+                <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
+                     图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
+                <span
+                  v-if="page.everAudible"
+                  class="tab-audio"
+                  :class="{ muted: page.muted }"
+                  role="button"
+                  tabindex="0"
+                  :data-audio="page.muted ? 'muted' : 'audible'"
+                  :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+                  v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+                  @click.stop="void store.setMuted(page.id, !page.muted)"
+                  @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
+                  @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
+                >
+                  <VolumeX v-if="page.muted" :size="11" />
+                  <Volume2 v-else :size="11" />
+                </span>
+                <!-- Always rendered. A close affordance that exists only on the
+                     current tab turns "close these four" into four hover round
+                     trips; the resting state is quiet enough not to compete. -->
+                <span
+                  class="tab-close"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="t('app.browserCloseTab')"
+                  :data-close-tab="page.id"
+                  @click.stop="store.closeTab(page.id)"
+                  @keydown.enter.stop="store.closeTab(page.id)"
+                  @keydown.space.prevent.stop="store.closeTab(page.id)"
+                >
+                  <X :size="10" />
+                </span>
+              </button>
+            </TransitionGroup>
+          </div>
           <button
-            v-for="entry in DEVTOOLS_TABS"
-            :key="entry.id"
             type="button"
-            role="tab"
-            class="devtools-tab"
-            :class="{ active: panel.tab === entry.id, compact: panel.compact }"
-            :aria-selected="panel.tab === entry.id"
-            :aria-label="panel.compact ? t(entry.labelKey) : undefined"
-            v-tooltip="panel.compact ? t(entry.labelKey) : undefined"
-            :data-devtools-tab="entry.id"
-            @click="showDevtoolsTab(panel.tabId, entry.id)"
+            class="strip-add"
+            :aria-label="t('app.browserNewTabHere')"
+            v-tooltip="t('app.browserNewTabHere')"
+            @click="addWindowPage"
           >
-            <component :is="entry.icon" :size="11" />
-            <span v-if="!panel.compact">{{ t(entry.labelKey) }}</span>
+            <Plus :size="14" />
+          </button>
+          <div class="strip-drag"></div>
+        </div>
+      <div ref="stage" class="stage">
+        <!--
+          The zoom readout, for a gesture the chrome never sees.
+
+          Ctrl +/-, Ctrl+wheel and Ctrl+0 are handled inside the page, so there is
+          nothing here to update — this overlay is the feedback, and it expires on
+          its own. Cheap and centred like every browser's: a short-lived label is
+          all the confirmation the gesture needs, and it must not take a row.
+        -->
+        <div v-if="zoomNotice" class="zoom-toast mono" data-zoom-toast>
+          {{ zoomNotice.zoom }}%
+        </div>
+        <!--
+          Find sits over the page, top-right, like every browser since Chrome.
+
+          It used to be its own row under the toolbar, which made the whole stage
+          jump down by its height whenever it opened and pushed the page layout
+          around — the one thing a transient control must not do. As an overlay it
+          costs nothing until it is used, and closing it leaves the page exactly
+          where it was.
+        -->
+        <div v-if="findOpen" class="findbar" data-find-bar>
+          <InputShell size="toolbar" class="find-shell">
+            <input
+              ref="findInput"
+              v-model="findText"
+              type="text"
+              :placeholder="t('app.browserFindPlaceholder')"
+              @input="runFind('reset')"
+              @keydown.enter.prevent="runFind('next')"
+              @keydown.shift.enter.prevent="runFind('prev')"
+              @keydown.esc.prevent="closeFindBar"
+            />
+          </InputShell>
+          <span class="count">
+            {{ findResult ? `${findResult.activeMatch} / ${findResult.matches}` : "—" }}
+          </span>
+          <button type="button" class="icon" :aria-label="t('app.browserFindPrev')" @click="runFind('prev')">
+            <ChevronUp :size="13" />
+          </button>
+          <button type="button" class="icon" :aria-label="t('app.browserFindNext')" @click="runFind('next')">
+            <ChevronDown :size="13" />
+          </button>
+          <button type="button" class="icon" :aria-label="t('app.browserFindClose')" @click="closeFindBar">
+            <X :size="13" />
           </button>
         </div>
-        <button
-          type="button"
-          class="devtools-head-close"
-          :aria-label="t('app.browserDevToolsClose')"
-          v-tooltip="t('app.browserDevToolsClose')"
-          :data-devtools-close="panel.tabId"
-          @click="closeDevTools(panel.tabId)"
-        >
-          <X :size="12" />
-        </button>
-      </div>
 
-      <!-- Our own panel bodies. Only one is mounted per page, and only when
-           that page's tab is the one showing. -->
-      <template v-for="panel in devtoolsPanels" :key="`devtools-body-${panel.key}`">
+
+        <!-- A blank page has no node on the stage; the app draws it. -->
         <div
-          v-if="panel.tab !== 'front-end'"
-          class="devtools-body"
+          v-for="surface in blankSurfaces"
+          :key="`blank-${surface.tab.id}`"
+          class="blank-slot"
+          :style="
+            surface.slot
+              ? {
+                  left: `${surface.slot.x}px`,
+                  top: `${surface.slot.y}px`,
+                  width: `${surface.slot.width}px`,
+                  height: `${surface.slot.height}px`,
+                }
+              : { inset: '0' }
+          "
+        >
+          <NewTabPage :tab="surface.tab" @open-bookmark="openBookmark" />
+        </div>
+
+        <!-- The page's own resize edges, over the guest and under the panels. -->
+        <PageSizeFrame
+          v-if="pageFrameTab"
+          :tab="pageFrameTab"
+          :stage-width="stageBox.width"
+          :stage-height="stageBox.height"
+          @resize="resizePage"
+        />
+
+        <!--
+          The stage is single-cell: one page fills it, and the account name lives
+          in the instance rail's first row. No header band, no cell geometry —
+          what is on stage is always the instance the rail has selected (ADR 0012).
+        -->
+
+        <!-- The seam between a page and its docked DevTools panel. Both sides are
+             native surfaces, so only a real gap between them leaves anywhere for
+             this to be seen and grabbed. -->
+        <div
+          v-for="grip in devtoolsGrips"
+          :key="`devtools-grip-${grip.key}`"
+          class="devtools-grip"
           :style="{
-            left: `${panel.body.left}px`,
-            top: `${panel.body.top}px`,
-            width: `${panel.body.width}px`,
-            height: `${panel.body.height}px`,
+            left: `${grip.left}px`,
+            top: `${grip.top}px`,
+            width: `${grip.width}px`,
+            height: `${grip.height}px`,
+          }"
+          @pointerdown="startDevToolsResize(grip.tabId, $event)"
+        ></div>
+
+        <!--
+          The strip above a docked panel. The panel is a native surface, so the
+          close button cannot be drawn on top of it — it lives here instead, in the
+          26px the panel gives up at its top (see `EMBEDDED_DEVTOOLS_HEAD`).
+        -->
+        <div
+          v-for="panel in devtoolsPanels"
+          :key="`devtools-head-${panel.key}`"
+          class="devtools-head"
+          :style="{
+            left: `${panel.head.left}px`,
+            top: `${panel.head.top}px`,
+            width: `${panel.head.width}px`,
+            height: `${panel.head.height}px`,
           }"
         >
-          <DevicePanel
-            v-if="panel.tab === 'device'"
-            :device="panel.device"
-            :viewport="panel.viewport ?? null"
-            :viewport-override="panel.viewportOverride"
-            @device="setDevice(panel.tabId, $event)"
-            @viewport="setViewport(panel.tabId, $event)"
-          />
-          <PerformancePanel v-else-if="panel.tab === 'performance'" :tab-id="panel.tabId" />
+          <!--
+            Three tabs, one rectangle.
+
+            The native front-end is a WebContentsView, so when one of our own
+            panels is showing it has to be parked off screen entirely — two owners
+            of one rect would fight, and the native one always wins. Switching is
+            therefore "which surface owns this rectangle", not "which layer is on
+            top".
+          -->
+          <div class="devtools-tabs" role="tablist">
+            <button
+              v-for="entry in DEVTOOLS_TABS"
+              :key="entry.id"
+              type="button"
+              role="tab"
+              class="devtools-tab"
+              :class="{ active: panel.tab === entry.id, compact: panel.compact }"
+              :aria-selected="panel.tab === entry.id"
+              :aria-label="panel.compact ? t(entry.labelKey) : undefined"
+              v-tooltip="panel.compact ? t(entry.labelKey) : undefined"
+              :data-devtools-tab="entry.id"
+              @click="showDevtoolsTab(panel.tabId, entry.id)"
+            >
+              <component :is="entry.icon" :size="11" />
+              <span v-if="!panel.compact">{{ t(entry.labelKey) }}</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            class="devtools-head-close"
+            :aria-label="t('app.browserDevToolsClose')"
+            v-tooltip="t('app.browserDevToolsClose')"
+            :data-devtools-close="panel.tabId"
+            @click="closeDevTools(panel.tabId)"
+          >
+            <X :size="12" />
+          </button>
         </div>
-      </template>
 
-      <!--
-        Batch launch marker: while a batch is still filling this view, the stage
-        itself may not move at all — a free layout has one cell and the first
-        page takes seconds to land. The marker is the difference between "the
-        launch is running" and "the click did nothing". It sits above the guest
-        nodes, which live at z-index 1.
-      -->
-      <div v-if="store.activeView?.launching" class="batch-marker" role="status">
-        <span class="batch-spinner spin" aria-hidden="true"></span>
-        {{
-          t("app.batchStarting", {
-            done: store.activeView.launching.done,
-            total: store.activeView.launching.total,
-          })
-        }}
-      </div>
+        <!-- Our own panel bodies. Only one is mounted per page, and only when
+             that page's tab is the one showing. -->
+        <template v-for="panel in devtoolsPanels" :key="`devtools-body-${panel.key}`">
+          <div
+            v-if="panel.tab !== 'front-end'"
+            class="devtools-body"
+            :style="{
+              left: `${panel.body.left}px`,
+              top: `${panel.body.top}px`,
+              width: `${panel.body.width}px`,
+              height: `${panel.body.height}px`,
+            }"
+          >
+            <DevicePanel
+              v-if="panel.tab === 'device'"
+              :device="panel.device"
+              :viewport="panel.viewport ?? null"
+              :viewport-override="panel.viewportOverride"
+              @device="setDevice(panel.tabId, $event)"
+              @viewport="setViewport(panel.tabId, $event)"
+            />
+            <PerformancePanel v-else-if="panel.tab === 'performance'" :tab-id="panel.tabId" />
+          </div>
+        </template>
 
-      <!--
-        The empty stage: no pages anywhere. The instance rail's [+ 启动] and the
-        address bar above are the ways out; the button repeats the address bar's
-        answer for a first-run screen that has neither.
-      -->
-      <div v-if="!store.tabs.length" class="stage-empty">
-        <p>{{ t("app.browserEmptyTitle") }}</p>
-        <p class="sub">{{ t("app.browserEmptyHint") }}</p>
-        <!-- One button, not a wall of site chips: the address bar is right above
-             and the split new-tab button already lists every site as a bookmark,
-             so repeating them here made the empty state look like a menu. -->
-        <AppButton class="stage-empty-action" @click="store.openTab()">
-          {{ t("app.browserNewTab") }}
-        </AppButton>
+        <!--
+          Batch launch marker: while a batch is still filling this view, the stage
+          itself may not move at all — a free layout has one cell and the first
+          page takes seconds to land. The marker is the difference between "the
+          launch is running" and "the click did nothing". It sits above the guest
+          nodes, which live at z-index 1.
+        -->
+        <div v-if="store.activeView?.launching" class="batch-marker" role="status">
+          <span class="batch-spinner spin" aria-hidden="true"></span>
+          {{
+            t("app.batchStarting", {
+              done: store.activeView.launching.done,
+              total: store.activeView.launching.total,
+            })
+          }}
+        </div>
+
+        <!--
+          The empty stage: no pages anywhere. The instance rail's [+ 启动] and the
+          address bar above are the ways out; the button repeats the address bar's
+          answer for a first-run screen that has neither.
+        -->
+        <div v-if="!store.tabs.length" class="stage-empty">
+          <p>{{ t("app.browserEmptyTitle") }}</p>
+          <p class="sub">{{ t("app.browserEmptyHint") }}</p>
+          <!-- One button, not a wall of site chips: the address bar is right above
+               and the split new-tab button already lists every site as a bookmark,
+               so repeating them here made the empty state look like a menu. -->
+          <AppButton class="stage-empty-action" @click="store.openTab()">
+            {{ t("app.browserNewTab") }}
+          </AppButton>
+        </div>
+    </div>
       </div>
     </div>
 
@@ -2547,31 +2552,57 @@ function fillMessage(reason?: string): string {
 </template>
 
 <style scoped>
+/*
+ * The shell: the address row across the window, then a row with the account
+ * column on the left and the page area on the right.
+ *
+ * The column is a *sibling* of `.stage`, never an overlay on it: stage
+ * geometry (`useStageGeometry`), the blank page surfaces, the resize frame and
+ * the DevTools split are all computed from the stage's own rect, so anything
+ * painted inside it would both cover the page and skew those numbers.
+ */
 .browser {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* The dock is a flex sibling; without this the browser refuses to shrink below
-     its content's intrinsic width and the stage keeps the full window width even
-     though the dock took a column. */
   min-width: 0;
   height: 100%;
   flex: 1 1 auto;
 }
 
+/* The row under the address bar: column + page area, no gap between them. */
+.work-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+/* The right column: page strip above the stage. */
+.content-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ---------------------------------------------------------------------------
  * Tab strip
  *
- * The band is the frame colour; the active tab is the toolbar colour with no
- * bottom edge. That is the whole trick, and it is what makes the strip read as
- * part of the toolbar instead of as a row of pills sitting above it.
+ * The band is the frame colour; the active tab is the chrome colour with no
+ * bottom edge, so the strip and the address row below it read as one surface.
+ * The strip now lives in the right column, under the address row: it no longer
+ * meets the window's top-right corner, so it no longer reserves the caption
+ * band — that moved to the address row, which is the row that reaches it.
  * ------------------------------------------------------------------------ */
 .tabstrip {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: var(--titlebar-height);
+  height: var(--tabstrip-height);
   padding-left: 4px;
   background: var(--frame);
 }
@@ -2839,7 +2870,14 @@ function fillMessage(reason?: string): string {
   color: var(--text);
 }
 
-/* Everything between the last tab and the window controls drags the window. */
+/*
+ * The empty stretch after the last tab.
+ *
+ * It used to be a window drag band, because the strip was the window's top
+ * edge. The address row above is that band now; a second one here would let a
+ * drag that starts mid-window (right above the page) move the window, which is
+ * how a stray drag over a tab quietly slid the whole app.
+ */
 .strip-drag {
   flex: 1 1 auto;
   min-width: 12px;
@@ -2958,27 +2996,32 @@ function fillMessage(reason?: string): string {
   color: var(--faint);
 }
 
-/* The native window controls are drawn over the window's top-right corner, and
-   that corner now belongs to this strip in both shells — the sidebar is on the
-   left, so nothing else reaches the right end. */
-.tabstrip[data-platform="win32"],
-.tabstrip[data-platform="linux"] {
-  padding-right: calc(var(--window-controls-width, 138px) + 2px);
-}
-
-.tabstrip[data-platform="darwin"] {
-  padding-left: 82px;
-}
-
-
 .toolbar {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: var(--toolbar-height);
+  height: var(--titlebar-height);
   padding: 0 8px;
   background: var(--chrome);
   flex: 0 0 auto;
+}
+
+/*
+ * The address row is the window's top band, so *it* owns the caption reserve.
+ *
+ * The native buttons are painted over the client area at the top-right corner;
+ * the row that reaches that corner has to leave their width empty, or they
+ * cover the app menu. Exactly one row reserves it — when both the address row
+ * and the strip did, the strip's share became a dead gap whose right edge no
+ * longer lined up with anything. macOS keeps the traffic lights on the left.
+ */
+.toolbar[data-platform="win32"],
+.toolbar[data-platform="linux"] {
+  padding-right: calc(var(--window-controls-width, 138px) + 8px);
+}
+
+.toolbar[data-platform="darwin"] {
+  padding-left: 82px;
 }
 
 /* Sits level with the address field, both 30px tall: a control that is shorter

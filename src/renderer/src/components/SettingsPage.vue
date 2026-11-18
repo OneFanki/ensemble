@@ -105,6 +105,39 @@ const importPassphrase = ref("");
 const importResult = ref<ImportResult | null>(null);
 const transferError = ref<string | null>(null);
 
+// ---- profile merge invitation ----
+// Read once when the page mounts; the actions re-read it, because both answers
+// end with the block leaving the page.
+const mergeStatus = ref<{
+  pending: boolean;
+  profiles: Array<{ id: string; name: string }>;
+} | null>(null);
+
+async function loadMergeStatus(): Promise<void> {
+  mergeStatus.value = (await store.profileMergeStatus()) ?? null;
+}
+
+async function mergeProfilesNow(): Promise<void> {
+  const profiles = mergeStatus.value?.profiles ?? [];
+  const accepted = await confirm.ask({
+    title: t("app.mergeProfilesTitle"),
+    body: t("app.mergeProfilesBody", {
+      count: profiles.length,
+      names: profiles.map((profile) => profile.name).join("、"),
+    }),
+    confirmLabel: t("app.mergeProfilesConfirm"),
+    tone: "danger",
+  });
+  if (!accepted) return;
+  await store.mergeProfilesToDefault();
+  await loadMergeStatus();
+}
+
+async function keepProfilesAsIs(): Promise<void> {
+  await store.keepProfiles();
+  await loadMergeStatus();
+}
+
 // ---- MCP ----
 // `storeToRefs`, not destructuring: a plain `const { mcp } = store` snapshots the
 // value, so toggling the endpoint updated the main process while the segmented
@@ -232,6 +265,7 @@ const mcpSnippet = computed(() => {
 onMounted(async () => {
   await store.mcpStatus();
   portDraft.value = String(mcp.value?.port ?? "");
+  await loadMergeStatus();
 });
 
 async function refreshMcp(patch: Parameters<typeof store.updateMcp>[0]) {
@@ -1040,6 +1074,31 @@ async function submitMaster() {
             <!-- Stays visible: a master password that cannot be recovered is a
                  consequence nobody should discover afterwards. -->
             <p class="fineprint">{{ $t("app.vaultExplainer") }}</p>
+          </SettingGroup>
+
+          <!--
+            The one-time profile merge invitation. It exists only for a workspace
+            that was built when named profiles were a thing the user managed — a
+            workspace with just the built-in default never sees it, and once it
+            has been answered (either way) it never comes back.
+          -->
+          <SettingGroup
+            v-if="activeTab === 'data' && mergeStatus?.pending"
+            :title="$t('app.mergeProfilesTitle')"
+          >
+            <SettingRow :label="$t('app.mergeProfilesCount', { count: mergeStatus.profiles.length })">
+              <span class="mono merge-names">{{ mergeStatus.profiles.map((profile) => profile.name).join("、") }}</span>
+            </SettingRow>
+            <p class="fineprint" data-merge-note>{{ $t("app.mergeProfilesExplain") }}</p>
+            <p class="fineprint">{{ $t("app.mergeProfilesKeepNote", { dir: (store.snapshot?.userDataDir ?? "") + "\\profiles" }) }}</p>
+            <div class="vault-actions">
+              <AppButton variant="primary" data-merge-apply @click="mergeProfilesNow">
+                {{ $t("app.mergeProfilesConfirm") }}
+              </AppButton>
+              <AppButton data-merge-keep @click="keepProfilesAsIs">
+                {{ $t("app.mergeProfilesKeep") }}
+              </AppButton>
+            </div>
           </SettingGroup>
 
           <SettingGroup v-if="activeTab === 'data'" :title="$t('app.dataTitle')">
@@ -1926,6 +1985,17 @@ async function submitMaster() {
   margin: 0;
   font-size: 11px;
   color: var(--red);
+}
+
+/* ---- profile merge invitation ---- */
+
+/* The profile names are data, not prose: the mono face says "these are the rows
+   being talked about", and the wrap keeps a long list from pushing the row. */
+.merge-names {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 /* ---- data transfer ---- */

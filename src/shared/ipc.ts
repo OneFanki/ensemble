@@ -157,6 +157,12 @@ export const IPC = {
   profileDelete: "profile:delete",
   /** Chooses which profile a page with no account opens in. */
   profileSetDefault: "profile:set-default",
+  /** Whether the settings page should offer the profile-merge invitation. */
+  profileMergeStatus: "profile:merge-status",
+  /** Merges every user-created profile into the built-in default. */
+  profileMergeApply: "profile:merge-apply",
+  /** Answers the merge invitation with "keep them"; it will not show again. */
+  profileMergeKeep: "profile:merge-keep",
   dataExport: "data:export",
   dataImportPick: "data:import-pick",
   dataImportApply: "data:import-apply",
@@ -560,6 +566,15 @@ export interface EnsembleApi {
   renameProfile(id: string, name: string): Promise<AppSettings>;
   deleteProfile(id: string): Promise<AppSettings>;
   setDefaultProfile(id: string): Promise<AppSettings>;
+  /**
+   * The merge invitation's current state: the user-created profiles it names,
+   * and whether it should show at all.
+   */
+  profileMergeStatus(): Promise<{ pending: boolean; profiles: Array<{ id: string; name: string }> }>;
+  /** Merges every user-created profile into the built-in default; returns the settings. */
+  mergeProfilesToDefault(): Promise<AppSettings>;
+  /** Answers the invitation with "keep them"; it will not show again. */
+  keepProfiles(): Promise<AppSettings>;
   /** Fires the connectivity test; every probe is one GET through the session. */
   testProxyConnectivity(): Promise<ConnectivityProbeResult[]>;
 

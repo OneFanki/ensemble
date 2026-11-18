@@ -870,17 +870,15 @@ try {
     const anonymous = rows.filter((el) => el.classList.contains('anonymous'));
     const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
     const firstAccountIndex = rows.findIndex((el) => !el.classList.contains('anonymous'));
-    // The blank pages are gone as separate rows: a browser with no account is
-    // now one of the profiles, and it lives under its own mode rather than in
-    // this column — the account tab answers "which login", the profile tab
-    // answers "which cookie jar".
+    // The chooser asks one question — whose page this is. Profiles are not a
+    // mode here any more: the account list answers "which login", the site's
+    // two openings answer "no login in particular", and that is the whole menu.
     const modes = [...document.querySelectorAll('.open-menu .mode')];
     return {
       accounts: accounts.length,
       anonymous: anonymous.length,
       names: anonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
       modes: modes.length,
-      modesOn: modes.filter((el) => el.classList.contains('on')).length,
       profilesHidden: document.querySelectorAll('.open-menu .profile-row').length,
       // The site's own openings are fixed above the scrolling account list: a
       // site with thirty accounts must not push "open daily" past the fold.
@@ -894,10 +892,8 @@ try {
     menuShape,
   );
   check(
-    "the chooser opens on the account tab with the profile list behind it",
-    menuShape?.modes === 2 &&
-      menuShape?.modesOn === 1 &&
-      menuShape?.profilesHidden === 0,
+    "the chooser has no profile mode and no profile rows",
+    menuShape?.modes === 0 && menuShape?.profilesHidden === 0,
     menuShape,
   );
   check(

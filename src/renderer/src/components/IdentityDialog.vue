@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ROLE_COLORS } from "@shared/defaults";
 import type { Engine, IdentityDraft, RoleColor } from "@shared/types";
-import { Eye, EyeOff, Link2, RotateCcw, Trash2, Unlink } from "lucide-vue-next";
+import { ChevronRight, Eye, EyeOff, Link2, RotateCcw, Trash2, Unlink } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
@@ -37,6 +37,15 @@ const form = reactive<IdentityDraft>({ ...props.draft });
 const password = ref("");
 const reveal = ref(false);
 const error = ref<string | null>(null);
+/**
+ * The isolation fold, closed unless the user asks.
+ *
+ * An account's session data is separate by default and needs no decision at
+ * creation time, so the fold stays shut; it is the way in to the one action
+ * that touches that data (clearing it) and to the sentence that says what the
+ * isolation means. Nothing here adds a field to the draft.
+ */
+const advancedOpen = ref(false);
 /** In inherit mode the password input stays hidden until the user asks to edit. */
 const editingSitePassword = ref(false);
 /** Inline "create a site from the address you are on" fields. */
@@ -528,6 +537,36 @@ async function rebuildProfile() {
         />
       </FormField>
 
+      <!-- Isolation, folded away. Every account already keeps its session to
+           itself, so the default path through this form asks nothing about it;
+           the fold holds the one sentence that says what that means and the one
+           action that touches the data. -->
+      <section class="advanced" :class="{ open: advancedOpen }">
+        <button
+          type="button"
+          class="advanced-head"
+          data-advanced-toggle
+          :aria-expanded="advancedOpen"
+          @click="advancedOpen = !advancedOpen"
+        >
+          <ChevronRight :size="12" class="advanced-chevron" />
+          <span>{{ $t("app.isolationFoldTitle") }}</span>
+        </button>
+        <div v-if="advancedOpen" class="advanced-body" data-advanced-panel>
+          <p class="note">{{ $t("app.isolationFoldNote") }}</p>
+          <AppButton
+            v-if="form.id"
+            variant="danger"
+            data-clear-session
+            :disabled="store.busy === 'identity'"
+            @click="rebuildProfile"
+          >
+            <RotateCcw :size="12" />
+            {{ $t("app.rebuildProfile") }}
+          </AppButton>
+        </div>
+      </section>
+
       <p v-if="error" class="error" role="alert">{{ error }}</p>
     </div>
 
@@ -535,12 +574,6 @@ async function rebuildProfile() {
       <AppButton variant="danger" v-if="form.id" @click="emit('delete')">
         <Trash2 :size="12" />
         {{ $t("app.delete") }}
-      </AppButton>
-      <AppButton v-if="form.id"
-        :disabled="store.busy === 'identity'"
-        @click="rebuildProfile">
-        <RotateCcw :size="12" />
-        {{ $t("app.rebuildProfile") }}
       </AppButton>
       <span class="spacer"></span>
       <AppButton @click="emit('close')">{{ $t("app.cancel") }}</AppButton>
@@ -740,6 +773,50 @@ async function rebuildProfile() {
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--faint);
+}
+
+/*
+ * The isolation fold. A quiet header line, the same shape as the app's group
+ * headings elsewhere: chevron plus words, opening on click. Closed by default,
+ * which is the point — the form's ordinary path never asks about it.
+ */
+.advanced {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  padding: 9px 12px;
+}
+
+.advanced-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 0;
+  width: 100%;
+  text-align: left;
+}
+
+.advanced-head:hover {
+  color: var(--text-secondary);
+}
+
+.advanced-chevron {
+  color: var(--faint);
+  transition: transform 0.15s ease;
+}
+
+.advanced.open .advanced-chevron {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  padding-top: 9px;
 }
 
 .group {

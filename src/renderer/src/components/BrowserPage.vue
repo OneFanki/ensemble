@@ -37,7 +37,6 @@ import {
   FolderOpen,
   Info,
   KeyRound,
-  Layers,
   LayoutGrid,
   Minus,
   Monitor,
@@ -2168,16 +2167,6 @@ function fillMessage(reason?: string): string {
           >
             <BookmarkIcon :size="14" />
             <span>{{ t("app.bookmarks") }}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="profiles"
-            @click="openPageFromMenu('profiles')"
-          >
-            <Layers :size="14" />
-            <span>{{ t("app.profiles") }}</span>
           </button>
           <!--
             Developer tools and AI access: both are "tools for this browser",

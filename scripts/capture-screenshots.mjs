@@ -431,8 +431,6 @@ const DEMO = {
     // the kind of session it holds, never after a customer.
     defaultProfile: "默认档案",
     cleanProfile: "干净会话",
-    workProfile: "工作档案",
-    clientProfile: "对照档案",
     people: [
       ["管理员 · 主账号", "admin@example.test", "管理员", "amber"],
       ["成员 · 子账号", "member@example.test", "成员", "teal"],
@@ -469,8 +467,6 @@ const DEMO = {
     ],
     defaultProfile: "Default profile",
     cleanProfile: "Clean session",
-    workProfile: "Work profile",
-    clientProfile: "Comparison profile",
     people: [
       ["Admin · primary", "admin@example.test", "Admin", "amber"],
       ["Member", "member@example.test", "Member", "teal"],
@@ -533,19 +529,7 @@ const SHOTS = [
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
   { name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
   { name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
-  { name: "profiles", locale: "zh", view: "profiles" },
-  { name: "profiles-en", locale: "en", view: "profiles" },
-  { name: "profiles-light", locale: "zh", view: "profiles", theme: "light" },
   { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-arrow"] },
-  {
-    // The chooser's second tab: the same panel, answering "which cookie jar"
-    // instead of "whose login". Shown separately because one shot cannot show
-    // both modes, and the profile list is the new half.
-    name: "env-menu-profiles",
-    locale: "zh",
-    view: "browser",
-    clicks: [".toolbar .split-arrow", '.open-menu .mode[data-mode="profiles"]'],
-  },
   {
     // The AI policy editor: four scopes, the address list, and the two ways to
     // add to it. This is the settings section that used to be a bare chip list.
@@ -1041,20 +1025,13 @@ async function seed(userData, locale, theme = "dark") {
         guideVersion: 99,
         autoCheckUpdates: false,
         /*
-         * Two profiles beyond the built-in default, so the profiles page and the
-         * chooser's profile tab show what they are for rather than a single row.
-         * Written here rather than through the UI because the screenshot run has
-         * no user to click a dialog.
-         *
-         * The clean session is part of the stored list but is deliberately not
-         * shown on the profiles page — it is one fixed throwaway, not a jar
-         * anyone manages — so it is here for the chooser only.
+         * The two built-ins only: profiles are not a thing the user manages any
+         * more, so no screenshot run needs extra rows. The clean session stays
+         * in the list because the chooser's throwaway opening reads its name.
          */
         profiles: [
           { id: "default", name: demo.defaultProfile, retention: "persist", builtin: true },
           { id: "clean", name: demo.cleanProfile, retention: "ephemeral", builtin: true },
-          { id: "pwork", name: demo.workProfile, retention: "persist" },
-          { id: "pclient", name: demo.clientProfile, retention: "persist" },
         ],
         defaultProfileId: "default",
       },

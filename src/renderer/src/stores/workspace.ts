@@ -1069,6 +1069,28 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
+  /** The merge invitation's state, read fresh when the settings page opens. */
+  async function profileMergeStatus() {
+    return run("profile", () => window.ensemble.profileMergeStatus());
+  }
+
+  async function mergeProfilesToDefault() {
+    return run("profile", async () => {
+      const next = await window.ensemble.mergeProfilesToDefault();
+      applySettings(next);
+      notify(tr("app.toastProfilesMerged"));
+      return next;
+    });
+  }
+
+  async function keepProfiles() {
+    return run("profile", async () => {
+      const next = await window.ensemble.keepProfiles();
+      applySettings(next);
+      return next;
+    });
+  }
+
   /**
    * Fires the connectivity probes for the proxy settings.
    *
@@ -1231,6 +1253,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     renameProfile,
     deleteProfile,
     setDefaultProfile,
+    profileMergeStatus,
+    mergeProfilesToDefault,
+    keepProfiles,
     testProxyConnectivity,
     exportWorkspace,
     pickImport,

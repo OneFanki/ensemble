@@ -7,8 +7,9 @@
  *   - the main half is the blank answer: one click opens a blank page — the
  *     app's own new-tab surface, no site navigated, no account panel —
  *   - the arrow half opens the chooser, where an account (locked to a view's
- *     site when the container names one), a site's own openings or a profile
- *     can be picked on purpose.
+ *     site when the container names one) or a site's own openings can be
+ *     picked on purpose. Profiles are not a choice here any more: an account is
+ *     whose page it is, and the default profile serves the account-less ones.
  *
  * Before the split, the whole "+" was the chooser: clicking it for a blank page
  * landed on the accounts tab with the first site pre-picked, so "just open
@@ -201,6 +202,7 @@ try {
       label: el.textContent?.trim() ?? '',
       on: el.classList.contains('on'),
     }));
+    const profileRows = document.querySelectorAll('.open-menu .profile-row').length;
     const anonymous = [...document.querySelectorAll('.account-row.anonymous')].map((el) =>
       el.querySelector('.acc-name')?.textContent?.trim() ?? '',
     );
@@ -218,31 +220,14 @@ try {
       : false;
     const frozen = document.querySelectorAll('.stage .frozen').length;
     const before = await api.getEmbeddedState();
-    // A profile row opens a blank browser in that profile — a blank page there
-    // is the point, because the profile is the cookie jar, not a destination.
-    // The account tab is the default, so the profile list only exists after the
-    // mode switch.
-    document.querySelector('.open-menu .mode[data-mode="profiles"]')?.click();
-    await new Promise((r) => setTimeout(r, 200));
-    const profiles = document.querySelectorAll('.open-menu .profile-row').length;
-    document.querySelector('.open-menu .profile-row')?.click();
-    await new Promise((r) => setTimeout(r, 2200));
-    const state = await api.getEmbeddedState();
-    const added = state.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
-    const page = added[0] ?? null;
     return {
       open: Boolean(panel),
       modes,
+      profileRows,
       anonymous,
       pageOnTop,
       frozen,
       carrier: before.carrier ?? "native",
-      profiles,
-      added: added.length,
-      label: page?.label ?? null,
-      identityId: page?.identityId ?? null,
-      profileId: page?.profileId ?? null,
-      url: page?.url ?? null,
     };
   `,
   );
@@ -252,11 +237,8 @@ try {
     toolbar,
   );
   check(
-    "the chooser offers accounts and profiles, accounts first",
-    toolbar?.modes?.length === 2 &&
-      toolbar?.modes?.[0]?.on === true &&
-      toolbar?.modes?.[0]?.label === "账号" &&
-      toolbar?.modes?.[1]?.label === "档案",
+    "the chooser asks one question: no profile tab, no profile rows",
+    toolbar?.modes?.length === 0 && toolbar?.profileRows === 0,
     toolbar,
   );
   check(
@@ -284,8 +266,6 @@ try {
       document.querySelector('.toolbar .split-arrow')?.click();
       await wait(900);
     }
-    document.querySelector('.open-menu .mode[data-mode="accounts"]')?.click();
-    await wait(200);
     const rows = [...document.querySelectorAll('.open-menu .account-row.anonymous')];
     const heights = rows.map((el) => Math.round(el.getBoundingClientRect().height));
     const notes = document.querySelectorAll('.open-menu .account-row.anonymous .acc-note').length;
@@ -310,15 +290,6 @@ try {
     "the explanation is available on hover instead",
     openings?.tipVisible === true && Boolean(openings?.tipText),
     openings,
-  );
-  check(
-    "the profile tab lists profiles and opens a blank browser in one",
-    toolbar?.profiles > 0 &&
-      toolbar?.added === 1 &&
-      toolbar?.identityId === null &&
-      toolbar?.label === "新标签页" &&
-      Boolean(toolbar?.profileId),
-    toolbar,
   );
 
   // Picking an account from the chooser must navigate to that account's site,

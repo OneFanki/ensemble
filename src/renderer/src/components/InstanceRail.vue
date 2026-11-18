@@ -393,7 +393,7 @@ function activateFromFold(item: RailItem): void {
           :key="item.id"
           type="button"
           role="tab"
-          class="rail-chip"
+          class="rail-chip no-drag"
           :class="{ 'on-stage': item.onStage }"
           :aria-selected="item.onStage"
           :data-instance-chip="item.instanceId"

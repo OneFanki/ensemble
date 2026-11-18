@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_UPDATE_RELEASES,
   RELEASES_PAGE_URL,
   evaluateUpdate,
+  evaluateUpdateFromList,
   parseLatestRelease,
+  parseReleasesList,
   parseSha256,
   pickUpdateAsset,
   selectUpdateNotes,
+  selectUpdateRangeReleases,
 } from "@shared/update";
 
 describe("latest release parsing", () => {
@@ -191,5 +195,138 @@ describe("update summary selection", () => {
   it("returns a body without sections unchanged", () => {
     expect(selectUpdateNotes("- one change", "en")).toBe("- one change");
     expect(selectUpdateNotes(undefined, "en")).toBe("");
+  });
+});
+
+describe("release list parsing", () => {
+  const release = (version: string, notes = `notes ${version}`) => ({
+    tag_name: `v${version}`,
+    html_url: `https://github.com/OneFanki/ensemble/releases/tag/v${version}`,
+    body: notes,
+    assets: [],
+  });
+
+  it("parses an array payload and drops entries that do not parse", () => {
+    const parsed = parseReleasesList([release("2.3.0"), { tag_name: "nightly" }, null]);
+    expect(parsed.map((item) => item.version)).toEqual(["2.3.0"]);
+  });
+
+  it("accepts a single-object payload as a one-element list", () => {
+    // The old /releases/latest shape and the end-to-end stub both answer with
+    // one object; they flow through the same code instead of a second path.
+    expect(parseReleasesList(release("9.9.9")).map((item) => item.version)).toEqual(["9.9.9"]);
+    expect(parseReleasesList(null)).toEqual([]);
+  });
+});
+
+describe("update range selection", () => {
+  const release = (version: string, notes?: string) => ({
+    version,
+    url: `https://example.test/v${version}`,
+    ...(notes ? { notes } : {}),
+  });
+
+  it("keeps only versions newer than the installed one, oldest first", () => {
+    const { sections, omitted } = selectUpdateRangeReleases(
+      "2.2.0",
+      [release("2.4.0"), release("2.2.0"), release("2.3.0"), release("2.1.0")],
+    );
+    // The installed version itself must not appear — its changes are already
+    // on the machine — and the list reads oldest → newest.
+    expect(sections.map((item) => item.version)).toEqual(["2.3.0", "2.4.0"]);
+    expect(omitted).toBe(0);
+  });
+
+  it("shows everything newer when the installed version is not in the list", () => {
+    // A beta or locally built version number: every published release above it
+    // is still part of the answer.
+    const { sections, omitted } = selectUpdateRangeReleases("2.1.5", [
+      release("2.2.0"),
+      release("2.3.0"),
+    ]);
+    expect(sections.map((item) => item.version)).toEqual(["2.2.0", "2.3.0"]);
+    expect(omitted).toBe(0);
+  });
+
+  it("caps the list at the newest releases and counts the folded-away ones", () => {
+    const versions = Array.from({ length: 14 }, (_, index) => `2.${index + 1}.0`);
+    const { sections, omitted } = selectUpdateRangeReleases(
+      "2.0.0",
+      versions.map((version) => release(version)),
+    );
+    expect(sections).toHaveLength(MAX_UPDATE_RELEASES);
+    expect(sections[0]?.version).toBe("2.5.0");
+    expect(sections.at(-1)?.version).toBe("2.14.0");
+    expect(omitted).toBe(4);
+  });
+
+  it("carries each release's notes through, including the absent ones", () => {
+    const { sections } = selectUpdateRangeReleases("1.0.0", [
+      release("1.1.0", "- added a thing"),
+      release("1.2.0"),
+    ]);
+    expect(sections).toEqual([
+      { version: "1.1.0", url: "https://example.test/v1.1.0", notes: "- added a thing" },
+      // A release without a body stays in the list; the dialog renders its own
+      // placeholder for it.
+      { version: "1.2.0", url: "https://example.test/v1.2.0" },
+    ]);
+  });
+});
+
+describe("update evaluation from a release list", () => {
+  const release = (version: string, notes?: string) => ({
+    version,
+    url: `https://example.test/v${version}`,
+    ...(notes ? { notes } : {}),
+  });
+
+  it("evaluates against the newest entry and attaches the range", () => {
+    const result = evaluateUpdateFromList("2.2.0", [
+      release("2.4.0", "- newest"),
+      release("2.3.0", "- middle"),
+    ]);
+    expect(result.status).toBe("available");
+    expect(result.latest).toBe("2.4.0");
+    expect(result.notes).toBe("- newest");
+    expect(result.releases?.map((item) => item.version)).toEqual(["2.3.0", "2.4.0"]);
+    expect(result).not.toHaveProperty("omittedReleases");
+  });
+
+  it("reports omitted releases only when the cap bit", () => {
+    const versions = Array.from({ length: MAX_UPDATE_RELEASES + 1 }, (_, index) =>
+      release(`3.${index}.0`),
+    );
+    const result = evaluateUpdateFromList("2.9.0", versions);
+    expect(result.releases).toHaveLength(MAX_UPDATE_RELEASES);
+    expect(result.omittedReleases).toBe(1);
+  });
+
+  it("stays current without a range when the newest equals the installed one", () => {
+    const result = evaluateUpdateFromList("2.4.0", [release("2.4.0"), release("2.3.0")]);
+    expect(result.status).toBe("current");
+    expect(result.latest).toBe("2.4.0");
+    // An older-but-listed release never resurrects an update prompt.
+    expect(result).not.toHaveProperty("releases");
+  });
+
+  it("degrades to an error when the list is empty", () => {
+    expect(evaluateUpdateFromList("2.2.0", [])).toEqual({ status: "error", current: "2.2.0" });
+  });
+
+  it("attaches the newest release's matching asset", () => {
+    const asset = {
+      name: "Ensemble-2.4.0-win-x64-setup.exe",
+      url: "https://github.com/OneFanki/ensemble/releases/download/v2.4.0/Ensemble-2.4.0-win-x64-setup.exe",
+      size: 1024,
+      sha256: "a".repeat(64),
+    };
+    const result = evaluateUpdateFromList(
+      "2.2.0",
+      [{ ...release("2.4.0"), assets: [asset] }],
+      "win32",
+      "x64",
+    );
+    expect(result.asset?.name).toBe(asset.name);
   });
 });

@@ -95,9 +95,9 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 import {
-  evaluateUpdate,
-  LATEST_RELEASE_API,
-  parseLatestRelease,
+  evaluateUpdateFromList,
+  parseReleasesList,
+  RELEASES_LIST_API,
   type UpdateCheckResult,
   type UpdateProgress,
 } from "@shared/update";
@@ -2589,13 +2589,16 @@ function sendUpdateProgress(progress: UpdateProgress): void {
   }
 }
 
-/** Requests the latest release. Never downloads; that is always a separate click. */
+/**
+ * Requests the release list so an install that skipped versions sees what each
+ * of them changed. Never downloads; that is always a separate click.
+ */
 async function checkForUpdate(): Promise<UpdateCheckResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
   // The end-to-end probe points this at a local server so the real path (parse,
   // match an asset, verify) runs without publishing anything.
-  const endpoint = process.env["ENSEMBLE_UPDATE_API"] ?? LATEST_RELEASE_API;
+  const endpoint = process.env["ENSEMBLE_UPDATE_API"] ?? RELEASES_LIST_API;
   try {
     // `net.fetch`, not the global one: both are Chromium's network stack, but
     // only this one uses `session.defaultSession`, where `applyProxyToDefaultSession`
@@ -2613,9 +2616,9 @@ async function checkForUpdate(): Promise<UpdateCheckResult> {
         message: `HTTP ${response.status}`,
       } satisfies UpdateCheckResult;
     }
-    return evaluateUpdate(
+    return evaluateUpdateFromList(
       app.getVersion(),
-      parseLatestRelease(await response.json()),
+      parseReleasesList(await response.json()),
       process.platform as Platform,
       process.arch,
     );

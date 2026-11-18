@@ -19,6 +19,9 @@ import AppButton from "./ui/AppButton.vue";
  *   without reading them.
  * - Downloading and installing both start from a click. The app verifies the
  *   file's SHA-256 before anything is executed, and says so.
+ *
+ * An install that skipped several versions gets one section per release,
+ * oldest first, so it reads as what accumulated since the last update.
  */
 const props = defineProps<{ result: UpdateCheckResult }>();
 const emit = defineEmits<{ close: []; dismissed: [version: string] }>();
@@ -29,7 +32,17 @@ const errorText = ref<string | null>(null);
 let disposeProgress: (() => void) | undefined;
 
 const latest = computed(() => props.result.latest ?? "");
-const notes = computed(() => selectUpdateNotes(props.result.notes, currentLocale()));
+const omitted = computed(() => props.result.omittedReleases ?? 0);
+const sections = computed(() => {
+  const listed = (props.result.releases ?? []).map((release) => ({
+    version: release.version,
+    body: selectUpdateNotes(release.notes, currentLocale()),
+  }));
+  if (listed.length > 0) return listed;
+  // A result without a range summary still has the latest release's own notes.
+  const body = selectUpdateNotes(props.result.notes, currentLocale());
+  return latest.value ? [{ version: latest.value, body }] : [];
+});
 const percent = computed(() => {
   const current = progress.value;
   if (!current?.total || current.received <= 0) return 0;
@@ -120,13 +133,24 @@ watch(
     @close="later"
   >
     <div class="summary">
-      <!-- Short and scannable: a release summary, not the changelog. -->
-      <ul v-if="notes" class="notes">
-        <li v-for="(line, index) in notes.split('\n').filter((item) => item.trim())" :key="index">
-          {{ line.replace(/^[-*]\s*/, "") }}
-        </li>
-      </ul>
-      <p v-else class="no-notes">{{ $t("app.updateNoNotes") }}</p>
+      <p v-if="omitted > 0" class="omitted mono">
+        {{ $t("app.updateOmitted", { count: omitted }) }}
+      </p>
+      <div class="releases">
+        <section v-for="release in sections" :key="release.version" class="release">
+          <h4 class="release-version mono">{{ release.version }}</h4>
+          <!-- Short and scannable: a release summary, not the changelog. -->
+          <ul v-if="release.body" class="notes">
+            <li
+              v-for="(line, index) in release.body.split('\n').filter((item) => item.trim())"
+              :key="index"
+            >
+              {{ line.replace(/^[-*]\s*/, "") }}
+            </li>
+          </ul>
+          <p v-else class="no-notes">{{ $t("app.updateNoNotes") }}</p>
+        </section>
+      </div>
       <button type="button" class="more" @click="openReleasePage">
         <ExternalLink :size="11" />
         {{ $t("app.updateFullNotes") }}
@@ -191,6 +215,37 @@ watch(
   padding: 10px 12px;
 }
 
+/* The range summary scrolls as a whole instead of pushing the buttons off the
+   dialog; each version is a bordered-off section inside it. */
+.releases {
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.release {
+  min-width: 0;
+}
+
+.release + .release {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
+}
+
+.release-version {
+  margin: 0 0 5px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.omitted {
+  margin: 0 0 8px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
 .notes {
   margin: 0;
   padding-left: 16px;
@@ -200,10 +255,6 @@ watch(
   font-size: 11.5px;
   line-height: 1.65;
   color: var(--text-secondary);
-  /* A summary that grew into a changelog scrolls instead of pushing the
-     buttons off the dialog. */
-  max-height: 190px;
-  overflow-y: auto;
 }
 
 .more {

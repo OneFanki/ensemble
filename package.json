@@ -90,6 +90,7 @@
     "e2e:boot-splash": "node scripts/e2e-boot-splash.mjs",
     "e2e:motion": "node scripts/e2e-motion.mjs",
     "e2e:proxy": "node scripts/e2e-proxy.mjs",
+    "e2e:update-notes": "node scripts/e2e-update-notes.mjs",
     "e2e:collection-tables": "node scripts/e2e-collection-views.mjs",
     "e2e:launch-reveal": "node scripts/e2e-launch-reveal.mjs",
     "e2e:chrome-click": "node scripts/e2e-chrome-click.mjs",

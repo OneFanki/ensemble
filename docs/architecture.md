@@ -1428,7 +1428,9 @@ AI 在页面上做了什么，是一个**记录**，不是通知。它有过一�
 ## 版本检查与安装
 
 `shared/update.ts` 负责解析 GitHub Releases API 的返回并比较版本，`src/main/index.ts` 的
-`app:check-update` 在 8 秒超时内请求 `api.github.com/repos/OneFanki/ensemble/releases/latest`。
+`app:check-update` 在 8 秒超时内请求 `/releases` 列表（`per_page=100`）。更新提示把当前版本
+（不含）到最新版本之间的全部 release 各展示一节，升序排列，最多 10 节，更早的折叠为一句计数；
+单个版本没有说明就显示占位文案。
 
 - 检查是自动的（启动后一次、之后每 6 小时），**下载与安装都必须由用户点一下**。
 - 版本号比较按点分段数值比较，不是字符串比较（`0.10.0` 比 `0.9.0` 新）。

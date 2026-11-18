@@ -13,7 +13,13 @@ import { compareVersions, normalizeVersion } from "./version";
  */
 export const REPOSITORY_URL = "https://github.com/OneFanki/ensemble";
 export const RELEASES_PAGE_URL = `${REPOSITORY_URL}/releases`;
-export const LATEST_RELEASE_API = "https://api.github.com/repos/OneFanki/ensemble/releases/latest";
+/**
+ * The release list, not just the latest entry: an install that skipped several
+ * versions is told what each of them changed. `per_page=100` covers the whole
+ * history on one page; the dialog's own cap is what bounds the rendering.
+ */
+export const RELEASES_LIST_API =
+  "https://api.github.com/repos/OneFanki/ensemble/releases?per_page=100";
 
 export type UpdateStatus = "current" | "available" | "error";
 
@@ -37,10 +43,25 @@ export interface UpdateCheckResult {
    * for this purpose; the long changelog lives in CHANGELOG.md, not here.
    */
   notes?: string;
+  /**
+   * Every release between the current version (exclusive) and the latest one,
+   * oldest first — one section per release for the update dialog. Absent when
+   * already current.
+   */
+  releases?: ReleaseNoteSection[];
+  /** How many older-than-shown releases the dialog cap left out. */
+  omittedReleases?: number;
   /** The file for this OS and architecture, when the release publishes one. */
   asset?: UpdateAsset;
   /** Technical detail for the failure case; the UI shows its own localized text. */
   message?: string;
+}
+
+/** One version's worth of notes in the range summary. */
+export interface ReleaseNoteSection {
+  version: string;
+  url?: string;
+  notes?: string;
 }
 
 export interface ReleaseInfo {
@@ -179,6 +200,83 @@ export function parseLatestRelease(raw: unknown): ReleaseInfo | null {
     // as an older payload that never carried them, and callers only ever ask
     // for a platform match.
     ...(assets.length > 0 ? { assets } : {}),
+  };
+}
+
+/**
+ * Reads a `/releases` response into parsed releases, dropping entries that do
+ * not parse. A single-object payload (the old `/releases/latest` shape, or the
+ * end-to-end stub) is accepted as a one-element list so both endpoints flow
+ * through the same code.
+ */
+export function parseReleasesList(raw: unknown): ReleaseInfo[] {
+  if (!Array.isArray(raw)) {
+    const single = parseLatestRelease(raw);
+    return single ? [single] : [];
+  }
+  const releases: ReleaseInfo[] = [];
+  for (const entry of raw) {
+    const parsed = parseLatestRelease(entry);
+    if (parsed) releases.push(parsed);
+  }
+  return releases;
+}
+
+/**
+ * How many per-version sections the dialog will render. A release train skipped
+ * by dozens of versions still answers "what changed", just with a bound.
+ */
+export const MAX_UPDATE_RELEASES = 10;
+
+/**
+ * Picks the releases between the current version (exclusive) and the newest one,
+ * sorted oldest first so the dialog reads as "what accumulated since you last
+ * looked".
+ *
+ * A version equal to or older than the installed one never appears. Releases
+ * beyond the cap are dropped from the old end — the ones closest to the latest
+ * version are what the user is about to install — and counted so the dialog can
+ * say how much was folded away.
+ */
+export function selectUpdateRangeReleases(
+  current: string,
+  releases: readonly ReleaseInfo[],
+  limit: number = MAX_UPDATE_RELEASES,
+): { sections: ReleaseNoteSection[]; omitted: number } {
+  const installed = normalizeVersion(current);
+  const newer = releases
+    .filter((release) => compareVersions(release.version, installed) > 0)
+    .sort((a, b) => compareVersions(a.version, b.version));
+  const kept = newer.slice(Math.max(0, newer.length - limit));
+  return {
+    sections: kept.map(({ version, url, notes }) => ({ version, url, notes })),
+    omitted: newer.length - kept.length,
+  };
+}
+
+/**
+ * Same evaluation as `evaluateUpdate`, but fed the whole release list: the
+ * newest entry decides the status and asset, and every version above the
+ * installed one rides along as the dialog's range summary.
+ */
+export function evaluateUpdateFromList(
+  current: string,
+  releases: readonly ReleaseInfo[],
+  platform?: Platform,
+  arch?: string,
+): UpdateCheckResult {
+  const latest = releases.reduce<ReleaseInfo | null>(
+    (best, release) =>
+      best === null || compareVersions(release.version, best.version) > 0 ? release : best,
+    null,
+  );
+  const base = evaluateUpdate(current, latest, platform, arch);
+  if (base.status !== "available") return base;
+  const { sections, omitted } = selectUpdateRangeReleases(current, releases);
+  return {
+    ...base,
+    ...(sections.length > 0 ? { releases: sections } : {}),
+    ...(omitted > 0 ? { omittedReleases: omitted } : {}),
   };
 }
 

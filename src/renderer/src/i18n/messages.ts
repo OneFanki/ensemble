@@ -810,6 +810,7 @@ export const messages = {
       // Update dialog
       updateDialogTitle: "发现新版本 {version}",
       updateDialogDesc: "当前版本 {current}，可以现在就更新。",
+      updateOmitted: "另有 {count} 个更早版本未列出",
       updateNoNotes: "这个版本没有提供摘要。",
       updateFullNotes: "查看完整变更",
       updateDownload: "下载更新",
@@ -2033,6 +2034,7 @@ export const messages = {
       // Update dialog
       updateDialogTitle: "Version {version} is available",
       updateDialogDesc: "You are on {current}. You can update now.",
+      updateOmitted: "{count} older version(s) not shown",
       updateNoNotes: "This release did not include a summary.",
       updateFullNotes: "See all changes",
       updateDownload: "Download update",

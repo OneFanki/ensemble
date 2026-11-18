@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of every "+" that used to create a daily-profile blank page.
+ * End-to-end check of the toolbar "+" and its chooser.
  *
- * A page in this app belongs to a system, and usually to an account: which
- * account decides the session partition, so the account is a question, not a
- * default. Three surfaces answered it by guessing (daily profile):
+ * The "+" is two halves with two answers:
  *
- *   1. the view header's "+" in the dock,
- *   2. the empty cell's account picker,
- *   3. the toolbar's new-tab button while a view is on stage.
+ *   - the main half is the blank answer: one click opens a blank page — the
+ *     app's own new-tab surface, no site navigated, no account panel —
+ *   - the arrow half opens the chooser, where an account (locked to a view's
+ *     site when the container names one), a site's own openings or a profile
+ *     can be picked on purpose.
  *
- * The empty-cell picker had a second bug of its own: the page was created with
- * an identity but no URL, so it sat on about:blank while the dock already showed
- * the account's name and the stage kept drawing the new-tab search surface.
+ * Before the split, the whole "+" was the chooser: clicking it for a blank page
+ * landed on the accounts tab with the first site pre-picked, so "just open
+ * something empty" started with a site the user never asked for. The suites
+ * below pin the new contract: blank is blank, and the account question is only
+ * asked where the user opened the chooser themselves.
+ *
+ * The empty cell's account picker is covered too: the page it creates must
+ * navigate to the site instead of sitting on about:blank under the account's
+ * name.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -226,7 +232,7 @@ try {
     `
     const api = window.ensemble;
     const before = await api.getEmbeddedState();
-    const trigger = document.querySelector('.view-block .block-head .split-main');
+    const trigger = document.querySelector('.view-block .block-head .split-arrow');
     for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
       trigger?.click();
       await new Promise((r) => setTimeout(r, 900));
@@ -315,12 +321,53 @@ try {
   );
   check("the chooser closes after a pick", viewPlusPick?.panelOpen === false, viewPlusPick);
 
-  // --- 3. The toolbar's "+" with a view on stage ---------------------------
+  // --- 3. The toolbar's main half is the blank answer ----------------------
+  const blankOpen = await inApp(
+    client,
+    `
+    const api = window.ensemble;
+    const before = await api.getEmbeddedState();
+    document.querySelector('.toolbar .split-main')?.click();
+    await new Promise((r) => setTimeout(r, 2200));
+    const state = await api.getEmbeddedState();
+    const added = state.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
+    const page = added[0] ?? null;
+    return {
+      panelOpen: Boolean(document.querySelector('.open-panel')),
+      added: added.length,
+      label: page?.label ?? null,
+      identityId: page?.identityId ?? null,
+      url: page?.url ?? null,
+      blankSurface: Boolean(document.querySelector('.blank-slot')),
+      addressBar: document.querySelector('.address-shell input')?.value ?? '',
+    };
+  `,
+  );
+  check(
+    "the toolbar's main half creates a page without opening the chooser",
+    blankOpen?.panelOpen === false && blankOpen?.added === 1,
+    blankOpen,
+  );
+  check(
+    "that page is a blank new-tab page: no account, no site navigated",
+    blankOpen?.label === "新标签页" &&
+      blankOpen?.url === "about:blank" &&
+      blankOpen?.identityId === null &&
+      blankOpen?.blankSurface === true,
+    blankOpen,
+  );
+  check(
+    "the address bar stays empty on the blank page",
+    blankOpen?.addressBar === "",
+    blankOpen,
+  );
+
+  // --- 4. The toolbar's arrow opens the chooser with a view on stage -------
   const toolbar = await inApp(
     client,
     `
     const api = window.ensemble;
-    const trigger = document.querySelector('.toolbar .split-main');
+    const trigger = document.querySelector('.toolbar .split-arrow');
     for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
       trigger?.click();
       await new Promise((r) => setTimeout(r, 900));
@@ -361,7 +408,7 @@ try {
   `,
   );
   check(
-    "the toolbar button opens the same chooser with a view on stage",
+    "the toolbar arrow opens the chooser with a view on stage",
     toolbar?.open === true &&
       toolbar?.modes?.length === 2 &&
       toolbar?.modes?.[0]?.on === true &&
@@ -386,7 +433,7 @@ try {
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     if (!document.querySelector('.open-menu')) {
-      document.querySelector('.toolbar .split-main')?.click();
+      document.querySelector('.toolbar .split-arrow')?.click();
       await wait(900);
     }
     document.querySelector('.open-menu .mode[data-mode="accounts"]')?.click();
@@ -432,7 +479,7 @@ try {
     `
     const api = window.ensemble;
     await api.activateEmbeddedView(null);
-    const trigger = document.querySelector('.toolbar .split-main');
+    const trigger = document.querySelector('.toolbar .split-arrow');
     for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
       trigger?.click();
       await new Promise((r) => setTimeout(r, 900));

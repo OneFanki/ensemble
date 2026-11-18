@@ -826,7 +826,7 @@ try {
   // instead of switching, and it painted before the native page was parked, so
   // its left half was covered for about 100ms.
   const menuOpen = await client.evaluate(`(async () => {
-    const trigger = document.querySelector('.toolbar .split-main');
+    const trigger = document.querySelector('.toolbar .split-arrow');
     // Retried: the click is dispatched while the toolbar may still be settling
     // after the resize above, and a click that lands on a re-rendering button is
     // swallowed. Retrying the open is not weakening the check — the assertions
@@ -914,7 +914,7 @@ try {
   );
 
   const menuClosed = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-main')?.click();
+    document.querySelector('.toolbar .split-arrow')?.click();
     await new Promise((r) => setTimeout(r, 700));
     return Boolean(document.querySelector('.open-panel'));
   })()`);
@@ -923,7 +923,7 @@ try {
   });
 
   const menuSwitch = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-main')?.click();
+    document.querySelector('.toolbar .split-arrow')?.click();
     await new Promise((r) => setTimeout(r, 900));
     const rows = [...document.querySelectorAll('.site-row')];
     rows[1]?.click();

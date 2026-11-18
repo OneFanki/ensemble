@@ -359,7 +359,7 @@ try {
     client,
     `
     const api = window.ensemble;
-    const trigger = document.querySelector('.toolbar .split-main');
+    const trigger = document.querySelector('.toolbar .split-arrow');
     for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
       trigger?.click();
       await new Promise((r) => setTimeout(r, 900));

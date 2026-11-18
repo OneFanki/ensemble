@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onClickOutside } from "@vueuse/core";
-import { Plus } from "lucide-vue-next";
+import { ChevronDown, Plus } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -8,15 +8,19 @@ import { useWorkspaceStore } from "../stores/workspace";
 import SiteOpenMenu from "./SiteOpenMenu.vue";
 
 /**
- * The "+" that asks "as whom?" before it creates anything.
+ * The "+", in two halves with two answers.
  *
- * A page in this app is almost never just a page: it belongs to a system and
- * usually to an account, and which account decides the session partition. A
- * one-click "+" therefore had to guess, and the guess was the daily profile — so
- * a view built to compare accounts got an anonymous page in a cell instead. Now
- * the click is a question: pick an account (opened at its start page and filled),
- * open the site in the default profile or a throwaway, or open a blank browser in
- * one of the profiles.
+ * The main half is the blank answer: one click opens a blank page in the
+ * default profile — the app's own new-tab surface, no site navigated, no
+ * account question asked. Every other "+" in a browser works this way, and
+ * asking "as whom?" before showing any page turned "just open something empty"
+ * into a trip through an account chooser that had already pre-picked a site.
+ *
+ * The arrow half is the account answer: it opens the chooser to pick an account
+ * (opened at its start page and filled), a site's default-profile or throwaway
+ * opening, or a blank browser in a named profile. The chooser is the secondary
+ * door — reached only on purpose — because a page here usually belongs to an
+ * account, and which account decides the session partition.
  *
  * `lockedSiteId` is set where the surrounding container already names the
  * system — a view's own "+" — so the chooser lists that site's accounts and
@@ -72,9 +76,13 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") open.value = false;
 }
 
+/** The main half opens a blank page; the arrow is what opens the chooser. */
+const blankLabel = computed(() => t("app.browserNewBlank"));
 const label = computed(() =>
-  props.lockedSiteId ? t("app.browserAddTab") : t("app.browserNewTab"),
+  props.lockedSiteId ? t("app.browserAddTab") : t("app.browserOpenAs"),
 );
+/** The blank page needs a cookie jar: the user's default profile. */
+const defaultProfileId = computed(() => store.settings.defaultProfileId);
 /**
  * The lock only counts when the site still exists.
  *
@@ -119,7 +127,7 @@ async function toggle(): Promise<void> {
  * view header near the bottom of the dock.
  */
 function placePanel(): void {
-  const trigger = root.value?.querySelector<HTMLElement>(".split-main");
+  const trigger = root.value?.querySelector<HTMLElement>(".split-arrow");
   if (!trigger) return;
   const rect = trigger.getBoundingClientRect();
   const width = effectiveLock.value ? 250 : 400;
@@ -140,6 +148,20 @@ function placePanel(): void {
 function chooseProfile(profileId: string): void {
   open.value = false;
   emit("openProfile", profileId);
+}
+
+/**
+ * The main half: a blank page, straight away.
+ *
+ * The chooser never opens on this path — no panel, no pre-picked site — which
+ * is the whole point of the split. Reusing `openProfile` with the default
+ * profile keeps one code path per landing spot: the container's existing
+ * `@open-profile` wiring already knows whether the page belongs in its view,
+ * the flat strip or on stage.
+ */
+function openBlank(): void {
+  open.value = false;
+  emit("openProfile", defaultProfileId.value);
 }
 
 function chooseDaily(siteId: string): void {
@@ -163,12 +185,22 @@ function chooseIdentity(identityId: string): void {
     <button
       type="button"
       class="split-main"
+      :aria-label="blankLabel"
+      v-tooltip="blankLabel"
+      @click.stop="openBlank"
+    >
+      <Plus :size="compact ? 11 : 14" />
+    </button>
+    <button
+      type="button"
+      class="split-arrow"
       :aria-label="label"
       :aria-expanded="open"
+      :aria-haspopup="true"
       v-tooltip="label"
       @click.stop="toggle"
     >
-      <Plus :size="compact ? 11 : 14" />
+      <ChevronDown :size="compact ? 10 : 12" />
     </button>
   </span>
 
@@ -219,9 +251,25 @@ function chooseIdentity(identityId: string): void {
   border-radius: var(--radius);
 }
 
-.split-main:hover {
+.split-main:hover,
+.split-arrow:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+/*
+ * The arrow half. Narrow, divided from the main half by a hairline: two
+ * answers to one "+" — blank now, or asked as whom — that still read as a
+ * single control in the toolbar.
+ */
+.split-arrow {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  border-left: 1px solid var(--line-soft);
 }
 
 /* Dock headers and empty cells are denser than the toolbar. */
@@ -231,7 +279,14 @@ function chooseIdentity(identityId: string): void {
   background: transparent;
 }
 
-.split.compact .split-main:hover {
+.split.compact .split-arrow {
+  width: 14px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.split.compact .split-main:hover,
+.split.compact .split-arrow:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 7%, transparent);
 }

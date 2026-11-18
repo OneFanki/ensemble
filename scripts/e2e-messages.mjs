@@ -162,11 +162,11 @@ try {
   );
 
   // 2) The two entry points agree that something is unread. The management
-  // pane's section column carries the message centre (a row, so it can name
-  // the page); the toolbar bell only carries a red dot, because a number there
+  // pane's 更多 section carries the message centre (a row, so it can name the
+  // page); the toolbar bell only carries a red dot, because a number there
   // widened the button and pushed it out of line with the icons beside it — so
   // the bell is asserted on the dot, not on a number. The bell is read first:
-  // opening the pane replaces the browser page, and the bell lives there.
+  // the placement is by attribute rather than by translated text.
   const entryPoints = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const out = {
@@ -175,18 +175,20 @@ try {
       menuItem: false,
       menuLabel: '',
     };
-    document.querySelector('[data-manage-btn]')?.click();
-    await wait(600);
-    const item = document.querySelector('[data-manage-item="messages"]');
+    document.querySelector('[data-rail-entry="more"]')?.click();
+    for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
+      await wait(80);
+    }
+    const item = document.querySelector('[data-more-tab="messages"]');
     out.menuItem = Boolean(item);
     out.menuLabel = item?.textContent?.trim() ?? '';
     // Back to the browser: the checks below drive the bell on the toolbar.
-    document.querySelector('[data-nav="browser"]')?.click();
+    document.querySelector('[data-floating-pane] .pane-head button')?.click();
     await wait(600);
     return out;
   })()`);
   check(
-    "the management pane carries messages, and the bell a red dot",
+    "the more pane carries messages, and the bell a red dot",
     entryPoints?.menuItem === true &&
       entryPoints?.menuLabel === "消息" &&
       entryPoints?.bell === true &&

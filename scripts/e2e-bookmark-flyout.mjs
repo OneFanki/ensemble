@@ -248,21 +248,26 @@ try {
     { subAfterScroll, rootStillOpen },
   );
 
-  // --- 4. The retired column stays retired; the rail owns the top row -------
+  // --- 4. The retired column stays retired; the account rail owns the left ---
   const shell = await client.evaluate(`(() => {
-    const rail = document.querySelector('.rail')?.getBoundingClientRect();
+    const rail = document.querySelector('[data-account-rail]')?.getBoundingClientRect();
     return {
       dock: Boolean(document.querySelector('.dock')),
       layoutBtn: Boolean(document.querySelector('.layout-btn')),
+      railLeft: rail ? Math.round(rail.left) : null,
       railTop: rail ? Math.round(rail.top) : null,
       railInsideWindow: rail ? rail.left >= 0 && rail.right <= window.innerWidth : false,
+      railBottom: rail ? Math.round(rail.bottom) : null,
+      viewportH: document.documentElement.clientHeight,
     };
   })()`);
   check(
-    "the dock stays retired and the rail spans the window's top",
+    "the dock stays retired and the account rail runs down the left edge",
     shell?.dock === false &&
       shell?.layoutBtn === false &&
-      shell?.railTop === 0 &&
+      shell?.railLeft === 0 &&
+      shell?.railTop > 0 &&
+      shell?.railBottom === shell?.viewportH &&
       shell?.railInsideWindow === true,
     shell,
   );

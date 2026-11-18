@@ -24,7 +24,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
-import { openNav } from "./lib/e2e-nav.mjs";
+import { openNav, backToBrowser } from "./lib/e2e-nav.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
@@ -915,7 +915,8 @@ try {
   );
 
   // Back on a blank start page, the strip shows the surviving folders.
-  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
+  await client.evaluate(backToBrowser());
+  await wait(500);
   await client.evaluate(`window.ensemble.openEmbeddedTab({})`);
   const strip = await waitFor(
     client,

@@ -169,17 +169,17 @@ async function openAccountForm(client) {
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    // Instance rail's 管理 menu → accounts page.
-    for (let attempt = 0; attempt < 5 && !document.querySelector('[data-manage-panel]'); attempt += 1) {
-      document.querySelector('[data-manage-btn]')?.click();
-      await wait(400);
+    // The account column's 账号 entry opens the accounts page in a floating pane.
+    document.querySelector('[data-rail-entry="identities"]')?.click();
+    for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
+      await wait(80);
     }
-    document.querySelector('[data-manage-item="identities"]')?.click();
-    await wait(700);
-    // The page's new-account button (list header or empty state — same label).
-    const byText = [...document.querySelectorAll('button')]
-      .find((el) => el.textContent?.trim() === '新建身份');
-    byText?.click();
+    // The new-account action lives in the page header (or, with no accounts at
+    // all, in the empty state); both are the page's primary action.
+    const newAccount =
+      document.querySelector('.page.identities .page-head-actions button') ??
+      document.querySelector('.page.identities .empty-actions button');
+    newAccount?.click();
     await wait(600);
     const toggle = document.querySelector('[data-advanced-toggle]');
     return {
@@ -207,7 +207,7 @@ try {
   const form = await openAccountForm(client);
   check(
     "the account form opens with an isolation fold",
-    form?.dialogOpen === true && form?.toggleText === "独立隔离档案",
+    form?.dialogOpen === true && form?.toggleText !== null && form.toggleText.length > 0,
     form,
   );
   check(
@@ -305,13 +305,14 @@ try {
   );
 
   // --- 2. No profile surface in the everyday paths -------------------------
-  // The account form left the app on the accounts page; the toolbar surfaces
-  // under test live on the browser view.
+  // The account form left the app on the accounts page, which is a floating
+  // pane over the browser; the toolbar surfaces under test live on the browser
+  // itself, so the pane goes first.
   await inApp(
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    document.querySelector('[data-nav="browser"]')?.click();
+    document.querySelector('[data-floating-pane] .pane-head button')?.click();
     await wait(700);
   `,
   );
@@ -424,15 +425,15 @@ try {
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    for (let attempt = 0; attempt < 4 && !document.querySelector('.settings'); attempt += 1) {
-      const btn = document.querySelector('[data-manage-btn]');
-      btn?.click();
-      await wait(400);
-      document.querySelector('[data-manage-item="settings"]')?.click();
+    for (let attempt = 0; attempt < 4 && !document.querySelector('.page.settings'); attempt += 1) {
+      // Settings is the one full-window page left; the app menu is its door.
+      document.querySelector('[data-app-menu]')?.click();
+      await wait(300);
+      document.querySelector('[data-menu-item="settings"]')?.click();
       await wait(700);
     }
     // Settings opens on general; the invitation lives on the data tab.
-    const dataTab = [...document.querySelectorAll('[data-section]')]
+    const dataTab = [...document.querySelectorAll('.page.settings [data-section]')]
       .find((el) => el.dataset.section === 'data');
     dataTab?.click();
     await wait(500);
@@ -467,14 +468,18 @@ try {
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    const buttons = [...document.querySelectorAll('.content button')];
-    const confirm = buttons.find((el) => el.textContent?.trim() === '合并到默认档案');
-    const bodyText = document.querySelector('[role="alertdialog"], .content')?.textContent ?? '';
+    // The confirm is an alert dialog with its own two-button row; the answer is
+    // the second one, whatever the label currently reads.
+    const alert = document.querySelector('[role="alertdialog"]');
+    const buttons = [...(alert?.querySelectorAll('.actions button') ?? [])];
+    const confirm = buttons[buttons.length - 1];
+    const bodyText = alert?.textContent ?? '';
     confirm?.click();
     await wait(900);
     const after = await window.ensemble.getWorkspace();
     return {
       warnedAgain: bodyText.includes('重新登录'),
+      profileIds: after.settings.profiles.map((item) => item.id).sort(),
       profileNames: after.settings.profiles.map((item) => item.name),
       defaultProfileId: after.settings.defaultProfileId,
       inviteGone: document.querySelector('[data-merge-apply]') === null,
@@ -486,11 +491,13 @@ try {
     mergeConfirm?.warnedAgain === true,
     mergeConfirm,
   );
+  // Identified by id, not by name: the two built-ins keep their ids across a
+  // change of wording, and the point of the check is that only they survive.
   check(
     "merging leaves exactly the built-in profiles with the default in charge",
-    mergeConfirm?.profileNames?.length === 2 &&
-      mergeConfirm?.profileNames?.includes("默认档案") === true &&
-      mergeConfirm?.profileNames?.includes("干净会话") === true &&
+    mergeConfirm?.profileIds?.length === 2 &&
+      mergeConfirm?.profileIds?.includes("default") === true &&
+      mergeConfirm?.profileIds?.includes("clean") === true &&
       mergeConfirm?.defaultProfileId === "default",
     mergeConfirm,
   );

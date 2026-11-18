@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 /**
- * End-to-end check that the console never shares pixels with a live page.
+ * End-to-end check that a management layer never takes the page away.
  *
- * Reported bug: with a page loaded, opening Settings made the page and the panel
- * flicker over each other. The page is a real compositing surface, the console is
- * ordinary in-flow HTML, so whichever one is drawn second wins — and for a frame
- * that was decided by event ordering rather than by intent.
+ * This suite used to guard the opposite contract: opening the console replaced
+ * the browser page, the page surface painted above ordinary HTML, so the pages
+ * had to be parked in the very task that switched the view or the panel and the
+ * page swapped places for a frame.
  *
- * Two things are asserted, and they cover the two different failure modes:
+ * Management is a layer now (ADR 0012): the browser stays mounted, the page stays
+ * on the stage at the same rectangle, and the layer draws over part of it. What
+ * has to hold, and what this suite asserts:
  *
- * 1. **Structural** — the console's layer is above the page pool's, so no future
- *    ordering mistake can put a page in front of it.
- * 2. **Timing** — by the time the click handler returns, every page is already
- *    parked. Checking in the same task as the click is the point: the bug was one
- *    frame of lag, and any assertion that waits for a frame would pass on the
- *    broken build too (measured — the DOM is already settled by the first frame).
+ * 1. **The page is not parked.** Opening a layer leaves every page node where it
+ *    was, opaque, and still sized to the stage — the person can read the page
+ *    beside the layer.
+ * 2. **The layer is above the pool by layer number.** The layer is a real
+ *    element over a guest; ordering must come from `z-index`, not from mount
+ *    order.
+ * 3. **Docked DevTools still step aside.** The panel is a native view that no
+ *    HTML can stack over, so an open layer must report `devtoolsParked` and the
+ *    flag must clear when the layer closes. That flag is the one piece of the old
+ *    "the page gets out of the way" machinery that still has a job.
+ * 4. **Closing gives the stage back unchanged.** Nothing was torn down, so the
+ *    page never leaves its rectangle — not even for a frame.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -121,58 +129,67 @@ try {
 
   // 1. The page really is on stage before the click, or the test proves nothing.
   const before = await client.evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('webview')];
-    return nodes.map((node) => ({
-      left: node.style.left,
-      opacity: node.style.opacity,
-    }));
-  })()`);
-  check(
-    "the page is on stage before the console opens",
-    before.some((node) => node.opacity === "1" && !node.left.startsWith("-")),
-    before,
-  );
-
-  // 2. The click, then a read in the *same* task. Nothing is awaited between the
-  //    two, so a park that waits for the browser page to unmount — what the bug
-  //    was — would still show the page on stage here.
-  //
-  //    Vue renders on a microtask, so the pane cannot be in the DOM yet.
-  //    That is the whole point: the pages have to be parked *before* the render
-  //    that draws the pane, not as a consequence of it.
-  // [管理] is a single click that switches the pane in place, so the check below
-  // still measures "one click on a navigation control", not a two-step sequence.
-  const afterClick = await client.evaluate(`(() => {
-    const btn = document.querySelector('[data-manage-btn]');
-    if (!btn) return { error: 'no manage button' };
-    btn.click();
+    const stage = document.querySelector('.stage')?.getBoundingClientRect();
     const nodes = [...document.querySelectorAll('webview')];
     return {
-      clicked: true,
-      consoleInDom: Boolean(document.querySelector('.manage-pane')),
+      stage: stage ? { x: Math.round(stage.x), y: Math.round(stage.y), w: Math.round(stage.width) } : null,
       nodes: nodes.map((node) => ({
-        tabId: node.dataset.tabId,
         left: node.style.left,
+        top: node.style.top,
+        width: node.style.width,
         opacity: node.style.opacity,
         pointer: node.style.pointerEvents,
       })),
     };
   })()`);
   check(
-    "every page is parked in the same task as the click, not a frame later",
-    Array.isArray(afterClick?.nodes) &&
-      afterClick.nodes.length > 0 &&
-      afterClick.nodes.every(
-        (node) => node.opacity === "0" && node.left.startsWith("-") && node.pointer === "none",
-      ),
-    afterClick,
+    "the page is on stage before the layer opens",
+    before?.nodes?.some((node) => node.opacity === "1" && !node.left.startsWith("-")),
+    before,
   );
 
-  // 3. And the console does appear, on the very next frame.
+  // 2. One click on the rail entry, then a read. A layer is a render away, so
+  //    the pane is not in the DOM yet — the point is that the page never left.
+  const afterClick = await client.evaluate(`(() => {
+    const btn = document.querySelector('[data-rail-entry="sites"]');
+    if (!btn) return { error: 'no sites entry on the account rail' };
+    btn.click();
+    const nodes = [...document.querySelectorAll('webview')];
+    return {
+      clicked: true,
+      paneInDom: Boolean(document.querySelector('[data-floating-pane]')),
+      nodes: nodes.map((node) => ({
+        tabId: node.dataset.tabId,
+        left: node.style.left,
+        top: node.style.top,
+        width: node.style.width,
+        opacity: node.style.opacity,
+        pointer: node.style.pointerEvents,
+      })),
+    };
+  })()`);
+  check(
+    "opening a layer leaves every page exactly where it was",
+    Array.isArray(afterClick?.nodes) &&
+      afterClick.nodes.length === before?.nodes?.length &&
+      afterClick.nodes.every(
+        (node, index) =>
+          node.left === before?.nodes?.[index]?.left &&
+          node.top === before?.nodes?.[index]?.top &&
+          node.width === before?.nodes?.[index]?.width &&
+          node.opacity === before?.nodes?.[index]?.opacity,
+      ) &&
+      afterClick.nodes.some((node) => node.opacity === "1" && !node.left.startsWith("-")),
+    { afterClick, before },
+  );
+
+  // 3. And the layer does appear, on the very next frame. Landing after the
+  //    entry animation is a separate read: on the first frame the pane still
+  //    carries its opening transform.
   const settled = await client.evaluate(`(async () => {
     await new Promise((r) => requestAnimationFrame(r));
     return {
-      consoleInDom: Boolean(document.querySelector('.manage-pane')),
+      paneInDom: Boolean(document.querySelector('[data-floating-pane]')),
       nodes: [...document.querySelectorAll('webview')].map((node) => ({
         left: node.style.left,
         opacity: node.style.opacity,
@@ -180,10 +197,42 @@ try {
     };
   })()`);
   check(
-    "the console is drawn on the next frame, with every page still parked",
-    settled?.consoleInDom === true &&
-      settled.nodes.every((node) => node.opacity === "0" && node.left.startsWith("-")),
+    "the layer is drawn on the next frame, with the page still on stage",
+    settled?.paneInDom === true &&
+      settled.nodes.some((node) => node.opacity === "1" && !node.left.startsWith("-")),
     settled,
+  );
+
+  await wait(700);
+  // A headless run never composites, so the pane's opening animation stays at
+  // its first keyframe (a translate of a few pixels) and every geometry read
+  // would land mid-animation. Switching animations off makes the target values
+  // observable.
+  const placed = await client.evaluate(`(() => {
+    const style = document.createElement('style');
+    style.textContent = '*{transition:none !important;animation:none !important}';
+    document.head.appendChild(style);
+    const pane = document.querySelector('[data-floating-pane]')?.getBoundingClientRect();
+    const scrim = document.querySelector('[data-floating-scrim]')?.getBoundingClientRect();
+    const rail = document.querySelector('[data-account-rail]')?.getBoundingClientRect();
+    const stage = document.querySelector('.stage')?.getBoundingClientRect();
+    const result = {
+      pane: pane ? { x: Math.round(pane.x), right: Math.round(pane.right) } : null,
+      scrim: scrim ? { x: Math.round(scrim.x), right: Math.round(scrim.right) } : null,
+      railRight: rail ? Math.round(rail.right) : null,
+      stage: stage ? { x: Math.round(stage.x), right: Math.round(stage.right) } : null,
+      windowWidth: window.innerWidth,
+    };
+    style.remove();
+    return result;
+  })()`);
+  check(
+    "the layer starts at the account column and leaves the stage readable beside it",
+    Boolean(placed?.pane && placed?.railRight && placed?.stage) &&
+      placed.pane.x === placed.railRight &&
+      placed.pane.right < placed.stage.right &&
+      placed.pane.right <= placed.windowWidth,
+    placed,
   );
 
   // 4. The layer numbers, so ordering alone can never decide this again.
@@ -196,37 +245,97 @@ try {
         position: getComputedStyle(element).position,
       };
     };
-    return { console: z('.manage-pane'), pool: z('.guest-pool') };
+    return { layer: z('[data-floating-pane-layer]'), pane: z('[data-floating-pane]'), pool: z('.guest-pool') };
   })()`);
   check(
-    "the console sits above the page pool by layer number",
-    layers?.console?.position !== "static" &&
-      Number(layers?.console?.zIndex) > Number(layers?.pool?.zIndex ?? 0),
+    "the layer sits above the page pool by layer number",
+    layers?.layer?.position !== "static" &&
+      Number(layers?.pane?.zIndex) > Number(layers?.layer?.zIndex ?? 0) &&
+      Number(layers?.layer?.zIndex) > Number(layers?.pool?.zIndex ?? 0),
     layers,
   );
 
-  // 5. Going back must put the page on stage again — parking must not be one-way.
-  const back = await client.evaluate(`(async () => {
-    const control = document.querySelector('[data-nav="browser"]');
-    if (!control) return { error: 'no browser row' };
-    control.click();
-    await new Promise((r) => setTimeout(r, 900));
-    const nodes = [...document.querySelectorAll('webview')];
-    const stage = document.querySelector('.stage');
+  // 5. Docked DevTools still step aside for an open layer. The panel is a
+  //    native view, so this is the one piece of parking that must survive.
+  const parked = await client.evaluate(`(async () => {
+    const open = await window.ensemble.getEmbeddedState();
     return {
-      onBrowser: Boolean(stage),
-      nodes: nodes.map((node) => ({
+      flag: open.devtoolsParked === true,
+      floatingAttr: document.documentElement.dataset.floating ?? null,
+    };
+  })()`);
+  check(
+    "an open layer reports the docked DevTools as parked and suspends dragging",
+    parked?.flag === true && parked?.floatingAttr === "1",
+    parked,
+  );
+
+  // 6. Closing must clear both, and the page must still be on stage — there was
+  //    nothing to bring back.
+  const back = await client.evaluate(`(async () => {
+    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    await new Promise((r) => setTimeout(r, 700));
+    const state = await window.ensemble.getEmbeddedState();
+    const stage = document.querySelector('.stage')?.getBoundingClientRect();
+    return {
+      paneGone: !document.querySelector('[data-floating-pane]'),
+      parked: state.devtoolsParked === true,
+      floatingAttr: document.documentElement.dataset.floating ?? null,
+      stage: stage ? { x: Math.round(stage.x), y: Math.round(stage.y), w: Math.round(stage.width) } : null,
+      nodes: [...document.querySelectorAll('webview')].map((node) => ({
         left: node.style.left,
+        top: node.style.top,
         opacity: node.style.opacity,
-        width: node.style.width,
       })),
     };
   })()`);
   check(
-    "returning to the browser puts the page back on stage",
-    back?.onBrowser === true &&
+    "closing the layer clears the DevTools park and the drag suspension",
+    back?.paneGone === true && back?.parked === false && back?.floatingAttr === null,
+    back,
+  );
+  check(
+    "the page is still on the stage it never left",
+    back?.stage?.x === before?.stage?.x &&
+      back?.stage?.w === before?.stage?.w &&
       back.nodes.some((node) => node.opacity === "1" && !node.left.startsWith("-")),
     back,
+  );
+
+  // 7. The user's two other ways out: Esc and a press on the scrim. Both are
+  //    the pane's own contract, and both have to leave the browser intact.
+  const escClose = await client.evaluate(`(async () => {
+    document.querySelector('[data-rail-entry="sites"]')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const opened = Boolean(document.querySelector('[data-floating-pane]'));
+    const pane = document.querySelector('[data-floating-pane]');
+    pane?.focus?.();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 500));
+    return { opened, closed: !document.querySelector('[data-floating-pane]') };
+  })()`);
+  check("Esc closes an open layer", escClose?.opened === true && escClose?.closed === true, escClose);
+
+  const scrimClose = await client.evaluate(`(async () => {
+    document.querySelector('[data-rail-entry="more"]')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const opened = Boolean(document.querySelector('[data-floating-pane]'));
+    document.querySelector('[data-floating-scrim]')?.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 500));
+    return {
+      opened,
+      closed: !document.querySelector('[data-floating-pane]'),
+      staged: [...document.querySelectorAll('webview')].some(
+        (node) => node.style.opacity === "1" && !node.style.left.startsWith("-"),
+      ),
+    };
+  })()`);
+  check(
+    "a press on the scrim closes the layer and leaves the page on stage",
+    scrimClose?.opened === true && scrimClose?.closed === true && scrimClose?.staged === true,
+    scrimClose,
   );
 } catch (error) {
   console.error("[console-overlap] fatal", String(error));

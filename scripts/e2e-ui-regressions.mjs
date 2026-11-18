@@ -196,31 +196,39 @@ async function waitFor(client, expression, timeout = 4000) {
 }
 
 /**
- * Open a management pane section.
+ * Open one of the app's pages.
  *
- * The pane is opened by the instance rail's [管理] button, which lives on the
- * browser page — so from the pane the band back-arrow returns to the browser
- * first, then the shared navigation in `scripts/lib/e2e-nav.mjs` does the rest.
- * `flows` and `settings-<id>` name destinations a second click inside their
- * section reaches; the shared library owns those too.
+ * The shared navigation in `scripts/lib/e2e-nav.mjs` owns the selectors: a rail
+ * entry for 站点 / 账号 / 更多, the app menu for settings, and the second click
+ * each of those needs (a `[data-more-tab]` section, a `[data-ai-tab]` tab, a
+ * `[data-section]` in settings).
  */
 async function openConsolePage(client, view) {
   await client.evaluate(openNav(view));
   const marker =
     view === "settings" || view.startsWith("settings-")
       ? `Boolean(document.querySelector('.page.settings'))`
-      : `Boolean(document.querySelector('[data-manage-pane]'))`;
+      : `Boolean(document.querySelector('[data-floating-pane]'))`;
   return waitFor(client, marker, 5000);
 }
 
-/** Back to the browser surface. */
+/** Back to the browser surface: the pane closes, the browser stays mounted. */
 async function backToBrowser(client) {
   await client.evaluate(`(async () => {
-    document.querySelector('[data-nav="browser"]')?.click();
+    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    await new Promise((r) => setTimeout(r, 450));
+    // Settings is the one page that still replaces the browser.
+    document.querySelector('.page.settings .settings-head .back')?.click();
     await new Promise((r) => setTimeout(r, 450));
     return true;
   })()`);
-  await waitFor(client, `Boolean(document.querySelector('.tabstrip'))`, 5000);
+  await waitFor(
+    client,
+    `Boolean(document.querySelector('[data-account-rail]')) &&
+      !document.querySelector('[data-floating-pane]') &&
+      !document.querySelector('.page.settings')`,
+    5000,
+  );
 }
 
 try {
@@ -688,37 +696,12 @@ try {
   );
   check("the prompt floats above the page", prompt?.bottomGap !== null && prompt.bottomGap >= 20, prompt);
 
-  // --- Toolbar "+" sizing, dock resize and collapse animation --------------
-  /*
-   * The run dock belongs to the workbench, not to the browser.
-   *
-   * 1.0 drew it permanently beside the stage; it now appears with a multi-cell
-   * layout. Everything about the dock — its handle, its animation, its collapsed
-   * strip — is only observable once that mode is on, so it is entered here,
-   * before any of those readings.
-   */
-  await client.evaluate(`(async () => {
-    const btn = document.querySelector('.tabstrip .layout-btn');
-    if (btn && !btn.classList.contains('is-bench')) btn.click();
-    await new Promise((r) => setTimeout(r, 900));
-    return true;
-  })()`);
-  await waitFor(client, `Boolean(document.querySelector('.dock'))`, 6000);
-
-  // Read the animation intent before transitions are switched off below.
+  // --- Toolbar "+" sizing -----------------------------------------------
   //
-  // The dock is the top half of the left column now, and the column owns the
-  // width and the handle: a child that kept its own `<aside>`, border and
-  // resize handle would draw a second edge beside the navigation under it.
-  const dockMotion = await client.evaluate(`(() => {
-    const column = document.querySelector('.sidebar');
-    const handle = document.querySelector('.sidebar-resize');
-    return {
-      transition: column ? getComputedStyle(column).transitionProperty : null,
-      handle: Boolean(handle),
-      cursor: handle ? getComputedStyle(handle).cursor : null,
-    };
-  })()`);
+  // The run dock and its resize handle went out with the multi-cell workbench
+  // (ADR 0012), and so did the layout glyph that used to turn them on. What is
+  // still worth measuring in this row is the control heights agreeing and the
+  // zoom stepper staying out of it.
 
   // Geometry checks below compare settled values. In a headless run the window
   // is never composited, so CSS transitions do not advance and every read would
@@ -988,13 +971,13 @@ try {
     downloadsClosed,
   );
 
-  // --- The sidebar is retired; the instance rail is the navigation ---------
+  // --- The workbench column is retired; the account rail is the navigation --
   /*
    * The dock's resize handle, collapse animation and collapsed strip all
    * belonged to the navigation column, which the single-stage shell (ADR 0012)
    * removed. The equivalents that remain are asserted here: no column comes
-   * back, the stage owns the full window width, and the instance rail is the
-   * one instance switcher.
+   * back, the stage fills the right column beside the account rail, and the
+   * account rail is the one instance switcher.
    */
   const retired = await client.evaluate(`(async () => {
     await window.ensemble.getEmbeddedState();
@@ -1008,14 +991,19 @@ try {
       (el) => el.getAttribute('data-instance-chip') !== current?.instanceId,
     );
     const stage = document.querySelector('.stage');
+    const rail = document.querySelector('[data-account-rail]');
+    const stageBox = stage?.getBoundingClientRect();
+    const railBox = rail?.getBoundingClientRect();
     return {
       sidebar: Boolean(document.querySelector('.sidebar')),
       dock: Boolean(document.querySelector('.dock')),
       handle: Boolean(document.querySelector('.sidebar-resize')),
-      rail: Boolean(document.querySelector('.rail')),
+      rail: Boolean(rail),
       chips: chips.length,
       instances: new Set(state.tabs.map((tab) => tab.instanceId)).size,
-      stageWidth: stage ? Math.round(stage.getBoundingClientRect().width) : null,
+      stageLeft: stageBox ? Math.round(stageBox.left) : null,
+      stageRight: stageBox ? Math.round(stageBox.right) : null,
+      railRight: railBox ? Math.round(railBox.right) : null,
       windowWidth: window.innerWidth,
       clickedOther: otherChip?.getAttribute('data-instance-chip') ?? null,
     };
@@ -1040,42 +1028,45 @@ try {
     retired,
   );
   check(
-    "the instance rail is the one instance switcher",
+    "the account rail is the one instance switcher",
     retired?.rail === true && retired?.chips === retired?.instances && retired?.chips >= 2,
     retired,
   );
   check(
-    "the stage owns the full window width, edge to edge",
-    retired?.stageWidth === retired?.windowWidth,
+    "the stage fills the right column, edge to edge on the window's right",
+    retired?.stageLeft === retired?.railRight &&
+      retired?.stageRight === retired?.windowWidth,
     retired,
   );
   check(
-    "clicking another rail chip switches the instance on stage",
+    "clicking another account switches the instance on stage",
     switchCheck?.landedInstance === retired?.clickedOther,
     { clickedOther: retired?.clickedOther, landed: switchCheck?.landedInstance },
   );
 
-  // The rail entries lead with the account colour and name, and the on-stage
-  // one carries a fill the others do not — the visible difference between the
-  // two rows of the header (instances vs pages).
+  // The rail entries lead with the account colour bar and name, and the
+  // on-stage one carries a fill the others do not.
   const railLook = await client.evaluate(`(() => {
     const onStage = document.querySelector('[data-instance-chip][data-on-stage="1"]');
     const idle = document.querySelector('[data-instance-chip][data-on-stage="0"]');
     const stage = onStage ? getComputedStyle(onStage).backgroundColor : null;
     const other = idle ? getComputedStyle(idle).backgroundColor : null;
+    const color = onStage?.querySelector('.item-color');
     return {
       onStageFill: stage,
       idleFill: other,
-      avatar: Boolean(onStage?.querySelector('.chip-avatar')),
+      colorBar: Boolean(color),
+      colorBarFill: color ? getComputedStyle(color).backgroundColor : null,
       account: onStage?.querySelector('.chip-account')?.textContent?.trim() ?? "",
     };
   })()`);
   check(
-    "the on-stage rail entry is marked by fill, and each entry leads with the account",
+    "the on-stage rail entry is marked by fill, and each entry leads with its account",
     railLook?.onStageFill !== null &&
       railLook.onStageFill !== "rgba(0, 0, 0, 0)" &&
       railLook.onStageFill !== railLook?.idleFill &&
-      railLook?.avatar === true &&
+      railLook?.colorBar === true &&
+      railLook?.colorBarFill !== "rgba(0, 0, 0, 0)" &&
       (railLook?.account ?? "").length > 0,
     railLook,
   );
@@ -1758,19 +1749,31 @@ try {
     labelled,
   );
 
-  // --- Leaving the browser page must not show or flatten the pages ----------
-  // Pages keep running when the user is on another rail page. Two things must
-  // hold there, and both broke at some point:
-  //  * the native view is parked outside the window, or it paints over the page
-  //    the user is looking at;
-  //  * the page keeps a real viewport, or every geometry-based decision the AI
-  //    makes ("is this text visible", where is the button) is wrong.
+  // --- A management layer must not take the page off the stage --------------
+  // Pages keep running while a layer is open, and they now keep their pixels
+  // too: the layer covers part of the stage, the page under it stays where it
+  // was. Two things must hold, and both broke at some point:
+  //  * the page must keep a real rectangle (a parked node has no viewport, and
+  //    every geometry-based decision the AI makes then answers wrong);
+  //  * opening a layer must report the docked DevTools as parked, because that
+  //    panel is a native view no HTML can stack over.
   await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();
     const tab = state.tabs[0];
     if (tab) await window.ensemble.navigateEmbeddedTab(tab.id, ${JSON.stringify(PAGE_URL)});
     await new Promise((r) => setTimeout(r, 1200));
     return Boolean(tab);
+  })()`);
+  const stagedBefore = await client.evaluate(`(() => {
+    const boxes = [...document.querySelectorAll('webview')]
+      .map((node) => node.getBoundingClientRect())
+      .map((rect) => ({
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      }));
+    return { boxes };
   })()`);
   await client.evaluate(openNav("identities"));
   await wait(1200);
@@ -1792,30 +1795,40 @@ try {
       carrier: state.carrier ?? "native",
       tabs: state.tabs.map((tab) => ({ id: tab.id, bounds: tab.bounds ?? null })),
       nodes,
+      devtoolsParked: state.devtoolsParked === true,
+      paneOpen: Boolean(document.querySelector('[data-floating-pane]')),
       onIdentities: Boolean(document.querySelector('.id-card')),
     };
   })()`);
-  // The guarantee is "no page is on the stage any more", and each carrier
-  // expresses it differently. A native view is parked past the window edge and
-  // reports that rect; a guest is a node in this document, so main gives up its
-  // place entirely (zero bounds) and the pool moves it outside the window.
-  // Asserting the carrier-neutral half — nothing sized over the stage — keeps
-  // the check about the behaviour rather than about the coordinates.
+  // The layer is mounted over part of the stage, so the page it covers must
+  // still report the same rectangle it had — that is what "the layer does not
+  // take the page away" means, and it is also what keeps the AI's viewport
+  // reads honest while a page is open.
   check(
-    "switching pages keeps every embedded page off the stage",
-    parkedState?.onIdentities === true &&
+    "a management layer leaves every embedded page on its stage rectangle",
+    parkedState?.paneOpen === true &&
+      parkedState?.onIdentities === true &&
       parkedState.tabs.length > 0 &&
       (parkedState.carrier === "guest"
-        ? parkedState.nodes.every(
-            (node) =>
-              node.width <= 0 ||
-              node.height <= 0 ||
-              node.x + node.width <= 0 ||
-              node.y + node.height <= 0,
+        ? parkedState.nodes.some(
+            (node) => node.width > 0 && node.height > 0 && node.x + node.width > 0,
           )
-        : parkedState.tabs.every(
-            (tab) => tab.bounds && tab.bounds.x >= parkedState.viewportWidth,
-          )),
+        : parkedState.tabs.some((tab) => tab.bounds && tab.bounds.width > 0)) &&
+      // Every node that had a box before the layer opened still has the same
+      // one: the layer covers part of the stage, it does not unmount it.
+      (stagedBefore?.boxes ?? []).every((box) =>
+        parkedState.nodes.some(
+          (node) =>
+            node.x === box.x && node.y === box.y && node.width === box.width && node.height === box.height,
+        ) ||
+        box.x + box.width <= 0 ||
+        box.width <= 0,
+      ),
+    { parkedState, stagedBefore },
+  );
+  check(
+    "an open management layer parks the docked DevTools panels",
+    parkedState?.devtoolsParked === true,
     parkedState,
   );
 
@@ -1835,18 +1848,18 @@ try {
     return sizes;
   })();
   check(
-    "no parked page collapses to a zero-width layout",
+    "no page under an open layer collapses to a zero-width layout",
     parkedViewport.length > 0 &&
       parkedViewport.every((size) => size && size.w > 0 && size.h > 0 && size.bodyW > 0),
     parkedViewport,
   );
 
-  // --- Rail chips: a click selects the instance that chip stands for --------
-  // The rail shares the screen with the stage, so a chip click must select its
+  // --- Account rail: a click selects the instance that item stands for ------
+  // The rail shares the screen with the stage, so an item click must select its
   // own instance and leave the stage mounted.
   const dockSwitch = await client.evaluate(`(async () => {
-    if (document.querySelector('[data-manage-pane]')) {
-      document.querySelector('[data-nav="browser"]')?.click();
+    if (document.querySelector('[data-floating-pane]')) {
+      document.querySelector('[data-floating-pane] .pane-head button')?.click();
       await new Promise((r) => setTimeout(r, 500));
     }
     const chip = [...document.querySelectorAll('[data-instance-chip]')].find(
@@ -1867,7 +1880,7 @@ try {
     };
   })()`);
   check(
-    "clicking a rail chip selects that instance and keeps the stage on screen",
+    "clicking an account rail item selects that instance and keeps the stage on screen",
     dockSwitch?.onBrowserBefore === true &&
       dockSwitch?.clicked === true &&
       dockSwitch?.onBrowserAfter === true &&
@@ -2301,60 +2314,59 @@ try {
    * (ADR 0012); the workspace's `views` field and its ordering logic keep
    * their coverage in the unit tests (tests/view-order.test.ts). What the
    * shell must still guarantee: no route to the page from the management
-   * pane, and the workspace round-trip keeps existing rows.
+   * layers, and the workspace round-trip keeps existing rows.
    */
   await backToBrowser(client);
   const viewsRetired = await client.evaluate(`(async () => {
-    document.querySelector('[data-manage-btn]')?.click();
-    await new Promise((r) => setTimeout(r, 600));
-    const items = [...document.querySelectorAll('[data-manage-item]')].map((el) =>
-      el.getAttribute('data-manage-item'),
-    );
-    // Back out of the pane; the entry-count assertion below reads the browser
-    // page, not the pane.
-    document.querySelector('[data-nav="browser"]')?.click();
-    await new Promise((r) => setTimeout(r, 500));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Every management layer there is, read for an entry that opens saved views.
+    const entries = [];
+    for (const layer of ['sites', 'identities', 'more']) {
+      document.querySelector('[data-rail-entry="' + layer + '"]')?.click();
+      for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
+        await wait(80);
+      }
+      for (const el of document.querySelectorAll('[data-floating-pane] [data-more-tab], [data-floating-pane] .page')) {
+        if (el.dataset.moreTab) entries.push(el.dataset.moreTab);
+      }
+      document.querySelector('[data-floating-pane] .pane-head button')?.click();
+      await wait(300);
+    }
     // An old workspace still carries saved views; the shell keeps the data
     // readable and untouched by the retirement.
     const snap = await window.ensemble.getWorkspace();
-    return { items, viewsInData: Array.isArray(snap.views) };
+    return { entries, viewsInData: Array.isArray(snap.views) };
   })()`);
   check(
-    "the management pane has no views entry, and view data round-trips",
-    viewsRetired?.items?.includes("views") === false &&
+    "no management layer routes to saved views, and view data round-trips",
+    viewsRetired?.entries?.includes("views") === false &&
       viewsRetired?.viewsInData === true,
     viewsRetired,
   );
 
-  // --- The browser page carries exactly two standing entries ----------------
-  // P1-2/P1-6 acceptance: the only navigation a user is ever shown is
-  // [+ 启动] and [管理] on the instance rail. Everything else — sections,
-  // message centre, flows — lives inside the pane, so on the browser page
-  // itself there must be no section rows at all and no other standing
-  // buttons besides the two.
+  // --- The browser page's standing navigation -------------------------------
+  // [+ 启动] and the three management entries on the account rail are the only
+  // navigation on the browser surface. Everything else — sections, message
+  // centre, flows — lives inside a floating layer, so there must be no section
+  // rows on the browser page itself.
   const navEntries = await client.evaluate(`(() => {
-    const railButtons = [...document.querySelectorAll('.rail .rail-btn')].map((el) =>
-      el.getAttribute('data-manage-btn') !== null
-        ? 'manage'
-        : el.querySelector('[data-launch-btn]') !== null || el.getAttribute('data-launch-btn') !== null
-          ? 'launch'
-          : 'other',
+    const railEntries = [...document.querySelectorAll('[data-rail-entry]')].map((el) =>
+      el.getAttribute('data-rail-entry'),
     );
     return {
-      railButtons,
-      sectionsOnBrowser: document.querySelectorAll('[data-manage-item]').length,
-      hasSidebar: Boolean(document.querySelector('.sidebar-nav')),
-      hasBandBack: Boolean(document.querySelector('[data-nav="browser"]')),
+      railEntries,
+      hasLaunch: Boolean(document.querySelector('[data-launch-btn]')),
+      sectionsOnBrowser: document.querySelectorAll('[data-more-tab]').length,
+      paneOpen: Boolean(document.querySelector('[data-floating-pane]')),
     };
   })()`);
   check(
-    "the browser page carries exactly two standing entries: [+ 启动] and [管理]",
-    navEntries?.railButtons?.length === 2 &&
-      navEntries.railButtons.includes('launch') &&
-      navEntries.railButtons.includes('manage') &&
+    "the browser page carries its launch control and the three rail entries",
+    navEntries?.hasLaunch === true &&
+      navEntries?.railEntries?.length === 3 &&
+      navEntries.railEntries.join(",") === "sites,identities,more" &&
       navEntries.sectionsOnBrowser === 0 &&
-      navEntries.hasSidebar === false &&
-      navEntries.hasBandBack === false,
+      navEntries.paneOpen === false,
     navEntries,
   );
 
@@ -2564,18 +2576,17 @@ try {
     rawKeys,
   );
 
-  // Settings lives in the management pane now, so "a manual tab change must
-  // not stick" is about the request reaching the page, not about a sidebar row
-  // staying lit: pick another tab, leave the pane, and ask the AI entry for the
-  // MCP section again.
+  // Settings is the one full-window page left, so "a manual tab change must not
+  // stick" is about the request reaching the page: pick another tab, leave
+  // settings, and ask the AI entry for the MCP section again.
   await client.evaluate(
     `(() => { document.querySelector('.page.settings [data-section="general"]')?.click(); return true; })()`,
   );
   await wait(400);
   await client.evaluate(`(async () => {
-    // Back to the browser first: the AI entry is a toolbar control, and the
-    // pane has neither a toolbar nor that control.
-    document.querySelector('[data-nav="browser"]')?.click();
+    // Back to the browser first: the AI entry is a toolbar control, and
+    // settings has neither that toolbar nor the control.
+    document.querySelector('.page.settings .settings-head .back')?.click();
     await new Promise((r) => setTimeout(r, 500));
     document.querySelector('[data-ai-panel]')?.click();
     await new Promise((r) => setTimeout(r, 350));
@@ -2597,9 +2608,17 @@ try {
     for (const tab of (await api.getEmbeddedState()).tabs) await api.closeEmbeddedTab(tab.id);
     await new Promise((done) => setTimeout(done, 700));
     const before = (await api.getEmbeddedState()).tabs.length;
-    document.querySelector('.tabstrip .strip-add')?.click();
+    const add = document.querySelector('.tabstrip .strip-add');
+    add?.click();
     await new Promise((done) => setTimeout(done, 1200));
-    return { before, after: (await api.getEmbeddedState()).tabs.length };
+    return {
+      before,
+      after: (await api.getEmbeddedState()).tabs.length,
+      addPresent: Boolean(add),
+      onBrowser: Boolean(document.querySelector('[data-account-rail]')),
+      paneOpen: Boolean(document.querySelector('[data-floating-pane]')),
+      settingsOpen: Boolean(document.querySelector('.page.settings')),
+    };
   })()`);
   check(
     "the strip's plus opens a page even when nothing is open",

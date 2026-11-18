@@ -155,7 +155,6 @@ try {
       pageView: page?.viewId ?? null,
       pageId: page?.id ?? null,
       tabs: state.tabs.length,
-      dockRows: document.querySelectorAll('.dock .view-block .rows .tab-row').length,
     };
   })()`);
   check(

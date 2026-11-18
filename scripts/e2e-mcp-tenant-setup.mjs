@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
-import { openNav } from "./lib/e2e-nav.mjs";
+import { openNav, backToBrowser } from "./lib/e2e-nav.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow } from "./lib/e2e-cdp.mjs";
 
@@ -300,7 +300,7 @@ try {
     mcpEntry,
   );
   // Back to the browser: the rest of this run drives pages.
-  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
+  await client.evaluate(backToBrowser());
   await new Promise((r) => setTimeout(r, 500));
 
   const admin = await tryCall("create_identity", {

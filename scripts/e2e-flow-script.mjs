@@ -330,7 +330,8 @@ try {
     );
     await wait(700);
     const editorState = await client.evaluate(`(() => {
-      const dialog = document.querySelector('[role="dialog"]');
+      // A modal's own box, not any dialog role: the management layer is one too.
+      const dialog = document.querySelector('[role="dialog"].content');
       if (!dialog) return { dialog: false };
       const editors = [...dialog.querySelectorAll('.step-editor')];
       // Which flow the detail pane had selected is not worth pinning; what

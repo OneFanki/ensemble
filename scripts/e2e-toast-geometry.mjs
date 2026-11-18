@@ -196,13 +196,11 @@ try {
       const doc = document.documentElement;
       const stack = document.querySelector('.toast-stack');
       const rect = stack?.getBoundingClientRect();
-      const rail = document.querySelector('.rail')?.getBoundingClientRect();
       return {
         count: document.querySelectorAll('.toast').length,
         viewportW: doc.clientWidth,
         offsetParent: stack?.offsetParent ? (stack.offsetParent.className || stack.offsetParent.tagName) : null,
         stack: rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null,
-        rail: rail ? { top: rail.top, bottom: rail.bottom } : null,
       };
     })()`);
     if (toasts.count >= names.length) break;
@@ -234,21 +232,24 @@ try {
     { stack: toasts.stack, viewportH },
   );
   // The stack sits over the page now, so the geometry claim is about the
-  // window's own chrome: fixed to the bottom-right corner, below the header
-  // rows (the instance rail is the first of them; the navigation column this
-  // check used to clear is retired with the grid, ADR 0012), and readable end
-  // to end.
+  // window's own chrome: fixed to the bottom-right corner, below the address row
+  // (the band the toast stack must never cover) and clear of the account column
+  // on the left, readable end to end.
   //
   // It used to be confined to the dock's rectangle because a native page view
   // painted over every HTML layer. The carrier is a `<webview>` guest now — an
   // ordinary composited layer — which is why the stack can float over the page
   // at all.
+  const topBand = await client.evaluate(`(() => {
+    const toolbar = document.querySelector('.toolbar')?.getBoundingClientRect();
+    return toolbar ? { bottom: Math.round(toolbar.bottom) } : null;
+  })()`);
   check(
-    "toast stack floats over the page, clear of the header rows",
-    Boolean(toasts.stack && toasts.rail) &&
-      toasts.stack.top >= (toasts.rail?.bottom ?? 0) - 1 &&
+    "toast stack floats over the page, clear of the address row",
+    Boolean(toasts.stack && topBand) &&
+      toasts.stack.top >= (topBand?.bottom ?? 0) - 1 &&
       toasts.stack.right <= toasts.viewportW,
-    { stack: toasts.stack, rail: toasts.rail, viewportW: toasts.viewportW },
+    { stack: toasts.stack, topBand, viewportW: toasts.viewportW },
   );
 
   client.close();

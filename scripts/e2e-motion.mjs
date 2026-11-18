@@ -170,14 +170,18 @@ try {
   // --- 对话框：淡入 + 上浮 + 微缩 ----------------------------------------
   //
   // The identity dialog lives on the identities page, which is reached through
-  // the rail's [管理] menu — the shared path in scripts/lib/e2e-nav.mjs.
+  // the account rail's 账号 entry — the shared path in scripts/lib/e2e-nav.mjs.
   await goTo(client, "identities", 900);
 
+  // A modal's own box: the management layer is `role="dialog"` too, and it is
+  // mounted behind the form, so an unscoped query samples the pane's animation
+  // instead of the dialog's.
+  const DIALOG = '[role="dialog"].content';
   const dialogFrames = await client.evaluate(
     sampleFrames(
-      '[role="dialog"], .content',
+      DIALOG,
       `() => {
-        const b = [...document.querySelectorAll('button')].find((el) => /新建/.test(el.textContent || ''));
+        const b = [...document.querySelectorAll('.identities button')].find((el) => /新建/.test(el.textContent || ''));
         if (b) b.click();
       }`,
     ),
@@ -197,7 +201,7 @@ try {
   );
 
   const dialogGeom = await client.evaluate(`(async () => {
-    const el = document.querySelector('[role="dialog"], .content');
+    const el = document.querySelector(${JSON.stringify(DIALOG)});
     if (!el) return null;
     // Sample after the entry animation has actually finished: reading computed
     // style one frame before the end caught 0.9996/0.9974 and failed an exact
@@ -234,8 +238,8 @@ try {
   // rather than assumed — a trigger found while a dialog was still up belongs
   // to the dialog, and closing it took the trigger with it.
   await client.evaluate(`(async () => {
-    const scrim = document.querySelector('[role="dialog"] .close')
-      ?? document.querySelector('[role="dialog"]');
+    const scrim = document.querySelector(${JSON.stringify(DIALOG)} + ' .close')
+      ?? document.querySelector(${JSON.stringify(DIALOG)});
     scrim?.click();
     await new Promise((r) => setTimeout(r, 400));
     return true;
@@ -245,13 +249,12 @@ try {
   await goTo(client, "settings-engines", 900);
   const arrived = await client.evaluate(`(async () => {
     return {
-      dialog: Boolean(document.querySelector('[role="dialog"]')),
+      dialog: Boolean(document.querySelector(${JSON.stringify(DIALOG)})),
       settings: Boolean(document.querySelector('.page.settings')),
       nav: document.querySelector('.page.settings [role="tab"].active')?.dataset.section ?? null,
-      // Scoped to the page: the column's own layout picker is a select too, and
-      // it is first in document order, so an unscoped query opened the dock's
-      // picker and then looked for a panel that belonged to a different
-      // component.
+      // Scoped to the page: the settings sections are selects too, and an
+      // unscoped query could open one of them and then look for a panel that
+      // belonged to a different component.
       triggers: document.querySelectorAll('.page.settings .select-trigger').length,
     };
   })()`);
@@ -458,7 +461,7 @@ try {
     const probe = document.createElement('div');
     probe.style.animation = 'none';
     document.body.appendChild(probe);
-    const el = document.querySelector('[role="dialog"], .content, .toast');
+    const el = document.querySelector('[role="dialog"].content, .toast');
     const value = el ? getComputedStyle(el).animationDuration : null;
     probe.remove();
     return {

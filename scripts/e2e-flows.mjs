@@ -442,7 +442,9 @@ try {
     })()`);
     await wait(700);
     const editorState = await client.evaluate(`(() => {
-      const content = document.querySelector('[role="dialog"]');
+      // A modal's own box, not any dialog role: the management layer is one too,
+      // and it is mounted behind the form.
+      const content = document.querySelector('[role="dialog"].content');
       if (!content) return { dialog: false };
       const rect = content.getBoundingClientRect();
       const valueInput = [...content.querySelectorAll('input')].find((el) =>
@@ -475,7 +477,7 @@ try {
     // it — which used to make the dialog read the click as "outside" and close,
     // throwing away the whole form. Choosing an option must keep the dialog.
     const dropdown = await client.evaluate(`(async () => {
-      const content = document.querySelector('[role="dialog"]');
+      const content = document.querySelector('[role="dialog"].content');
       if (!content) return { dialog: false };
       // A step's action list, not the site picker: this workspace has one site,
       // so the site select would have a single option and prove nothing.
@@ -490,7 +492,7 @@ try {
       const label = target?.textContent?.trim() ?? "";
       target?.click();
       await new Promise((r) => setTimeout(r, 350));
-      const still = document.querySelector('[role="dialog"]');
+      const still = document.querySelector('[role="dialog"].content');
       return {
         dialog: Boolean(still),
         trigger: true,

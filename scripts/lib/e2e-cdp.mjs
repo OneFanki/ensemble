@@ -28,8 +28,11 @@
  * import { connectToWindow, attachToWindow } from "./lib/e2e-cdp.mjs";
  *
  * const { app, client, appLog } = await attachToWindow({ userData, args: [...] });
- * await client.evaluate(`document.querySelector('[data-nav="sites"]')?.click()`);
+ * await client.evaluate(`document.querySelector('[data-rail-entry="sites"]')?.click()`);
  * ```
+ *
+ * To reach one of the app's own pages, use the shared navigation in
+ * `./e2e-nav.mjs` rather than spelling the selectors out again.
  */
 
 /** Reads a target's WebSocket URL from the debugging port the app wrote. */

@@ -453,14 +453,14 @@ async function launchPickedIdentities(): Promise<void> {
           type="button"
           class="entry-btn"
           :class="{ active: activeLayer === 'identities' }"
-          :aria-label="t('app.identities')"
+          :aria-label="t('app.railAccounts')"
           :aria-pressed="activeLayer === 'identities'"
-          v-tooltip="t('app.identities')"
+          v-tooltip="t('app.railAccounts')"
           data-rail-entry="identities"
           @click="toggleLayer('identities')"
         >
           <Users :size="14" />
-          <span>{{ t("app.identities") }}</span>
+          <span>{{ t("app.railAccounts") }}</span>
         </button>
         <button
           type="button"

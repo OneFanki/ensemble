@@ -79,7 +79,7 @@ describe("hover labels", () => {
     // in: every hint here is the app's own drawn layer.
     expect(rail).toContain('v-tooltip="t(\'app.railLaunch\')"');
     expect(rail).toContain('v-tooltip="t(\'app.sites\')"');
-    expect(rail).toContain('v-tooltip="t(\'app.identities\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.railAccounts\')"');
     expect(rail).toContain('v-tooltip="t(\'app.more\')"');
     expect(rail).toContain('v-tooltip="item.account"');
     expect(rail).not.toMatch(/:title="t\('app\./);

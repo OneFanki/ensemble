@@ -14,6 +14,7 @@ import { Sparkles } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { groupAiActivity } from "@shared/ai-activity";
+import { EMBEDDED_DEFAULT_PROFILE_ID } from "@shared/embedded";
 import type { AiActivitySiteGroup } from "@shared/types";
 import AiActivityDetail from "./AiActivityDetail.vue";
 import AiActivityRow from "./AiActivityRow.vue";
@@ -76,6 +77,9 @@ function contextOf(group: AiActivitySiteGroup): string {
   }
   if (first.clean) return t("app.aiActivityContextClean");
   const profile = workspace.settings.profiles.find((item) => item.id === first.profileId);
+  // The built-in default carries a stored name on the data side; what a reader
+  // needs here is the session's UI name.
+  if (profile?.id === EMBEDDED_DEFAULT_PROFILE_ID) return t("app.dailyProfile");
   return profile?.name ?? t("app.aiActivityContextProfile");
 }
 

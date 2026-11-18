@@ -63,7 +63,7 @@ const title = computed(() => {
     case "sites":
       return t("app.sites");
     case "identities":
-      return t("app.identities");
+      return t("app.railAccounts");
     default:
       return t("app.more");
   }

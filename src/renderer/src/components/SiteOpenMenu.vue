@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BrowserProfile, Identity, Site } from "@shared/types";
+import { EMBEDDED_DEFAULT_PROFILE_ID } from "@shared/embedded";
 import { ChevronRight, Globe, ShieldOff } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -18,7 +19,7 @@ import { useI18n } from "vue-i18n";
 const props = defineProps<{
   sites: Site[];
   identities: Identity[];
-  /** Read only for the default profile's name on the site-less opening row. */
+  /** Read only for the default session's name on the site-less opening row. */
   profiles: BrowserProfile[];
   /** Profile a page with no account opens in when none is picked. */
   defaultProfileId: string;
@@ -66,6 +67,17 @@ const accounts = computed(() => {
 
 const defaultProfile = computed(
   () => props.profiles.find((profile) => profile.id === props.defaultProfileId) ?? props.profiles[0],
+);
+
+/**
+ * The built-in default profile's stored name is a data value, not copy: it is
+ * the id key the settings file and the IPC surface both carry. What the row
+ * says is the UI name for that session, so it comes from the message table.
+ */
+const defaultProfileLabel = computed(() =>
+  defaultProfile.value?.id === EMBEDDED_DEFAULT_PROFILE_ID
+    ? t("app.dailyProfile")
+    : (defaultProfile.value?.name ?? ""),
 );
 
 /** The search box filters systems, which only exists when they are listed. */
@@ -130,7 +142,7 @@ function openIdentity(identity: Identity): void {
           scrolling list — a site with thirty accounts must not push them past
           the fold.
 
-          One line each, with the explanation on hover. "默认档案" and
+          One line each, with the explanation on hover. "默认会话" and
           "干净会话" already say what they are to anyone who has used the app
           once; a second line repeating it would cost every visit to explain
           something the reader learned the first time.
@@ -143,7 +155,7 @@ function openIdentity(identity: Identity): void {
           @click="openDaily(activeSite)"
         >
           <Globe :size="11" />
-          <span class="acc-name">{{ t("app.openSiteDefault", { name: defaultProfile?.name ?? "" }) }}</span>
+          <span class="acc-name">{{ t("app.openSiteDefault", { name: defaultProfileLabel }) }}</span>
         </button>
         <button
           type="button"

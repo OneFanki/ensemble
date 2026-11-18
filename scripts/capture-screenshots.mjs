@@ -231,8 +231,13 @@ const ROLE_PAGES = {
  * a three-to-four column table — no horizontal scroll, nothing clipped. Every
  * page carries its identity badge in the same colour the running dock uses for
  * that account, which is what makes the four cells read as four accounts.
+ *
+ * These pages are scenery this script draws, so they follow the shot's declared
+ * theme (`?theme=light`). Without that, a "light theme" README image is four
+ * dark rectangles — the shell obeys the setting while the stage, most of the
+ * picture, stays dark, and the shot contradicts its own caption.
  */
-function renderRole(role, lang) {
+function renderRole(role, lang, theme = "dark") {
   const page = ROLE_PAGES[role][lang];
   const t = lang === "en" ? "Back office" : "后台系统";
 
@@ -285,43 +290,45 @@ function renderRole(role, lang) {
     ? `<div class="head-actions"><button class="primary">${page.primary}</button></div>`
     : "";
 
-  return `<!doctype html><html lang="${lang === "en" ? "en" : "zh-CN"}"><head><meta charset="utf-8"><title>${page.role} · ${t}</title>
+  return `<!doctype html><html lang="${lang === "en" ? "en" : "zh-CN"}"${theme === "light" ? ' data-theme="light"' : ""}><head><meta charset="utf-8"><title>${page.role} · ${t}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
 *{box-sizing:border-box}
-body{font:11px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:#12161c;color:#e6ecf3;display:flex;height:100vh;overflow:hidden}
-aside{width:92px;flex:none;background:#161b22;border-right:1px solid #232b35;padding:10px 7px;display:flex;flex-direction:column;gap:2px}
-.brand{font-size:11px;font-weight:600;letter-spacing:.3px;padding:1px 7px 10px;color:#e6ecf3;white-space:nowrap}
+:root{--page-bg:#12161c;--panel:#161b22;--line:#232b35;--heading:#e6ecf3;--muted:#8b99a9;--card:#1a2029;--card-line:#242d38;--row-line:#1d242e;--badge-bg:#1a212a;--badge-line:#2a3340;--body-text:#c8d2dd;--mini-bg:#232b35;--danger-text:#e08598;--ok-text:#6cc49a}
+[data-theme="light"]{--page-bg:#f4f6f8;--panel:#ffffff;--line:#e3e8ee;--heading:#24303c;--muted:#64748b;--card:#ffffff;--card-line:#e3e8ee;--row-line:#eef2f6;--badge-bg:#f0f3f7;--badge-line:#dde4ec;--body-text:#3d4b5c;--mini-bg:#eef1f5;--danger-text:#b8395a;--ok-text:#2e8f62}
+body{font:11px/1.5 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;margin:0;background:var(--page-bg);color:var(--heading);display:flex;height:100vh;overflow:hidden}
+aside{width:92px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:10px 7px;display:flex;flex-direction:column;gap:2px}
+.brand{font-size:11px;font-weight:600;letter-spacing:.3px;padding:1px 7px 10px;color:var(--heading);white-space:nowrap}
 .menu{display:flex;flex-direction:column;gap:2px}
-aside a{color:#8b99a9;text-decoration:none;font-size:10.5px;padding:6px 8px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside a{color:var(--muted);text-decoration:none;font-size:10.5px;padding:6px 8px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 aside a.on{background:color-mix(in srgb,{{ACCENT}} 16%,transparent);color:{{ACCENT}};font-weight:600}
 main{flex:1;min-width:0;display:flex;flex-direction:column}
-header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #232b35}
+header{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
 header h1{font-size:13px;font-weight:600;margin:0}
 .head-actions{display:flex;gap:6px;margin-left:auto}
 .primary{background:{{ACCENT}};color:#141414;border:0;border-radius:6px;padding:4px 11px;font-size:10.5px;font-weight:600}
-.badge{display:flex;align-items:center;gap:6px;background:#1a212a;border:1px solid #2a3340;border-radius:999px;padding:3px 10px 3px 7px;font-size:10.5px;color:#c8d2dd;flex:none;margin-left:${page.primary ? "0" : "auto"}}
+.badge{display:flex;align-items:center;gap:6px;background:var(--badge-bg);border:1px solid var(--badge-line);border-radius:999px;padding:3px 10px 3px 7px;font-size:10.5px;color:var(--body-text);flex:none;margin-left:${page.primary ? "0" : "auto"}}
 .content{padding:12px 14px;display:flex;flex-direction:column;gap:10px;overflow:hidden}
 .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
-.card{background:#1a2029;border:1px solid #242d38;border-radius:8px;padding:8px 11px;display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}
-.card-label{font-size:10px;color:#8b99a9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card{background:var(--card);border:1px solid var(--card-line);border-radius:8px;padding:8px 11px;display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0}
+.card-label{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-value{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-.notice{display:flex;align-items:center;gap:6px;background:color-mix(in srgb,{{ACCENT}} 10%,#1a2029);border:1px solid color-mix(in srgb,{{ACCENT}} 30%,transparent);border-radius:7px;padding:6px 10px;font-size:10.5px;color:#c8d2dd}
+.notice{display:flex;align-items:center;gap:6px;background:color-mix(in srgb,{{ACCENT}} 10%,var(--card));border:1px solid color-mix(in srgb,{{ACCENT}} 30%,transparent);border-radius:7px;padding:6px 10px;font-size:10.5px;color:var(--body-text)}
 .notice i{font-style:normal;color:{{ACCENT}}}
-.table{background:#1a2029;border:1px solid #242d38;border-radius:8px;overflow:hidden}
+.table{background:var(--card);border:1px solid var(--card-line);border-radius:8px;overflow:hidden}
 table{width:100%;border-collapse:collapse;font-size:11px}
-th{text-align:left;font-weight:500;color:#8b99a9;padding:6px 10px;border-bottom:1px solid #242d38;font-size:10px;white-space:nowrap}
-td{padding:6px 10px;border-bottom:1px solid #1d242e;color:#c8d2dd;white-space:nowrap}
+th{text-align:left;font-weight:500;color:var(--muted);padding:6px 10px;border-bottom:1px solid var(--card-line);font-size:10px;white-space:nowrap}
+td{padding:6px 10px;border-bottom:1px solid var(--row-line);color:var(--body-text);white-space:nowrap}
 tr:last-child td{border-bottom:none}
 .mono{font-variant-numeric:tabular-nums}
 .status{display:inline-flex;align-items:center;gap:5px}
 .status i{width:6px;height:6px;border-radius:50%;flex:none}
 .status.ok i{background:#4caf7d}.status.warn i{background:#d9a13c}.status.bad i{background:#d05070}.status.muted i{background:#5b6672}
-.status.muted{color:#8b99a9}
+.status.muted{color:var(--muted)}
 .row-actions{display:inline-flex;gap:5px}
-.mini{background:#232b35;color:#c8d2dd;border:0;border-radius:5px;padding:2px 8px;font-size:10px}
-.mini.danger{color:#e08598}
-.mini.ok{color:#6cc49a}
+.mini{background:var(--mini-bg);color:var(--body-text);border:0;border-radius:5px;padding:2px 8px;font-size:10px}
+.mini.danger{color:var(--danger-text)}
+.mini.ok{color:var(--ok-text)}
 </style></head><body>
 <aside><div class="brand">${t}</div><nav class="menu">${menuItems}</nav></aside>
 <main><header><h1>${page.heading}</h1>${primary}<span class="badge"><i></i>${page.role}</span></header>
@@ -370,29 +377,36 @@ const demoPage = createServer((req, res) => {
     res.end(FAVICON_SVG);
     return;
   }
+  // Same rule as renderRole: these pages are drawn scenery, so they pick up the
+  // shot's declared theme from the query. Dark stays the default, which keeps
+  // every dark shot's page identical to what it has always served.
+  const requestUrl = new URL(req.url ?? "/", `http://127.0.0.1:${PAGE_PORT}`);
+  const theme = requestUrl.searchParams.get("theme") === "light" ? "light" : "dark";
   // Role consoles for the hero shot: /admin /member /guest /review render four
   // different views of the same system, `?l=en` switches the copy.
   const roleMatch = (req.url ?? "/").match(/^\/(admin|member|guest|review)\b/);
   if (roleMatch) {
-    const lang = new URL(req.url ?? "/", `http://127.0.0.1:${PAGE_PORT}`).searchParams.get("l");
+    const lang = requestUrl.searchParams.get("l");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    res.end(renderRole(roleMatch[1], lang === "en" ? "en" : "zh"));
+    res.end(renderRole(roleMatch[1], lang === "en" ? "en" : "zh", theme));
     return;
   }
-  const who = decodeURIComponent((req.url ?? "/").split("/")[1] || "console");
+  const who = decodeURIComponent(requestUrl.pathname.split("/")[1] || "console");
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>${who} · 控制台</title>
+  res.end(`<!doctype html><html${theme === "light" ? ' data-theme="light"' : ""}><head><meta charset="utf-8"><title>${who} · 控制台</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <style>
-body{font:13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:18px 22px;background:#0f1419;color:#dbe3ec}
-h1{font-size:16px;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid #26313d;font-weight:500}
+:root{--bg:#0f1419;--text:#dbe3ec;--sub:#9babbd;--line:#26313d;--li-line:#1c2530;--ghost-bg:#1c2530;--ghost-text:#9babbd}
+[data-theme="light"]{--bg:#f5f7f9;--text:#24303c;--sub:#64748b;--line:#e2e8ee;--li-line:#e8edf2;--ghost-bg:#e9eef3;--ghost-text:#526274}
+body{font:13px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:18px 22px;background:var(--bg);color:var(--text)}
+h1{font-size:16px;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid var(--line);font-weight:500}
 nav a{color:#6ea8dc;margin-right:14px;text-decoration:none;font-size:12px}
 ul{list-style:none;padding:0;margin:16px 0 0}
-li{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #1c2530;color:#9babbd}
-li b{color:#dbe3ec;font-weight:500}
+li{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--li-line);color:var(--sub)}
+li b{color:var(--text);font-weight:500}
 .row{display:flex;gap:8px;margin-top:18px}
 button{background:#2f6fae;color:#fff;border:0;border-radius:5px;padding:6px 12px;font-size:12px}
-button.ghost{background:#1c2530;color:#9babbd}
+button.ghost{background:var(--ghost-bg);color:var(--ghost-text)}
 </style></head><body>
 <h1>${who}</h1>
 <nav><a href="/console">控制台</a><a href="/orders">订单</a><a href="/docs">接口文档</a></nav>
@@ -839,6 +853,18 @@ function uuid(index) {
   return `${String(index).repeat(8)}-${String(index).repeat(4)}-4${String(index).repeat(3)}-8${String(index).repeat(3)}-${String(index).repeat(12)}`;
 }
 
+/**
+ * Demo-page path with the shot's declared theme attached. The seeded
+ * startPaths, bookmarks and every URL the capture script navigates to go
+ * through here, so the scenery a light shot paints is light too — see the
+ * note on renderRole.
+ */
+function demoPath(path, theme, extraParams = []) {
+  const params = [...extraParams];
+  if (theme === "light") params.push("theme=light");
+  return `${path}${params.length ? `?${params.join("&")}` : ""}`;
+}
+
 /** Writes a workspace in the current schema; the app reads it on startup. */
 async function seed(userData, locale, theme = "dark") {
   const demo = DEMO[locale];
@@ -849,10 +875,13 @@ async function seed(userData, locale, theme = "dark") {
   const secondId = uuid(9);
   // Each identity lands on its own role console, so the hero shot's 2×2 shows
   // four different views of one system — the product's whole claim.
-  const rolePaths =
-    locale === "en"
-      ? ["/admin?l=en", "/member?l=en", "/guest?l=en", "/review?l=en"]
-      : ["/admin", "/member", "/guest", "/review"];
+  const langParam = locale === "en" ? ["l=en"] : [];
+  const rolePaths = [
+    "/admin",
+    "/member",
+    "/guest",
+    "/review",
+  ].map((path) => demoPath(path, theme, langParam));
   const identities = demo.people.map(([name, username, role, color], index) => ({
     id: uuid(index + 2),
     siteId,
@@ -962,7 +991,7 @@ async function seed(userData, locale, theme = "dark") {
           {
             id: uuid(20),
             name: demo.site,
-            url: `http://127.0.0.1:${PAGE_PORT}/console`,
+            url: `http://127.0.0.1:${PAGE_PORT}${demoPath("/console", theme)}`,
             order: 0,
             createdAt: now,
             updatedAt: now,
@@ -970,7 +999,7 @@ async function seed(userData, locale, theme = "dark") {
           {
             id: uuid(21),
             name: locale === "zh" ? "接口文档" : "API docs",
-            url: `http://127.0.0.1:${PAGE_PORT}/docs`,
+            url: `http://127.0.0.1:${PAGE_PORT}${demoPath("/docs", theme)}`,
             order: 1,
             createdAt: now,
             updatedAt: now,
@@ -978,7 +1007,7 @@ async function seed(userData, locale, theme = "dark") {
           {
             id: uuid(22),
             name: locale === "zh" ? "发布流水线" : "Release pipeline",
-            url: `http://127.0.0.1:${PAGE_PORT}/builds`,
+            url: `http://127.0.0.1:${PAGE_PORT}${demoPath("/builds", theme)}`,
             order: 2,
             createdAt: now,
             updatedAt: now,
@@ -986,7 +1015,7 @@ async function seed(userData, locale, theme = "dark") {
           {
             id: uuid(23),
             name: locale === "zh" ? "监控面板" : "Dashboards",
-            url: `http://127.0.0.1:${PAGE_PORT}/metrics`,
+            url: `http://127.0.0.1:${PAGE_PORT}${demoPath("/metrics", theme)}`,
             order: 3,
             createdAt: now,
             updatedAt: now,
@@ -1249,8 +1278,8 @@ async function capture(shot) {
           ...(shot.singleCellQuery ? [shot.singleCellQuery] : []),
         ];
         const singleCellUrl =
-          `http://127.0.0.1:${PAGE_PORT}/admin` +
-          (singleCellParams.length ? `?${singleCellParams.join("&")}` : "");
+          `http://127.0.0.1:${PAGE_PORT}` +
+          demoPath("/admin", shot.theme, singleCellParams);
         await client.evaluate(`(async () => {
           const api = window.ensemble;
           for (const view of (await api.getEmbeddedState()).views) {
@@ -1281,7 +1310,7 @@ async function capture(shot) {
             if (tab.id !== keep?.id) await api.closeEmbeddedTab(tab.id);
           }
           if (keep) {
-            await api.navigateEmbeddedTab(keep.id, "http://127.0.0.1:${PAGE_PORT}/console");
+            await api.navigateEmbeddedTab(keep.id, "http://127.0.0.1:${PAGE_PORT}${demoPath("/console", shot.theme)}");
             await new Promise((r) => setTimeout(r, 1600));
             const again = await api.getEmbeddedState();
             const root = again.tabs.find((tab) => tab.id === keep.id);
@@ -1318,7 +1347,9 @@ async function capture(shot) {
         );
         if (pageTarget) {
           const pageClient = await connect(pageTarget.webSocketDebuggerUrl);
-          await pageClient.evaluate(`(() => { window.open('/second', '_blank'); return true; })()`);
+          await pageClient.evaluate(
+            `(() => { window.open(${JSON.stringify(demoPath("/second", shot.theme))}, '_blank'); return true; })()`,
+          );
           pageClient.close();
           await wait(1800);
         }
@@ -1335,7 +1366,7 @@ async function capture(shot) {
           const created = await api.createEmbeddedView({ layoutId: "1x1", name: "第二组" });
           await api.openEmbeddedTabInSlot(created.activeViewId, 0);
           await new Promise((r) => setTimeout(r, 700));
-          await api.openEmbeddedTab({ viewId: null, url: "http://127.0.0.1:${PAGE_PORT}/docs" });
+          await api.openEmbeddedTab({ viewId: null, url: "http://127.0.0.1:${PAGE_PORT}${demoPath("/docs", shot.theme)}" });
           await new Promise((r) => setTimeout(r, 1200));
           return true;
         })()`);

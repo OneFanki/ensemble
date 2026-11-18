@@ -64,8 +64,8 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案 | 标签 id、所属身份、档案、标题、地址、布局、静音/有声 |
-| `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
+| `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案。`sleeping: true` 的页面已被冻结（操作会先自动唤醒）；醒着但闲置的页面带 `sleepExempt` 说明没冻的原因（`on-stage-visible` / `audible` / `ai-active` / `policy` 等），两者都没有的下一轮扫描即冻结——判断哪个页在占资源并自行 close 用它 | 标签 id、所属身份、档案、标题、地址、布局、静音/有声、休眠状态与豁免原因 |
+| `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_tab` 的页面落自己的实例、不占台上格位（台外照常可读，闲置后休眠，操作前自动唤醒），`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接。被 beforeunload 拦下时快速返回 `cancelled: "beforeunload"`（页面留在原地且可继续操作），用 `handle_browser_dialog` 决定去留 | `{ tab }`；被拦时另有 `cancelled` 与 `note` |
 | `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态摘要 |
 | `pop_out_browser_tab` | run | — | 把页面拆到独立 OS 窗口（配合系统分屏并排观察）；已拆出时再次调用即收回主舞台。同一实例同时只允许一个拆出窗口。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留；之后的读取、点击、截图等工具照常对该标签页工作 | `{ windowId }`；收回时 `{ docked: true }` |

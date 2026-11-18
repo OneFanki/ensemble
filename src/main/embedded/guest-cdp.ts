@@ -93,6 +93,19 @@ export class GuestCdp implements CdpExecutor {
   ) {}
 
   /**
+   * AI-facing commands waiting for their reply; see {@link busy}.
+   *
+   * Deliberately not the session's own pending count: that one also covers the
+   * observer channel (`sendQuiet`), and a 5 Hz performance sample happening to
+   * be in flight at sweep time then reads as "a command is running" — the sweep
+   * refreshes the AI grace, and a page under continuous observation can chain
+   * one lucky hit into the next, never sleeping at all. Freezing an observation
+   * costs nothing (the sampler just stops producing readings); freezing a real
+   * command turns it into a timeout. Busy counts the second kind only.
+   */
+  private aiInFlight = 0;
+
+  /**
    * Set once the guest has received a real pointer event.
    *
    * Not a cached "is focused" flag: the input route opens for good after the
@@ -122,14 +135,30 @@ export class GuestCdp implements CdpExecutor {
     return guestId !== undefined && this.target.has(guestId);
   }
 
+  /**
+   * True while an AI-facing command is in flight.
+   *
+   * This is the fact the sleep sweep reads before freezing: only these commands
+   * would be broken by a freeze, so only these count — observer traffic
+   * (`sendQuiet`) runs under a freeze without harm and is excluded.
+   */
   busy(): boolean {
-    const guestId = this.target.guestId();
-    return guestId !== undefined && this.target.busy(guestId);
+    return this.aiInFlight > 0;
   }
 
   /** Marks this page as the AI's current target; see `onActivity`. */
   private async touch(): Promise<void> {
     await this.onActivity?.();
+  }
+
+  /** Runs one AI-facing command with the in-flight count held above zero. */
+  private async counted<T>(work: () => Promise<T>): Promise<T> {
+    this.aiInFlight += 1;
+    try {
+      return await work();
+    } finally {
+      this.aiInFlight -= 1;
+    }
   }
 
   async prepare(): Promise<void> {
@@ -149,8 +178,10 @@ export class GuestCdp implements CdpExecutor {
     params: Record<string, unknown> = {},
     options: { timeoutMs?: number } = {},
   ): Promise<T> {
-    await this.touch();
-    return this.target.send<T>(this.guest(), method, params, options);
+    return this.counted(async () => {
+      await this.touch();
+      return this.target.send<T>(this.guest(), method, params, options);
+    });
   }
 
   /**
@@ -221,8 +252,10 @@ export class GuestCdp implements CdpExecutor {
     expression: string,
     options: { awaitPromise?: boolean; timeoutMs?: number } = {},
   ): Promise<T> {
-    await this.touch();
-    return this.presented(() => this.target.evaluate<T>(this.guest(), expression, options));
+    return this.counted(async () => {
+      await this.touch();
+      return this.presented(() => this.target.evaluate<T>(this.guest(), expression, options));
+    });
   }
 
   async snapshotDom(expression: string): Promise<DomSnapshot> {
@@ -278,67 +311,67 @@ export class GuestCdp implements CdpExecutor {
   ): Promise<Buffer> {
     // The renderer capture path never sends a CDP command, so the activity mark
     // cannot come from `send`: a screenshot of a sleeping page must wake it too.
-    await this.touch();
-    const format = options.format ?? "png";
-    const budget = Math.max(500, options.timeoutMs ?? 8_000);
-    const params = {
-      format,
-      ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
-      ...(options.clip
-        ? { clip: { ...options.clip, scale: options.clip.scale ?? 1 } }
-        : {}),
-    };
-    const fromRenderer = async (): Promise<Buffer> => {
-      const contents = this.guestContents();
-      if (!contents) throw new Error("页面已关闭");
-      // Bounded like every other path: a capture that never returns is
-      // indistinguishable from a page that is busy, so it reports as a deadline
-      // instead of waiting out the caller's transport timeout.
-      const image = await withDeadline(contents.capturePage(), budget, "页面画面采集没有返回");
-      if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
-      return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
-    };
-    // A clip forces the compositor: `capturePage` has no rectangle to take.
-    if (options.preferRenderer && !options.clip) {
-      // Present for the box, not for the frames: `capturePage` needs the node
-      // laid out, and the caller's reason for taking this path is that the node
-      // has no usable box right now. The capture happens *inside* `presented` —
-      // once it returns, the node is parked again and a second `capturePage`
-      // would fail exactly as the first one did.
-      return this.presented(fromRenderer);
-    }
-    // Presenting covers both halves of the compositor's requirements: a culled
-    // guest never answers this command, and a hidden one makes the page's own
-    // visibility checks lie.
-    try {
-      return await this.presented(async () => {
-        const result = await Promise.race([
-          this.send<{ data: string }>(
-            "Page.captureScreenshot",
-            params,
-            { timeoutMs: Math.min(4_000, budget) },
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("截图超时")), Math.min(4_000, budget)),
-          ),
-        ]);
-        return Buffer.from(result.data, "base64");
-      });
-    } catch (error) {
-      /*
-       * The renderer fallback is only for the unclipped case: a clipped capture
-       * that fell back would hand back the whole viewport and look like success.
-       */
-      if (options.clip) throw error;
-      // The window can stop painting between the caller's check and this command
-      // — minimised mid-flight, moved to another display. Falling back here turns
-      // a failed screenshot into a slightly slower one.
-      try {
-        return await fromRenderer();
-      } catch {
-        throw error;
+    // The whole capture counts as in-flight (see `busy`) — the inner compositor
+    // `send` nests its own count, which the `> 0` check absorbs.
+    return this.counted(async () => {
+      await this.touch();
+      const format = options.format ?? "png";
+      const budget = Math.max(500, options.timeoutMs ?? 8_000);
+      const params = {
+        format,
+        ...(format === "jpeg" ? { quality: options.quality ?? 80 } : {}),
+        ...(options.clip ? { clip: { ...options.clip, scale: options.clip.scale ?? 1 } } : {}),
+      };
+      const fromRenderer = async (): Promise<Buffer> => {
+        const contents = this.guestContents();
+        if (!contents) throw new Error("页面已关闭");
+        // Bounded like every other path: a capture that never returns is
+        // indistinguishable from a page that is busy, so it reports as a deadline
+        // instead of waiting out the caller's transport timeout.
+        const image = await withDeadline(contents.capturePage(), budget, "页面画面采集没有返回");
+        if (image.isEmpty()) throw new Error("窗口不可见，无法截图");
+        return format === "jpeg" ? image.toJPEG(options.quality ?? 80) : image.toPNG();
+      };
+      // A clip forces the compositor: `capturePage` has no rectangle to take.
+      if (options.preferRenderer && !options.clip) {
+        // Present for the box, not for the frames: `capturePage` needs the node
+        // laid out, and the caller's reason for taking this path is that the node
+        // has no usable box right now. The capture happens *inside* `presented` —
+        // once it returns, the node is parked again and a second `capturePage`
+        // would fail exactly as the first one did.
+        return this.presented(fromRenderer);
       }
-    }
+      // Presenting covers both halves of the compositor's requirements: a culled
+      // guest never answers this command, and a hidden one makes the page's own
+      // visibility checks lie.
+      try {
+        return await this.presented(async () => {
+          const result = await Promise.race([
+            this.send<{ data: string }>("Page.captureScreenshot", params, {
+              timeoutMs: Math.min(4_000, budget),
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("截图超时")), Math.min(4_000, budget)),
+            ),
+          ]);
+          return Buffer.from(result.data, "base64");
+        });
+      } catch (error) {
+        /*
+         * The renderer fallback is only for the unclipped case: a clipped capture
+         * that fell back would hand back the whole viewport and look like success.
+         */
+        if (options.clip) throw error;
+        // The window can stop painting between the caller's check and this command
+        // — minimised mid-flight, moved to another display. Falling back here turns
+        // a failed screenshot into a slightly slower one.
+        try {
+          return await fromRenderer();
+        } catch {
+          throw error;
+        }
+      }
+    });
   }
 
   async clickAt(x: number, y: number): Promise<ClickPressHit | null> {

@@ -401,13 +401,15 @@ MCP 暴露的浏览器工具覆盖：列标签、开视图、开标签（按身�
 角色、可访问名称、稳定选择器与**表单项旁边的标签文字**，隐藏元素不出现——这正是「这个
 账号实际能看到什么」。
 
-**AI 开页面不抢前台。** `open_browser_tab` 与 `open_browser_view` 都不调用
+**AI 开页面不抢前台，也不占台。** `open_browser_tab` 与 `open_browser_view` 都不调用
 `focusPage()`：不抬窗口、不把界面切到浏览器页。UI 入口（工具栏「+」、账号卡、视图启动）
 仍然抬窗口——那是用户刚刚点了一下，想看到结果；AI 是把页面当工作区在用，往往在用户读
-文档或改设置时开页，每开一个页就把窗口顶到最前面会让这个端点没法用。
+文档或改设置时开页，每开一个页就把窗口顶到最前面会让这个端点没法用。`open_browser_tab`
+的页面也不进任何容器：它落自己的实例（干净会话或身份分区），台上的格位与用户的选中都
+不动，闲置后照常入冻；要上台由用户点实例条，或 AI 用 `open_browser_view` /
+`pin_browser_tab` / `activate` 显式摆位。
 
-- 不抬窗口也照样能工作：页面节点一开始就按舞台矩形摆好，所以截图与 DOM 读取在后台照常
-  可用；`viewId` 指定的视图仍然被激活，用户切回去时就是那一屏。
+- 不上台也照样能工作：台外节点保有完整尺寸的停靠框，所以截图与 DOM 读取在后台照常可用。
 - 输入类工具开启 `Emulation.setFocusEmulationEnabled`，窗口不在前台也能派发事件。
 - `openEmbeddedView(viewId, { reveal })` 用同一个函数服务两边，差别只有这一个参数。
 
@@ -517,16 +519,24 @@ Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不
   `Page.setWebLifecycleState: "frozen"`：页面 JavaScript 整体挂起（冻结页上 evaluate 永不
   返回），3D 场景随之停。停放页闲置 60 秒（窗口期内无任何 CDP 流量）后由 10 秒一轮的扫描
   冻结，**扫描在浏览器构造时无条件启动**。AI 的每条命令在 `GuestCdp` 的 `send` /
-  `evaluate` / `screenshot` 前都会 **await** 一次唤醒，回台与导航也会唤醒，所以截图、点击
-  永远落在活页面上；`lifecycle()` 自己不走这条钩子，否则扫描的冻结会把自己标成活动。
-  扫描的判定集中在 `src/core/cdp/sleep.ts` 的 `shouldSleepPage`，它把台上、已冻结、无载体、
-  加载、崩溃、空白、DevTools、有声、`sleepPolicy: "never"`、AI 窗口与**命令在途**
-  一次性判完。命令在途由 `CdpExecutor.busy()` 报告（guest 走 `GuestSessions.pending` 计数），
-  扫描遇到忙碌页就刷新 AI 窗口并跳过——一个跑了几分钟的 `evaluate` 不会在脚本中间被冻住，
-  命令结束后仍享有完整宽限期。
+  `evaluate` / `screenshot` 前都会 **await** 一次唤醒，回台、导航、窗口恢复与托盘归位也会
+  唤醒，所以截图、点击永远落在活页面上；`lifecycle()` 自己不走这条钩子，否则扫描的冻结会把
+  自己标成活动。
+  扫描的判定集中在 `src/core/cdp/sleep.ts` 的 `shouldSleepPage`，它把用户可见、已冻结、
+  无载体、加载、崩溃、空白、DevTools、有声、`sleepPolicy: "never"`、AI 窗口与**命令在途**
+  一次性判完。豁免按同一顺序由 `sleepExemptReason` 给出短串，与判定同源（事实组装只在
+  manager 的 `sleepFacts` 一处），随页面状态发布为 `sleepExempt`，AI 据此判断谁在占资源。
+  「用户可见」不是占格：它是台上实例的当前页 × 宿主窗口可见——窗口最小化、隐藏到托盘时
+  台上页照常入冻（minimize/hide 即扫一轮，restore/show 唤醒台上页），批量启动的后台成员与
+  AI 经 `open_browser_tab` 开的页（落自己的实例、不占格）同样按闲置入冻。
+  命令在途由 `CdpExecutor.busy()` 报告，guest 只数 **AI 命令**（`GuestCdp.aiInFlight`）：
+  观察通道（性能采样的 5 Hz 心跳等）不算忙碌，否则扫描的宽限刷新会被采样命令连续续命，
+  被观察的页永远睡不着。扫描遇到忙碌页就刷新 AI 窗口并跳过——一个跑了几分钟的 `evaluate`
+  不会在脚本中间被冻住，命令结束后仍享有完整宽限期。
   每个标签页可单独设「永不休眠」（右键菜单，`setSleepPolicy`），设为 never 时立刻唤醒；
   默认策略就是「跟随默认」。休眠页在 favicon 槽显示蓝色雪花，永不眠页在标题旁显示图钉，
-  两处标签的 `title` 也写明状态。`sleepGraceMs` / `sleepSweepMs` 是构造参数，
+  两处标签的 `title` 也写明状态；实例行条目上有冻结标识（全部页冻结灰标、部分冻结半标，
+  映射在 `src/shared/instance-freeze.ts`）。`sleepGraceMs` / `sleepSweepMs` 是构造参数，
   仅 e2e 用 `ENSEMBLE_SLEEP_GRACE_MS` / `ENSEMBLE_SLEEP_SWEEP_MS` 缩短；生产恒为 60s / 10s。
   另注意窗口级遮挡：整个应用被盖住或移出屏幕时，Chromium 原生节流本就会把所有页压停。
 

@@ -556,6 +556,12 @@ try {
   await tool("reset_browser_viewport", { tabId }, (v) => v !== undefined);
 
   await tool("set_tab_page", { pageId: secondId }, (v) => v !== undefined);
+  /*
+   * `set_tab_page` 把一个 loose 页摆上单舞台——新放置语义下那是 flat 模式，
+   * 台上没有容器，「省略 viewId = 台上视图」此刻没有目标。pin 用例先把之前
+   * 打开的容器摆回台上，再验证省略 viewId 的语义本身。
+   */
+  await tool("open_browser_view", { viewId }, (v) => v !== undefined);
   await tool("pin_browser_tab", { slotIndex: 0, tabId }, (v) => v !== undefined);
 
   // Two tabs of one identity cannot share a view: a view records members by

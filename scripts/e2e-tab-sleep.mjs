@@ -194,6 +194,7 @@ try {
       return {
         alive: Boolean(tab),
         sleeping: tab?.sleeping === true,
+        sleepExempt: tab?.sleepExempt ?? null,
         policy: tab?.sleepPolicy ?? null,
         active: state.activeTabId === ${JSON.stringify(id)},
       };
@@ -211,6 +212,68 @@ try {
     return last;
   }
 
+  /*
+   * S7 regression, forward direction: a page an AI opens through
+   * `open_browser_tab` lands in its own instance — no stage cell, no selection,
+   * and no "occupies a slot so it never sleeps" exemption. Idle, it freezes
+   * like any other parked page; a read wakes it and the next idle freezes it
+   * again. The rail chip of a fully sleeping instance carries the freeze mark.
+   */
+  const aiOpened = await callTool("open_browser_tab", { url: firstUrl });
+  const aiTabId = aiOpened?.id ?? aiOpened?.tabId;
+  check("an AI-opened page returns its id", Boolean(aiTabId), aiOpened);
+  if (!aiTabId || !aiOpened?.instanceId) {
+    throw new Error(`no ai tab id in ${JSON.stringify(aiOpened)}`);
+  }
+  await wait(1500);
+  const aiPlacement = await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    const tab = state.tabs.find((item) => item.id === ${JSON.stringify(aiTabId)});
+    return {
+      selected: state.activeTabId === ${JSON.stringify(aiTabId)},
+      inSlot: state.views.some((v) => (v.slotTabs ?? []).includes(${JSON.stringify(aiTabId)})),
+      exempt: tab?.sleepExempt ?? null,
+      sleeping: tab?.sleeping === true,
+    };
+  })()`);
+  check(
+    "an AI-opened page takes no stage cell and no selection",
+    aiPlacement?.selected === false && aiPlacement?.inSlot === false,
+    aiPlacement,
+  );
+  const aiAsleep = await waitSleepState(aiTabId, true);
+  check(
+    "an AI-opened page falls asleep once idle",
+    aiAsleep?.sleeping === true,
+    aiAsleep,
+  );
+  const aiRail = await client.evaluate(`(() => {
+    const chip = document.querySelector('[data-instance-chip="${aiOpened.instanceId}"]');
+    return {
+      chip: Boolean(chip),
+      freeze: chip?.querySelector("[data-freeze]")?.getAttribute("data-freeze") ?? null,
+    };
+  })()`);
+  check(
+    "a fully sleeping instance shows the freeze mark on its rail chip",
+    aiRail?.chip === true && aiRail?.freeze === "full",
+    aiRail,
+  );
+  const aiRead = await callTool("read_browser_page", { tabId: aiTabId });
+  check(
+    "reading the frozen AI page wakes it and returns its DOM",
+    aiRead?.title === "sleep/first" && (aiRead?.nodes?.length ?? 0) > 0,
+    { title: aiRead?.title, nodes: aiRead?.nodes?.length },
+  );
+  const aiWoken = await tabState(aiTabId);
+  check("the AI page is marked awake after the read", aiWoken?.sleeping === false, aiWoken);
+  const aiSleptAgain = await waitSleepState(aiTabId, true);
+  check(
+    "the AI page sleeps again once AI traffic stops",
+    aiSleptAgain?.sleeping === true,
+    aiSleptAgain,
+  );
+
   const secondAsleep = await waitSleepState(secondId, true);
   check(
     "a parked page falls asleep after the grace period",
@@ -222,6 +285,11 @@ try {
   check(
     "the page on stage never falls asleep",
     firstAwake?.sleeping === false,
+    firstAwake,
+  );
+  check(
+    "the page on stage publishes why it stays awake",
+    firstAwake?.sleepExempt === "on-stage-visible",
     firstAwake,
   );
 
@@ -313,6 +381,11 @@ try {
   check(
     "a never-sleep tab stays awake in the background",
     stayedAwake?.sleeping === false && stayedAwake?.policy === "never",
+    stayedAwake,
+  );
+  check(
+    "the never-sleep tab names its policy as the exemption",
+    stayedAwake?.sleepExempt === "policy",
     stayedAwake,
   );
 

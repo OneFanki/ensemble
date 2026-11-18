@@ -60,7 +60,8 @@ import {
   perfWindowSummary,
   pushSample,
 } from "@core/cdp/performance";
-import { shouldSleepPage } from "@core/cdp/sleep";
+import { shouldSleepPage, sleepExemptReason } from "@core/cdp/sleep";
+import type { SleepCandidate } from "@core/cdp/sleep";
 import type { MissingCredentialReason } from "@core/credentials/vault";
 import { t } from "@core/i18n/translate";
 import { primeDevToolsFrontendLanguage } from "./devtools-language";
@@ -1230,9 +1231,30 @@ export class EmbeddedBrowser {
     });
     win.on("focus", () => this.syncTouchCursorPoller());
     win.on("blur", () => this.stopTouchCursorPoller());
-    win.on("minimize", () => this.stopTouchCursorPoller());
-    win.on("restore", () => this.syncTouchCursorPoller());
+    win.on("minimize", () => {
+      this.stopTouchCursorPoller();
+      // The stage is no longer showing anything, so its page joins the sleep
+      // candidates immediately instead of waiting out the next sweep tick.
+      this.sweepFrozenCandidates();
+    });
+    win.on("restore", () => {
+      this.syncTouchCursorPoller();
+      // Whatever the sweep froze while the window was down comes back with it.
+      this.wakeStagedTabs();
+    });
+    // 托盘收纳走 hide：与最小化同一语义——用户看不见舞台，台上页照常入冻；
+    // 唤醒对称地发生在 show。
+    win.on("hide", () => this.sweepFrozenCandidates());
+    win.on("show", () => {
+      if (win.isMinimized()) return;
+      this.wakeStagedTabs();
+    });
     this.sendState();
+  }
+
+  /** Wakes every page the stage is holding: they are visible again. */
+  private wakeStagedTabs(): void {
+    for (const id of this.stagedTabs) void this.wakeTab(id);
   }
 
   isOpen(): boolean {
@@ -1255,6 +1277,17 @@ export class EmbeddedBrowser {
     const effectiveViewport = this.viewportOf(tab);
     const pending = !contents || contents.isDestroyed();
     const audible = Boolean(contents && !contents.isDestroyed() && contents.isCurrentlyAudible());
+    const frozen = this.frozenTabs.has(tab.id);
+    // The published reason comes from the same fact assembly the sweep reads,
+    // so what a tool result says about a page can never disagree with what the
+    // sweep would do to it. A carrier-less page has no facts and publishes none.
+    const sleepExempt = frozen
+      ? undefined
+      : (() => {
+          const now = Date.now();
+          const candidate = this.sleepFacts(tab, now);
+          return candidate ? sleepExemptReason(candidate, now) : undefined;
+        })();
     const clean = this.cleanInstances.has(tab.instanceId);
     /*
      * The default profile is not a missing value.
@@ -1291,7 +1324,8 @@ export class EmbeddedBrowser {
       ...(tab.muted ? { muted: true } : {}),
       ...(audible ? { audible: true } : {}),
       ...(tab.everAudible ? { everAudible: true } : {}),
-      ...(this.frozenTabs.has(tab.id) ? { sleeping: true } : {}),
+      ...(frozen ? { sleeping: true } : {}),
+      ...(sleepExempt ? { sleepExempt } : {}),
       ...(tab.dialog
         ? {
             dialog: {
@@ -2351,8 +2385,15 @@ export class EmbeddedBrowser {
      * drawing the new-tab surface for that whole window; the user reads it as
      * "clicked an account, got a new tab, waited". Selecting the tab here means
      * the very first state the renderer sees is already the loading page.
+     *
+     * An AI-opened page does not claim anything: `activeTabId` doubles as the
+     * flat stage's "who is on screen", and a background page must not take the
+     * stage — or the user's selection — away just because a client opened it.
+     * Callers that work with the page pass its id explicitly.
      */
-    this.activeTabId = id;
+    if (input.origin !== "ai") {
+      this.activeTabId = id;
+    }
     this.setActivePage(tab);
     this.emitState();
     const carrier = await this.openCarrier({ tabId: id, partition, url: target });
@@ -2386,6 +2427,15 @@ export class EmbeddedBrowser {
       // user is looking at.
       if (owner && owner.slotTabs.includes(tab.id)) owner.focusedTabId = tab.id;
       this.activeViewId = input.viewId;
+    } else if (input.origin === "ai") {
+      // An AI-opened page lands in its own instance — no container, no stage
+      // cell, no change to what the user is looking at. Whether it ever takes
+      // the stage is decided by the placement pass and by an explicit act of the
+      // user (clicking its rail entry) or the AI (`open_browser_view`,
+      // `pin_browser_tab`, `activate`). Its guest node still gets a parked,
+      // full-size box off-window, so reads and screenshots work as usual while
+      // it waits — and the sleep sweep treats it like any other parked page
+      // instead of exempting it for occupying a cell nobody watches.
     } else {
       delete this.activeViewId;
     }
@@ -4067,15 +4117,59 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Gathers the sleep facts of one page.
+   *
+   * This is the only place the facts are assembled — `describe` reads the same
+   * result to publish `sleepExempt`, so the published reason and the sweep's
+   * decision can never drift apart. The sweep, not this method, owns the one
+   * side effect: refreshing the AI window of a page with a command in flight,
+   * so the grace starts after the command finishes rather than when it started.
+   */
+  private sleepFacts(tab: TabRecord, now: number): SleepCandidate | undefined {
+    // A page is published before its carrier exists so the renderer can be
+    // asked to host it; both the sweep and a state broadcast can land in that
+    // window, and neither has facts to read yet.
+    const contents = tab.view?.webContents;
+    if (!contents || contents.isDestroyed()) return undefined;
+    const busy = tab.cdp.busy();
+    return {
+      // 「用户真在看」＝ 该页是台上实例的当前页 × 宿主窗口可见。占格不再是
+      // 豁免：最小化或隐藏的窗口什么都不显示，批量启动的后台成员与容器共享
+      // 格位却从没上台（bounds 为 0），二者都必须照常入冻。拆出的页面以弹窗
+      // 自己的可见性为准——用户正看着的弹窗不该被冻住。
+      userVisible: this.options.popouts?.has(tab.id)
+        ? this.isOnScreen(tab)
+        : this.stagedTabs.has(tab.id) && this.hostVisible(),
+      frozen: this.frozenTabs.has(tab.id),
+      available: true,
+      loading: contents.isLoading(),
+      crashed: tab.crashed,
+      blank: isBlankTab(tab),
+      devtoolsOpen: this.devtoolsOpen(tab),
+      audible: contents.isCurrentlyAudible(),
+      policy: tab.sleepPolicy,
+      aiActiveUntil: this.aiActiveUntil.get(tab.id),
+      busy,
+    };
+  }
+
+  /** Whether the window carrying the stage is on screen right now. */
+  private hostVisible(): boolean {
+    const host = this.host;
+    if (!host || host.isDestroyed()) return false;
+    return host.isVisible() && !host.isMinimized();
+  }
+
+  /**
    * Freezes parked pages whose sleep grace has lapsed.
    *
    * `shouldSleepPage` owns the rules; this method only gathers the facts. A
-   * page with a CDP command in flight is never a candidate, and each pass
-   * refreshes its AI window so the grace starts after the command finishes
-   * rather than when it started — a five-minute evaluate must not hand the
-   * sweep a page that is still executing. A page that refuses the lifecycle
-   * command simply stays awake: the feature degrades to "no sleeping" instead
-   * of breaking automation.
+   * page that refuses the lifecycle command simply stays awake: the feature
+   * degrades to "no sleeping" instead of breaking automation. The same pass
+   * also wakes: a page the user can see again (restored window, brought back on
+   * stage, a popout un-minimised) must not stay suspended behind an event the
+   * placement pass already handled — the check is idempotent with `wakeTab`,
+   * so it only catches pages the event-driven paths missed.
    */
   private sweepFrozenCandidates(): void {
     const now = Date.now();
@@ -4087,31 +4181,15 @@ export class EmbeddedBrowser {
       }
     }
     for (const tab of this.tabs) {
-      // A page is published before its carrier exists so the renderer can be
-      // asked to host it; the sweep runs on a timer and can land in that window.
-      const contents = tab.view?.webContents;
-      if (!contents || contents.isDestroyed()) continue;
+      const candidate = this.sleepFacts(tab, now);
+      if (!candidate) continue;
       // While a command is in flight the page is not idle, whatever the clock
       // says. Refresh the window so the full grace follows its completion.
-      const busy = tab.cdp.busy();
-      if (busy) this.aiActiveUntil.set(tab.id, now + this.sleepGraceMs);
-      const candidate = {
-        // 拆出的页面以弹窗可见性为「在台」：可见的弹窗不该被后台休眠冻住——
-        // 用户正看着它。
-        staged: this.options.popouts?.has(tab.id)
-          ? this.isOnScreen(tab)
-          : this.stagedTabs.has(tab.id),
-        frozen: this.frozenTabs.has(tab.id),
-        available: true,
-        loading: contents.isLoading(),
-        crashed: tab.crashed,
-        blank: isBlankTab(tab),
-        devtoolsOpen: this.devtoolsOpen(tab),
-        audible: contents.isCurrentlyAudible(),
-        policy: tab.sleepPolicy,
-        aiActiveUntil: this.aiActiveUntil.get(tab.id),
-        busy,
-      };
+      if (candidate.busy) this.aiActiveUntil.set(tab.id, now + this.sleepGraceMs);
+      if (candidate.frozen && candidate.userVisible) {
+        void this.wakeTab(tab.id);
+        continue;
+      }
       if (!shouldSleepPage(candidate, now)) continue;
       this.frozenTabs.add(tab.id);
       void tab.cdp.lifecycle("frozen").then(

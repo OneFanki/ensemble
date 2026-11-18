@@ -1283,6 +1283,10 @@ const TAB_SUMMARY_FIELDS = [
   "muted",
   "audible",
   "loading",
+  // sleeping 与 sleepExempt 是休眠调度的两个对面：谁在冻结、谁醒着以及为
+  // 什么——AI 据此判断哪个页在吃资源并自行 close。
+  "sleeping",
+  "sleepExempt",
   // popout 决定读取/截图走哪条渲染路径，属于 AI 决策字段，不是渲染层私货。
   "popout",
 ] as const;
@@ -3619,7 +3623,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；没有 clean 的页面属于某个档案，`profileId: \"default\"` 就是默认档案。",
+          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；没有 clean 的页面属于某个档案，`profileId: \"default\"` 就是默认档案。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
         kind: "read",
         inputSchema: object({}),
         run: () => projectState(surface().state()),
@@ -3666,7 +3670,7 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该身份独立的会话分区，登录态持久保存且与其他身份隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该身份独立的会话分区，登录态持久保存且与其他身份隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
           url: string("要打开的地址；省略则打开空白页"),

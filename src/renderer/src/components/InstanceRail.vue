@@ -19,6 +19,7 @@
 import { onClickOutside } from "@vueuse/core";
 import type { EmbeddedTab } from "@shared/embedded";
 import { aiDotState, lastActionAtByTab } from "@shared/ai-dot";
+import { instanceFreezeState, type InstanceFreezeState } from "@shared/instance-freeze";
 import type { RoleColor } from "@shared/types";
 import {
   ChevronDown,
@@ -65,6 +66,14 @@ interface RailItem {
   dot: "active" | "recent" | "idle";
   /** Text of the dot's hover hint; absent when there is no dot to explain. */
   dotTip?: string;
+  /**
+   * Freeze state across the instance's pages: full / partial / awake (no mark).
+   * Resolved here so the shared mapping (shared/instance-freeze) is the only
+   * place that decides it.
+   */
+  freeze: InstanceFreezeState;
+  /** Text of the freeze mark's hover hint; absent when there is no mark. */
+  freezeTip?: string;
   /** External (system-browser) instance: clicking focuses that window. */
   external?: boolean;
 }
@@ -128,6 +137,23 @@ function dotOf(root: EmbeddedTab): { dot: "active" | "recent" | "idle"; tip?: st
   return { dot: state, tip: t("app.aiDotLastAction", { time }) };
 }
 
+/** Freeze mark of one instance: the mapping over its pages, plus the hint. */
+function freezeOf(root: EmbeddedTab): { freeze: InstanceFreezeState; tip?: string } {
+  const pages = embedded.instancePages(root.instanceId);
+  const freeze = instanceFreezeState(pages);
+  if (freeze === "awake") return { freeze };
+  return {
+    freeze,
+    tip:
+      freeze === "full"
+        ? t("app.freezeFullTip", { count: pages.length })
+        : t("app.freezePartialTip", {
+            frozen: pages.filter((page) => page.sleeping).length,
+            count: pages.length,
+          }),
+  };
+}
+
 /** Built-in instances, in tab order (the order they were launched in). */
 const embeddedItems = computed<RailItem[]>(() => {
   const seen = new Set<string>();
@@ -139,6 +165,7 @@ const embeddedItems = computed<RailItem[]>(() => {
     if (!root) continue;
     const page = activePageOf(root);
     const resolved = dotOf(root);
+    const frozen = freezeOf(root);
     items.push({
       id: root.id,
       instanceId: root.instanceId,
@@ -149,6 +176,8 @@ const embeddedItems = computed<RailItem[]>(() => {
       onStage: embedded.isOnStage(page),
       dot: resolved.dot,
       ...(resolved.tip ? { dotTip: resolved.tip } : {}),
+      freeze: frozen.freeze,
+      ...(frozen.tip ? { freezeTip: frozen.tip } : {}),
     });
   }
   return items;
@@ -164,6 +193,7 @@ const externalItems = computed<RailItem[]>(() =>
     color: "amber" as RoleColor,
     onStage: false,
     dot: "idle" as const,
+    freeze: "awake" as const,
     external: true,
   })),
 );
@@ -387,6 +417,14 @@ function activateFromFold(item: RailItem): void {
             :class="item.dot"
             :data-ai-dot="item.dot"
             v-tooltip="item.dotTip"
+          ></span>
+          <!-- 冻结标识：灰标 = 全部页面休眠，半标 = 部分休眠，无标 = 全醒。 -->
+          <span
+            v-if="!item.external && item.freeze !== 'awake'"
+            class="freeze-dot"
+            :class="item.freeze"
+            :data-freeze="item.freeze"
+            v-tooltip="item.freezeTip"
           ></span>
           <span
             class="chip-close"
@@ -647,6 +685,28 @@ function activateFromFold(item: RailItem): void {
     opacity: 1;
     transform: scale(1);
   }
+}
+
+/*
+ * The freeze mark, next to the AI dot. Full = every page of the instance is
+ * asleep (solid, quiet grey); partial = some are (left half filled). The state
+ * is published as an attribute so tests can assert the mapping without timing
+ * pixels, same as the AI dot.
+ */
+.freeze-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 7px;
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+.freeze-dot.partial {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--text) 55%, transparent) 0 50%,
+    color-mix(in srgb, var(--text) 18%, transparent) 50% 100%
+  );
 }
 
 /* The close cross reveals on hover, quiet at rest like a browser tab's. */

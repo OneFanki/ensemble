@@ -2866,10 +2866,20 @@ function stopUpdateWatcher(): void {
 async function shutdownAndQuit(): Promise<void> {
   if (quitting) return;
   quitting = true;
+  /*
+   * One line per teardown step, through the same channel as startup.
+   *
+   * A quit that hangs used to leave nothing behind: the window closed and the
+   * process just sat there, with no way to tell which step never returned.
+   * The last `quit:` line in main.log names the step that is stuck; a `failed`
+   * line names the step that threw. Ordering only — no behaviour here.
+   */
+  logLine("quit: shutdown-start");
   try {
     // Order matters: stop accepting new AI requests before tearing down browsers,
     // so a tool call cannot start a launch halfway through shutdown.
     await mcpServer?.stop();
+    logLine("quit: mcp-stopped");
     stopUpdateWatcher();
     // No dialog can outlive the window it was about to answer for. An approval
     // question left open would keep its MCP call waiting past `mcpServer.stop()`,
@@ -2877,31 +2887,43 @@ async function shutdownAndQuit(): Promise<void> {
     // means.
     httpAuth.abandonAll();
     approvals.abandonAll();
+    logLine("quit: approvals-abandoned");
     if (approvalWindow && !approvalWindow.isDestroyed()) approvalWindow.destroy();
     approvalWindow = null;
     approvalReady = false;
     approvalPayload = null;
     tray?.destroy();
     tray = null;
+    logLine("quit: tray-destroyed");
     stopActiveWatcher();
     hideFocusLabel();
     if (focusLabelWindow && !focusLabelWindow.isDestroyed()) focusLabelWindow.destroy();
     focusLabelWindow = null;
+    logLine("quit: focus-label-cleared");
     // 拆出的窗口在页面载体销毁前回收：它们是本进程的 Chromium 窗口，退出
     // 顺序约束的「回收浏览器」覆盖它们。
     await popouts?.dockAll();
+    logLine("quit: popouts-docked");
     // Embedded views are Chromium renderers inside this process, so they must be
     // gone before the app quits; there is no external process to reclaim.
     embedded?.dispose();
     embedded = null;
+    logLine("quit: embedded-disposed");
     // Any guest still attached belongs to the window being destroyed; closing
     // its session first is what keeps the teardown from racing the destruction.
     await guestManager.dispose();
+    logLine("quit: guests-disposed");
     if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
     overlayWindow = null;
     disposeWindowFocus();
+    logLine("quit: windows-focus-disposed");
     await service?.shutdown();
+    logLine("quit: service-shutdown");
+  } catch (error) {
+    logLine(`quit: failed ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    throw error;
   } finally {
+    logLine("quit: app-quit-requested");
     app.quit();
   }
 }
@@ -4672,7 +4694,6 @@ if (!singletonLock.acquired) {
         surfaceName: () => "embedded",
         createTab: async (input) => {
           const browser = ensureEmbeddedBrowser();
-          const viewId = browser.defaultViewId();
           const created = await browser.createTab({
             ...(input.url ? { url: input.url } : {}),
             ...(input.identityId ? { identityId: input.identityId } : {}),
@@ -4691,9 +4712,11 @@ if (!singletonLock.acquired) {
             // construction and has no user login to protect, so everything the
             // AI does there is its own.
             ...(input.identityId ? {} : { clean: true }),
-            // An AI opening pages for comparison expects them on stage together,
-            // so a new tab joins the view the user is looking at.
-            ...(viewId ? { viewId } : {}),
+            // 不带 viewId：AI 开的页落自己的实例，不占台上的格位、不接管用户
+            // 的选中。台上与否由放置逻辑与显式的上台操作决定（点实例条、
+            // open_browser_view、pin_browser_tab、activate）；页面在台外仍保有
+            // 完整尺寸的停靠框，读取、截图照常工作，闲置后照常休眠。要把多页
+            // 摆上同一屏幕，用 open_browser_view 或 compose_view。
             origin: "ai",
           });
           // Deliberately no `focusPage()` here.
@@ -4704,11 +4727,8 @@ if (!singletonLock.acquired) {
           // user is reading or editing something else in the same app, and having
           // the window jump to the front on every `open_browser_tab` makes the
           // endpoint unusable. The page gets a real viewport either way:
-          // `createTab` lays it out inside the window before parking it, so
+          // `createTab` gives the parked node a full-size box off-window, so
           // screenshots and DOM queries work while it is off screen.
-          //
-          // The tab still lands on stage when the browser page happens to be
-          // visible, because the view on stage is what `viewId` names.
           if (input.identityId) scheduleEmbeddedLogin(created.id, input.identityId);
           return created;
         },
@@ -4998,6 +5018,7 @@ app.on(
 // app.quit() here the process stays alive after the last window closes (and a
 // portable build's exe stays locked on Windows).
 app.on("window-all-closed", () => {
+  logLine("quit: window-all-closed");
   if (process.platform === "darwin") return;
   if (quitting) {
     app.quit();
@@ -5017,12 +5038,20 @@ app.on("window-all-closed", () => {
  */
 app.on("before-quit", (event) => {
   if (quitting) return;
+  logLine("quit: before-quit");
   event.preventDefault();
   void shutdownAndQuit();
 });
 
 process.on("uncaughtException", (error) => {
   console.error("[ensemble] uncaught exception", error);
+});
+
+// The last line of a clean run: pairs with "quit: shutdown-start" so a log ends
+// with either the real exit code or — by its absence — proof the process never
+// got there.
+process.on("exit", (code) => {
+  logLine(`quit: process-exit code=${code}`);
 });
 
 process.on("unhandledRejection", (reason) => {

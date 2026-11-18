@@ -156,7 +156,7 @@
   /* Window geometry: strip + toolbar are the browser's own two rows. */
   --titlebar-height: 34px;
   --toolbar-height: 44px;
-  --rail-width: 196px;
+  --account-rail-width: 196px;
   --dock-width: 244px;
 
   /* Spacing ladder. Anything that is not one of these should say why. */

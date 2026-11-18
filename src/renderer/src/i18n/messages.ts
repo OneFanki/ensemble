@@ -1108,6 +1108,7 @@ export const messages = {
       railLaunchGo: "启动（{count}）",
       railRunning: "运行中",
       railManage: "管理",
+      more: "更多",
       backToBrowser: "返回浏览器",
       noIdentitiesYet: "还没有账号。在管理 → 账号里添加。",
 
@@ -2340,6 +2341,7 @@ export const messages = {
       railLaunchGo: "Launch ({count})",
       railRunning: "Running",
       railManage: "Manage",
+      more: "More",
       backToBrowser: "Back to the browser",
       noIdentitiesYet: "No accounts yet. Add one under Manage → Accounts.",
 

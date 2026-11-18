@@ -496,6 +496,14 @@ export interface EmbeddedSurface {
       | { kind: "view"; viewId: string }
       | { kind: "loose" },
   ): unknown;
+  /**
+   * 把页面拆出到独立 OS 窗口；已在弹窗里的页面则收回主舞台。
+   *
+   * Optional like the rest of the capability surface: a host without window
+   * management reports the capability as absent instead of promising a move it
+   * cannot make.
+   */
+  popOutTab?(tabId: string): Promise<unknown>;
   fillLogin(tabId: string): Promise<unknown>;
   defaultTabId(requested?: string): string;
   /** Id of the view on stage, so layout tools do not need one spelled out. */
@@ -591,6 +599,7 @@ function surfaceCapabilities(surface: EmbeddedSurface): Record<OptionalSurfaceMe
     muteForAi: present("muteForAi"),
     restoreAfterAi: present("restoreAfterAi"),
     openViewContainer: present("openViewContainer"),
+    popOutTab: present("popOutTab"),
     addInitScript: present("addInitScript"),
     listInitScripts: present("listInitScripts"),
     removeInitScript: present("removeInitScript"),
@@ -4984,6 +4993,18 @@ export class McpServer {
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
         run: (args) => projectState(surface().closeTab(String(args["tabId"] ?? ""))),
+      },
+      {
+        name: "pop_out_browser_tab",
+        description:
+          "把一个标签页拆出到独立 OS 窗口（配合系统分屏与多显示器并排观察）；已拆出的页面再次调用即收回主舞台。会话分区、登录态与 AI 可操作性在拆出前后不变。",
+        kind: "run",
+        inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
+        run: (args) => {
+          const popOutTab = surface().popOutTab;
+          if (!popOutTab) throw new Error("当前表面不支持拆出窗口");
+          return popOutTab(String(args["tabId"] ?? ""));
+        },
       },
       {
         name: "move_browser_tab",

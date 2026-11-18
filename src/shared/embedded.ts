@@ -88,6 +88,13 @@ export interface EmbeddedTab {
   /** True for the page currently shown by its instance. */
   active: boolean;
   /**
+   * True while the page is popped out into its own OS window.
+   *
+   * The strip keeps showing the tab; the pixels live in the popout, so the
+   * stage has nothing to draw for it. Selecting the tab focuses the popout.
+   */
+  popout?: boolean;
+  /**
    * True when Ensemble is not playing this page's sound.
    *
    * Set by the tab's speaker control or by the AI, and kept per page so a

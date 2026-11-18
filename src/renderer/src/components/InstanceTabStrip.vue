@@ -17,6 +17,7 @@ import { Minimize2, Pin, Plus, Snowflake, Volume2, VolumeX, X } from "lucide-vue
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
+import TabPopOutButton from "./TabPopOutButton.vue";
 
 const props = defineProps<{
   /** Root page id of the instance; every page of it is listed. */
@@ -184,6 +185,7 @@ function addPage(): void {
         <VolumeX v-if="page.muted" :size="9" />
         <Volume2 v-else :size="9" />
       </button>
+      <TabPopOutButton :page="page" />
       <button
         type="button"
         class="slot-tab-close"

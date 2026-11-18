@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>页面窗口</title>
+    <style>
+      /* 弹窗只承载页面：背景与页面节点铺满内容区，没有任何宿主 UI。 */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #101317;
+      }
+      webview {
+        display: flex;
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        border: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/popout-main.ts"></script>
+  </body>
+</html>

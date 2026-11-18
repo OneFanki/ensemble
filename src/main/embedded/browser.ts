@@ -669,6 +669,14 @@ export interface GuestHost {
   /** Tells the renderer the node may be removed. Sent after `release`. */
   unmount(tabId: string): void;
   /**
+   * Drops the "this page's node has a real box" mark kept for `tabId`.
+   *
+   * A carrier swap reuses the tab id for a brand-new node; without this the
+   * commands issued in the gap between mount and first layout would run against
+   * a 0×0 viewport while believing the page was laid out.
+   */
+  forgetLaidOut?(tabId: string): void;
+  /**
    * Asks the renderer to show a page for a moment, or to put it back.
    *
    * A guest only produces frames while it is actually painting, so a screenshot
@@ -693,10 +701,35 @@ export interface GuestHost {
    * silent guest answers `Page.captureScreenshot` by never replying. The window
    * cannot be assumed to have painted: a headless run parks it off every
    * display, and a minimised one is equally frame-less.
+   *
+   * `hostWebContents` names the window the guest lives in; omitted means the
+   * main window. A popped-out page's embedder is its popout, and priming the
+   * wrong window leaves the guest just as frame-less.
    */
-  primeForCapture?(): Promise<boolean>;
+  primeForCapture?(hostWebContents?: WebContents): Promise<boolean>;
   /** The command target for a page's guest, resolved per command. */
   targetFor(tabId: string): GuestCdpTarget;
+}
+
+/**
+ * 拆窗窗口的簿记视图（由 PopoutManager 实现，见 popout.ts）。
+ *
+ * 定义在浏览器管理器一侧而非 popout.ts，是为了让布局与截图代码只依赖它需要
+ * 的五个问题——窗口创建、关闭编排与退出回收都不经过这里。
+ */
+export interface PopoutDirector {
+  /** 该页面当前是否承载在独立窗口里。 */
+  has(tabId: string): boolean;
+  /** 弹窗内容区尺寸（CSS 像素）；窗口已关时 undefined。 */
+  contentSize(tabId: string): { width: number; height: number } | undefined;
+  /** 弹窗可见性与最小化状态；窗口已关时 undefined。 */
+  visibility(tabId: string): { visible: boolean; minimized: boolean } | undefined;
+  /** 弹窗的承载 webContents（截图 prime 与 multi-host 安装的指路凭据）。 */
+  hostWebContents(tabId: string): WebContents | undefined;
+  /** 撤销登记并销毁弹窗；页面关闭时调用，不触发回主舞台的换代。 */
+  dock(tabId: string): Promise<void>;
+  /** 页面标题同步进弹窗的系统标题栏。 */
+  setTitle(tabId: string, title: string): void;
 }
 
 export interface EmbeddedBrowserOptions {
@@ -769,6 +802,15 @@ export interface EmbeddedBrowserOptions {
    * the chrome whenever a new overlay forgot to announce itself.
    */
   guests: GuestHost;
+  /**
+   * 拆窗（页面承载到独立 OS 窗口）的窗口簿记，主进程装配时注入。
+   *
+   * 管理器只问三件事：这个页面是否在弹窗里（布局与截图路径据此分流）、弹窗的
+   * 内容区与可见性（bounds 记录与在屏判断）、承载窗口是谁（截图 prime 指路）。
+   * 换代挂载序列在 {@link EmbeddedBrowser.remountCarrier}，窗口生命周期在
+   * PopoutManager（popout.ts）。
+   */
+  popouts?: PopoutDirector;
   /** Persists a runtime layout change back to the view definition. */
   onViewLayoutChange?: (viewDefinitionId: string, layoutId: LayoutId) => void;
   onFocusTab?: (tabId: string) => void;
@@ -1245,6 +1287,7 @@ export class EmbeddedBrowser {
       ...(profileId ? { profileId } : {}),
       partition: this.partitionOf(tab),
       active: this.instanceActive.get(tab.instanceId) === tab.id,
+      ...(this.options.popouts?.has(tab.id) ? { popout: true } : {}),
       ...(tab.muted ? { muted: true } : {}),
       ...(audible ? { audible: true } : {}),
       ...(tab.everAudible ? { everAudible: true } : {}),
@@ -2793,6 +2836,8 @@ export class EmbeddedBrowser {
     });
     contents.on("page-title-updated", (_event, title) => {
       tab.title = title;
+      // 拆出的页面把标题同步进系统标题栏；strip 上的同一份标题照常更新。
+      this.options.popouts?.setTitle(tab.id, title);
       update();
     });
     // A page that starts or stops making sound changes which icon the strip
@@ -2936,6 +2981,9 @@ export class EmbeddedBrowser {
      * the click, so its focus event is the only signal that reaches us.
      */
     contents.on("focus", () => {
+      // 拆出的页面在自己的窗口里获得焦点；它不上主舞台，焦点也不代表用户想把
+      // 主舞台的选择切过去——点了弹窗里的页面后主舞台保持原样。
+      if (this.options.popouts?.has(tab.id)) return;
       if (this.activeTabId === tab.id) return;
       this.selectPage(tab);
     });
@@ -2981,7 +3029,13 @@ export class EmbeddedBrowser {
           },
         },
       ]);
-      menu.popup({ window: this.host ?? undefined });
+      // 拆出的页面在自己的窗口上弹菜单，而不是把菜单弹回主窗口。
+      const poppedWindow = this.options.popouts?.hostWebContents(tab.id);
+      menu.popup({
+        window: (poppedWindow ? BrowserWindow.fromWebContents(poppedWindow) : undefined) ??
+          this.host ??
+          undefined,
+      });
     });
     contents.setWindowOpenHandler(({ url }) => {
       const target = normalizeEmbeddedUrl(url);
@@ -3267,6 +3321,23 @@ export class EmbeddedBrowser {
    */
   activate(tabId: string): EmbeddedState {
     const tab = this.requireTab(tabId);
+    // 拆出的页面选中 = 把弹窗提到前台；strip 高亮它，主舞台不重排——它的像素
+    // 不在舞台里。
+    const poppedContents = this.options.popouts?.has(tabId)
+      ? this.options.popouts.hostWebContents(tabId)
+      : undefined;
+    const popWindow =
+      poppedContents && !poppedContents.isDestroyed()
+        ? BrowserWindow.fromWebContents(poppedContents)
+        : undefined;
+    if (popWindow && !popWindow.isDestroyed()) {
+      if (popWindow.isMinimized()) popWindow.restore();
+      popWindow.show();
+      popWindow.focus();
+      this.setActivePage(tab);
+      this.emitState();
+      return this.state();
+    }
     this.setActivePage(tab);
     const root = this.instanceRoot(tab.instanceId) ?? tab;
     const plan = planTabClick(
@@ -3318,6 +3389,9 @@ export class EmbeddedBrowser {
   closeTab(tabId: string): EmbeddedState {
     const tab = this.findTab(tabId);
     if (!tab) return this.state();
+    // 页面关闭时它的弹窗没有存在的意义。dock 先撤销登记再销毁，弹窗的
+    // closed 钩子看到登记已撤就不会走「回主舞台」的换代。
+    void this.options.popouts?.dock(tabId).catch(() => undefined);
     const view = tab.viewId ? this.findView(tab.viewId) : undefined;
     // A split cell that was showing this exact page loses its pin first, so the
     // cell falls back to the instance's active page instead of pointing at a
@@ -3429,6 +3503,117 @@ export class EmbeddedBrowser {
       if (sibling.id !== tab.id) this.closeTab(sibling.id);
     }
     return this.state();
+  }
+
+  /**
+   * 单个页面的公开描述（拆出编排需要 instanceId 判断「同实例一个弹窗」）。
+   */
+  describeTab(tabId: string): EmbeddedTab {
+    return this.describe(this.requireTab(tabId));
+  }
+
+  /**
+   * 把一个页面在窗口之间搬迁：拆出到弹窗（`"popout"`）或收回主舞台（`"stage"`）。
+   *
+   * 节点无法跨窗口迁移——`<webview>` 归宿主渲染层 DOM 所有，卸载即销毁
+   * guest（2026-11-18 spike 实测）——所以搬迁是完整的换代：旧载体先完整释放
+   * （teardown CDP 会话，等它应答，再让旧窗口删节点；顺序反了会在在途命令
+   * 下面抽走 native target，进程级崩溃），新窗口按同一分区重建节点。分区在
+   * session 层，登录态、Cookie 与存储跨换代原样保留；CDP 会话在新节点上重开，
+   * guest manager 的会话建立钩子重放会话内状态（预置脚本、`Page.enable`）。
+   *
+   * 挂载请求按 tabId 路由（guestHost 实现查 popouts 登记），所以「拆出」必须
+   * 先登记弹窗再进到这里，收回则相反——先换代，登记撤销后新节点自然落在
+   * 主窗口。
+   *
+   * 页面本体在换代中重载一次：SPA 内存态与未提交的表单不保留，这是重建路径
+   * 的固有限制；会话层（登录态）不丢。
+   */
+  async remountCarrier(tabId: string, target: "popout" | "stage"): Promise<EmbeddedTab> {
+    // 不走 requireTab：换代场景恰恰是「载体刚死」——弹窗被用户关掉时 tab 的
+    // 旧 guest 已销毁，requireTab 对此抛「页面已关闭」。tab 记录本身还在，
+    // 要换掉的正是那具死载体。
+    const tab = this.findTab(tabId);
+    if (!tab) throw new Error(`标签页不存在：${tabId}`);
+    const partition = this.partitionOf(tab);
+    const url = tab.url;
+    const muted = tab.muted;
+    const zoom = tab.zoomOverride ?? this.defaultZoom;
+    const poppedOut = this.options.popouts?.has(tab.id) ?? false;
+
+    // 1. 释放旧载体。弹窗被用户直接关掉时 guest 已随窗口销毁，release 与
+    //    unmount 都要按「已经没了」处理而不是报错。
+    await this.guests.release(tabId).catch(() => undefined);
+    this.guests.unmount(tabId);
+    // 「节点已布局」的标记跟着旧节点走：不清掉的话，换代后的命令会在新节点
+    // 还没有真实视口时就放行，页内可见性检查全部答 false。
+    this.guests.forgetLaidOut?.(tabId);
+
+    // 2. 在目标窗口重建节点。弹窗模式用恒定 {0,0} 原点的 surface：bounds
+    //    记录弹窗内容区（下一步写入），不掺入主舞台偏移。
+    const mounted = await this.guests.mount({ tabId, partition, url });
+    tab.view =
+      target === "popout"
+        ? new GuestPageSurface(mounted.contents, () => ({ x: 0, y: 0 }))
+        : new GuestPageSurface(mounted.contents, () => ({
+            x: this.stage?.x ?? 0,
+            y: this.stage?.y ?? 0,
+          }));
+    tab.cdp = this.guestExecutor(tabId);
+    tab.view.webContents.setAudioMuted(Boolean(muted));
+    this.wireTab(tab);
+    this.applyZoom(tab, zoom);
+
+    if (target === "popout") {
+      const size = this.options.popouts?.contentSize(tab.id);
+      if (size) tab.view.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
+      // 拆出把实例从视图槽位摘出来：槽位显示的是实例的 active 页，而那页马上
+      // 就不在舞台上了，留着一个画不出的格子比空着更误导。
+      this.detachFromView(tab);
+      // 主舞台若正选中这一页，切走：留着的选中项画不出像素，下一次布局会让
+      // 舞台空白。
+      if (this.activeTabId === tab.id) this.retargetActiveTabFrom(tab.id);
+    }
+
+    this.applyLayout();
+    this.emitState();
+    if (target === "stage") this.activate(tab.id);
+    return this.describe(tab);
+  }
+
+  /**
+   * 把主舞台的选择从 `tabId` 挪开：优先同实例的其它页，再退到任意其它标签。
+   * 都没有时清空选择（舞台留白比指向一个画不出的页面诚实）。
+   */
+  private retargetActiveTabFrom(tabId: string): void {
+    const current = this.findTab(tabId);
+    const sibling = current
+      ? this.instanceTabs(current.instanceId).find((item) => item.id !== tabId)
+      : undefined;
+    const fallback = this.tabs.find(
+      (item) => item.id !== tabId && !this.options.popouts?.has(item.id),
+    );
+    const next = sibling ?? fallback;
+    if (next) {
+      this.activeTabId = next.id;
+      this.setActivePage(next);
+    } else {
+      delete this.activeTabId;
+    }
+  }
+
+  /**
+   * 弹窗尺寸变化后重新记录 bounds（截图路径与在屏判断读它）。
+   *
+   * 由主进程在弹窗 `resize` 事件里调用；页面节点的摆放是弹窗渲染层自己的事，
+   * 这里只维护记录值。
+   */
+  syncPopoutBounds(tabId: string): void {
+    if (!this.options.popouts?.has(tabId)) return;
+    const tab = this.findTab(tabId);
+    const size = this.options.popouts.contentSize(tabId);
+    if (!tab || !size) return;
+    tab.view?.setBounds({ x: 0, y: 0, width: size.width, height: size.height });
   }
 
   private discardTab(tab: TabRecord): void {
@@ -3619,6 +3804,8 @@ export class EmbeddedBrowser {
         // here on the first state broadcast of a fresh session.
         const contents = tab.view?.webContents;
         if (!contents || contents.isDestroyed()) continue;
+        // 拆出的页面不归零：bounds 是弹窗内容区的记录，不是主窗口的舞台位置。
+        if (this.options.popouts?.has(tab.id)) continue;
         tab.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
       }
       this.stagedTabs.clear();
@@ -3651,6 +3838,8 @@ export class EmbeddedBrowser {
       if (
         page &&
         !page.viewId &&
+        // 拆出的页面画在弹窗里，不占主舞台：选中它时舞台留白，像素归弹窗管。
+        !this.options.popouts?.has(page.id) &&
         !isBlankTab(page) &&
         page.view?.webContents &&
         !page.view.webContents.isDestroyed()
@@ -3734,6 +3923,9 @@ export class EmbeddedBrowser {
   private parkUnstaged(staged: Set<string>): void {
     for (const tab of this.tabs) {
       if (staged.has(tab.id)) continue;
+      // 拆出的页面不属于主窗口的舞台：它的 bounds 记录的是弹窗内容区（remount
+      // 时写入，resize 时跟随），归零会让截图路径把它当成没有视口的页面。
+      if (this.options.popouts?.has(tab.id)) continue;
       const contents = tab.view?.webContents;
       if (!contents || contents.isDestroyed()) continue;
       // A page with a fixed viewport keeps the box that viewport asks for
@@ -3904,7 +4096,11 @@ export class EmbeddedBrowser {
       const busy = tab.cdp.busy();
       if (busy) this.aiActiveUntil.set(tab.id, now + this.sleepGraceMs);
       const candidate = {
-        staged: this.stagedTabs.has(tab.id),
+        // 拆出的页面以弹窗可见性为「在台」：可见的弹窗不该被后台休眠冻住——
+        // 用户正看着它。
+        staged: this.options.popouts?.has(tab.id)
+          ? this.isOnScreen(tab)
+          : this.stagedTabs.has(tab.id),
         frozen: this.frozenTabs.has(tab.id),
         available: true,
         loading: contents.isLoading(),
@@ -6479,8 +6675,11 @@ export class EmbeddedBrowser {
           // A dying page fails the capture below with its own reason.
         }
       } else {
-        // The embedder has to have painted before its guest can.
-        await this.options.guests?.primeForCapture?.();
+        // The embedder has to have painted before its guest can. For a popped-
+        // out page that embedder is the popout window, not the main one.
+        await this.options.guests?.primeForCapture?.(
+          this.options.popouts?.hostWebContents(tab.id),
+        );
       }
       return tab.cdp.screenshot({
         format: options.format,
@@ -6650,11 +6849,29 @@ export class EmbeddedBrowser {
    * Reads the three inputs `viewIsOnScreen` needs. The result only decides which
    * screenshot path to take, so a wrong answer costs a fallback, never
    * correctness.
+   *
+   * 拆出的页面以弹窗为准，不读主窗口：主窗口最小化时弹窗照常出帧（CDP 快路），
+   * 弹窗自己最小化时无帧（CDP 不回复，必须退到 capturePage 渲染路径——spike
+   * 实测 2026-11-18）。读错窗口会让最小化的弹窗截图挂满整个超时。
    */
   private isOnScreen(tab: TabRecord): boolean {
+    if (tab.view.webContents.isDestroyed()) return false;
+    const popouts = this.options.popouts;
+    if (popouts?.has(tab.id)) {
+      const visibility = popouts.visibility(tab.id);
+      const size = popouts.contentSize(tab.id);
+      const bounds = tab.view.getBounds();
+      return Boolean(
+        visibility?.visible &&
+          !visibility.minimized &&
+          (size?.width ?? 0) > 0 &&
+          (size?.height ?? 0) > 0 &&
+          bounds.width > 0 &&
+          bounds.height > 0,
+      );
+    }
     const host = this.host;
     if (!host || host.isDestroyed()) return false;
-    if (tab.view.webContents.isDestroyed()) return false;
     return viewIsOnScreen(tab.view.getBounds(), this.hostContentSize(), {
       visible: host.isVisible(),
       minimized: host.isMinimized(),

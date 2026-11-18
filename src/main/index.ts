@@ -122,6 +122,8 @@ import {
 } from "electron";
 import { EmbeddedBrowser, type GuestHost } from "./embedded/browser";
 import { BrowserGuestManager } from "./embedded/guests";
+import { PopoutManager } from "./embedded/popout";
+import type { EmbeddedTab } from "@shared/embedded";
 import { DownloadManager } from "./downloads";
 import { applyProxyToDefaultSession } from "./proxy";
 import { fixRealmEncoding, HttpAuthCoordinator } from "./http-auth";
@@ -444,6 +446,108 @@ let presentSeq = 0;
 const presentWaiters = new Map<number, (payload: { requestId: number; shown: boolean }) => void>();
 
 /**
+ * 拆出窗口的簿记。声明在 guestHost 之前，路由要在第一次挂载前就能查表；
+ * 实例在下方装配（需要 createWindow 等环境知识）。
+ */
+let popouts: PopoutManager | null = null;
+
+/**
+ * 创建一个拆出窗口。
+ *
+ * 它只是页面容器：安全三件套与主窗口一致，`webviewTag` 供它承载 guest 节点，
+ * preload 只暴露 guest 生命周期通道，没有任何其它能力。显式挂到主窗口
+ * （`parent`）——不挂的话主窗口销毁后弹窗会残留（2026-11-18 spike 实测）。
+ */
+async function createPopoutWindow(tabId: string): Promise<BrowserWindow> {
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    minWidth: 420,
+    minHeight: 320,
+    ...(mainWindow && !mainWindow.isDestroyed() ? { parent: mainWindow } : {}),
+    show: !headless,
+    backgroundColor: isDarkTheme(settingsCache?.theme ?? "system") ? "#0b0d10" : "#f3efe6",
+    title: appDisplayName,
+    ...(appIconPath() ? { icon: appIconPath() } : {}),
+    webPreferences: {
+      preload: join(__dirname, "../preload/popout.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: true,
+      spellcheck: false,
+    },
+  });
+  guestManager.install(win.webContents);
+  // closed 事件到达时窗口已销毁，届时再读 win.webContents 会抛
+  // "Object has been destroyed"；提前把引用拿好。
+  const hostedContents = win.webContents;
+  win.once("closed", () => {
+    guestManager.uninstallHost(hostedContents);
+  });
+  const loadPromise =
+    isDev && process.env["ELECTRON_RENDERER_URL"]
+      ? win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}popout.html`)
+      : win.loadFile(join(__dirname, "../renderer/popout.html"));
+  await loadPromise.catch(() => undefined);
+  // 弹窗尺寸变化时重新记录页面 bounds（截图路径与在屏判断读它）。
+  win.on("resize", () => {
+    if (!embedded || win.isDestroyed()) return;
+    embedded.syncPopoutBounds(tabId);
+  });
+  return win;
+}
+
+/**
+ * 拆出编排：先登记弹窗（挂载路由按登记表走），再换代挂载；失败时把弹窗
+ * 收掉，不留半套窗口（场景启动原子性约束同样适用于这里）。
+ */
+async function popOutBrowserTab(tabId: string): Promise<{ windowId: number }> {
+  const browser = ensureEmbeddedBrowser();
+  const manager = popouts;
+  if (!manager) throw new Error("拆出窗口不可用");
+  const info = browser.describeTab(tabId);
+  const win = await manager.popOut(tabId, info.instanceId);
+  try {
+    await browser.remountCarrier(tabId, "popout");
+  } catch (error) {
+    await manager.dock(tabId).catch(() => undefined);
+    throw error;
+  }
+  return { windowId: win.id };
+}
+
+/** 收回编排：先换代回主窗口（登记已撤，挂载自然落在主窗口），再销毁弹窗。 */
+async function dockBrowserTab(tabId: string): Promise<void> {
+  const manager = popouts;
+  if (!manager?.has(tabId)) return;
+  const browser = ensureEmbeddedBrowser();
+  await manager.dock(tabId);
+  await browser.remountCarrier(tabId, "stage");
+}
+
+/** 拆出窗口的装配。声明早、装配晚：路由先可用，环境知识在窗口创建时才需要。 */
+function installPopoutManager(): void {
+  popouts = new PopoutManager({
+    createWindow: (tabId) => createPopoutWindow(tabId),
+    // 用户点了弹窗的 X：窗口已销毁，把页面换回主舞台。登记在 closed 钩子里
+    // 已撤，挂载请求此刻指向主窗口。
+    onWindowClosed: (tabId) => {
+      const browser = embedded;
+      if (!browser) return;
+      void browser.remountCarrier(tabId, "stage").catch(() => undefined);
+    },
+  });
+}
+
+/** 挂载请求发往的窗口：该页拆出了弹窗就是弹窗，否则是主窗口。 */
+function mountTargetFor(tabId: string): BrowserWindow | undefined {
+  const popped = popouts?.windowFor(tabId);
+  if (popped && !popped.isDestroyed()) return popped;
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+}
+
+/**
  * The renderer's half of the carrier contract.
  *
  * Main cannot create a `<webview>` node, so mounting is a request: send the
@@ -451,11 +555,14 @@ const presentWaiters = new Map<number, (payload: { requestId: number; shown: boo
  * hand back the guest's `webContents` and its CDP executor. Every page open
  * goes through this once, which is why the wait has a deadline — a renderer
  * that never answers must fail the open instead of hanging a tool call.
+ *
+ * 拆出的页面把请求发给它的弹窗：路由只查登记表，换代（拆出/收回）不需要
+ * 这里的任何配合。
  */
 const guestHost: GuestHost = {
   async mount({ tabId, partition, url }) {
-    const win = mainWindow;
-    if (!win || win.isDestroyed()) throw new Error("窗口已关闭");
+    const win = mountTargetFor(tabId);
+    if (!win) throw new Error("窗口已关闭");
     // Start waiting before asking: the renderer can report `dom-ready` before
     // the `send` has even returned, and a wait registered afterwards would miss
     // an attach that already happened.
@@ -481,8 +588,8 @@ const guestHost: GuestHost = {
      */
     const retry = setTimeout(() => {
       if (guestManager.guestIdFor(tabId)) return;
-      const current = mainWindow;
-      if (!current || current.isDestroyed()) return;
+      const current = mountTargetFor(tabId);
+      if (!current) return;
       current.webContents.send(IPC.embeddedGuestMount, request);
     }, 400);
     retry.unref?.();
@@ -503,11 +610,29 @@ const guestHost: GuestHost = {
     if (guestId) await guestManager.teardown(guestId);
   },
   unmount(tabId) {
-    const win = mainWindow;
-    if (!win || win.isDestroyed()) return;
-    win.webContents.send(IPC.embeddedGuestUnmount, { tabId });
+    /*
+     * 广播给每一个承载窗口，而不是查表路由：拆出换代时「旧节点所在的窗口」
+     * 是登记变更之前的主窗口——路由表此刻已经指向弹窗，发给它等于旧窗口的
+     * 节点永远删不掉，主窗口里留一个同分区的僵尸 guest。各窗口的渲染层对
+     * 不存在的 tabId 是 no-op，广播是安全的。
+     */
+    const targets: BrowserWindow[] = mainWindow ? [mainWindow] : [];
+    for (const id of popouts?.tabIds() ?? []) {
+      const win = popouts?.windowFor(id);
+      if (win) targets.push(win);
+    }
+    for (const win of targets) {
+      if (!win || win.isDestroyed()) continue;
+      win.webContents.send(IPC.embeddedGuestUnmount, { tabId });
+    }
+  },
+  forgetLaidOut(tabId) {
+    guestManager.forgetLaidOut(tabId);
   },
   present(tabId, visible) {
+    // 拆出的页面有自己的窗口，不需要主窗口短暂呈现：它要么整窗可见，要么
+    // 最小化（截图走渲染路径，与主窗口最小化同一分支）。
+    if (popouts?.has(tabId)) return Promise.resolve();
     const win = mainWindow;
     if (!win || win.isDestroyed()) return Promise.reject(new Error("窗口已关闭"));
     const requestId = ++presentSeq;
@@ -699,6 +824,16 @@ function ensureEmbeddedBrowser(): EmbeddedBrowser {
     // has to be handed to the manager — a missed one downloads invisibly.
     onSessionReady: (ses) => downloads.attach(ses),
     guests: guestHost,
+    // 拆窗窗口的簿记视图：布局、截图路径与休眠扫描据此把拆出的页面分流到
+    // 它自己的窗口。读的是函数，装配顺序无关。
+    popouts: {
+      has: (tabId) => popouts?.has(tabId) ?? false,
+      contentSize: (tabId) => popouts?.contentSize(tabId),
+      visibility: (tabId) => popouts?.visibility(tabId),
+      hostWebContents: (tabId) => popouts?.hostWebContents(tabId),
+      dock: (tabId) => popouts?.dock(tabId) ?? Promise.resolve(),
+      setTitle: (tabId, title) => popouts?.setTitle(tabId, title),
+    },
     // Dragging a layout picker in the sidebar edits the open container only for
     // hand-made views; saved views persist the choice back to the definition.
     onViewLayoutChange: (viewDefinitionId, layoutId) => {
@@ -1439,7 +1574,7 @@ function ensureOverlay(): BrowserWindow {
     title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -1677,7 +1812,7 @@ function ensureApprovalWindow(): BrowserWindow {
     title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -1921,7 +2056,7 @@ function ensureFocusLabel(): BrowserWindow {
     title: appDisplayName,
     ...(appIconPath() ? { icon: appIconPath() } : {}),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -2331,7 +2466,7 @@ async function createWindow(): Promise<void> {
           titleBarOverlay: titleBarOverlay(currentTheme),
         }),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(__dirname, "../preload/index.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -2749,6 +2884,9 @@ async function shutdownAndQuit(): Promise<void> {
     hideFocusLabel();
     if (focusLabelWindow && !focusLabelWindow.isDestroyed()) focusLabelWindow.destroy();
     focusLabelWindow = null;
+    // 拆出的窗口在页面载体销毁前回收：它们是本进程的 Chromium 窗口，退出
+    // 顺序约束的「回收浏览器」覆盖它们。
+    await popouts?.dockAll();
     // Embedded views are Chromium renderers inside this process, so they must be
     // gone before the app quits; there is no external process to reclaim.
     embedded?.dispose();
@@ -4245,7 +4383,11 @@ function registerIpc(workspace: WorkspaceService): void {
     if (!Number.isInteger(id) || id <= 0) throw new Error("无效的页面标识");
     const contents = webContents.fromId(id);
     if (!contents) throw new Error("页面已关闭");
-    const host = mainWindow?.webContents ?? undefined;
+    // 承载窗口以 guest 的宿主为准，不硬编码主窗口：拆出的页面挂在弹窗里，
+    // 上报来自弹窗渲染层。对不上就拒绝——guest 必须属于上报它的窗口。
+    const host = contents.hostWebContents && !contents.hostWebContents.isDestroyed()
+      ? contents.hostWebContents
+      : mainWindow?.webContents ?? undefined;
     const handle =
       typeof tabId === "string" && tabId
         ? guestManager.attachByKey(tabId, contents, host)
@@ -4290,6 +4432,24 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedGuestLaidOut, (tabId: string) => {
     if (typeof tabId !== "string" || !tabId) return;
     guestManager.confirmLaidOut(tabId);
+  });
+
+  /*
+   * 拆出与收回。toggle 语义：已拆出的页面再次调用即收回，返回当前状态——
+   * 调用方（UI 与 MCP）都不需要先查再动。
+   */
+  handle(IPC.embeddedTabPopOut, async (tabId: string) => {
+    if (typeof tabId !== "string" || !tabId) throw new Error("需要标签页 id");
+    if (popouts?.has(tabId)) {
+      await dockBrowserTab(tabId);
+      return { docked: true as const };
+    }
+    return popOutBrowserTab(tabId);
+  });
+  handle(IPC.embeddedTabDock, async (tabId: string) => {
+    if (typeof tabId !== "string" || !tabId) throw new Error("需要标签页 id");
+    await dockBrowserTab(tabId);
+    return { docked: true as const };
   });
 
   // The chrome reports the content area it reserves for native views. `send`
@@ -4558,6 +4718,15 @@ if (!singletonLock.acquired) {
         // The log's site/profile context, which the gate must not depend on.
         actionFacts: (tabId) => ensureEmbeddedBrowser().actionFacts(tabId),
         closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
+        // 拆出与收回共用一个开关：已拆出时再次调用即收回主舞台。编排函数
+        // 在文件上方（popOutBrowserTab / dockBrowserTab）。
+        popOutTab: async (tabId) => {
+          if (popouts?.has(tabId)) {
+            await dockBrowserTab(tabId);
+            return { docked: true as const };
+          }
+          return popOutBrowserTab(tabId);
+        },
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),
         click: (tabId, target) => ensureEmbeddedBrowser().click(tabId, target),
@@ -4720,6 +4889,8 @@ if (!singletonLock.acquired) {
       });
     await createWindow();
     await mcpReady;
+    // 拆窗窗口管理器：主窗口就绪后装配，MCP 与 UI 的入口都经它创建弹窗。
+    installPopoutManager();
 
     /**
      * A freshly started window opens with one blank page.

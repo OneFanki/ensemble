@@ -308,6 +308,8 @@ const api: EnsembleApi = {
     ipcRenderer.invoke(IPC.embeddedGuestPresented, requestId, shown),
   confirmEmbeddedGuestLaidOut: (tabId) =>
     ipcRenderer.invoke(IPC.embeddedGuestLaidOut, tabId),
+  popOutBrowserTab: (tabId) => ipcRenderer.invoke(IPC.embeddedTabPopOut, tabId),
+  dockBrowserTab: (tabId) => ipcRenderer.invoke(IPC.embeddedTabDock, tabId),
 
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),

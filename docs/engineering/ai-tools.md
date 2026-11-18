@@ -68,6 +68,7 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接。被 beforeunload 拦下时快速返回 `cancelled: "beforeunload"`（页面留在原地且可继续操作），用 `handle_browser_dialog` 决定去留 | `{ tab }`；被拦时另有 `cancelled` 与 `note` |
 | `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态 |
+| `pop_out_browser_tab` | run | — | 把页面拆到独立 OS 窗口（配合系统分屏并排观察）；已拆出时再次调用即收回主舞台。同一实例同时只允许一个拆出窗口。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留；之后的读取、点击、截图等工具照常对该标签页工作 | `{ windowId }`；收回时 `{ docked: true }` |
 | `set_browser_layout` / `pin_browser_tab` / `compose_view` | run / run / write | — | 省略 `viewId` 时作用于台上的视图 | 布局或容器 |
 | `set_browser_viewport` / `reset_browser_viewport` | run | 是 | 宽 320–3840、高 320–2160 | 生效后的尺寸 |
 | `set_browser_muted` | run | — | 只切换 Ensemble 的输出；页面自己的媒体与 Web Audio 照常运行。不受来源闸门限制，AI 自动静音不会覆盖用户手动取消的静音 | `{ tabId, muted }` |

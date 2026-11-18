@@ -117,21 +117,24 @@ describe("automation scripts", () => {
     }
   });
 
-  it("exempts only the suite that needs a minimisable window", () => {
-    // `e2e-minimize` starts the app *with* a window on purpose: a headless run
-    // parks it at opacity 0, where `minimize()` is a no-op, and the whole point
-    // of that suite is what a really minimised window does. It is the only
-    // exemption, and it is pinned here so a new script cannot excuse itself by
-    // copying its pattern.
-    const text = readFileSync(join(process.cwd(), "scripts", "e2e-minimize.mjs"), "utf8");
-    expect(text).not.toContain("ENSEMBLE_HEADLESS");
-    expect(text).toContain("minimize()");
+  it("exempts only the suites that need a minimisable window", () => {
+    // `e2e-minimize` and `e2e-popout` start the app *with* a window on purpose:
+    // a headless run parks it at opacity 0, where `minimize()` is a no-op, and
+    // those suites are exactly about what a really minimised window does
+    // (popout checks screenshots of a minimised popout). They are the only
+    // exemptions, and they are pinned here so a new script cannot excuse itself
+    // by copying their pattern.
+    for (const name of ["e2e-minimize.mjs", "e2e-popout.mjs"]) {
+      const text = readFileSync(join(process.cwd(), "scripts", name), "utf8");
+      expect(text).not.toContain("ENSEMBLE_HEADLESS");
+      expect(text).toContain("minimize()");
+    }
     const exempt = readdirSync(join(process.cwd(), "scripts"))
       .filter((name) => name.startsWith("e2e-") && name.endsWith(".mjs"))
       .filter((name) => {
         const source = readFileSync(join(process.cwd(), "scripts", name), "utf8");
         return source.includes("spawn(") && !source.includes("ENSEMBLE_HEADLESS");
       });
-    expect(exempt).toEqual(["e2e-minimize.mjs"]);
+    expect(exempt).toEqual(["e2e-minimize.mjs", "e2e-popout.mjs"]);
   });
 });

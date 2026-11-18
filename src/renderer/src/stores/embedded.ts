@@ -428,6 +428,16 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     state.value = await window.ensemble.closeEmbeddedTab(tabId);
   }
 
+  /**
+   * 把页面拆出到独立窗口；已拆出的页面收回主舞台。
+   *
+   * toggle 语义由主进程裁决。新状态经常规广播到达：广播里该页带 `popout: true`，
+   * strip 据此换图标与文案。
+   */
+  async function popOutTab(tabId: string): Promise<void> {
+    await window.ensemble.popOutBrowserTab(tabId);
+  }
+
   async function activate(tabId: string): Promise<void> {
     state.value = await window.ensemble.activateEmbeddedTab(tabId);
   }
@@ -686,6 +696,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     openIdentitiesInNewView,
     openView,
     closeTab,
+    popOutTab,
     activate,
     activateView,
     createView,

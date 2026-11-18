@@ -425,6 +425,7 @@ describe("browser tools are advertised", () => {
       "move_browser_tab",
       "set_tab_page",
       "close_browser_tab",
+      "pop_out_browser_tab",
     ]) {
       expect(names).toContain(expected);
     }
@@ -1048,6 +1049,7 @@ describe("capability reporting", () => {
       muteForAi: () => {},
       restoreAfterAi: () => {},
       openViewContainer: () => "view-1",
+      popOutTab: async () => ({}),
       addInitScript: async () => ({ scriptId: "s1" }),
       listInitScripts: () => [],
       removeInitScript: async () => {},

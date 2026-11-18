@@ -95,15 +95,23 @@ export class BrowserGuestManager {
     string,
     { promise: Promise<void>; resolve: () => void; timer: ReturnType<typeof setTimeout> }
   >();
-  private host: WebContents | null = null;
-  /** Whether the embedder has been made to produce a frame (see {@link primeHost}). */
-  private hostPrimed = false;
+  /**
+   * The windows that host `<webview>` nodes, each with its attach listener.
+   *
+   * The main window is the only host today except for one case: a page popped
+   * out into its own window (拆窗) mounts its node there. Both windows listen
+   * for attach events so a guest registers no matter which window created it.
+   * The listener is per host because priming must target the guest's own
+   * embedder, and the attach event does not name it.
+   */
+  private readonly hosts = new Map<WebContents, (event: Electron.Event, contents: WebContents) => void>();
+  /** Whether an embedder has been made to produce a frame (see {@link primeHost}). */
+  private readonly hostPrimed = new WeakSet<WebContents>();
   private readonly onWillAttach: (
     event: Electron.Event,
     preferences: Electron.WebPreferences,
     params: Record<string, string>,
   ) => void;
-  private readonly onDidAttach: (event: Electron.Event, contents: WebContents) => void;
 
   constructor(private readonly options: BrowserGuestManagerOptions = {}) {
     this.sessions = new GuestSessions({
@@ -120,41 +128,71 @@ export class BrowserGuestManager {
       this.options.onError?.(`拒绝挂载页面：${decision.reason ?? "未通过校验"}`);
       event.preventDefault();
     };
-    // Guests that attach without a waiter are still registered: the renderer
-    // reports a node as soon as it exists, but a reload of the embedder can
-    // re-attach one before that report arrives.
-    this.onDidAttach = (_event, contents) => {
-      this.register(contents);
-      // Not awaited: the guest is usable for everything except screenshots
-      // until the frame lands, and blocking the attach event would stall the
-      // renderer's own `dom-ready` handling.
-      void this.primeHost();
-    };
   }
 
   /**
-   * Binds the manager to the window that will host the `<webview>` nodes.
+   * Binds the manager to a window that hosts `<webview>` nodes.
    *
-   * Idempotent: the window can be recreated (the app lives in the tray), and
-   * re-binding the same `webContents` would double every listener.
+   * Idempotent per window, and additive across windows: the main window is
+   * installed once at startup, a popout window installs itself when created.
+   * Re-binding the same `webContents` would double every listener, and the
+   * main window can be recreated (the app lives in the tray) without the
+   * popouts going away.
    */
   install(host: WebContents): void {
-    if (this.host === host) return;
-    this.uninstall();
-    this.host = host;
+    if (this.hosts.has(host)) return;
     // A new window has never produced a frame; the next guest has to prime it
     // again, or every screenshot of a background tab waits out its timeout.
-    this.hostPrimed = false;
+    this.hostPrimed.delete(host);
+    const onDidAttach = this.didAttachFor(host);
+    this.hosts.set(host, onDidAttach);
     host.on("will-attach-webview", this.onWillAttach);
-    host.on("did-attach-webview", this.onDidAttach);
+    host.on("did-attach-webview", onDidAttach);
+  }
+
+  /**
+   * Per-host attach listener.
+   *
+   * The shared handler needs to know which window gained the node — priming
+   * must target the guest's own embedder — and the attach event's typed payload
+   * does not carry the sender, so the host is captured here instead.
+   */
+  private didAttachFor(
+    host: WebContents,
+  ): (event: Electron.Event, contents: WebContents) => void {
+    return (_event, contents) => {
+      this.register(contents, host);
+      // Not awaited: the guest is usable for everything except screenshots
+      // until the frame lands, and blocking the attach event would stall the
+      // renderer's own `dom-ready` handling.
+      void this.primeHost(host);
+    };
   }
 
   uninstall(): void {
-    const host = this.host;
-    this.host = null;
-    if (!host || host.isDestroyed()) return;
+    for (const host of this.hosts.keys()) {
+      if (host.isDestroyed()) continue;
+      host.off("will-attach-webview", this.onWillAttach);
+      host.off("did-attach-webview", this.hosts.get(host)!);
+    }
+    this.hosts.clear();
+  }
+
+  /**
+   * Removes one window from the host set.
+   *
+   * A popout takes its listeners with it when it closes; keeping a destroyed
+   * `webContents` in the set would make {@link primeForCapture} and host
+   * iteration trip over it. Guests that belonged to that window are already
+   * gone — `destroyed` fired for each as the window died.
+   */
+  uninstallHost(host: WebContents): void {
+    const onDidAttach = this.hosts.get(host);
+    if (!onDidAttach) return;
+    this.hosts.delete(host);
+    if (host.isDestroyed()) return;
     host.off("will-attach-webview", this.onWillAttach);
-    host.off("did-attach-webview", this.onDidAttach);
+    host.off("did-attach-webview", onDidAttach);
   }
 
   /** Number of guests currently attached; the surface uses it for diagnostics. */
@@ -171,6 +209,10 @@ export class BrowserGuestManager {
    * the main use, so this runs once when the first guest attaches rather than
    * lazily per call — one 150ms prime instead of a 4s timeout per screenshot.
    *
+   * The embedder that matters is the one hosting *this* guest, which is why
+   * the caller can pass a window: a popout-hosted guest primes its popout, not
+   * the main window. Without an argument the main host is primed.
+   *
    * Deliberately a CDP capture of the *host*: `capturePage()` on a window whose
    * page contains a webview throws `UnknownVizError`, and attaching without
    * capturing does not produce the frame.
@@ -180,15 +222,22 @@ export class BrowserGuestManager {
    * them, and the flag would then claim a prime that no longer holds. {@link
    * primeForCapture} is what callers use when a real capture is about to happen.
    */
-  private async primeHost(): Promise<void> {
-    const host = this.host;
-    if (!host || host.isDestroyed() || this.hostPrimed) return;
-    this.hostPrimed = true;
-    await this.captureHost();
+  private async primeHost(host: WebContents | undefined): Promise<void> {
+    const target = host ?? this.primaryHost();
+    if (!target || target.isDestroyed() || this.hostPrimed.has(target)) return;
+    this.hostPrimed.add(target);
+    await this.captureHost(target);
   }
 
-  private async captureHost(): Promise<boolean> {
-    const host = this.host;
+  /** The main window's webContents, when it is still alive. */
+  private primaryHost(): WebContents | undefined {
+    for (const host of this.hosts.keys()) {
+      if (!host.isDestroyed()) return host;
+    }
+    return undefined;
+  }
+
+  private async captureHost(host: WebContents | undefined): Promise<boolean> {
     if (!host || host.isDestroyed()) return false;
     try {
       if (!host.debugger.isAttached()) host.debugger.attach("1.3");
@@ -223,10 +272,14 @@ export class BrowserGuestManager {
    * primed" cannot be remembered: a parked window, a minimised one and one that
    * was just moved produce no frames, and a guest whose embedder is not
    * producing frames waits out the whole screenshot deadline.
+   *
+   * `hostWebContents` names the window the guest lives in (its `hostWebContents`);
+   * omitted means the main window.
    */
-  async primeForCapture(): Promise<boolean> {
-    this.hostPrimed = true;
-    return this.captureHost();
+  async primeForCapture(hostWebContents?: WebContents): Promise<boolean> {
+    const target = hostWebContents ?? this.primaryHost();
+    if (target) this.hostPrimed.add(target);
+    return this.captureHost(target);
   }
 
   /**

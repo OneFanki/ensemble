@@ -363,6 +363,10 @@ export const IPC = {
   embeddedGuestPresented: "embedded:guest-presented",
   /** Renderer → main: a node exists and has been given its box. */
   embeddedGuestLaidOut: "embedded:guest-laid-out",
+  /** Renderer → main: move a page into its own OS window (or back, when already out). */
+  embeddedTabPopOut: "embedded:tab-pop-out",
+  /** Renderer → main: move a popped-out page back onto the main stage. */
+  embeddedTabDock: "embedded:tab-dock",
   settingsSave: "settings:save",
   /** Fires the connectivity test shown in the proxy settings. */
   proxyTestConnectivity: "proxy:test-connectivity",
@@ -975,6 +979,14 @@ export interface EnsembleApi {
   confirmEmbeddedGuestPresented(requestId: number, shown: boolean): Promise<void>;
   /** Renderer → main: a node now has its real box, so the page is readable. */
   confirmEmbeddedGuestLaidOut(tabId: string): Promise<void>;
+  /**
+   * Moves a page into its own OS window, or back onto the stage when it is
+   * already out (toggle). Resolves with the new window id, or `docked: true`
+   * after the page came back.
+   */
+  popOutBrowserTab(tabId: string): Promise<{ windowId?: number; docked?: boolean }>;
+  /** Moves a popped-out page back onto the main stage. */
+  dockBrowserTab(tabId: string): Promise<{ docked: boolean }>;
 
   saveAppSettings(patch: SettingsPatch): Promise<AppSettings>;
   setTheme(theme: AppSettings["theme"]): Promise<void>;

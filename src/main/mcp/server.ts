@@ -1283,6 +1283,8 @@ const TAB_SUMMARY_FIELDS = [
   "muted",
   "audible",
   "loading",
+  // popout 决定读取/截图走哪条渲染路径，属于 AI 决策字段，不是渲染层私货。
+  "popout",
 ] as const;
 
 function projectTab(tab: unknown): Record<string, unknown> {

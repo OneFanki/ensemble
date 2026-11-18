@@ -35,7 +35,7 @@
  * Parking now hangs off this counter, which every floating layer already passes
  * through. One place, correct nesting, and a new menu cannot forget.
  */
-import { watch, type Ref } from "vue";
+import { onScopeDispose, type Ref, watch } from "vue";
 
 /** How many layers are open. Positive means drag regions are suspended. */
 let openLayers = 0;
@@ -50,18 +50,29 @@ function publish(open: boolean): void {
 /**
  * Publishes "a layer is open" while `open` is true.
  *
- * Returns nothing on purpose: the caller keeps owning its own open state, and
- * the cleanup is registered against it. There is exactly one thing to get right
- * here — that the flag is removed when the component unmounts with a layer open,
- * which would otherwise leave dragging disabled for the rest of the session.
+ * Returns nothing on purpose: the caller keeps owning its own open state. Two
+ * things are easy to get wrong here, and both were:
+ *
+ * 1. **The decrement has to survive unmount.** A layer removed from the tree
+ *    while open never sees `open` turn false, so a watch alone leaves the
+ *    counter positive for the rest of the session: dragging stays off and the
+ *    DevTools panel stays parked with no way to bring it back. The scope
+ *    cleanup below is what releases it.
+ * 2. **One layer, one count.** Re-reporting the same value must not move the
+ *    counter, otherwise a layer whose ref is recomputed (or a component that
+ *    flips its own flag twice) drifts the count away from the number of open
+ *    layers.
  */
 export function useFloatingLayer(open: Ref<boolean>): void {
-  watch(
-    open,
-    (isOpen) => {
-      openLayers = Math.max(0, openLayers + (isOpen ? 1 : -1));
-      publish(openLayers > 0);
-    },
-    { immediate: true },
-  );
+  let counted = false;
+
+  function apply(isOpen: boolean): void {
+    if (isOpen === counted) return;
+    counted = isOpen;
+    openLayers = Math.max(0, openLayers + (isOpen ? 1 : -1));
+    publish(openLayers > 0);
+  }
+
+  watch(open, apply, { immediate: true });
+  onScopeDispose(() => apply(false));
 }

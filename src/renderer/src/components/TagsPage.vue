@@ -115,7 +115,7 @@ function onTagDragEnd(): void {
   dropTagId.value = null;
 }
 
-/** "3 个站点 · 5 个账号 · 1 个视图", so an unused tag is obvious. */
+/** "3 个站点 · 5 个账号", so an unused tag is obvious. */
 function usage(tag: Tag): string {
   const sites = store.sites.filter((site) => site.tagIds?.includes(tag.id)).length;
   const identities = store.identities.filter((identity) => {
@@ -123,11 +123,9 @@ function usage(tag: Tag): string {
     const site = store.sites.find((item) => item.id === identity.siteId);
     return Boolean(site?.tagIds?.includes(tag.id));
   }).length;
-  const views = store.views.filter((view) => store.tagsForView(view).includes(tag.id)).length;
   const parts = [
     t("app.tagUsageSites", { count: sites }),
     t("app.tagUsageIdentities", { count: identities }),
-    t("app.tagUsageViews", { count: views }),
   ];
   return parts.join(" · ");
 }
@@ -139,8 +137,7 @@ function isUnused(tag: Tag): boolean {
       if (identity.tagIds?.includes(tag.id)) return true;
       const site = store.sites.find((item) => item.id === identity.siteId);
       return Boolean(site?.tagIds?.includes(tag.id));
-    }) &&
-    !store.views.some((view) => store.tagsForView(view).includes(tag.id))
+    })
   );
 }
 

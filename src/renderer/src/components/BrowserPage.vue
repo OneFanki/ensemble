@@ -1,20 +1,15 @@
 <script setup lang="ts">
-import type { EmbeddedDevice, EmbeddedTab, EmbeddedView, StageRect } from "@shared/embedded";
+import type { EmbeddedDevice, EmbeddedTab, StageRect } from "@shared/embedded";
 import type { UpdateCheckResult } from "@shared/update";
 import {
   EMBEDDED_DEVTOOLS_GRIP,
   EMBEDDED_DEVTOOLS_HEAD,
-  EMBEDDED_DIVIDER,
-  EMBEDDED_SLOT_HEADER,
-  embeddedSlotRects,
   isBlankTab,
-  stageDrawsSlotHeaders,
   tabDisplayTitle,
   VIEWPORT_MAX_HEIGHT,
   VIEWPORT_MAX_WIDTH,
   VIEWPORT_MIN,
   VIEWPORT_PRESETS,
-  viewSlotFractions,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
 import type {
@@ -23,9 +18,7 @@ import type {
   BookmarkDraft,
   DownloadAction,
   DownloadEntry,
-  Identity,
   LoginCaptureNotice,
-  SlotRect,
 } from "@shared/types";
 import {
   Activity,
@@ -80,7 +73,7 @@ import BookmarkDialog from "./BookmarkDialog.vue";
 import DevicePanel from "./DevicePanel.vue";
 import AiPanel from "./AiPanel.vue";
 import PageSizeFrame from "./PageSizeFrame.vue";
-import InstanceTabStrip from "./InstanceTabStrip.vue";
+import InstanceRail from "./InstanceRail.vue";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
 import OpenSiteButton from "./OpenSiteButton.vue";
@@ -97,23 +90,13 @@ const { t } = useI18n();
 const props = defineProps<{
   /** An HTML overlay (for example the site menu) covers the stage. */
   obscured?: boolean;
-  /**
-   * The sidebar is on screen.
-   *
-   * The top tab strip is drawn either way — a browser always has one. With the
-   * column up it also names the focused cell's account, because every cell of
-   * the same app shows the same page titles.
-   */
-  bench?: boolean;
 }>();
 
 const emit = defineEmits<{
   /** Open a management page; `null` means "settings", the menu's default. */
   openConsole: [view?: "sites" | "bookmarks" | "profiles" | "settings" | "messages" | "ai"];
-  /** Single cell ↔ workbench. */
-  switchMode: [mode: "browse" | "bench"];
-  /** The app menu's "open the workbench" — same action as the layout button. */
-  openWorkspace: [];
+  /** A management page was chosen from the instance rail; the shell owns it. */
+  manage: [view: string];
   /** The app menu's guide entry; the shell owns the dialog. */
   openGuide: [];
   /** A manual update check from the menu found something to install. */
@@ -204,11 +187,6 @@ function toggleAppMenu(): void {
 /** How the window was asked to quit; the main process owns what that means. */
 const appPlatform = computed(() => workspace.snapshot?.platform ?? "win32");
 
-function openWorkspaceFromMenu(): void {
-  appMenuOpen.value = false;
-  emit("openWorkspace");
-}
-
 function openPageFromMenu(view: "sites" | "bookmarks" | "profiles" | "settings"): void {
   appMenuOpen.value = false;
   emit("openConsole", view);
@@ -248,45 +226,20 @@ async function openCleanFromMenu(): Promise<void> {
 }
 
 /**
- * Whether the sidebar is up.
+ * The instance whose pages the second row lists.
  *
- * Read from the prop when the parent has an opinion, and from the layout
- * otherwise: a multi-cell layout is on stage because someone opened the
- * workbench, and a stale prop should not hide the column beside a grid.
+ * The stage is single-cell (ADR 0012): it shows one instance, and the strip
+ * below the instance rail is that instance's pages — which is what a tab strip
+ * means.
  */
-const bench = computed(() => {
-  if (props.bench !== undefined) return props.bench;
-  return (activeView.value ? store.slots(activeView.value) : 1) > 1;
-});
-
-/**
- * Pages the window-level tab strip lists.
- *
- * The focused cell's instance when there is a view, the active instance when the
- * stage is flat. One instance fills one cell, so "the window's tabs" always means
- * one browser's pages — which is what a tab strip means.
- */
-const windowInstanceId = computed<string | null>(() => {
-  const view = activeView.value;
-  if (view) {
-    const focused = view.focusedTabId ?? view.slotTabs.find(Boolean) ?? null;
-    return slotInstanceId(focused);
-  }
-  return activeTab.value?.instanceId ?? null;
-});
+const windowInstanceId = computed<string | null>(() => activeTab.value?.instanceId ?? null);
 
 const windowPages = computed<EmbeddedTab[]>(() =>
   windowInstanceId.value ? store.instancePages(windowInstanceId.value) : [],
 );
 
-/** Which page the strip marks as current: the focused cell's own page. */
-const windowActivePageId = computed<string | null>(() => {
-  const view = activeView.value;
-  if (!view) return activeTab.value?.id ?? null;
-  const focused = view.focusedTabId ?? view.slotTabs.find(Boolean) ?? null;
-  const index = focused ? view.slotTabs.indexOf(focused) : -1;
-  return (index >= 0 ? slotPage(focused, index) : undefined)?.id ?? null;
-});
+/** Which page the strip marks as current: the one on stage. */
+const windowActivePageId = computed<string | null>(() => activeTab.value?.id ?? null);
 
 /**
  * The sleep state a tab should show, if any.
@@ -307,19 +260,9 @@ function pageTitle(page: EmbeddedTab): string {
   return `${page.url}\n${state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep")}`;
 }
 
-/**
- * Clicking a window-level tab shows that page in the focused cell.
- *
- * It goes through the same path as a click inside the cell's strip, so a split
- * instance keeps pinning pages to cells instead of moving the whole window's
- * active page.
- */
+/** Clicking a strip tab puts that page on the stage. */
 function activateWindowPage(pageId: string): void {
-  const view = activeView.value;
-  const focused = view?.focusedTabId ?? view?.slotTabs.find(Boolean) ?? null;
-  const index = view && focused ? view.slotTabs.indexOf(focused) : -1;
-  if (index >= 0) selectPage(pageId, index);
-  else selectPage(pageId);
+  void store.activate(pageId);
 }
 
 function onWindowPageDragStart(page: EmbeddedTab, event: DragEvent): void {
@@ -414,32 +357,16 @@ function addWindowPage(): void {
   else void store.openLooseTab();
 }
 
-/**
- * Show ↔ hide the sidebar.
- *
- * The parent owns the mode: the shell decides whether the column is on screen,
- * and the browser only reports what was clicked. Hiding does not close anything —
- * every page keeps running and is still reachable when the column comes back.
- */
-function toggleBench(): void {
-  emit("switchMode", bench.value ? "browse" : "bench");
-}
-
 const activeTab = computed(() => store.activeTab);
-const activeView = computed(() => store.activeView);
 /** Transient zoom percentage; see `showZoomNotice` in the store. */
 const zoomNotice = computed(() => store.zoomNotice);
 
 /**
  * The strip swaps its pages as a set when the selection moves to another
- * window: every key changes at once, so the enter/leave pair reads as "a new
- * tab appeared and the old one was closed". Same title, same slot — there is
+ * instance: every key changes at once, so the enter/leave pair reads as "a new
+ * tab appeared and the old one was closed". Same title, same place — there is
  * nothing to animate, and the switch below turns the transition off for that
- * one frame. New tabs inside one window and reordering keep theirs.
- *
- * Declared after `activeView` on purpose: `windowInstanceId` reads it, and a
- * watch established while it is still in its temporal dead zone would throw
- * during setup and take the whole page down with it.
+ * one frame. New tabs inside one instance and reordering keep theirs.
  */
 const stripAnimated = ref(true);
 
@@ -585,138 +512,6 @@ async function onBookmarkDialogSave(draft: BookmarkDraft): Promise<void> {
     await workspace.setBookmarkFavicon(saved.id, activeTab.value.favicon);
   }
   workspace.notify(t("app.bookmarkAdded", { name: saved?.name ?? draft.name }), "success");
-}
-
-/**
- * Slots of the view on stage, in the same geometry the main process uses. The
- * header band of each slot is the only part of the stage HTML that stays
- * visible: the native page paints over the rest.
- */
-const slotChrome = computed(() => {
-  const view = activeView.value;
-  const width = stageBox.value.width;
-  const height = stageBox.value.height;
-  if (!view || width <= 0 || height <= 0) return [];
-  return embeddedSlotRects(view.layoutId, { x: 0, y: 0, width, height }, view.slotRects).map(
-    (slot, index) => ({
-      ...slot,
-      index,
-      tabId: view.slotTabs[index] ?? null,
-    }),
-  );
-});
-
-/**
- * Cells that draw their own header band.
- *
- * Empty for a one-cell stage: with a single cell the band repeats the window's
- * tab strip one row lower and says nothing the strip does not. The same rule
- * decides the page's geometry in the main process (`stageDrawsSlotHeaders`), so
- * the two cannot disagree about whether that 26px belongs to the chrome or to
- * the page.
- */
-const slotHeaders = computed(() => {
-  if (!stageDrawsSlotHeaders(slotChrome.value.length)) return [];
-  return slotChrome.value.filter((item) => item.tabId);
-});
-
-function tabById(id: string | null): EmbeddedTab | undefined {
-  if (!id) return undefined;
-  return store.tabs.find((tab) => tab.id === id);
-}
-
-/**
- * Page a slot is currently showing.
- *
- * `slotTabs` stores browser-instance ids; the instance may have several pages
- * after a `target="_blank"` link, and normally the slot shows the active one.
- * A slot that pinned a page (`slotPages`, the same-account split) shows that
- * page instead — otherwise the two cells would show the same thing.
- */
-function slotPage(rootId: string | null, index?: number): EmbeddedTab | undefined {
-  const root = tabById(rootId);
-  if (!root) return undefined;
-  const pinnedId = index === undefined ? null : (activeView.value?.slotPages?.[index] ?? null);
-  const pinned = pinnedId ? tabById(pinnedId) : undefined;
-  if (pinned && pinned.instanceId === root.instanceId) return pinned;
-  const pages = store.instancePages(root.instanceId);
-  return pages.find((page) => page.active) ?? root;
-}
-
-/**
- * Index of the slot that currently shows this page, if any.
- *
- * With a split, one instance occupies two cells showing two different pages; the
- * strip in each cell must mark *its own* page as current, so the caller passes
- * the slot index it is drawing for.
- */
-function slotShowingPage(pageId: string | undefined): number | undefined {
-  if (!pageId) return undefined;
-  return slotChrome.value.find((slot) => slotPage(slot.tabId, slot.index)?.id === pageId)?.index;
-}
-
-/**
- * Instance id behind a slot's entry.
- *
- * `slotTabs` holds the root page's id, and closing that page re-points the slot
- * at the oldest survivor — whose `instanceId` still names the original instance.
- * Passing the slot entry straight to the strip therefore looked up pages by a
- * page id and found none, which is exactly how a cell lost its tab strip after
- * its root page was closed.
- */
-function slotInstanceId(rootId: string | null): string | null {
-  if (!rootId) return null;
-  const root = tabById(rootId);
-  return root?.instanceId ?? null;
-}
-
-/** Name of the account the slot's instance belongs to, when it has one. */
-function slotAccount(rootId: string | null): string {
-  const root = tabById(rootId);
-  if (!root?.identityId) return "";
-  return workspace.identities.find((item) => item.id === root.identityId)?.name ?? "";
-}
-
-/** How many cells of the active view hold the instance behind this slot entry. */
-function viewSlotCount(rootId: string | null): number {
-  const view = activeView.value;
-  if (!view || !rootId) return 0;
-  return view.slotTabs.filter((id) => id === rootId).length;
-}
-
-/**
- * Gives a split cell back to the instance.
- *
- * A split is two cells showing two pages of one window; "un-split" means this
- * cell stops pinning a page, so it follows the instance again. If the instance
- * still holds another cell the pins there are dropped too — otherwise "one cell
- * follows the window" would sit next to a cell that still pins a page, which is
- * the same confusion in a smaller dose.
- */
-async function unsplitSlot(slotIndex: number): Promise<void> {
-  const view = activeView.value;
-  if (!view) return;
-  await store.unsplitSlot(view.id, slotIndex);
-}
-
-/**
- * Switching pages inside a slot.
- *
- * The instance stays in the same cell — only which of its pages is on screen
- * changes — so this must not bubble up to the header's "select this slot".
- *
- * When the same instance occupies two cells (a split), the click also pins the
- * page to *this* cell. Without that, `activate` would move the instance's global
- * active page and the other cell would silently switch to the same page — the
- * two-cell comparison would collapse into two identical pictures.
- */
-function selectPage(pageId: string, slotIndex?: number): void {
-  const view = activeView.value;
-  if (view && slotIndex !== undefined && viewSlotCount(view.slotTabs[slotIndex] ?? null) > 1) {
-    void store.splitPageIntoSlot(view.id, slotIndex, pageId);
-    return;
-  }
-  void store.activate(pageId);
 }
 
 /**
@@ -948,330 +743,11 @@ async function applyCustomViewport(): Promise<void> {
  * of on an empty white rectangle.
  */
 const blankSurfaces = computed(() => {
-  const view = activeView.value;
-  if (!view) {
-    const tab = activeTab.value;
-    if (!tab || tab.viewId || !isBlankTab(tab)) return [];
-    // A single cell has no header band any more (the window strip owns the tabs),
-    // so the blank surface fills the stage instead of starting below a band that
-    // is not drawn.
-    const box = stageBox.value;
-    return [{ tab, slot: { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) } }];
-  }
-  return slotChrome.value
-    .map((slot, index) => ({ slot, index }))
-    .flatMap(({ slot, index }) => {
-      const page = slotPage(slot.tabId, index);
-      if (!page || !isBlankTab(page)) return [];
-      const rect = embeddedSlotRectsForSlot(index);
-      return rect ? [{ tab: page, slot: rect }] : [];
-    });
+  const tab = activeTab.value;
+  if (!tab || tab.viewId || !isBlankTab(tab)) return [];
+  const box = stageBox.value;
+  return [{ tab, slot: { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) } }];
 });
-
-/** Slot rect with the header band removed: the surface lives below the chrome. */
-function embeddedSlotRectsForSlot(index: number): StageRect | null {
-  const slot = slotChrome.value.find((item) => item.index === index);
-  if (!slot) return null;
-  // One cell has no band (see `slotHeaders`), so the surface takes the full cell.
-  const header = stageDrawsSlotHeaders(slotChrome.value.length) ? EMBEDDED_SLOT_HEADER : 0;
-  return {
-    x: slot.x,
-    y: slot.y + header,
-    width: slot.width,
-    height: Math.max(1, slot.height - header),
-  };
-}
-
-function activateSlot(rootId: string | null, index?: number): void {
-  const page = slotPage(rootId, index);
-  if (page) void store.activate(page.id);
-}
-
-/**
- * A dock row can be dropped straight onto a slot.
- *
- * Picking a slot first and then clicking a tab is the documented path, but almost
- * nobody discovers it: dragging the page onto the cell is what people try first.
- * The header band is the only HTML above a live page, so that is the drop target.
- */
-const dropSlot = ref<number | null>(null);
-/** Empty cell whose account picker is open; one at a time, like a menu. */
-const openSlotPicker = ref<number | null>(null);
-
-function onSlotDragOver(slotIndex: number, event: DragEvent): void {
-  if (!event.dataTransfer?.types.includes("text/plain")) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-  dropSlot.value = slotIndex;
-}
-
-/**
- * Two kinds of drag land on a cell, and they mean different things.
- *
- * A dock row drags an *instance root*: "put this browser window in that cell".
- * A page tab drags one *page* (it also sets `application/x-ensemble-page`):
- * "show this page in that cell". The second is what makes one account split
- * across two cells — the instance stays the same, only the visible page differs,
- * so cookies and the login stay shared.
- */
-async function onSlotDrop(slotIndex: number, event: DragEvent): Promise<void> {
-  event.preventDefault();
-  const pageId = event.dataTransfer?.getData("application/x-ensemble-page") ?? "";
-  const tabId = event.dataTransfer?.getData("text/plain");
-  dropSlot.value = null;
-  // Clearing the drag signal restores the live pages; do it before the IPC so the
-  // re-layout lands on a stage that is already visible again.
-  store.dragTab(null);
-  const view = activeView.value;
-  if (!view) return;
-  if (pageId) {
-    await store.splitPageIntoSlot(view.id, slotIndex, pageId);
-    return;
-  }
-  if (!tabId) return;
-  // pinTab joins the view when needed and focuses the page it pinned.
-  await store.pin(view.id, slotIndex, tabId);
-}
-
-/**
- * An empty slot is drawn as one dashed cell covering the whole rectangle.
- *
- * It has no header band — there is no page title to put in one, and a 26px strip
- * with only a slot number looked like a label stuck to the top edge. The number
- * moves into the cell, next to the action, so the whole area reads as "a place a
- * page belongs".
- */
-const emptySlots = computed(() =>
-  slotChrome.value
-    .filter((slot) => !slot.tabId)
-    .map((slot) => ({
-      index: slot.index,
-      left: slot.x,
-      top: slot.y,
-      width: slot.width,
-      height: slot.height,
-    })),
-);
-
-/**
- * Occupied cells that need a drop cover while a drag is in flight.
- *
- * See the template comment: without it the drop is delivered to the page instead
- * of to the cell. `draggingTabId` is set by both drag sources (the dock and a
- * page tab), so this appears for either.
- */
-const dragCoverSlots = computed(() =>
-  store.draggingTabId ? slotChrome.value.filter((slot) => slot.tabId) : [],
-);
-
-/**
- * Divider handles for resizing a view by hand.
- *
- * Native pages are inset by `EMBEDDED_DIVIDER` on every internal edge, which
- * leaves a real gap for the handle: a divider drawn on the exact boundary would
- * be painted over by the page itself.
- *
- * Handles are grouped by *boundary*, not by slot. In a 2×2, both bottom cells
- * end at the same y — a per-rect map keyed by that y ended up keeping only the
- * last one, so the horizontal handle covered the right half of the stage and
- * the left half was unreachable (dragging there hit the stage itself). Each
- * boundary here spans every cell that touches it.
- */
-interface Divider {
-  key: string;
-  axis: "x" | "y";
-  /** Boundary in fractions of the stage. */
-  at: number;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-/** Rounds a fraction to the precision boundaries are compared at. */
-function boundary(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-const dividers = computed<Divider[]>(() => {
-  const element = stage.value;
-  const view = activeView.value;
-  if (!element || !view) return [];
-  // A single full-stage page has nothing to split.
-  if (!view.slotRects && view.layoutId === "free") return [];
-  const rects = viewSlotFractions(view);
-  if (rects.length < 2) return [];
-  const width = element.clientWidth;
-  const height = element.clientHeight;
-  if (width <= 0 || height <= 0) return [];
-
-  /** One boundary per position, with the extent of every cell touching it. */
-  const collect = (positions: Array<{ at: number; from: number; to: number }>) => {
-    const byAt = new Map<number, { from: number; to: number }>();
-    for (const edge of positions) {
-      const prev = byAt.get(edge.at);
-      if (!prev) {
-        byAt.set(edge.at, { from: edge.from, to: edge.to });
-        continue;
-      }
-      byAt.set(edge.at, {
-        from: Math.min(prev.from, edge.from),
-        to: Math.max(prev.to, edge.to),
-      });
-    }
-    return byAt;
-  };
-
-  const verticals: Array<{ at: number; from: number; to: number }> = [];
-  const horizontals: Array<{ at: number; from: number; to: number }> = [];
-  for (const rect of rects) {
-    const right = boundary(rect.x + rect.width);
-    const bottom = boundary(rect.y + rect.height);
-    const left = boundary(rect.x);
-    const top = boundary(rect.y);
-    // The stage border is not a boundary between cells.
-    if (left > 0.001 && left < 0.999) {
-      verticals.push({ at: left, from: rect.y, to: rect.y + rect.height });
-    }
-    if (right > 0.001 && right < 0.999) {
-      verticals.push({ at: right, from: rect.y, to: rect.y + rect.height });
-    }
-    if (top > 0.001 && top < 0.999) {
-      horizontals.push({ at: top, from: rect.x, to: rect.x + rect.width });
-    }
-    if (bottom > 0.001 && bottom < 0.999) {
-      horizontals.push({ at: bottom, from: rect.x, to: rect.x + rect.width });
-    }
-  }
-
-  const handles: Divider[] = [];
-  for (const [at, span] of collect(verticals)) {
-    handles.push({
-      key: `v-${at}`,
-      axis: "x",
-      at,
-      left: Math.round(at * width) - EMBEDDED_DIVIDER,
-      top: Math.round(span.from * height),
-      width: EMBEDDED_DIVIDER,
-      height: Math.max(1, Math.round((span.to - span.from) * height)),
-    });
-  }
-  for (const [at, span] of collect(horizontals)) {
-    handles.push({
-      key: `h-${at}`,
-      axis: "y",
-      at,
-      left: Math.round(span.from * width),
-      top: Math.round(at * height) - EMBEDDED_DIVIDER,
-      width: Math.max(1, Math.round((span.to - span.from) * width)),
-      height: EMBEDDED_DIVIDER,
-    });
-  }
-  return handles;
-});
-
-const drag = ref<{
-  axis: "x" | "y";
-  at: number;
-  start: number;
-  rects: SlotRect[];
-} | null>(null);
-
-function startResize(divider: Divider, event: PointerEvent): void {
-  const view = activeView.value;
-  if (!view) return;
-  event.preventDefault();
-  event.stopPropagation();
-  /*
-   * The pointer has to be taken away from the pages for the whole gesture.
-   *
-   * A boundary runs beside two live pages, and the very first move lands over
-   * one of them. A guest is a real surface: it takes the pointer and the
-   * `pointermove` stream stops reaching the window, so the divider froze at its
-   * starting position — the drag looked like it simply did not work. The dock's
-   * resize handle has held the shield for the same reason since it was written;
-   * this one was missing it.
-   */
-  store.holdPointer();
-  drag.value = {
-    axis: divider.axis,
-    at: divider.at,
-    start: divider.axis === "x" ? event.clientX : event.clientY,
-    rects: viewSlotFractions(view),
-  };
-  window.addEventListener("pointermove", onResizeMove);
-  window.addEventListener("pointerup", endResize, { once: true });
-}
-
-/** Re-splits the slots that touch the dragged boundary; the rest stay put. */
-function resizedRects(state: NonNullable<typeof drag.value>, delta: number): SlotRect[] {
-  const epsilon = 0.001;
-  // Keep at least 10% on both sides of the boundary, then clamp.
-  let lower = 0.1;
-  let upper = 0.9;
-  for (const rect of state.rects) {
-    const edge = state.axis === "x" ? rect.x + rect.width : rect.y + rect.height;
-    const origin = state.axis === "x" ? rect.x : rect.y;
-    const size = state.axis === "x" ? rect.width : rect.height;
-    if (Math.abs(edge - state.at) < epsilon) lower = Math.max(lower, origin + 0.1);
-    if (Math.abs(origin - state.at) < epsilon) upper = Math.min(upper, origin + size - 0.1);
-  }
-  const target = Math.max(lower, Math.min(upper, state.at + delta));
-
-  return state.rects.map((rect) => {
-    const right = rect.x + rect.width;
-    const bottom = rect.y + rect.height;
-    if (state.axis === "x") {
-      if (Math.abs(right - state.at) < epsilon) return { ...rect, width: target - rect.x };
-      if (Math.abs(rect.x - state.at) < epsilon) {
-        return { ...rect, x: target, width: right - target };
-      }
-    } else {
-      if (Math.abs(bottom - state.at) < epsilon) return { ...rect, height: target - rect.y };
-      if (Math.abs(rect.y - state.at) < epsilon) {
-        return { ...rect, y: target, height: bottom - target };
-      }
-    }
-    return rect;
-  });
-}
-
-let resizeFrame = 0;
-let pendingRects: SlotRect[] | null = null;
-
-function onResizeMove(event: PointerEvent): void {
-  const state = drag.value;
-  const element = stage.value;
-  const view = activeView.value;
-  if (!state || !element || !view) return;
-  const size = state.axis === "x" ? element.clientWidth : element.clientHeight;
-  if (size <= 0) return;
-  const delta = ((state.axis === "x" ? event.clientX : event.clientY) - state.start) / size;
-  const next = resizedRects(state, delta);
-  pendingRects = next;
-  if (resizeFrame) return;
-  // Coalesce to one IPC per frame: every update re-bounds the native pages.
-  resizeFrame = window.requestAnimationFrame(() => {
-    resizeFrame = 0;
-    if (!pendingRects) return;
-    void store.setSlotRects(view.id, pendingRects);
-    pendingRects = null;
-  });
-}
-
-function endResize(): void {
-  drag.value = null;
-  // Balanced with `startResize`: a shield left held would leave every page
-  // permanently unable to take the pointer, which reads as "the browser stopped
-  // responding" rather than as a stuck resize.
-  store.releasePointer();
-  window.removeEventListener("pointermove", onResizeMove);
-  if (resizeFrame) {
-    window.cancelAnimationFrame(resizeFrame);
-    resizeFrame = 0;
-  }
-  pendingRects = null;
-}
 
 /**
  * Pages with a docked DevTools panel: the seam its handle sits in, and the band
@@ -1284,8 +760,6 @@ function endResize(): void {
  * same way.
  */
 const devtoolsPanels = computed(() => {
-  const view = activeView.value;
-  const cells = slotChrome.value;
   const stages: Array<{
     id: string;
     tabId: string;
@@ -1294,36 +768,18 @@ const devtoolsPanels = computed(() => {
     tab: "front-end" | "device" | "performance";
     page: EmbeddedTab;
   }> = [];
-  if (view) {
-    for (const cell of cells) {
-      const page = slotPage(cell.tabId, cell.index);
-      if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) continue;
-      const rect = embeddedSlotRectsForSlot(cell.index);
-      if (rect) {
-        stages.push({
-          id: page.id,
-          tabId: page.id,
-          rect,
-          width: page.devtoolsWidth,
-          tab: page.devtoolsTab ?? "front-end",
-          page,
-        });
-      }
-    }
-  } else {
-    const page = activeTab.value;
-    if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) return [];
-    const box = stageBox.value;
-    const rect = { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) };
-    stages.push({
-      id: page.id,
-      tabId: page.id,
-      rect,
-      width: page.devtoolsWidth,
-      tab: page.devtoolsTab ?? "front-end",
-      page,
-    });
-  }
+  const page = activeTab.value;
+  if (!page?.devtoolsOpen || page.devtoolsWidth === undefined) return [];
+  const box = stageBox.value;
+  const rect = { x: 0, y: 0, width: box.width, height: Math.max(1, box.height) };
+  stages.push({
+    id: page.id,
+    tabId: page.id,
+    rect,
+    width: page.devtoolsWidth,
+    tab: page.devtoolsTab ?? "front-end",
+    page,
+  });
   return stages.map((entry) => {
     /*
      * Split the cell, then let the page fit into what is left.
@@ -1646,7 +1102,6 @@ onBeforeUnmount(() => {
   offDownloads?.();
   document.removeEventListener("pointerdown", onDocumentPointerDown);
   window.removeEventListener("keydown", onKeydown);
-  window.removeEventListener("pointermove", onResizeMove);
   // Park the pages: another app page is taking the window, and WebContentsViews
   // paint above HTML no matter what z-index says.
   store.setStage(null);
@@ -1668,13 +1123,6 @@ watch(
   () => {
     findResult.value = null;
   },
-);
-
-// Slot geometry changes with the layout; tell the main process again so the
-// bounds it applies match what this page drew.
-watch(
-  () => activeView.value?.layoutId,
-  () => reportStage(),
 );
 
 /**
@@ -1966,36 +1414,6 @@ async function fillLogin(tabId: string): Promise<void> {
   workspace.notify(fillMessage(result.reason), "error");
 }
 
-/** Empty slot → new tab pinned there and focused, ready for an address. */
-async function addToSlot(slotIndex: number, identityId?: string): Promise<void> {
-  const view = activeView.value;
-  if (!view) return;
-  openSlotPicker.value = null;
-  await store.openTabInSlot(view.id, slotIndex, identityId ? { identityId } : undefined);
-}
-
-/**
- * Accounts offered for an empty cell: the site's own, in stored order.
- *
- * The site comes from `store.viewSiteId`, which knows both a saved view
- * definition and a hand-assembled container. An empty container with no
- * definition offers nothing: there is nothing to infer from, and listing every
- * identity in the workspace would turn the small menu into a second identities
- * page. Dragging one account in is what establishes the site.
- */
-function slotIdentities(slotIndex: number): Identity[] {
-  void slotIndex;
-  const view = activeView.value;
-  if (!view) return [];
-  const siteId = store.viewSiteId(view.id);
-  if (!siteId) return [];
-  return workspace.identities.filter((identity) => identity.siteId === siteId);
-}
-
-function toggleSlotPicker(slotIndex: number): void {
-  openSlotPicker.value = openSlotPicker.value === slotIndex ? null : slotIndex;
-}
-
 /**
  * Site bookmarks next to the address bar.
  *
@@ -2058,9 +1476,7 @@ async function openBookmark(bookmark: Bookmark): Promise<void> {
  * page is the same answer.
  */
 async function openIdentityBookmark(identityId: string): Promise<void> {
-  const view = activeView.value;
-  if (view) await store.openTabInto(view.id, { identityId });
-  else await store.openIdentity(identityId);
+  await store.openIdentity(identityId);
 }
 
 function fillMessage(reason?: string): string {
@@ -2091,42 +1507,23 @@ function fillMessage(reason?: string): string {
 </script>
 
 <template>
-  <section class="browser" :class="{ bench }">
+  <section class="browser">
     <!--
-      The tab strip, where every browser puts it.
+      The first row: one entry per running instance, ending with [+ 启动] and
+      [管理]. Clicking an entry puts that instance on the stage; the rest keep
+      running in the background. The rail owns the window's drag band too —
+      its empty stretches move the window, like a tab strip.
+    -->
+    <InstanceRail @manage="(view) => emit('manage', view)" />
+    <!--
+      The second row: the pages of the instance on stage.
 
-      1.0 drew the page list inside each cell's 26px header band, which meant a
-      single-cell layout had a tab strip in an unusual place and no strip at all
-      across the top — the one thing a browser is recognised by. The strip here
-      belongs to the window: it shows the focused cell's pages, and in a
-      multi-cell layout it also names which account that cell is, because every
-      cell of the same app shows the same page titles.
-
-      The active tab is painted in the toolbar's colour with no bottom edge, so
-      strip and toolbar read as one surface. That single detail is most of the
-      difference between a browser and a web app that draws tabs.
+      The stage is single-cell, so "the window's tabs" is exactly one browser's
+      pages — which is what a tab strip means. The active tab is painted in the
+      toolbar's colour with no bottom edge, so strip and toolbar read as one
+      surface.
     -->
     <div class="tabstrip drag-region" :data-platform="platform">
-      <!--
-        Shows and hides the sidebar — nothing else.
-
-        It used to also give a one-cell view a 2×1 layout on the way in, so
-        "open the workbench" silently rearranged the stage and there was no
-        gesture that put it back. The column is its own answer: with it up you
-        get the run dock and the navigation, and how many cells the stage is
-        split into is the layout picker's business.
-      -->
-      <button
-        type="button"
-        class="layout-btn no-drag"
-        :class="{ 'is-bench': bench }"
-        v-tooltip="bench ? t('app.layoutCollapseWorkbench') : t('app.layoutOpenWorkbench')"
-        :aria-label="bench ? t('app.layoutCollapseWorkbench') : t('app.layoutOpenWorkbench')"
-        :aria-expanded="bench"
-        @click="toggleBench"
-      >
-        <LayoutGrid :size="14" />
-      </button>
       <div class="tabs no-drag" role="tablist" :aria-label="t('app.browserTabs')">
         <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
           <button
@@ -2747,23 +2144,6 @@ function fillMessage(reason?: string): string {
           <MoreHorizontal :size="16" />
         </button>
         <div v-if="appMenuOpen" class="app-menu" role="menu">
-          <!--
-            The second door to the sidebar. The first is the grid glyph at the
-            left of the tab strip — invisible as a concept to anyone who did not
-            already know what this app does, which is exactly the audience the
-            menu is for.
-          -->
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="workspace"
-            @click="openWorkspaceFromMenu"
-          >
-            <LayoutGrid :size="14" />
-            <span>{{ t("app.layoutOpenWorkbench") }}</span>
-          </button>
-          <div class="app-menu-rule" role="separator"></div>
           <!-- The built-in throwaway. Where launches go is decided at each
                launch point now, so this menu carries only the session action. -->
           <button
@@ -2984,192 +2364,14 @@ function fillMessage(reason?: string): string {
       />
 
       <!--
-        A flat stage gets no header band, in either mode.
-
-        It used to carry one so that an instance opened into the default tab
-        group still had page tabs and a "+". The window-level strip above the
-        toolbar does that now, for every mode — and in the workbench the flat
-        stage drew both, two identical tab rows one under the other. The band
-        remains only for real cells, where it answers something the top strip
-        cannot: which account this particular cell is.
+        The stage is single-cell: one page fills it, and the account name lives
+        in the instance rail's first row. No header band, no cell geometry —
+        what is on stage is always the instance the rail has selected (ADR 0012).
       -->
 
-      <!-- Native views paint over this area; only the slot headers stay visible. -->
-      <div
-        v-for="slot in slotHeaders"
-        :key="slot.index"
-        class="slot-header"
-        :class="{
-          selected: slot.tabId === activeView?.focusedTabId,
-          'drop-target': dropSlot === slot.index,
-        }"
-        :style="{
-          left: `${slot.x}px`,
-          top: `${slot.y}px`,
-          width: `${slot.width}px`,
-          height: `${EMBEDDED_SLOT_HEADER}px`,
-        }"
-        @click="activateSlot(slot.tabId, slot.index)"
-        @dragover="onSlotDragOver(slot.index, $event)"
-        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
-        @drop="onSlotDrop(slot.index, $event)"
-      >
-        <span class="slot-index mono">{{ slot.index + 1 }}</span>
-        <span
-          v-if="slotPage(slot.tabId, slot.index)?.color"
-          class="dot"
-          :style="{ background: `var(--role-${slotPage(slot.tabId, slot.index)?.color})` }"
-        ></span>
-        <!-- Which account this cell belongs to. Every cell of the same app shows
-             the same page title, so without the account name the band cannot
-             answer "who am I looking at" — which is the point of the grid. -->
-        <span v-if="slotAccount(slot.tabId)" class="slot-account">{{ slotAccount(slot.tabId) }}</span>
-        <span v-if="slotPage(slot.tabId, slot.index)?.loading" class="spinner"></span>
-        <!--
-          Pages of this instance. A slot holds an instance, so a popup it opened
-          has no cell of its own; without a strip here the only way to switch
-          back was the dock. The strip is drawn even for a single page: it is
-          what says "this cell is a browser with tabs" and the only place the
-          "+" for a second page can live.
-
-          A split cell gets `split` instead: there the cell is pinned to one page
-          and the strip must not offer the whole list, because the sibling cell
-          would draw the same list and the two would look identical.
-        -->
-        <InstanceTabStrip
-          :instance-id="slotInstanceId(slot.tabId)"
-          :current-id="slotPage(slot.tabId, slot.index)?.id"
-          :split="viewSlotCount(slot.tabId) > 1"
-          @select="(pageId) => selectPage(pageId, slot.index)"
-          @menu="openTabMenu"
-          @merge="unsplitSlot(slot.index)"
-        />
-      </div>
-
-      <!--
-        Drop cover, one per occupied cell, while a drag is in flight.
-
-        A page is a real surface: it takes the drop. `pointer-events: none`
-        during a drag stops it stealing the *pointer*, but drag-and-drop is
-        dispatched by hit-testing the document, and the guest still answers it —
-        so a drop aimed at a cell's page area was delivered to the page itself,
-        and the browser treated it as "drop a link on this page" (which is where
-        the stray new tab came from). This layer covers the cell's page area for
-        the duration of the drag so the drop handler here is what receives it.
-
-        It is drawn for occupied cells only; an empty cell already owns its whole
-        rectangle and listens for itself.
-      -->
-      <div
-        v-for="slot in dragCoverSlots"
-        :key="`cover-${slot.index}`"
-        class="slot-drop-cover"
-        :class="{ 'drop-target': dropSlot === slot.index }"
-        :style="{
-          left: `${slot.x}px`,
-          top: `${slot.y}px`,
-          width: `${slot.width}px`,
-          height: `${slot.height}px`,
-        }"
-        @dragover="onSlotDragOver(slot.index, $event)"
-        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
-        @drop="onSlotDrop(slot.index, $event)"
-      ></div>
-
-      <!--
-        An empty slot invites the next action: the dashed frame covers the whole
-        cell, the slot number sits inside it, and the button drops a focused tab
-        straight into this cell — so the address bar is ready to type.
-      -->
-      <div
-        v-for="slot in emptySlots"
-        :key="`empty-${slot.index}`"
-        class="slot-empty"
-        :class="{ 'drop-target': dropSlot === slot.index }"
-        :style="{
-          left: `${slot.left}px`,
-          top: `${slot.top}px`,
-          width: `${slot.width}px`,
-          height: `${slot.height}px`,
-        }"
-        @dragover="onSlotDragOver(slot.index, $event)"
-        @dragleave="dropSlot = dropSlot === slot.index ? null : dropSlot"
-        @drop="onSlotDrop(slot.index, $event)"
-      >
-        <span class="slot-empty-index mono">{{ slot.index + 1 }}</span>
-        <!-- Two affordances in one empty cell. The plain button is the common
-             case — "put a page here, I will type an address" — and stays a
-             single click. The picker beside it answers the other half of what an
-             empty cell means here: "this cell is this account". Without it,
-             building a grid of identities meant adding blank pages and then
-             finding each account somewhere else. -->
-        <div class="slot-add-row">
-          <button
-            type="button"
-            class="slot-add"
-            @click="addToSlot(slot.index)"
-          >
-            <Plus :size="13" />
-            {{ t("app.browserAddTabHere") }}
-          </button>
-          <div
-            v-if="slotIdentities(slot.index).length"
-            class="slot-identity"
-            :class="{ open: openSlotPicker === slot.index }"
-          >
-            <button
-              type="button"
-              class="slot-add slot-add-icon"
-              :aria-label="t('app.browserAddIdentityHere')"
-              :aria-expanded="openSlotPicker === slot.index"
-              v-tooltip="t('app.browserAddIdentityHere')"
-              @click="toggleSlotPicker(slot.index)"
-            >
-              <Users :size="13" />
-            </button>
-            <div v-if="openSlotPicker === slot.index" class="slot-identity-menu" role="listbox">
-              <!-- Only accounts of the site this view belongs to: a grid mixes
-                   accounts of one system, and listing every identity of every
-                   site would turn this small menu into a second identities page. -->
-              <button
-                v-for="identity in slotIdentities(slot.index)"
-                :key="identity.id"
-                type="button"
-                class="slot-identity-item"
-                role="option"
-                @click="addToSlot(slot.index, identity.id)"
-              >
-                <span
-                  class="identity-dot"
-                  :style="{ background: `var(--role-${identity.color ?? 'amber'})` }"
-                ></span>
-                <span class="identity-name">{{ identity.name }}</span>
-                <span v-if="identity.role" class="identity-role">{{ identity.role }}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Divider handles sit in the HTML header bands: a page node is a real
-           surface and would take the pointer anywhere its own box covers. -->
-      <div
-        v-for="handle in dividers"
-        :key="handle.key"
-        class="divider"
-        :class="handle.axis === 'x' ? 'vertical' : 'horizontal'"
-        :style="{
-          left: `${handle.left}px`,
-          top: `${handle.top}px`,
-          width: `${handle.width}px`,
-          height: `${handle.height}px`,
-        }"
-        @pointerdown="startResize(handle, $event)"
-      ></div>
-
-      <!-- The seam between a page and its docked DevTools panel. Same reason as
-           the stage dividers: both sides are native surfaces, so only a real gap
-           between them leaves anywhere for this to be seen and grabbed. -->
+      <!-- The seam between a page and its docked DevTools panel. Both sides are
+           native surfaces, so only a real gap between them leaves anywhere for
+           this to be seen and grabbed. -->
       <div
         v-for="grip in devtoolsGrips"
         :key="`devtools-grip-${grip.key}`"
@@ -3270,21 +2472,22 @@ function fillMessage(reason?: string): string {
         launch is running" and "the click did nothing". It sits above the guest
         nodes, which live at z-index 1.
       -->
-      <div v-if="activeView?.launching" class="batch-marker" role="status">
+      <div v-if="store.activeView?.launching" class="batch-marker" role="status">
         <span class="batch-spinner spin" aria-hidden="true"></span>
-        {{ t("app.batchStarting", { done: activeView.launching.done, total: activeView.launching.total }) }}
+        {{
+          t("app.batchStarting", {
+            done: store.activeView.launching.done,
+            total: store.activeView.launching.total,
+          })
+        }}
       </div>
 
       <!--
-        The empty stage, and only when nothing else on it says what to do.
-
-        A view with empty cells already draws each one as a dashed "add a tab
-        here" box; the global prompt then landed between them saying the same
-        thing a second time, in the middle of the grid it was standing in for.
-        The prompt is for a genuinely blank stage — no pages anywhere and no
-        cells to invite one.
+        The empty stage: no pages anywhere. The instance rail's [+ 启动] and the
+        address bar above are the ways out; the button repeats the address bar's
+        answer for a first-run screen that has neither.
       -->
-      <div v-if="!store.tabs.length && !emptySlots.length" class="stage-empty">
+      <div v-if="!store.tabs.length" class="stage-empty">
         <p>{{ t("app.browserEmptyTitle") }}</p>
         <p class="sub">{{ t("app.browserEmptyHint") }}</p>
         <!-- One button, not a wall of site chips: the address bar is right above
@@ -3506,32 +2709,6 @@ function fillMessage(reason?: string): string {
   height: var(--titlebar-height);
   padding-left: 4px;
   background: var(--frame);
-}
-
-/* The layout switch is the only way in and out of a multi-cell view, so it sits
-   at the strip's leading edge where every browser puts its tab-group controls. */
-.layout-btn {
-  align-self: center;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius);
-  color: var(--muted);
-  flex: 0 0 26px;
-  margin-right: 2px;
-}
-
-.layout-btn:hover {
-  background: var(--hover, color-mix(in srgb, var(--text) 7%, transparent));
-  color: var(--text);
-}
-
-/* The tint alone says "on"; the glyph keeps the normal text tone rather than
-   the deep accent-text gold, which at this size read as a brown smudge. */
-.layout-btn.is-bench {
-  background: var(--accent-soft);
-  color: var(--text);
 }
 
 /*
@@ -4840,215 +4017,6 @@ function fillMessage(reason?: string): string {
   overflow: hidden;
 }
 
-.slot-header {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 6px 0 8px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line-soft);
-  box-sizing: border-box;
-  cursor: pointer;
-  z-index: 1;
-  overflow: hidden;
-}
-
-.slot-header:hover {
-  background: var(--surface-2);
-}
-
-/* The flat stage has one cell and no grid, so its band is a plain strip: no
-   hover tint (clicking it selects nothing), no slot number, and no layout
-   picker. What it does carry is the page tabs — that was the whole point. */
-/* The selected cell is the keyboard target and the one a new page replaces, so
-   it is marked structurally — an accent rail plus a lifted background — instead
-   of spending band width on the word "selected". Tinted with the page colour
-   rather than the accent: mixing 8% amber into every selected band made it look
-   like a warning state. */
-.slot-header.selected {
-  background: var(--surface-3);
-  box-shadow:
-    inset 2px 0 0 var(--accent),
-    inset 0 1px 0 color-mix(in srgb, var(--accent) 32%, transparent);
-}
-
-.slot-header.drop-target {
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.slot-empty {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  border: 1px dashed var(--line);
-  border-radius: 4px;
-  background: var(--bg);
-  z-index: 0;
-}
-
-.slot-empty.drop-target {
-  border-color: var(--accent-text);
-  box-shadow: inset 0 0 0 1px var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
-}
-
-/*
- * Drop cover over an occupied cell.
- *
- * Transparent until the pointer is over it, so the page stays readable while the
- * drag is in flight; only the cell being aimed at lights up. It exists purely to
- * receive the drop — without it the page takes it (see the template comment).
- */
-.slot-drop-cover {
-  position: absolute;
-  z-index: 2;
-  border-radius: 2px;
-  transition: box-shadow var(--motion-fast) var(--ease-out);
-}
-
-.slot-drop-cover.drop-target {
-  box-shadow: inset 0 0 0 2px var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
-/* The number belongs inside the empty cell: a separate 26px header with only a
-   digit in it looked like a label pressed against the top edge. */
-.slot-empty-index {
-  display: grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  color: var(--faint);
-  font-size: 9.5px;
-}
-
-.slot-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 11.5px;
-  padding: 6px 11px;
-  cursor: pointer;
-}
-
-.slot-add:hover {
-  border-color: color-mix(in srgb, var(--line) 60%, var(--accent));
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-.slot-add-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* Square icon button beside the main one: the picker is the secondary path, so
-   it must not compete with "add a page here" for attention. */
-.slot-add-icon {
-  padding: 6px 7px;
-}
-
-.slot-identity {
-  position: relative;
-}
-
-/*
- * The picker opens downwards inside the empty cell.
- *
- * Unlike the dock's badge hint this one can afford to be a normal dropdown: the
- * cell is the app's own HTML (an empty slot has no native page over it), and the
- * stage does not scroll, so there is nothing to clip it. Capped height with its
- * own scroll for a site with many accounts.
- */
-.slot-identity-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 40;
-  min-width: 168px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-menu);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
-  transform-origin: top left;
-}
-
-.slot-identity-item {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.slot-identity-item:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-
-.identity-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.identity-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Role is a hint, not a label: keep it quiet so the name stays the thing read. */
-.identity-role {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--faint);
-}
-
-.divider {
-  position: absolute;
-  z-index: 2;
-  touch-action: none;
-}
-
-.divider.vertical {
-  cursor: col-resize;
-}
-
-.divider.horizontal {
-  cursor: row-resize;
-}
-
-.divider:hover {
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: 2px;
-}
-
 /*
  * The page ↔ DevTools seam.
  *
@@ -5162,47 +4130,6 @@ function fillMessage(reason?: string): string {
   z-index: 3;
   overflow: hidden;
   background: var(--surface);
-}
-
-.slot-index {
-  display: grid;
-  place-items: center;
-  min-width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  color: var(--faint);
-  font-size: 9.5px;
-  padding: 0 3px;
-}
-
-/* The middle of the header band, between the slot number and the strip.
-   Shrinks before the strip does, so page titles keep their room. */
-.slot-account {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 110px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10.5px;
-  color: var(--text-secondary);
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: none;
-}
-
-.spinner {
-  width: 8px;
-  height: 8px;
-  border: 1.5px solid var(--line);
-  border-top-color: var(--accent-text);
-  border-radius: 50%;
-  animation: spin var(--motion-slow) linear infinite;
 }
 
 .spin {

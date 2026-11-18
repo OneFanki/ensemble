@@ -271,6 +271,11 @@ export interface LayoutPreset {
   builtin: boolean;
 }
 
+/**
+ * 一组账号的启动定义。UI 已退役（P1-3，ADR 0012）：没有页面再创建或打开它，
+ * 「启动一组」由实例行的多选批量启动承接。字段与存储原样保留——workspace
+ * 的读写 round-trip 不丢这个字段，既有数据保持可解析。
+ */
 export interface View {
   id: string;
   siteId: string;
@@ -490,20 +495,10 @@ export interface AppSettings {
     | "ai"
     | "sites"
     | "identities"
-    | "views"
     | "flows"
     | "tags"
     | "bookmarks"
     | "profiles";
-  /**
-   * Which shell the window opens in.
-   *
-   * "browse" is the browser surface alone — tab strip, toolbar, page — and is
-   * what a single-cell layout means. "bench" adds the run dock and the cells of
-   * a multi-cell layout. The layout drives it automatically; this value is the
-   * last state, remembered so a restart lands where the work was.
-   */
-  shellMode?: "browse" | "bench";
   /**
    * View launched most recently. Only used when {@link restoreLastView} is on;
    * it is not the "selected view in the UI" and may point at another site.
@@ -835,6 +830,9 @@ export interface IdentityDraft {
   note?: string;
 }
 
+/**
+ * {@link View} 的表单草稿。视图页与表单已随 P1-3 退役，仅为数据兼容保留。
+ */
 export interface ViewDraft {
   id?: string;
   siteId: string;
@@ -881,7 +879,6 @@ export type SettingsPatch = Partial<
     | "locale"
     | "lastSiteId"
     | "lastView"
-    | "shellMode"
     | "lastViewId"
     | "restoreLastView"
     | "overlayEnabled"

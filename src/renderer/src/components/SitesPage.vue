@@ -91,10 +91,6 @@ function identityCount(site: Site): number {
   return store.identities.filter((identity) => identity.siteId === site.id).length;
 }
 
-function viewCount(site: Site): number {
-  return store.views.filter((view) => view.siteId === site.id).length;
-}
-
 function passwordSet(site: Site): boolean {
   return Boolean(store.credentials?.site[site.id]);
 }
@@ -222,9 +218,6 @@ import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
               <div class="env-meta">
                 <span class="env-chip">
                   <b class="mono">{{ identityCount(site) }}</b> {{ $t("app.identities") }}
-                </span>
-                <span class="env-chip">
-                  <b class="mono">{{ viewCount(site) }}</b> {{ $t("app.views") }}
                 </span>
                 <span class="env-chip" :class="{ missing: !passwordSet(site) }">
                   {{ passwordSet(site) ? $t("app.passwordSet") : $t("app.passwordNotSet") }}

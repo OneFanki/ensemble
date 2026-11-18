@@ -198,7 +198,9 @@ export const settingsPatchSchema = z.object({
   // Every value `AppSettings["lastView"]` allows. The list had drifted: `bookmarks`
   // and `profiles` were in the type but not here, so saving either as the view to
   // restore failed validation and the interface reported a schema error; adding
-  // `ai` without this would have broken it a third time.
+  // `ai` without this would have broken it a third time. "views" left the list
+  // when the saved-view pages were retired (P1-3): a stored "views" now falls
+  // back to the browser page.
   lastView: z
     .enum([
       "browser",
@@ -206,14 +208,12 @@ export const settingsPatchSchema = z.object({
       "ai",
       "sites",
       "identities",
-      "views",
       "flows",
       "tags",
       "bookmarks",
       "profiles",
     ])
     .optional(),
-  shellMode: z.enum(["browse", "bench"]).optional(),
   lastViewId: z.string().optional(),
   restoreLastView: z.boolean().optional(),
   overlayEnabled: z.boolean().optional(),

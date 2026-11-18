@@ -1,26 +1,16 @@
 <script setup lang="ts">
-import type {
-  IdentityDraft,
-  LayoutPreset,
-  LoginCaptureNotice,
-  Site,
-  SiteDraft,
-  SlotRect,
-  ViewDraft,
-} from "@shared/types";
+import type { IdentityDraft, LoginCaptureNotice, Site, SiteDraft } from "@shared/types";
 import type { UpdateCheckResult } from "@shared/update";
+import { ChevronLeft } from "lucide-vue-next";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bot } from "lucide-vue-next";
 import BrowserPage from "./components/BrowserPage.vue";
 import GuestPool from "./components/GuestPool.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import HttpAuthDialog from "./components/HttpAuthDialog.vue";
 import type { HttpAuthChallenge } from "@shared/ipc";
-import AppSidebar, { type AppView } from "./components/AppSidebar.vue";
 import FlowsPage from "./components/FlowsPage.vue";
 import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
-import LayoutEditor from "./components/LayoutEditor.vue";
 import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
@@ -35,8 +25,6 @@ import GuideDialog from "./components/GuideDialog.vue";
 import TagsPage from "./components/TagsPage.vue";
 import ToastStack from "./components/ToastStack.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
-import ViewDialog from "./components/ViewDialog.vue";
-import ViewsPage from "./components/ViewsPage.vue";
 import { type Locale, setLocale, tr } from "./i18n";
 import { type LocaleSetting, resolveLocale } from "@shared/locale";
 import { installWindowControlsWidth } from "./composables/windowControls";
@@ -49,37 +37,32 @@ import { useWorkspaceStore } from "./stores/workspace";
 /**
  * Everything that can be on screen.
  *
- * `browser` and the assets share one shell — a column of destinations with the
- * chosen page beside it. `settings` does not: it covers the whole window, with
- * its own tab bar and its own way back, because it changes the workspace rather
- * than showing part of it.
+ * The stage is single-cell (ADR 0012): the browser is the default page and the
+ * management pages replace it in the same pane, reached from the instance
+ * rail's [管理] menu. `settings` still covers the whole window with its own tab
+ * bar, because it changes the workspace rather than showing part of it.
+ *
+ * `views` is gone from here (P1-3): the saved-view pages and dialogs are
+ * retired from the UI; the workspace data keeps the `views` field for
+ * compatibility, with no page to open.
  */
-type View = AppView | "settings";
-
-/**
- * Which of the two shells is on screen.
- *
- * 1.0 had one shell: a side rail, a stage, and a run dock, all permanent. That
- * made every screen an admin console — the browser was one page among eight and
- * the tools took the edges of the window even while someone was just reading a
- * page. The model did not change; only its expression did. "Browse" is a
- * browser, and a browser is exactly a 1x1 layout with one instance in it.
- *
- * Browse: tab strip, toolbar, page. No sidebar.
- * Bench: the same chrome, plus the sidebar and the cells of a multi-cell layout.
- *
- * The mode follows the layout unless the user pins it: entering a multi-cell
- * layout is the act of asking for a workbench, and collapsing back to one cell
- * is the act of leaving it. Persisted so a restart lands where the work was.
- */
-type ShellMode = "browse" | "bench";
+type View =
+  | "browser"
+  | "messages"
+  | "ai"
+  | "sites"
+  | "identities"
+  | "flows"
+  | "tags"
+  | "bookmarks"
+  | "profiles"
+  | "settings";
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
 const confirm = useConfirmStore();
 const navigation = useNavigationStore();
 const view = ref<View>("browser");
-const mode = ref<ShellMode>(store.settings.shellMode ?? "browse");
 /**
  * Whether the opening splash is still covering the shell.
  *
@@ -96,25 +79,11 @@ const bootWatchdog = window.setTimeout(() => {
   bootReady.value = true;
 }, 8_000);
 /**
- * The sidebar is up while the workbench is, and while any management page is.
- *
- * It used to be two separate things that each owned their own half of this:
- * the run dock appeared with the workbench, and the console drew its own rail
- * whenever it covered the browser. Merged, the rule is one sentence: the column
- * is present whenever there is something beside the page to navigate from. In
- * plain browsing — a tab strip, a toolbar, a page — it is absent, because that
- * is what a browser looks like.
+ * The stage is single-cell and there is no sidebar: the browser fills the pane,
+ * and a management page replaces it in the same pane when one is chosen.
  */
-const sidebarOpen = computed(
-  () =>
-    view.value !== "settings" && (mode.value === "bench" || view.value !== "browser"),
-);
 const siteDraft = ref<SiteDraft | null>(null);
 const identityDraft = ref<IdentityDraft | null>(null);
-const viewDraft = ref<ViewDraft | null>(null);
-const layoutEditor = ref<{ preset?: LayoutPreset; seed?: SlotRect[]; viewId?: string } | null>(
-  null,
-);
 /** The in-app guide: the only first-run introduction and the readable handbook. */
 const guideOpen = ref(false);
 const healthOpen = ref(false);
@@ -173,8 +142,6 @@ const overlayOpen = computed(
       confirm.current ||
         siteDraft.value ||
         identityDraft.value ||
-        viewDraft.value ||
-        layoutEditor.value ||
         healthOpen.value ||
         updatePrompt.value ||
         guideOpen.value,
@@ -206,8 +173,6 @@ const captureCovered = computed(
       confirm.current ||
         siteDraft.value ||
         identityDraft.value ||
-        viewDraft.value ||
-        layoutEditor.value ||
         healthOpen.value ||
         updatePrompt.value,
     ),
@@ -256,11 +221,11 @@ onMounted(async () => {
   // The browser is the default page; returning to where the user left off beats
   // resetting them to a management page they only visited once. Bookmarks and
   // profiles are never restored for the same reason settings is not: they are
-  // places you go to change something, not where work sits.
+  // places you go to change something, not where work sits. A saved "views"
+  // (the retired page) falls through to the browser like any unknown value.
   view.value =
     saved === "sites" ||
     saved === "identities" ||
-    saved === "views" ||
     saved === "flows" ||
     saved === "tags" ||
     saved === "browser"
@@ -386,18 +351,17 @@ function openSettings(section: SettingsSection = "general") {
 }
 
 /**
- * The menu's "open the workbench": show the sidebar, nothing else.
+ * The instance rail's [管理] menu: the way into the management pages.
  *
- * It used to also force a 2×1 layout onto the focused view, which meant asking
- * for the sidebar silently rearranged the stage — and the button that was
- * supposed to undo it ("back to one cell") only hid the column, leaving the
- * split behind. The sidebar and the layout are two separate answers: this one
- * is "I want the list and the navigation", and the layout picker stays the only
- * thing that decides how many cells the stage has.
+ * TODO(第二波·管理窗格): these pages collapse into a dedicated pane; the button
+ * stays, only what it opens changes. Settings keeps its own full-window shell.
  */
-function openWorkspace() {
-  setMode("bench");
-  switchView("browser");
+function manageTo(target: string): void {
+  if (target === "settings") {
+    openSettings("general");
+    return;
+  }
+  switchView(target as View);
 }
 
 /**
@@ -416,30 +380,6 @@ watch(
   ([next, ready]) => embedded.suspendStage(!ready || next !== "browser"),
   { flush: "sync", immediate: true },
 );
-
-/**
- * The shell follows the layout.
- *
- * Only ever widens automatically: a multi-cell layout is the user asking for a
- * workbench, so the dock appears. Narrowing back is left to the user — closing
- * the last extra cell while the dock is open should not yank a panel away from
- * under the pointer mid-task.
- */
-watch(
-  () => {
-    const active = embedded.activeView;
-    return active ? embedded.slots(active) : 1;
-  },
-  (count) => {
-    if (count > 1 && mode.value !== "bench") setMode("bench");
-  },
-);
-
-function setMode(next: ShellMode): void {
-  if (mode.value === next) return;
-  mode.value = next;
-  void store.saveSettings({ shellMode: next });
-}
 
 /**
  * Which settings tab is on screen.
@@ -571,53 +511,12 @@ function openEditIdentity(identityId: string) {
   };
 }
 
-/**
- * A new view starts with members from the most recently used site, but the
- * dialog lists every identity — a view is one screen, not one deployment.
- *
- * `seed` is how a batch selection becomes a saved view: the accounts come in
- * already chosen, and the rest of the form (name, layout, tags) is the normal
- * new-view experience. The home site follows the first member so a cross-site
- * selection still lands on a real site instead of the last-used one.
+/*
+ * 视图（saved view）的创建/编辑/删除入口已随 P1-3 从 UI 退役：批量启动由
+ * InstanceRail 的 [+ 启动] 多选承接，不再经「保存一组」的表单。workspace 数据
+ * 里的 `views` 字段与其读写（store.saveView / deleteView / core 层）原样保留，
+ * 做兼容性 round-trip，只是不再有页面打开它们。
  */
-function openNewView(seed?: { identityIds: string[] }) {
-  const site = store.defaultSite;
-  const seeded = seed?.identityIds.filter((id) => store.identities.some((item) => item.id === id));
-  const firstMemberSite = seeded?.length
-    ? store.identities.find((item) => item.id === seeded[0])?.siteId
-    : undefined;
-  viewDraft.value = {
-    siteId: firstMemberSite ?? site?.id ?? store.sites[0]?.id ?? "",
-    name: "",
-    identityIds:
-      seeded && seeded.length > 0
-        ? seeded
-        : site
-          ? store
-              .identitiesOf(site.id)
-              .slice(0, 3)
-              .map((item) => item.id)
-          : [],
-    layoutId: store.settings.layout,
-    slotAssignments: {},
-    paths: {},
-    tagIds: [],
-  };
-}
-function openEditView(viewId: string) {
-  const view = store.views.find((item) => item.id === viewId);
-  if (!view) return;
-  viewDraft.value = {
-    id: view.id,
-    siteId: view.siteId,
-    name: view.name,
-    identityIds: [...view.identityIds],
-    layoutId: view.layoutId,
-    slotAssignments: { ...view.slotAssignments },
-    paths: { ...view.paths },
-    tagIds: view.tagIds ? [...view.tagIds] : [],
-  };
-}
 
 async function saveSite(draft: SiteDraft) {
   const result = await store.saveSite(draft);
@@ -788,62 +687,9 @@ async function createSiteFromIdentity(input: { name: string; baseUrl: string }) 
   identityDraft.value = { ...draft, siteId: saved.id };
 }
 
-async function saveView(draft: ViewDraft) {
-  const result = await store.saveView(draft);
-  if (result) viewDraft.value = null;
-}
-
-async function deleteView(viewId: string) {
-  const accepted = await confirm.ask({
-    title: tr("app.delete"),
-    body: tr("app.deleteViewConfirm"),
-    confirmLabel: tr("app.delete"),
-    tone: "danger",
-  });
-  if (!accepted) return;
-  await store.deleteView(viewId);
-}
-
 async function deleteSite(siteId: string) {
   await store.deleteSite(siteId);
   siteDraft.value = null;
-}
-
-function openLayoutEditor(preset?: LayoutPreset, viewId?: string) {
-  // Built-in presets cannot be edited in place, so customizing one seeds a new
-  // preset with its geometry instead of cloning the id.
-  const editablePreset = preset && !preset.builtin ? preset : undefined;
-  const seed = preset?.slots.map((slot) => ({ ...slot }));
-  layoutEditor.value = {
-    ...(editablePreset ? { preset: editablePreset } : {}),
-    ...(viewId ? { viewId } : {}),
-    seed:
-      seed && seed.length > 0
-        ? seed
-        : store.presetById(store.settings.layout).slots.map((slot) => ({ ...slot })),
-  };
-}
-
-async function saveLayout(draft: { id?: string; name: string; slots: SlotRect[] }) {
-  const viewId = layoutEditor.value?.viewId;
-  const saved = await store.saveLayoutPreset(draft);
-  if (!saved) return;
-  layoutEditor.value = null;
-  // When the editor was opened from a view, switch that view to the new preset
-  // right away; otherwise the user would save a layout and see nothing change.
-  if (viewId) await store.setViewLayout(viewId, saved.id);
-}
-
-async function deleteLayout(preset: LayoutPreset) {
-  const accepted = await confirm.ask({
-    title: tr("app.delete"),
-    body: tr("app.confirmDeleteLayout", { name: preset.name }),
-    confirmLabel: tr("app.delete"),
-    tone: "danger",
-  });
-  if (!accepted) return;
-  await store.deleteLayoutPreset(preset.id);
-  layoutEditor.value = null;
 }
 
 async function handleTheme(theme: "dark" | "light" | "system") {
@@ -881,24 +727,14 @@ async function handleLocale(locale: LocaleSetting) {
     </Transition>
 
     <!--
-      One shell for everything except settings: a column of destinations on the
-      left, the chosen page on the right.
+      One pane for everything except settings: the browser fills it, and a
+      management page replaces it in the same pane. The stage is single-cell
+      (ADR 0012) and the instance rail is the window's first row; [管理] at its
+      right end is how the management pages are reached (TODO(第二波·管理窗格):
+      they collapse into a dedicated pane, this list is the interim shape).
 
-      This replaces the pair that used to exist — a "browser" shell with a
-      right-hand run dock, and a separate console window with its own left rail.
-      Two shells meant the same question, "where am I and what else is there",
-      got answered on a different side of the screen depending on how you
-      arrived. Now the sidebar holds the running instances (top) and the
-      destinations (bottom), and the pane beside it is whichever one is selected.
-    -->
-    <!--
-      Settings covers the window rather than sitting beside the column.
-
-      Every other management page is a destination you visit while staying
-      oriented in the workspace: the column of pages stays up and the pane shows
-      the chosen one. Settings changes the workspace itself, so it takes the whole
-      window — its own tab bar, its own way back — the way a browser's own
-      settings page leaves the browser's chrome behind.
+      Settings still covers the window with its own tab bar, because it changes
+      the workspace rather than showing part of it.
     -->
     <SettingsPage
       v-if="view === 'settings'"
@@ -910,71 +746,62 @@ async function handleLocale(locale: LocaleSetting) {
       @update-found="(result) => (updatePrompt = result)"
     />
 
-    <div v-else class="shell">
-      <AppSidebar
-        v-if="sidebarOpen"
-        :view="view"
-        @navigate="switchView"
-        @settings="switchView('settings')"
+    <main v-else class="pane" :class="{ 'pane-console': view !== 'browser' }">
+      <!--
+        The band the native window controls own, and the way back.
+
+        Management pages are ordinary in-flow HTML with a 24px top padding, so
+        their first row — the page title and its action buttons — landed right
+        under the caption buttons drawn by the OS, and the right-hand button
+        was clipped in half. This band reserves the caption area and is the
+        draggable strip a frameless window needs; without it the whole page
+        has no way to move the window at all.
+
+        The back arrow is the page's way back to the browser: with the
+        navigation column gone, this band is where the way back lives. It is
+        the same door the browser's instance rail opens in the other direction.
+      -->
+      <div v-if="view !== 'browser'" class="pane-band drag-region" :data-platform="platform">
+        <button
+          type="button"
+          class="pane-back no-drag"
+          :aria-label="tr('app.backToBrowser')"
+          v-tooltip="tr('app.backToBrowser')"
+          data-nav="browser"
+          @click="switchView('browser')"
+        >
+          <ChevronLeft :size="14" />
+        </button>
+      </div>
+      <BrowserPage
+        v-if="view === 'browser'"
+        :obscured="overlayOpen"
+        @open-console="openConsole"
+        @manage="manageTo"
+        @open-guide="openGuide"
+        @update-found="(result) => (updatePrompt = result)"
+        @save-capture="saveCapturedLogin"
       />
-
-      <main class="pane" :class="{ 'pane-console': view !== 'browser' }">
-        <!--
-          The band the native window controls own.
-
-          Management pages are ordinary in-flow HTML with a 24px top padding, so
-          their first row — the page title and its action buttons — landed right
-          under the caption buttons drawn by the OS, and the right-hand button
-          was clipped in half. This band reserves the caption area and is the
-          draggable strip a frameless window needs; without it the whole page
-          has no way to move the window at all.
-        -->
-        <div
-          v-if="view !== 'browser'"
-          class="pane-band drag-region"
-          :data-platform="platform"
-          aria-hidden="true"
-        ></div>
-        <BrowserPage
-          v-if="view === 'browser'"
-          :obscured="overlayOpen"
-          :bench="mode === 'bench'"
-          @open-console="openConsole"
-          @switch-mode="setMode"
-          @open-workspace="openWorkspace"
-          @open-guide="openGuide"
-          @update-found="(result) => (updatePrompt = result)"
-          @save-capture="saveCapturedLogin"
-        />
-        <SitesPage
-          v-else-if="view === 'sites'"
-          @new-site="openNewSite"
-          @edit-site="openEditSite"
-          @open-site="openSite"
-          @add-identity="openNewIdentity"
-        />
-        <IdentitiesPage
-          v-else-if="view === 'identities'"
-          @new-identity="openNewIdentity"
-          @edit-identity="openEditIdentity"
-          @session-health="healthOpen = true"
-          @create-view="openNewView({ identityIds: $event })"
-        />
-        <ViewsPage
-          v-else-if="view === 'views'"
-          @new-view="openNewView"
-          @edit-view="openEditView"
-          @delete-view="deleteView"
-          @edit-layout="openLayoutEditor"
-        />
-        <FlowsPage v-else-if="view === 'flows'" />
-        <TagsPage v-else-if="view === 'tags'" />
-        <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
-        <AiActivityPage v-else-if="view === 'ai'" />
-        <ProfilesPage v-else-if="view === 'profiles'" />
-        <BookmarksPage v-else />
-      </main>
-    </div>
+      <SitesPage
+        v-else-if="view === 'sites'"
+        @new-site="openNewSite"
+        @edit-site="openEditSite"
+        @open-site="openSite"
+        @add-identity="openNewIdentity"
+      />
+      <IdentitiesPage
+        v-else-if="view === 'identities'"
+        @new-identity="openNewIdentity"
+        @edit-identity="openEditIdentity"
+        @session-health="healthOpen = true"
+      />
+      <FlowsPage v-else-if="view === 'flows'" />
+      <TagsPage v-else-if="view === 'tags'" />
+      <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
+      <AiActivityPage v-else-if="view === 'ai'" />
+      <ProfilesPage v-else-if="view === 'profiles'" />
+      <BookmarksPage v-else />
+    </main>
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in
@@ -997,8 +824,6 @@ async function handleLocale(locale: LocaleSetting) {
         confirm.current ? 'confirm' : '',
         siteDraft ? 'site' : '',
         identityDraft ? 'identity' : '',
-        viewDraft ? 'view' : '',
-        layoutEditor ? 'layout' : '',
         healthOpen ? 'health' : '',
         updatePrompt ? 'update' : '',
         guideOpen ? 'guide' : '',
@@ -1040,18 +865,6 @@ async function handleLocale(locale: LocaleSetting) {
       @delete="store.deleteIdentity(identityDraft!.id!); identityDraft = null"
     />
 
-    <ViewDialog
-      v-if="viewDraft"
-      :draft="viewDraft"
-      :identities="store.identities"
-      :sites="store.sites"
-      :presets="store.viewLayoutPresets"
-      :tags="store.snapshot?.tags ?? []"
-      @close="viewDraft = null"
-      @save="saveView"
-      @delete="store.deleteView(viewDraft!.id!); viewDraft = null"
-    />
-
     <SessionHealthDialog v-if="healthOpen" @close="healthOpen = false" />
 
     <HttpAuthDialog :challenge="authChallenge" @close="authChallenge = null" />
@@ -1061,15 +874,6 @@ async function handleLocale(locale: LocaleSetting) {
       :result="updatePrompt"
       @dismissed="(version) => store.saveSettings({ dismissedUpdateVersion: version })"
       @close="updatePrompt = null"
-    />
-
-    <LayoutEditor
-      v-if="layoutEditor"
-      :preset="layoutEditor.preset"
-      :seed="layoutEditor.seed"
-      @close="layoutEditor = null"
-      @save="saveLayout"
-      @delete="layoutEditor.preset ? deleteLayout(layoutEditor.preset) : null"
     />
 
     <GuideDialog v-if="guideOpen" @close="guideOpen = false" />
@@ -1169,33 +973,17 @@ async function handleLocale(locale: LocaleSetting) {
 }
 
 /*
- * Sidebar and pane, side by side.
- *
- * A row container, not two children of the shell: the shell is a column, and
- * putting the sidebar directly in it stacked it *under* the page instead of
- * beside it — which also left the stage measuring the full window width while a
- * column sat over nothing.
- */
-.shell {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  align-items: stretch;
-  background: var(--content);
-}
-
-/*
  * The content pane: the browser page, or a management page in its place.
  *
- * One element for both is the point of the merged shell. A management page is
- * not a different screen any more — it is this pane showing something else,
- * which is why switching to one no longer hides the window's chrome.
+ * There is no sidebar: the pane is the window, and the instance rail — the
+ * browser page's own first row — is where navigation lives. A management page
+ * is not a different screen, it is this pane showing something else.
  *
- * No background and no stacking of its own: pages are real compositing surfaces
- * stacked at `z-index: 1` at the app root, so a pane that painted a background
- * would cover the very page it is framing. The management pages get their own
- * covering surface below, only while one of them is showing.
+ * No background and no stacking of its own while the browser shows: pages are
+ * real compositing surfaces stacked at `z-index: 1` at the app root, so a pane
+ * that painted a background would cover the very page it is framing. The
+ * management pages get their own covering surface below, only while one of
+ * them is showing.
  */
 .pane {
   flex: 1 1 auto;
@@ -1237,13 +1025,33 @@ async function handleLocale(locale: LocaleSetting) {
  */
 .pane-band {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
   height: var(--titlebar-height);
+  /* Windows/Linux reserve the right corner for the caption buttons. */
+  padding-right: var(--window-controls-width, 138px);
 }
 
 /* The band inherits the pane's background so it reads as part of the page frame
    rather than as a second toolbar. */
 .pane-console > .pane-band {
   background: var(--frame);
+}
+
+/* The way back to the browser, at the band's leading edge. */
+.pane-back {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: 6px;
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.pane-back:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
 }
 
 /*

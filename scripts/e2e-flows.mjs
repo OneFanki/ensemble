@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow } from "./lib/e2e-cdp.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -399,27 +400,10 @@ try {
   check("app window is a debug target", Boolean(renderer));
   if (renderer) {
     const client = await connectToWindow(renderer.webSocketDebuggerUrl);
-    // The rail's management menu is the one door; it must name flows before
-    // the navigation is trusted. One interaction chain does both: open the
-    // menu on the browser page, read the row, click it, land on the page.
-    const door = await client.evaluate(`(async () => {
-      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-      if (!document.querySelector('.rail')) {
-        if (document.querySelector('.page.settings')) {
-          document.querySelector('.settings-head .back')?.click();
-        } else {
-          document.querySelector('[data-nav="browser"]')?.click();
-        }
-        await wait(600);
-      }
-      document.querySelector('[data-manage-btn]')?.click();
-      await wait(400);
-      const item = document.querySelector('[data-manage-item="flows"]');
-      const menuItem = Boolean(item);
-      item?.click();
-      await wait(700);
-      return { menuItem, onPage: Boolean(document.querySelector('.flows')) };
-    })()`);
+    // The management pane is the one door; flows is a tab of the AI section
+    // inside it. One interaction chain does both: open the pane from the
+    // browser page, open the AI section, open the flows tab, land on the page.
+    const door = await client.evaluate(openNav("flows"));
     await wait(400);
     const pageState = await client.evaluate(`(() => {
       const section = document.querySelector('.flows');
@@ -436,8 +420,8 @@ try {
       };
     })()`);
     check(
-      "the rail's menu opens a flows page listing the saved flow",
-      door?.menuItem === true && door?.onPage === true && pageState?.present === true && pageState?.rows === 1,
+      "the management pane's AI section opens a flows page listing the saved flow",
+      door === true && pageState?.present === true && pageState?.rows === 1,
       { door, pageState },
     );
 

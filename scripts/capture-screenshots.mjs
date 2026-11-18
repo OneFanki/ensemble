@@ -525,17 +525,12 @@ const SHOTS = [
   { name: "sites-en", locale: "en", view: "sites" },
   { name: "identities", locale: "zh", view: "identities" },
   { name: "identities-en", locale: "en", view: "identities" },
-  { name: "views", locale: "zh", view: "views" },
-  { name: "views-en", locale: "en", view: "views" },
   { name: "settings", locale: "zh", view: "settings-general" },
   { name: "settings-en", locale: "en", view: "settings-general" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
   { name: "light-en", locale: "en", view: "browser", theme: "light" },
   { name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
   { name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
-  { name: "profiles", locale: "zh", view: "profiles" },
-  { name: "profiles-en", locale: "en", view: "profiles" },
-  { name: "profiles-light", locale: "zh", view: "profiles", theme: "light" },
   { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-arrow"] },
   {
     // The chooser's second tab: the same panel, answering "which cookie jar"

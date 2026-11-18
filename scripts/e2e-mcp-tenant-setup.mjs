@@ -300,7 +300,7 @@ try {
     mcpEntry,
   );
   // Back to the browser: the rest of this run drives pages.
-  await client.evaluate(`document.querySelector('.settings-head .back')?.click()`);
+  await client.evaluate(`document.querySelector('[data-nav="browser"]')?.click()`);
   await new Promise((r) => setTimeout(r, 500));
 
   const admin = await tryCall("create_identity", {

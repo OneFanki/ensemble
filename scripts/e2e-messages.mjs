@@ -162,27 +162,31 @@ try {
   );
 
   // 2) The two entry points agree that something is unread. The management
-  // menu carries the message centre's door (a row, so it can name the page);
-  // the toolbar bell only carries a red dot, because a number there widened
-  // the button and pushed it out of line with the icons beside it — so the
-  // bell is asserted on the dot, not on a number.
+  // pane's section column carries the message centre (a row, so it can name
+  // the page); the toolbar bell only carries a red dot, because a number there
+  // widened the button and pushed it out of line with the icons beside it — so
+  // the bell is asserted on the dot, not on a number. The bell is read first:
+  // opening the pane replaces the browser page, and the bell lives there.
   const entryPoints = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    document.querySelector('[data-manage-btn]')?.click();
-    await wait(400);
-    const item = document.querySelector('[data-manage-item="messages"]');
     const out = {
-      menuItem: Boolean(item),
-      menuLabel: item?.textContent?.trim() ?? '',
       bell: Boolean(document.querySelector('[data-messages-bell]')),
       bellDot: Boolean(document.querySelector('[data-messages-bell] .bell-dot')),
+      menuItem: false,
+      menuLabel: '',
     };
-    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    await wait(300);
+    document.querySelector('[data-manage-btn]')?.click();
+    await wait(600);
+    const item = document.querySelector('[data-manage-item="messages"]');
+    out.menuItem = Boolean(item);
+    out.menuLabel = item?.textContent?.trim() ?? '';
+    // Back to the browser: the checks below drive the bell on the toolbar.
+    document.querySelector('[data-nav="browser"]')?.click();
+    await wait(600);
     return out;
   })()`);
   check(
-    "the management menu carries messages, and the bell a red dot",
+    "the management pane carries messages, and the bell a red dot",
     entryPoints?.menuItem === true &&
       entryPoints?.menuLabel === "消息" &&
       entryPoints?.bell === true &&

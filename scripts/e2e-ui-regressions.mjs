@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { openNav } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -195,58 +196,26 @@ async function waitFor(client, expression, timeout = 4000) {
 }
 
 /**
- * Open a management page.
+ * Open a management pane section.
  *
- * The navigation is the instance rail's [管理] menu, which lives on the browser
- * page — so from another management page the band back-arrow returns to the
- * browser first. Settings is a page of its own: it replaces the whole window
- * and picks its section with a tab bar inside the page.
+ * The pane is opened by the instance rail's [管理] button, which lives on the
+ * browser page — so from the pane the band back-arrow returns to the browser
+ * first, then the shared navigation in `scripts/lib/e2e-nav.mjs` does the rest.
+ * `flows` and `settings-<id>` name destinations a second click inside their
+ * section reaches; the shared library owns those too.
  */
 async function openConsolePage(client, view) {
-  if (view === "settings") {
-    await client.evaluate(`(async () => {
-      if (!document.querySelector('[data-manage-btn]')) {
-        document.querySelector('[data-nav="browser"]')?.click();
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      document.querySelector('[data-manage-btn]')?.click();
-      await new Promise((r) => setTimeout(r, 350));
-      document.querySelector('[data-manage-item="settings"]')?.click();
-      await new Promise((r) => setTimeout(r, 600));
-      return true;
-    })()`);
-    return waitFor(client, `Boolean(document.querySelector('.page.settings'))`, 5000);
-  }
-  await client.evaluate(`(async () => {
-    // Settings has no toolbar at all, so its own back button is the only way out
-    // — the manage menu cannot be reached from underneath it.
-    if (document.querySelector('.page.settings')) {
-      document.querySelector('.settings-head .back')?.click();
-      await new Promise((r) => setTimeout(r, 600));
-    }
-    // The rail is the browser page's first row; another management page first
-    // returns through the band back-arrow.
-    if (!document.querySelector('[data-manage-btn]')) {
-      document.querySelector('[data-nav="browser"]')?.click();
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    document.querySelector('[data-manage-btn]')?.click();
-    await new Promise((r) => setTimeout(r, 350));
-    document.querySelector('[data-manage-item="${view}"]')?.click();
-    await new Promise((r) => setTimeout(r, 350));
-    return true;
-  })()`);
-  return waitFor(client, `Boolean(document.querySelector('.pane-console'))`, 5000);
+  await client.evaluate(openNav(view));
+  const marker =
+    view === "settings" || view.startsWith("settings-")
+      ? `Boolean(document.querySelector('.page.settings'))`
+      : `Boolean(document.querySelector('[data-manage-pane]'))`;
+  return waitFor(client, marker, 5000);
 }
 
 /** Back to the browser surface. */
 async function backToBrowser(client) {
   await client.evaluate(`(async () => {
-    if (document.querySelector('.page.settings')) {
-      document.querySelector('.settings-head .back')?.click();
-      await new Promise((r) => setTimeout(r, 450));
-      return true;
-    }
     document.querySelector('[data-nav="browser"]')?.click();
     await new Promise((r) => setTimeout(r, 450));
     return true;
@@ -534,8 +503,11 @@ try {
 
   await openConsolePage(client, "settings");
   await waitFor(client, `Boolean(document.querySelector('[role="tab"]'))`);
+  // Scoped to the settings page's own directory: the pane's section column is
+  // a tablist too, and it does carry a 标签 row — the page this check is about
+  // is the one the settings section renders.
   const settingsTabs = await client.evaluate(`(() =>
-    [...document.querySelectorAll('[role="tab"]')].map((el) =>
+    [...document.querySelectorAll('.page.settings [role="tab"]')].map((el) =>
       el.textContent.replace(/\\s+/g, ' ').trim(),
     )
   )()`);
@@ -1799,9 +1771,7 @@ try {
     await new Promise((r) => setTimeout(r, 1200));
     return Boolean(tab);
   })()`);
-  await client.evaluate(
-    `(async () => { document.querySelector('[data-manage-btn]')?.click(); await new Promise((r) => setTimeout(r, 350)); document.querySelector('[data-manage-item="identities"]')?.click(); await new Promise((r) => setTimeout(r, 500)); return true; })()`,
-  );
+  await client.evaluate(openNav("identities"));
   await wait(1200);
 
   const parkedState = await client.evaluate(`(async () => {
@@ -1874,7 +1844,7 @@ try {
   // The rail shares the screen with the stage, so a chip click must select its
   // own instance and leave the stage mounted.
   const dockSwitch = await client.evaluate(`(async () => {
-    if (document.querySelector('.pane-console')) {
+    if (document.querySelector('[data-manage-pane]')) {
       document.querySelector('[data-nav="browser"]')?.click();
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -2087,8 +2057,8 @@ try {
     };
 
     const before = await window.ensemble.getWorkspace();
-    (async function(){ if(!document.querySelector('.sidebar-nav')) { document.querySelector('[data-app-menu]')?.click(); } await new Promise((r) => setTimeout(r, 500)); document.querySelector('[data-nav="sites"]')?.click(); })();
-    await new Promise((r) => setTimeout(r, 400));
+    // Already on the sites section (the fold checks above opened it); the old
+    // "navigate from the sidebar" hop here has nothing left to navigate from.
 
     await openForm();
     const onDefault = { trigger: trigger(), effective: effective() };
@@ -2330,27 +2300,61 @@ try {
    * (ADR 0012); the workspace's `views` field and its ordering logic keep
    * their coverage in the unit tests (tests/view-order.test.ts). What the
    * shell must still guarantee: no route to the page from the management
-   * menu, and the workspace round-trip keeps existing rows.
+   * pane, and the workspace round-trip keeps existing rows.
    */
   await backToBrowser(client);
   const viewsRetired = await client.evaluate(`(async () => {
     document.querySelector('[data-manage-btn]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 600));
     const items = [...document.querySelectorAll('[data-manage-item]')].map((el) =>
       el.getAttribute('data-manage-item'),
     );
-    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 300));
+    // Back out of the pane; the entry-count assertion below reads the browser
+    // page, not the pane.
+    document.querySelector('[data-nav="browser"]')?.click();
+    await new Promise((r) => setTimeout(r, 500));
     // An old workspace still carries saved views; the shell keeps the data
     // readable and untouched by the retirement.
     const snap = await window.ensemble.getWorkspace();
     return { items, viewsInData: Array.isArray(snap.views) };
   })()`);
   check(
-    "the management menu has no views entry, and view data round-trips",
+    "the management pane has no views entry, and view data round-trips",
     viewsRetired?.items?.includes("views") === false &&
       viewsRetired?.viewsInData === true,
     viewsRetired,
+  );
+
+  // --- The browser page carries exactly two standing entries ----------------
+  // P1-2/P1-6 acceptance: the only navigation a user is ever shown is
+  // [+ 启动] and [管理] on the instance rail. Everything else — sections,
+  // message centre, flows — lives inside the pane, so on the browser page
+  // itself there must be no section rows at all and no other standing
+  // buttons besides the two.
+  const navEntries = await client.evaluate(`(() => {
+    const railButtons = [...document.querySelectorAll('.rail .rail-btn')].map((el) =>
+      el.getAttribute('data-manage-btn') !== null
+        ? 'manage'
+        : el.querySelector('[data-launch-btn]') !== null || el.getAttribute('data-launch-btn') !== null
+          ? 'launch'
+          : 'other',
+    );
+    return {
+      railButtons,
+      sectionsOnBrowser: document.querySelectorAll('[data-manage-item]').length,
+      hasSidebar: Boolean(document.querySelector('.sidebar-nav')),
+      hasBandBack: Boolean(document.querySelector('[data-nav="browser"]')),
+    };
+  })()`);
+  check(
+    "the browser page carries exactly two standing entries: [+ 启动] and [管理]",
+    navEntries?.railButtons?.length === 2 &&
+      navEntries.railButtons.includes('launch') &&
+      navEntries.railButtons.includes('manage') &&
+      navEntries.sectionsOnBrowser === 0 &&
+      navEntries.hasSidebar === false &&
+      navEntries.hasBandBack === false,
+    navEntries,
   );
 
 
@@ -2369,8 +2373,8 @@ try {
       });
     }
     await new Promise((r) => setTimeout(r, 500));
-    (async function(){ document.querySelector('[data-manage-btn]')?.click(); await new Promise((r) => setTimeout(r, 400)); document.querySelector('[data-manage-item="flows"]')?.click(); })();
-    await new Promise((r) => setTimeout(r, 700));
+    // Already on the flows tab: openConsolePage(client, "flows") above went
+    // through the pane's AI section and opened it.
     const heads = () => [...document.querySelectorAll('.flows .group-head')];
     const rows = () => document.querySelectorAll('.flows .flow-row').length;
     const before = { heads: heads().length, rows: rows() };
@@ -2559,17 +2563,18 @@ try {
     rawKeys,
   );
 
-  // Settings is a page of its own, so "a manual tab change must not stick" is
-  // about the request reaching the page, not about a sidebar row staying lit:
-  // pick another tab, leave, and ask the AI entry for the MCP section again.
+  // Settings lives in the management pane now, so "a manual tab change must
+  // not stick" is about the request reaching the page, not about a sidebar row
+  // staying lit: pick another tab, leave the pane, and ask the AI entry for the
+  // MCP section again.
   await client.evaluate(
     `(() => { document.querySelector('.page.settings [data-section="general"]')?.click(); return true; })()`,
   );
   await wait(400);
   await client.evaluate(`(async () => {
-    // Back to the browser first: the AI entry is a toolbar control, and settings
-    // has neither a toolbar nor that control.
-    document.querySelector('.settings-head .back')?.click();
+    // Back to the browser first: the AI entry is a toolbar control, and the
+    // pane has neither a toolbar nor that control.
+    document.querySelector('[data-nav="browser"]')?.click();
     await new Promise((r) => setTimeout(r, 500));
     document.querySelector('[data-ai-panel]')?.click();
     await new Promise((r) => setTimeout(r, 350));

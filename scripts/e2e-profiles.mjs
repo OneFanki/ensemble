@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of browser profiles.
+ * End-to-end check of the profile fold-in.
  *
- * The claim a profile makes is a storage boundary, and the only way to test a
- * storage boundary is to store something on one side and look for it from the
- * other. Four things have to hold:
+ * Profiles have folded into accounts: a user only ever needs the word
+ * "account". Four things have to hold:
  *
- * 1. Two profiles get different session partitions, and a cookie set in one is
- *    invisible from the other — through a real page, not through the records.
- * 2. One profile reuses its partition: a second browser in the same profile sees
- *    the first browser's cookie. That is what makes a profile worth keeping.
- * 3. A throwaway profile never keeps anything, and two of its browsers do not
- *    share.
- * 4. The default profile setting decides where an account-less page lands.
- *
- * Plus the panel and page that manage profiles, driven the way a user would.
+ * 1. The account form carries an "独立隔离档案" fold and it starts closed —
+ *    creating an account asks nothing about storage; the fold holds the one
+ *    sentence that says what isolation means and (for a saved account) the one
+ *    action that touches that data.
+ * 2. No profile surface remains in the everyday paths: the new-browser chooser
+ *    has no profile tab, the toolbar menu has no profiles row.
+ * 3. A workspace with user-created profiles shows the one-time merge invitation
+ *    in Settings; a workspace with only the built-ins never does. The
+ *    invitation says up front that merged profiles sign in again and that the
+ *    data stays on disk — merging must never be a silent logout.
+ * 4. Merging leaves exactly the two built-ins, points the default back at
+ *    "default", keeps every profile directory on disk, and after a restart an
+ *    account-less page lands in the default profile's partition — where the
+ *    merged profiles' cookies do *not* appear, exactly as the invitation
+ *    warned. That is the honest contract: sessions under a merged profile are
+ *    not silently kept, and not silently destroyed either (the data is still
+ *    on disk).
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
@@ -33,8 +41,7 @@ const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-profiles-"));
  *
  * `/set?value=x` stores a cookie, and `/read` puts whatever cookie reached the
  * server into the document title. The title is the observable that needs no
- * script channel: the browser's own tab record carries it, so "which cookie jar
- * is this page in" can be answered from the state the chrome already shows.
+ * script channel: the browser's own tab record carries it.
  */
 const page = createServer((req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PAGE_PORT}`);
@@ -63,18 +70,31 @@ await new Promise((done) => page.listen(PAGE_PORT, "127.0.0.1", done));
 const ORIGIN = `http://127.0.0.1:${PAGE_PORT}`;
 
 mkdirSync(join(userData, "profiles"), { recursive: true });
+const now = new Date().toISOString();
 writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
     tags: [],
-    sites: [],
+    sites: [
+      {
+        id: "site-1",
+        name: "演示站点",
+        baseUrl: ORIGIN,
+        loginPath: "/",
+        autoSubmit: false,
+        tagIds: [],
+        extraFields: [],
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
     identities: [],
     views: [],
     instances: [],
     manualEngines: [],
     layoutPresets: [],
-    bookmarks: [{ id: "b1", name: "档案检查", url: ORIGIN, order: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }],
+    bookmarks: [],
   }),
 );
 writeFileSync(
@@ -86,11 +106,15 @@ const electronBinary =
   process.platform === "win32"
     ? resolve("node_modules/electron/dist/electron.exe")
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
-const app = spawn(
-  electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
-  { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
-);
+
+function launchApp() {
+  return spawn(electronBinary, [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`], {
+    env: { ...process.env, ENSEMBLE_HEADLESS: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+const app = launchApp();
 let appLog = "";
 app.stdout.on("data", (chunk) => (appLog += chunk));
 app.stderr.on("data", (chunk) => (appLog += chunk));
@@ -109,31 +133,60 @@ async function inApp(client, body) {
 }
 
 /**
- * Opens a browser in `profileId` at `url` and reports the session it landed in.
+ * Connects to a freshly started app on the same user data.
  *
- * The partition is read back from the published tab rather than re-derived: a
- * test that recomputed it from the same helper the app uses would pass while the
- * app handed the page the wrong one.
+ * `waitForWindow` caches the first launch's debug port, and a restart binds a
+ * new one, so this reads `DevToolsActivePort` directly and connects itself.
  */
-async function probe(client, profileId, url) {
+async function reconnect() {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 20_000) {
+    await wait(300);
+    try {
+      const [first] = (await readFile(join(userData, "DevToolsActivePort"), "utf8")).split(
+        /\r?\n/,
+      );
+      const port = Number.parseInt(first ?? "", 10);
+      if (!Number.isInteger(port) || port <= 0) continue;
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const target = list.find(
+        (item) =>
+          item.type === "page" &&
+          item.url.includes("index.html") &&
+          !item.url.startsWith("devtools"),
+      );
+      if (target) return await connectToWindow(target.webSocketDebuggerUrl);
+    } catch {
+      // The file and the endpoint both appear only once the app is up.
+    }
+  }
+  throw new Error("重启后的应用窗口没有出现");
+}
+
+/** Opens the account form and reports the fold's state. */
+async function openAccountForm(client) {
   return inApp(
     client,
     `
-    const api = window.ensemble;
-    const tab = await api.openEmbeddedTab({
-      url: ${JSON.stringify(url)},
-      profileId: ${JSON.stringify(profileId)},
-      viewId: null,
-    });
-    await new Promise((r) => setTimeout(r, 1800));
-    const state = await api.getEmbeddedState();
-    const live = state.tabs.find((item) => item.id === tab.id);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Instance rail's 管理 menu → accounts page.
+    for (let attempt = 0; attempt < 5 && !document.querySelector('[data-manage-panel]'); attempt += 1) {
+      document.querySelector('[data-manage-btn]')?.click();
+      await wait(400);
+    }
+    document.querySelector('[data-manage-item="identities"]')?.click();
+    await wait(700);
+    // The page's new-account button (list header or empty state — same label).
+    const byText = [...document.querySelectorAll('button')]
+      .find((el) => el.textContent?.trim() === '新建身份');
+    byText?.click();
+    await wait(600);
+    const toggle = document.querySelector('[data-advanced-toggle]');
     return {
-      id: tab.id,
-      partition: live?.partition ?? tab.partition,
-      profileId: live?.profileId ?? null,
-      title: live?.title ?? null,
-      url: live?.url ?? null,
+      dialogOpen: Boolean(document.querySelector('.content .form')),
+      toggleText: toggle?.textContent?.trim() ?? null,
+      panelClosed: document.querySelector('[data-advanced-panel]') === null,
+      expanded: toggle?.getAttribute('aria-expanded') === 'true',
     };
   `,
   );
@@ -144,487 +197,359 @@ try {
   try {
     client = await waitForWindow({ userData, waitForDebugPort });
   } catch (error) {
-    // The app's own log is the only thing that explains a window that
-    // never came up; without it this reads as "the debug port was slow".
     check("app window appeared", false, appLog.slice(-600));
     throw error;
   }
   check("app window appeared", true);
   await wait(3000);
 
-  // --- 1. Two profiles are two cookie jars --------------------------------
-  const createdA = await inApp(
-    client,
-    `return await window.ensemble.createProfile("工作档案");`,
-  );
-  const createdB = await inApp(
-    client,
-    `return await window.ensemble.createProfile("对照档案");`,
-  );
-  const profiles = createdB?.profiles ?? [];
-  const profileA = profiles.find((item) => item.name === "工作档案");
-  const profileB = profiles.find((item) => item.name === "对照档案");
+  // --- 1. The account form's isolation fold, closed by default -------------
+  const form = await openAccountForm(client);
   check(
-    "profiles can be created and both are listed",
-    Boolean(profileA?.id) && Boolean(profileB?.id) && profiles.length === 4,
-    profiles.map((item) => item.name),
+    "the account form opens with an isolation fold",
+    form?.dialogOpen === true && form?.toggleText === "独立隔离档案",
+    form,
+  );
+  check(
+    "the isolation fold starts collapsed",
+    form?.panelClosed === true && form?.expanded === false,
+    form,
   );
 
-  const seeded = await inApp(
+  const fold = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-advanced-toggle]')?.click();
+    await wait(300);
+    const panel = document.querySelector('[data-advanced-panel]');
+    return {
+      note: panel?.querySelector('.note')?.textContent?.trim() ?? null,
+      // A brand-new account has no session data yet, so the fold holds only
+      // the sentence — no action.
+      clearButton: Boolean(panel?.querySelector('[data-clear-session]')),
+    };
+  `,
+  );
+  check(
+    "expanding the fold explains isolation and offers no action yet",
+    fold?.note?.includes("独立保存") === true && fold?.clearButton === false,
+    fold,
+  );
+
+  // Close the dialog; the account is not saved (no site exists and the fold is
+  // what this section tests, not the form's validation).
+  await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '取消')?.click();
+    await wait(300);
+  `,
+  );
+
+  // A saved account's fold holds the one action that touches session data, and
+  // the footer no longer carries it — the default path through the form stays
+  // free of it.
+  await inApp(
     client,
     `
     const api = window.ensemble;
-    const tab = await api.openEmbeddedTab({
-      url: ${JSON.stringify(`${ORIGIN}/set?value=alpha`)},
-      profileId: ${JSON.stringify(profileA?.id ?? "")},
-      viewId: null,
+    await api.saveIdentity({
+      siteId: "site-1",
+      name: "隔离检查账号",
+      username: "isolated@example.test",
+      role: "member",
+      color: "teal",
+      passwordMode: "inherit",
+      startPath: "/",
     });
-    await new Promise((r) => setTimeout(r, 1800));
-    const state = await api.getEmbeddedState();
-    const live = state.tabs.find((item) => item.id === tab.id);
-    return { partition: live?.partition ?? null, profileId: live?.profileId ?? null };
   `,
   );
-  check(
-    "a browser opened in a profile records that profile",
-    seeded?.profileId === profileA?.id,
-    seeded,
-  );
-
-  const readA = await probe(client, profileA?.id ?? "", `${ORIGIN}/read`);
-  const readB = await probe(client, profileB?.id ?? "", `${ORIGIN}/read`);
-  check(
-    "a cookie set in one profile is not visible from another",
-    readA?.partition !== readB?.partition &&
-      readA?.partition?.includes(profileA?.id ?? "-") === true &&
-      readB?.partition?.includes(profileB?.id ?? "-") === true,
-    { a: readA?.partition, b: readB?.partition },
-  );
-
-  // --- 2. A profile keeps its session between browsers --------------------
-  const readA2 = await probe(client, profileA?.id ?? "", `${ORIGIN}/read`);
-  check(
-    "a second browser in the same profile reuses its partition",
-    readA2?.partition === readA?.partition,
-    { first: readA?.partition, second: readA2?.partition },
-  );
-
-  // The cookie itself, read through the page rather than the records: navigate a
-  // browser in each profile to `/read` and read the title the server echoed. A
-  // page title reaches the chrome, so this needs no script channel into the page.
-  const titles = await inApp(
+  await wait(700);
+  const editFold = await inApp(
     client,
     `
-    const api = window.ensemble;
-    const state = await api.getEmbeddedState();
-    const of = (profileId) =>
-      state.tabs
-        .filter((tab) => tab.profileId === profileId && tab.url.includes('/read'))
-        .map((tab) => tab.title);
-    return { a: of(${JSON.stringify(profileA?.id ?? "")}), b: of(${JSON.stringify(profileB?.id ?? "")}) };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-edit-identity]')?.click();
+    await wait(700);
+    document.querySelector('[data-advanced-toggle]')?.click();
+    await wait(300);
+    const clearButton = document.querySelector('[data-clear-session]');
+    const footerText = document.querySelector('.content .foot')?.textContent ?? '';
+    return {
+      footerFound: footerText.length > 0,
+      clearButtonThere: Boolean(clearButton),
+      clearLabel: clearButton?.textContent?.trim() ?? null,
+      footerHasClear: footerText.includes('清除会话数据'),
+    };
   `,
   );
   check(
-    "the served page echoes the cookie only in the profile that set it",
-    titles?.a?.includes("alpha") === true && titles?.b?.every((title) => title !== "alpha"),
-    titles,
-  );
-
-  // --- 3. A throwaway profile keeps nothing ---------------------------------
-  const clean1 = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    const tab = await api.openEmbeddedTab({
-      url: ${JSON.stringify(`${ORIGIN}/set?value=beta`)},
-      profileId: "clean",
-      ephemeral: true,
-      viewId: null,
-    });
-    await new Promise((r) => setTimeout(r, 1800));
-    const state = await api.getEmbeddedState();
-    const live = state.tabs.find((item) => item.id === tab.id);
-    return { partition: live?.partition ?? null, clean: live?.clean ?? false };
-  `,
-  );
-  const clean2 = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    const tab = await api.openEmbeddedTab({
-      url: ${JSON.stringify(`${ORIGIN}/read`)},
-      profileId: "clean",
-      ephemeral: true,
-      viewId: null,
-    });
-    await new Promise((r) => setTimeout(r, 1800));
-    const state = await api.getEmbeddedState();
-    const live = state.tabs.find((item) => item.id === tab.id);
-    return { partition: live?.partition ?? null, title: live?.title ?? null };
-  `,
+    "a saved account's fold holds the clear-session action",
+    editFold?.clearButtonThere === true && editFold?.clearLabel === "清除会话数据",
+    editFold,
   );
   check(
-    "throwaway browsers get their own in-memory session",
-    clean1?.partition !== clean2?.partition &&
-      Boolean(clean1?.partition?.startsWith("embedded-clean-")) === true &&
-      clean1?.clean === true,
-    clean1,
-  );
-  check(
-    "a throwaway browser does not see another one's cookie",
-    clean2?.title === "none",
-    clean2,
-  );
-
-  // --- 4. The default profile decides where an account-less page lands ------
-  const switched = await inApp(
-    client,
-    `return await window.ensemble.setDefaultProfile(${JSON.stringify(profileB?.id ?? "")});`,
-  );
-  check(
-    "a profile can be made the default",
-    switched?.defaultProfileId === profileB?.id,
-    { defaultProfileId: switched?.defaultProfileId, expected: profileB?.id },
-  );
-
-  const implicit = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    const tab = await api.openEmbeddedTab({ url: ${JSON.stringify(`${ORIGIN}/read`)}, viewId: null });
-    await new Promise((r) => setTimeout(r, 1500));
-    const state = await api.getEmbeddedState();
-    const live = state.tabs.find((item) => item.id === tab.id);
-    return { profileId: live?.profileId ?? null, partition: live?.partition ?? null };
-  `,
-  );
-  check(
-    "a bookmark-style open lands in the default profile",
-    implicit?.profileId === profileB?.id,
-    { implicit, expected: profileB?.id },
-  );
-
-  // --- 5. The built-ins cannot be deleted, and the list survives mode swings --
-  const deleteBuiltin = await inApp(
-    client,
-    `return await window.ensemble.deleteProfile("default").then(() => "deleted").catch((e) => String(e?.message ?? e));`,
-  );
-  check(
-    "the built-in profile cannot be deleted",
-    String(deleteBuiltin).includes("内置"),
-    { deleteBuiltin },
-  );
-
-  const renamed = await inApp(
-    client,
-    `return await window.ensemble.renameProfile("default", "日常档案").then(() => "renamed").catch((e) => String(e?.message ?? e));`,
-  );
-  check(
-    "the built-in profile cannot be renamed",
-    String(renamed).includes("内置"),
-    { renamed },
-  );
-
-  // The lock covers the shipped rows only: a profile the user added is theirs
-  // to rename. Renamed back straight away, because the page check below looks
-  // rows up by name.
-  const renamedUser = await inApp(
-    client,
-    `return await window.ensemble.renameProfile(${JSON.stringify(profileA?.id ?? "")}, "工作档案-改名");`,
-  );
-  check(
-    "a user profile can still be renamed",
-    renamedUser?.profiles?.some(
-      (item) => item.id === profileA?.id && item.name === "工作档案-改名",
-    ) === true,
-    renamedUser?.profiles?.map((item) => item.name),
+    "the clear-session action lives in the fold, not the footer",
+    editFold?.footerFound === true && editFold?.footerHasClear === false,
+    editFold,
   );
   await inApp(
     client,
-    `return await window.ensemble.renameProfile(${JSON.stringify(profileA?.id ?? "")}, "工作档案");`,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '取消')?.click();
+    await wait(300);
+  `,
   );
 
-  const ephemeralDefault = await inApp(
-    client,
-    `return await window.ensemble.setDefaultProfile("clean").then(() => "accepted").catch((e) => String(e?.message ?? e));`,
-  );
-  check(
-    "a throwaway profile cannot become the default",
-    String(ephemeralDefault).includes("干净会话"),
-    { ephemeralDefault },
-  );
-
-  // --- 6. The panel opens a browser in a picked profile --------------------
-  const panel = await inApp(
+  // --- 2. No profile surface in the everyday paths -------------------------
+  // The account form left the app on the accounts page; the toolbar surfaces
+  // under test live on the browser view.
+  await inApp(
     client,
     `
-    const api = window.ensemble;
-    const trigger = document.querySelector('.toolbar .split-arrow');
-    for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
-      trigger?.click();
-      await new Promise((r) => setTimeout(r, 900));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-nav="browser"]')?.click();
+    await wait(700);
+  `,
+  );
+  const chooser = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let attempt = 0; attempt < 4 && !document.querySelector('.open-menu'); attempt += 1) {
+      document.querySelector('.toolbar .split-arrow')?.click();
+      await wait(700);
     }
-    const modes = [...document.querySelectorAll('.open-menu .mode')].map((el) => el.textContent?.trim() ?? '');
-    document.querySelector('.open-menu .mode[data-mode="profiles"]')?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    const rows = [...document.querySelectorAll('.open-menu .profile-row')].map((el) => ({
-      name: el.querySelector('.acc-name')?.textContent?.trim() ?? '',
-      default: Boolean(el.querySelector('.badge')),
-    }));
-    const before = await api.getEmbeddedState();
-    const target = [...document.querySelectorAll('.open-menu .profile-row')]
-      .find((el) => el.textContent?.includes('工作档案'));
-    target?.click();
-    await new Promise((r) => setTimeout(r, 1800));
-    const after = await api.getEmbeddedState();
-    const added = after.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
-    const live = added[0] ?? null;
+    const state = await window.ensemble.getEmbeddedState();
     return {
-      modes,
-      rows,
-      panelOpen: Boolean(document.querySelector('.open-panel')),
-      profileId: live?.profileId ?? null,
-      partition: live?.partition ?? null,
-      url: live?.url ?? null,
+      open: Boolean(document.querySelector('.open-menu')),
+      profileTabs: document.querySelectorAll('.open-menu .mode[data-mode="profiles"]').length,
+      profileRows: document.querySelectorAll('.open-menu .profile-row').length,
+      accountOpenings: document.querySelectorAll('.open-menu [data-open-daily], .open-menu [data-open-clean]').length,
+      tabs: state.tabs.length,
     };
   `,
   );
   check(
-    "the panel offers the account and profile modes, accounts first",
-    panel?.modes?.[0] === "账号" && panel?.modes?.[1] === "档案",
-    panel?.modes,
+    "the new-browser chooser has no profile tab and no profile rows",
+    chooser?.open === true && chooser?.profileTabs === 0 && chooser?.profileRows === 0,
+    chooser,
   );
   check(
-    "the profile list marks exactly the default",
-    panel?.rows?.filter((row) => row.default)?.length === 1,
-    panel?.rows,
-  );
-  check(
-    "picking a profile opens a blank browser in it and closes the panel",
-    panel?.profileId === profileA?.id &&
-      panel?.url === "about:blank" &&
-      panel?.partition === readA?.partition &&
-      panel?.panelOpen === false,
-    panel,
+    "the chooser keeps the site-less openings (default profile, clean session)",
+    chooser?.accountOpenings === 2,
+    chooser,
   );
 
-  // --- 7. The profiles page manages the list ------------------------------
-  // Reached through the app menu, which is the door that exists in the plainer
-  // shell too: the sidebar (and its 档案 row) only appears in the workbench.
-  const page = await inApp(
+  const menu = await inApp(
     client,
     `
-    const menu = document.querySelector('[data-app-menu]')?.querySelector('button');
-    // The toolbar's app menu trigger, whatever its icon is today.
-    document.querySelector('.app-menu-anchor button')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    document.querySelector('[data-menu-item="profiles"]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    const rows = [...document.querySelectorAll('.profiles .row')].map((el) => ({
-      name: el.querySelector('.row-name')?.textContent?.trim() ?? '',
-      default: Boolean(el.querySelector('.badge')),
-      canDelete:
-        Boolean(el.querySelector('[data-profile-delete]')) &&
-        !el.querySelector('[data-profile-delete]')?.disabled,
-    }));
-    // Every row on this page persists, so a per-row lifetime note would repeat
-    // one fact once per profile — the header says it once instead. What must not
-    // come back is a second line of text under the name: the row carries the
-    // name, the default chip and its buttons, and no note element.
-    const first = document.querySelector('.profiles .row');
-    const rowNotes = document.querySelectorAll('.profiles .row-note').length;
-    const noteish = first?.querySelectorAll('.row-note, .row-desc, .acc-note').length ?? -1;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.body.click();
+    await wait(300);
+    document.querySelector('.app-menu-anchor .app-menu-btn')?.click();
+    await wait(500);
     return {
-      opened: Boolean(document.querySelector('.profiles')),
-      rows,
-      rowNotes,
-      noteish,
-      menuFound: Boolean(document.querySelector('[data-menu-item="profiles"]')),
-      hadMenu: Boolean(menu),
+      profilesRow: document.querySelectorAll('.app-menu [data-menu-item="profiles"]').length,
+      bookmarksRow: document.querySelectorAll('.app-menu [data-menu-item="bookmarks"]').length,
     };
   `,
   );
   check(
-    // Three persistent rows plus the throwaway, which is listed last and drawn
-    // apart: opening a clean jar in a real browser is a reason to be on this
-    // page, but it is not a row anyone names or deletes.
-    "the profiles page lists the persistent profiles and the clean session last",
-    page?.opened === true &&
-      page?.rows?.length === 4 &&
-      page?.rows?.[3]?.name === "干净会话",
-    { opened: page?.opened, rows: page?.rows, menuFound: page?.menuFound },
+    "the toolbar menu has no profiles row",
+    menu?.profilesRow === 0 && menu?.bookmarksRow === 1,
+    menu,
   );
-  check(
-    "the profile row keeps its one-line shape",
-    // No note element under the name: the lifetime is one fact about the whole
-    // page, so the header carries it once instead of once per row.
-    page?.rowNotes === 0 && page?.noteish === 0,
-    { rowNotes: page?.rowNotes, noteish: page?.noteish },
-  );
+  await inApp(client, `document.body.click(); await new Promise((r) => setTimeout(r, 300));`);
 
-  // A built-in row offers neither rename nor delete; a user row offers both.
-  const affordances = await inApp(
-    client,
-    `
-    const row = (name) => [...document.querySelectorAll('.profiles .row')]
-      .find((el) => el.querySelector('.row-name')?.textContent?.trim() === name);
-    return {
-      builtinRename: Boolean(row('默认档案')?.querySelector('[data-profile-rename]')),
-      builtinDelete: Boolean(row('默认档案')?.querySelector('[data-profile-delete]')),
-      userRename: Boolean(row('工作档案')?.querySelector('[data-profile-rename]')),
-      userDelete: Boolean(row('工作档案')?.querySelector('[data-profile-delete]')),
-    };
-  `,
-  );
-  check(
-    "built-in rows offer neither rename nor delete",
-    affordances?.builtinRename === false &&
-      affordances?.builtinDelete === false &&
-      affordances?.userRename === true &&
-      affordances?.userDelete === true,
-    affordances,
-  );
-
-  // Every row launches, and the launch control offers the built-in surface plus
-  // the scanned browsers. This is the path the user asked for: "open this jar in
-  // a real browser" is a decision made here, not a mode flipped elsewhere.
-  const rowLaunchers = await inApp(
-    client,
-    `
-    const rows = [...document.querySelectorAll('.profiles .row')];
-    const of = (name) => rows.find((el) => el.querySelector('.row-name')?.textContent?.trim() === name);
-    const workspace = await window.ensemble.getWorkspace();
-    const clean = of('干净会话');
-    const work = of('工作档案');
-    const trigger = work?.querySelector('[data-launch-menu]');
-    trigger?.click();
-    await new Promise((r) => setTimeout(r, 350));
-    const panel = document.querySelector('[data-launch-panel]');
-    const engines = panel
-      ? [...panel.querySelectorAll('[data-engine]')].map((el) => el.dataset.engine)
-      : [];
-    trigger?.click();
-    return {
-      rowsWithLauncher: rows.filter((el) => el.querySelector('[data-launch-main]')).length,
-      totalRows: rows.length,
-      engines,
-      scanned: workspace.engines.length,
-      cleanHasLauncher: Boolean(clean?.querySelector('[data-launch-main]')),
-      cleanHasRename: Boolean(clean?.querySelector('[data-profile-rename]')),
-      cleanHasDelete: Boolean(clean?.querySelector('[data-profile-delete]')),
-    };
-  `,
-  );
-  check(
-    "every profile row can launch, and the throwaway row cannot be renamed or deleted",
-    rowLaunchers?.rowsWithLauncher === rowLaunchers?.totalRows &&
-      rowLaunchers?.cleanHasLauncher === true &&
-      rowLaunchers?.cleanHasRename === false &&
-      rowLaunchers?.cleanHasDelete === false,
-    rowLaunchers,
-  );
-  check(
-    "the row's launch menu lists the built-in surface and every scanned browser",
-    rowLaunchers?.engines?.[0] === "embedded" &&
-      rowLaunchers?.engines?.length === rowLaunchers?.scanned + 1,
-    rowLaunchers,
-  );
-
-  // Creating goes through a dialog, and the dialog closes once the write lands.
-  // The old inline form stayed open with the typed name still in it, which read
-  // as "nothing happened" while the new row was already in the list.
+  // --- 3. Two profiles sign in, then the invitation appears ----------------
   const created = await inApp(
     client,
     `
     const api = window.ensemble;
-    document.querySelector('[data-profile-new]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const input = document.querySelector('.content [data-profile-name]');
-    const opened = Boolean(input);
-    input.value = '弹窗档案';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('[data-profile-create]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    const after = await api.getWorkspace();
+    await api.createProfile("工作档案");
+    const settings = await api.createProfile("对照档案");
+    return settings.profiles.map((item) => ({ id: item.id, name: item.name }));
+  `,
+  );
+  const work = created?.find((item) => item.name === "工作档案");
+  const alt = created?.find((item) => item.name === "对照档案");
+  check(
+    "two user profiles exist alongside the built-ins",
+    Boolean(work?.id) && Boolean(alt?.id) && created?.length === 4,
+    created?.map((item) => item.name),
+  );
+
+  // Each jar signs in to the probe page: a cookie in its own partition. The
+  // partition is read while the page is open — the closed page leaves no record.
+  const seeded = [];
+  for (const [profile, value] of [
+    [work, "work-login"],
+    [alt, "alt-login"],
+  ]) {
+    seeded.push(
+      await inApp(
+        client,
+        `
+        const api = window.ensemble;
+        const tab = await api.openEmbeddedTab({
+          url: ${JSON.stringify(`${ORIGIN}/set?value=` + value)},
+          profileId: ${JSON.stringify(profile?.id ?? "")},
+          viewId: null,
+        });
+        await new Promise((r) => setTimeout(r, 1500));
+        const state = await api.getEmbeddedState();
+        const live = state.tabs.find((item) => item.id === tab.id);
+        const seen = { profileId: live?.profileId ?? null, partition: live?.partition ?? null };
+        await api.closeEmbeddedTab(tab.id).catch(() => {});
+        return seen;
+      `,
+      ),
+    );
+  }
+  check(
+    "each profile's page carried its own partition",
+    seeded?.[0]?.profileId === work?.id &&
+      seeded?.[1]?.profileId === alt?.id &&
+      seeded?.[0]?.partition !== seeded?.[1]?.partition,
+    seeded,
+  );
+
+  await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let attempt = 0; attempt < 4 && !document.querySelector('.settings'); attempt += 1) {
+      const btn = document.querySelector('[data-manage-btn]');
+      btn?.click();
+      await wait(400);
+      document.querySelector('[data-manage-item="settings"]')?.click();
+      await wait(700);
+    }
+    // Settings opens on general; the invitation lives on the data tab.
+    const dataTab = [...document.querySelectorAll('[data-section]')]
+      .find((el) => el.dataset.section === 'data');
+    dataTab?.click();
+    await wait(500);
+  `,
+  );
+  const invite = await inApp(
+    client,
+    `
     return {
-      opened,
-      closed: document.querySelector('.content [data-profile-name]') === null,
-      names: after.settings.profiles.map((item) => item.name),
-      listed: [...document.querySelectorAll('.profiles .row-name')].map((el) => el.textContent?.trim()),
+      invite: Boolean(document.querySelector('[data-merge-apply]')),
+      names: document.querySelector('.merge-names')?.textContent?.trim() ?? null,
+      note: document.querySelector('[data-merge-note]')?.textContent?.trim() ?? null,
+      keep: document.querySelector('[data-merge-keep]')?.textContent?.trim() ?? null,
     };
   `,
   );
   check(
-    "creating a profile uses a dialog and closes it on success",
-    created?.opened === true &&
-      created?.closed === true &&
-      created?.names?.includes("弹窗档案") &&
-      created?.listed?.includes("弹窗档案"),
-    created,
-  );
-
-  // Leaving the dialog without saving must not write anything.
-  const cancelled = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    document.querySelector('[data-profile-new]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const input = document.querySelector('.content [data-profile-name]');
-    input.value = '不该存在';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    // The dialog's own close button, top right.
-    document.querySelector('.content .close')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const after = await api.getWorkspace();
-    return {
-      closed: document.querySelector('.content [data-profile-name]') === null,
-      names: after.settings.profiles.map((item) => item.name),
-    };
-  `,
+    "settings shows the merge invitation naming both profiles",
+    invite?.invite === true && invite?.names === "工作档案、对照档案",
+    invite,
   );
   check(
-    "cancelling the dialog writes nothing",
-    cancelled?.closed === true && cancelled?.names?.includes("不该存在") === false,
-    cancelled,
+    "the invitation warns about re-sign-in and kept data before any click",
+    invite?.note?.includes("重新登录") === true && invite?.note?.includes("保留") === true,
+    invite?.note,
   );
 
-  check(
-    "the page marks the default and hides delete on built-ins",
-    page?.rows?.filter((row) => row.default)?.length === 1 &&
-      page?.rows?.find((row) => row.name === "默认档案")?.canDelete === false &&
-      page?.rows?.find((row) => row.name === "工作档案")?.canDelete === true,
-    page?.rows,
-  );
-  const removed = await inApp(
+  // --- 4. Merging: two rows leave, the default takes over, data stays ------
+  await inApp(client, `document.querySelector('[data-merge-apply]')?.click();`);
+  await wait(600);
+  const mergeConfirm = await inApp(
     client,
     `
-    const api = window.ensemble;
-    const before = await api.getWorkspace();
-    const target = before.settings.profiles.find((item) => item.name === '对照档案');
-    document.querySelector('[data-profile-delete="' + target.id + '"]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    // The confirmation dialog owns the decision; press its destructive button.
-    const buttons = [...document.querySelectorAll('.content.actions button, .actions button')];
-    const confirm = buttons.find((el) => el.textContent?.trim() === '删除');
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const buttons = [...document.querySelectorAll('.content button')];
+    const confirm = buttons.find((el) => el.textContent?.trim() === '合并到默认档案');
+    const bodyText = document.querySelector('[role="alertdialog"], .content')?.textContent ?? '';
     confirm?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    const after = await api.getWorkspace();
+    await wait(900);
+    const after = await window.ensemble.getWorkspace();
     return {
-      before: before.settings.profiles.length,
-      after: after.settings.profiles.length,
-      names: after.settings.profiles.map((item) => item.name),
-      // Deleting the default has to leave the choice somewhere real.
+      warnedAgain: bodyText.includes('重新登录'),
+      profileNames: after.settings.profiles.map((item) => item.name),
       defaultProfileId: after.settings.defaultProfileId,
+      inviteGone: document.querySelector('[data-merge-apply]') === null,
     };
   `,
   );
   check(
-    "deleting a user profile removes it and hands the default to a real profile",
-    removed?.after === removed?.before - 1 &&
-      !removed?.names?.includes("对照档案") &&
-      removed?.defaultProfileId !== profileB?.id,
-    removed,
+    "the confirm dialog repeats the re-sign-in warning",
+    mergeConfirm?.warnedAgain === true,
+    mergeConfirm,
+  );
+  check(
+    "merging leaves exactly the built-in profiles with the default in charge",
+    mergeConfirm?.profileNames?.length === 2 &&
+      mergeConfirm?.profileNames?.includes("默认档案") === true &&
+      mergeConfirm?.profileNames?.includes("干净会话") === true &&
+      mergeConfirm?.defaultProfileId === "default",
+    mergeConfirm,
+  );
+  check(
+    "the invitation leaves the settings page once answered",
+    mergeConfirm?.inviteGone === true,
+    mergeConfirm,
+  );
+
+  // --- 5. Restart: the default profile serves account-less pages, the merged
+  //     jars' data is still on disk, their cookies are not in the default ----
+  client.close();
+  app.kill();
+  await new Promise((done) => setTimeout(done, 2500));
+
+  const second = launchApp();
+  second.stdout.on("data", (chunk) => (appLog += chunk));
+  second.stderr.on("data", (chunk) => (appLog += chunk));
+  client = await reconnect();
+  await wait(2500);
+
+  const reopened = await inApp(
+    client,
+    `
+    const api = window.ensemble;
+    const tab = await api.openEmbeddedTab({ url: ${JSON.stringify(`${ORIGIN}/read`)}, viewId: null });
+    await new Promise((r) => setTimeout(r, 1800));
+    const state = await api.getEmbeddedState();
+    const live = state.tabs.find((item) => item.id === tab.id);
+    return {
+      partition: live?.partition ?? null,
+      profileId: live?.profileId ?? null,
+      title: live?.title ?? null,
+      profiles: (await api.getWorkspace()).settings.profiles.length,
+    };
+  `,
+  );
+  check(
+    "after a restart an account-less page lands in the default profile",
+    reopened?.partition === "persist:embedded-clean" &&
+      (reopened?.profileId === "default" || reopened?.profileId === null),
+    reopened,
+  );
+  check(
+    "the default partition does not hold a merged profile's cookie",
+    reopened?.title === "none",
+    { title: reopened?.title, partition: reopened?.partition },
+  );
+
+  const keptOnDisk =
+    existsSync(join(userData, "Partitions", `profile-${work?.id}`)) &&
+    existsSync(join(userData, "Partitions", `profile-${alt?.id}`));
+  check(
+    "the merged profiles' partition data is still on disk",
+    keptOnDisk,
+    { work: join(userData, "Partitions", `profile-${work?.id}`) },
+  );
+  check(
+    "the workspace still reports exactly the two built-ins after the restart",
+    reopened?.profiles === 2,
+    reopened?.profiles,
   );
 
   client.close();

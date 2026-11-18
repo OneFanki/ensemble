@@ -96,7 +96,7 @@ const BIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400, 4_800];
  */
 const SERVER_INSTRUCTIONS = [
   "Ensemble (同台) is a local multi-identity browser workbench for testing permission systems.",
-  "It stores sites, identities (one browser profile each, so accounts never share cookies),",
+  "It stores sites, identities (accounts; each keeps its own session, so accounts never share cookies),",
   "views (a set of identities laid out in a grid), reusable flows, and an embedded browser that",
   "an AI can drive. Nothing leaves this machine.",
   "",
@@ -2169,7 +2169,7 @@ export class McpServer {
       if (facts.clean) return "干净会话";
       const snapshot = this.options.service.snapshot();
       const profile = (snapshot.settings.profiles ?? []).find((item) => item.id === facts.profileId);
-      return profile ? `档案 · ${profile.name}` : "默认档案";
+      return profile ? `会话 · ${profile.name}` : "默认档案";
     } catch {
       return "";
     }
@@ -3623,7 +3623,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；没有 clean 的页面属于某个档案，`profileId: \"default\"` 就是默认档案。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
+          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；其余页面属于默认档案或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
         kind: "read",
         inputSchema: object({}),
         run: () => projectState(surface().state()),

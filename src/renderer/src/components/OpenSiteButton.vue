@@ -17,10 +17,10 @@ import SiteOpenMenu from "./SiteOpenMenu.vue";
  * into a trip through an account chooser that had already pre-picked a site.
  *
  * The arrow half is the account answer: it opens the chooser to pick an account
- * (opened at its start page and filled), a site's default-profile or throwaway
- * opening, or a blank browser in a named profile. The chooser is the secondary
- * door — reached only on purpose — because a page here usually belongs to an
- * account, and which account decides the session partition.
+ * (opened at its start page and filled) or a site's default-profile or
+ * throwaway opening. The chooser is the secondary door — reached only on
+ * purpose — because a page here usually belongs to an account, and which
+ * account decides the session partition.
  *
  * `lockedSiteId` is set where the surrounding container already names the
  * system — a view's own "+" — so the chooser lists that site's accounts and
@@ -145,11 +145,6 @@ function placePanel(): void {
   };
 }
 
-function chooseProfile(profileId: string): void {
-  open.value = false;
-  emit("openProfile", profileId);
-}
-
 /**
  * The main half: a blank page, straight away.
  *
@@ -212,7 +207,6 @@ function chooseIdentity(identityId: string): void {
         :profiles="store.settings.profiles ?? []"
         :default-profile-id="store.settings.defaultProfileId"
         :locked-site-id="effectiveLock"
-        @open-profile="chooseProfile"
         @open-daily="chooseDaily"
         @open-clean="chooseClean"
         @open-identity="chooseIdentity"

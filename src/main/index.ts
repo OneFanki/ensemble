@@ -3336,6 +3336,12 @@ function registerIpc(workspace: WorkspaceService): void {
   );
   handle(IPC.profileDelete, (id: string) => workspace.deleteProfile(String(id)));
   handle(IPC.profileSetDefault, (id: string) => workspace.setDefaultProfile(String(id)));
+  handle(IPC.profileMergeStatus, () => ({
+    pending: workspace.profileMergePending(),
+    profiles: workspace.mergeableProfiles(),
+  }));
+  handle(IPC.profileMergeApply, () => workspace.mergeProfilesToDefault());
+  handle(IPC.profileMergeKeep, () => workspace.keepProfiles());
 
   handle(IPC.credentialsSet, async (owner: PasswordOwner, password: string) => {
     await workspace.setPassword(passwordOwnerSchema.parse(owner), String(password));

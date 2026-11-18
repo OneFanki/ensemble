@@ -2127,6 +2127,79 @@ export class WorkspaceService {
   }
 
   /**
+   * The user-created persistent profiles the merge invitation is about.
+   *
+   * Accounts never sit in profiles — every account keeps its own session, which
+   * is exactly why the profile concept is folding into the account concept. A
+   * profile here is a named cookie jar for account-less pages, and any of them
+   * means this workspace was built when profiles were a thing the user managed.
+   */
+  mergeableProfiles(): Array<{ id: string; name: string }> {
+    return this.settings.profiles
+      .filter((profile) => !profile.builtin && profile.retention === "persist")
+      .map((profile) => ({ id: profile.id, name: profile.name }));
+  }
+
+  /**
+   * Whether the settings page should show the merge invitation.
+   *
+   * Only workspaces that actually hold a user-created profile see it — a user
+   * with just the built-in default has nothing to merge and must never be asked.
+   * Once answered (merged or kept), `profilesMerged` keeps the invitation from
+   * coming back: it is an offer on a settings page, not a dialog that interrupts.
+   */
+  profileMergePending(): boolean {
+    if (this.settings.profilesMerged) return false;
+    return this.mergeableProfiles().length > 0;
+  }
+
+  /**
+   * Merges every user-created profile into the built-in default.
+   *
+   * What merging means, concretely: the profile rows leave the settings list and
+   * the default falls back to the built-in, so every account-less page from now
+   * on opens in the one everyday jar. Nothing on disk is deleted — the built-in
+   * surface keeps each profile's partition data under `<userData>/Partitions`,
+   * and the external surface keeps `<profileRoot>/profiles/<id>` — because
+   * "merge these rows" must never be the click that destroys logins the user
+   * may still want. The trade-off is stated in the invitation: pages that were
+   * signed in under a merged profile sign in again.
+   *
+   * Running windows are left alone for the same reason; they simply have no
+   * launcher any more once this lands.
+   */
+  mergeProfilesToDefault(): AppSettings {
+    const merged = this.mergeableProfiles();
+    if (merged.length === 0) throw new Error("没有可合并的档案");
+    const mergedIds = new Set(merged.map((profile) => profile.id));
+    const profiles = this.settings.profiles.filter((profile) => !mergedIds.has(profile.id));
+    const defaultProfileId = mergedIds.has(this.settings.defaultProfileId)
+      ? (profiles.find((profile) => profile.id === EMBEDDED_DEFAULT_PROFILE_ID)?.id ??
+        profiles[0]?.id ??
+        EMBEDDED_DEFAULT_PROFILE_ID)
+      : this.settings.defaultProfileId;
+    this.settings = { ...this.settings, profiles, defaultProfileId, profilesMerged: true };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
+  /**
+   * Answers the invitation with "keep them", so it stops showing.
+   *
+   * The rows stay exactly as they are. Nothing in the product opens a new page
+   * in a named profile any more, so keeping them preserves what those jars hold
+   * and nothing else; the data on disk is untouched either way.
+   */
+  keepProfiles(): AppSettings {
+    if (this.settings.profilesMerged) return this.settingsSnapshot();
+    this.settings = { ...this.settings, profilesMerged: true };
+    this.settingsStore.write(this.settings);
+    this.emit();
+    return this.settingsSnapshot();
+  }
+
+  /**
    * Takes the factory default layout while the user has never picked one.
    *
    * The default changed from 2×2 to no-layout: without this, every existing

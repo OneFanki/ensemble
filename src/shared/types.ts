@@ -488,6 +488,15 @@ export interface AppSettings {
    * a bookmark, a typed address, the toolbar's "+".
    */
   defaultProfileId: string;
+  /**
+   * The one-time profile-merge invitation has been dealt with.
+   *
+   * Set when the user either merges their extra profiles into the default one or
+   * asks to keep them. A workspace whose user never created a profile never sees
+   * the invitation in the first place; this flag only stops it from re-appearing
+   * for someone who answered it.
+   */
+  profilesMerged?: boolean;
   lastSiteId?: string;
   lastView:
     | "browser"

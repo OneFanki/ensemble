@@ -42,11 +42,11 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | --- | --- | --- | --- | --- |
 | `get_workspace_summary` | read | — | 无 | 站点 / 身份 / 视图 / 运行中实例的数量与名称 |
 | `update_settings` | write | — | 无。凭据、密钥库、MCP 端口与令牌不接受修改 | 改动后的键值 |
-| `list_sites` / `list_site_tags` / `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码 |
+| `list_sites` / `list_site_tags` / `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码；`list_bookmarks` 不回传图标内容，只有 `hasFavicon` 标记；`list_flows` 返回 `{ flows, total }`——流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截断到前 200 字符、步骤多于 60 条截到 60 并标 `stepsTruncated`（`run_flow` 用完整定义，不受预览截断影响） |
 | `create_site` / `update_site` / `create_identity` / `create_identities` / `update_identity` / `link_identities_to_site` / `set_password` | write | — | 无。密码只写不读，返回值里没有明文字段 | 新建或更新后的对象，`create_identities` 额外带 `failures` |
 | `detach_identity_reference` | write | — | 无。已经是独立身份时无变化 | 断开后的身份 |
 | `create_view` / `update_view` / `set_view_layout` / `create_layout_preset` / `copy_view_to_site` | write | — | 无 | 视图或预设 |
-| `save_flow` / `save_tag` / `save_bookmark` | write | — | 无 | 保存后的对象 |
+| `save_flow` / `save_tag` / `save_bookmark` | write | — | 无 | 保存后的对象；`save_flow` 的步骤值截断（同 `list_flows`）、超 60 步截到 60 并标 `stepsTruncated`；`save_bookmark` 返回 `hasFavicon` 而非图标内容 |
 | `save_site_tag` | write | — | `save_tag` 的旧名称，行为相同；不广播给客户端 | 同 `save_tag` |
 | `delete_site_tag` | danger | — | `delete_tag` 的旧名称，同样要求 `confirm: true`；不广播给客户端 | `{ ok: true }` |
 | `export_accounts` / `import_accounts` / `preview_accounts` | write / write / read | — | `export_accounts` 只有传 `passphrase` 才带密码；返回值永不含明文 | 文件路径与数量 / 合并结果 / 预演结果 |
@@ -67,8 +67,15 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案 | 标签 id、所属身份、档案、标题、地址、布局、静音/有声 |
 | `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接。被 beforeunload 拦下时快速返回 `cancelled: "beforeunload"`（页面留在原地且可继续操作），用 `handle_browser_dialog` 决定去留 | `{ tab }`；被拦时另有 `cancelled` 与 `note` |
-| `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态 |
+| `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态摘要 |
 | `set_browser_layout` / `pin_browser_tab` / `compose_view` | run / run / write | — | 省略 `viewId` 时作用于台上的视图 | 布局或容器 |
+
+**浏览器状态返回的投影。** 所有返回标签页或布局状态的工具（`list_browser_tabs`、
+`open_browser_tab`、`navigate_browser_tab`、`close_browser_tab`、`set_browser_layout`、
+`pin_browser_tab`、`move_browser_tab`、`set_tab_page`、`open_browser_view`）在 MCP 出口
+只保留决策字段：id、label、url、title、归属（identityId / siteId / instanceId / viewId /
+clean / profileId）、声音与加载状态。渲染层用的图标 data: URL、窗口几何、缩放、分区、
+DevTools 宽度一律不出走——每个标签页少几 KB，图标内容从不进上下文。
 | `set_browser_viewport` / `reset_browser_viewport` | run | 是 | 宽 320–3840、高 320–2160 | 生效后的尺寸 |
 | `set_browser_muted` | run | — | 只切换 Ensemble 的输出；页面自己的媒体与 Web Audio 照常运行。不受来源闸门限制，AI 自动静音不会覆盖用户手动取消的静音 | `{ tabId, muted }` |
 | `set_browser_emulation` | write | 是 | 每个传入的键独立生效：`timezone`（IANA 名）/ `mediaType`（CSS 媒体类型）/ `offline` / `geolocation`，传 `null` 清除该项。模拟只作用于这一个页面，随标签页关闭丢弃；状态存在 CDP 会话里，与设备模拟同一套会话钉住规则。不授予权限——页面没被用户授权时拿不到地理坐标 | 当前生效的全部模拟项 |
@@ -112,7 +119,7 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | `fill_browser_login` | run | 是 | 密码留在主进程，跨域页面拒绝 | 填充结果 |
 | `run_flow` | run | 是 | 步骤失败即停并说明原因。`timeoutMs` 默认 120000、上限 600000，由调用方指定——慢操作必须显式给大一点。`wait` 步骤会被流程剩余预算截断，超时时报的是「流程超过 N 秒」而不是「条件没满足」。`script` 步骤在 vm 里编排动作原语（不含 login/cdp），整段受同一个预算约束，到点报「脚本超时」 | 每步结果与变量；用了原始 CDP 时多一个 `rawCdp` 列表，超过两次附带 `note` |
 | `screenshot_browser_tab` | run | — | `timeoutMs` 默认 15000、上限 60000。超时返回 `reason: "page-busy"` 而不是报错。给 `selector`/`elementText`/`role` 时只截该元素（裁剪到元素范围；元素在视口外直接报错，不回退成整页图） | `{ path, bytes, data? }` 或 `{ ok: false, timedOut, reason }` |
-| `evaluate_browser_page` | run | 是 | `timeoutMs` 默认 30000、上限 300000。超时返回 `{ timedOut: true, stillRunning: true }`，不是 `isError` | 表达式的值，或超时结构 |
+| `evaluate_browser_page` | run | 是 | `timeoutMs` 默认 30000、上限 300000。超时返回 `{ timedOut: true, stillRunning: true }`，不是 `isError`。返回值超过 64KB 时拒绝返回（`isError` 说明缩法）——先在表达式里聚合或分页，再取小结果 | 表达式的值，或超时结构 |
 | `cancel_browser_script` | run | 是 | 发 `Runtime.terminateExecution`。只能打断正在执行的代码；停在 Promise 上的脚本之后仍会继续 | `{ ok, note }` |
 | `add_browser_init_script` | run | 是 | **对当前文档不生效**，从下一次导航起生效。脚本随标签页存在 | `{ ok, scriptId, affects: "next-navigation" }` |
 | `remove_browser_init_script` | run | 是 | 下一次导航起不再执行；当前文档里已跑过的不受影响 | `{ ok: true }` |

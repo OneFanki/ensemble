@@ -105,23 +105,28 @@ try {
   })()`);
   await wait(2000);
 
-  // --- 1. The tab reaches the window's top edge ----------------------------
-  // The chrome is two rows now: the instance rail is the window's first row
-  // and the page tab strip sits directly beneath it. The top-edge goal is
-  // unchanged — the first row owns the window's top edge — plus the strip must
-  // sit flush under the rail with no dead band between them.
+  // --- 1. The strip is flush under the address row -------------------------
+  // The chrome is two bands now: the address row across the window, then the
+  // account column beside the page strip. The top-edge goal is unchanged — the
+  // tab row must start at the first band's bottom edge with no dead frame
+  // between them — plus the strip itself must be filled by its tabs.
   const geometry = await client.evaluate(`(() => {
-    const rail = document.querySelector('.browser > .rail');
+    const toolbar = document.querySelector('.toolbar');
+    const rail = document.querySelector('[data-account-rail]');
     const strip = document.querySelector('.tabstrip');
     const tab = document.querySelector('.tabstrip .tab');
-    if (!rail || !strip || !tab) return null;
+    if (!toolbar || !rail || !strip || !tab) return null;
+    const toolbarBox = toolbar.getBoundingClientRect();
     const railBox = rail.getBoundingClientRect();
     const stripBox = strip.getBoundingClientRect();
     const tabBox = tab.getBoundingClientRect();
     return {
+      toolbarHeight: Math.round(toolbarBox.height),
+      toolbarBottom: Math.round(toolbarBox.bottom),
       railTop: Math.round(railBox.top),
-      railHeight: Math.round(railBox.height),
+      railRight: Math.round(railBox.right),
       stripTop: Math.round(stripBox.top),
+      stripLeft: Math.round(stripBox.left),
       stripHeight: Math.round(stripBox.height),
       tabTop: Math.round(tabBox.top),
       tabHeight: Math.round(tabBox.height),
@@ -129,14 +134,19 @@ try {
       gapBelow: Math.round(stripBox.bottom - tabBox.bottom),
     };
   })()`);
-  check("the first row (instance rail) owns the window's top edge", geometry?.railTop === 0, geometry);
   check(
-    "the tab strip sits flush beneath the instance rail",
-    geometry?.stripTop === geometry?.railHeight,
+    "the address row is the window's top band",
+    geometry?.toolbarBottom > 0 && geometry?.railTop === geometry?.toolbarBottom,
     geometry,
   );
   check(
-    "the tab itself reaches the window's top edge",
+    "the tab strip sits flush beside the account column",
+    geometry?.stripTop === geometry?.toolbarBottom &&
+      geometry?.stripLeft === geometry?.railRight,
+    geometry,
+  );
+  check(
+    "the tab fills the strip from its top edge",
     geometry?.gapAbove === 0 && geometry?.tabHeight === geometry?.stripHeight,
     geometry,
   );

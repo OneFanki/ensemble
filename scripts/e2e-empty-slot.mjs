@@ -101,7 +101,7 @@ try {
       emptyState: document.querySelectorAll('.stage-empty').length,
       newTabAction: document.querySelector('.stage-empty-action')?.textContent?.trim() ?? null,
       launch: Boolean(document.querySelector('[data-launch-btn]')),
-      manage: Boolean(document.querySelector('[data-manage-btn]')),
+      railEntries: document.querySelectorAll('[data-rail-entry]').length,
       address: document.querySelector('.address input')?.value ?? null,
       cells: document.querySelectorAll('.slot-empty').length,
     };
@@ -109,8 +109,8 @@ try {
   check("a workspace with nothing running shows the stage's empty state", empty?.emptyState === 1, empty);
   check("the empty state offers the new-tab action", Boolean(empty?.newTabAction), empty);
   check(
-    "the rail keeps the two standing entrances available",
-    empty?.launch === true && empty?.manage === true,
+    "the rail keeps its launching and management entrances available",
+    empty?.launch === true && empty?.railEntries === 3,
     empty,
   );
   check("a blank page leaves the address bar empty", empty?.address === "", empty?.address);

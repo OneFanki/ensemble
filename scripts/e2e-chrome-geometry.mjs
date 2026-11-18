@@ -2,24 +2,21 @@
 /**
  * End-to-end check of the window's top rows and the single-stage geometry.
  *
- * The shell this suite measures is the single-stage one (ADR 0012): the
- * navigation column and the run dock are gone, the window's first row is the
- * instance rail and its second row is the on-stage instance's page strip, and
- * the stage fills whatever is left. Three families of bugs are worth
- * re-checking here, because each was invisible in the DOM — the elements
- * existed, they were just in the wrong place or drawn in a colour that does
- * not show:
+ * The shell this suite measures is the address row across the whole window, the
+ * account column under its left end, and the page area — page strip over stage —
+ * in the right column (ADR 0012). Three families of bugs are worth re-checking
+ * here, because each was invisible in the DOM — the elements existed, they were
+ * just in the wrong place or drawn in a colour that does not show:
  *
- * 1. **The top rows must stay clear of the native caption buttons.** The
- *    buttons are painted over the app's own frame at the top-right, and the
- *    strip is the surface that meets that corner. Its caption reservation has
- *    to hold in the new shell just as it did in the old one.
- * 2. **The two header rows must read as two rows.** The rail is the first row
- *    and the strip the second; a rail that starts a row lower, or a stage that
- *    stops where the retired column used to end, reads as one mangled header.
- *    The on-stage rail chip must also read apart from the idle ones in both
- *    themes — a fill that only differs by string, not by visibility, is the
- *    same bug the dock's group rule used to have in the light theme.
+ * 1. **One row owns the native caption buttons.** They are painted over the
+ *    app's own frame at the top-right, and the address row is the surface that
+ *    meets that corner. The reservation has to sit there, and nowhere else, or
+ *    the strip keeps a dead band that lines up with nothing.
+ * 2. **The rows must read as rows.** The column starts under the address row and
+ *    runs to the bottom edge; the strip starts where the column's left neighbour
+ *    ends and the stage below it; a stage that stops where the column used to be
+ *    reads as one mangled header. The on-stage rail item must also read apart
+ *    from the idle ones in both themes.
  * 3. **Dragging a page tab must shield the stage.** While the drag runs, a
  *    live page must not be able to take the pointer; when it ends, the pointer
  *    must come back.
@@ -104,11 +101,12 @@ try {
   })()`);
   await wait(2200);
 
-  // --- 1. The rail owns the window's top edge -------------------------------
+  // --- 1. The address row, the column and the stage stack in three bands ------
   //
-  // The navigation column is retired: the window's first row is the instance
-  // rail, its second row is the on-stage instance's page strip, and the stage
-  // fills everything below. That stacking is what these reads assert.
+  // The address row spans the window; under it the account column runs from its
+  // bottom edge to the window's own bottom, and the right column holds the page
+  // strip over the stage. These reads assert that stacking, which is what every
+  // page node's rectangle is computed from.
   const layout = await client.evaluate(`(() => {
     const controls = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--window-controls-width') || '0',
@@ -117,15 +115,24 @@ try {
       const el = document.querySelector(sel);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+      return {
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        right: Math.round(r.right),
+        bottom: Math.round(r.bottom),
+      };
     };
     return {
       controlsWidth: controls,
       innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
       browser: Boolean(document.querySelector('.browser')),
       sidebar: box('.sidebar'),
       dock: box('.dock'),
-      rail: box('.rail'),
+      toolbar: box('.toolbar'),
+      rail: box('[data-account-rail]'),
       tabstrip: box('.tabstrip'),
       pane: box('.pane'),
       stage: box('.stage'),
@@ -137,19 +144,39 @@ try {
     layout?.browser === true && layout?.sidebar === null && layout?.dock === null,
     layout,
   );
-  check("the rail is the window's first row", layout?.rail?.y === 0 && layout?.rail?.h > 0, layout);
-  // The rail is the first row and the strip the second: the strip's top edge
-  // has to sit on the rail's bottom edge, or one of them is hiding the other.
+  // The column starts exactly where the address row ends and reaches the bottom
+  // edge: a column that started a row lower would leave a strip of frame beside
+  // the address row, and one that stopped short would leave the stage without a
+  // left neighbour it is anchored to.
   check(
-    "the strip starts where the rail ends",
-    layout?.rail && layout?.tabstrip
-      ? Math.abs(layout.rail.y + layout.rail.h - layout.tabstrip.y) <= 1
+    "the account column starts under the address row and reaches the bottom",
+    layout?.rail && layout?.toolbar
+      ? layout.rail.x === 0 &&
+        layout.rail.y === layout.toolbar.bottom &&
+        layout.rail.h > 0 &&
+        layout.rail.bottom === layout.innerHeight
+      : false,
+    layout,
+  );
+  // The right column begins where the column ends: the strip's left edge is the
+  // column's right edge, and its top edge is the address row's bottom.
+  check(
+    "the page strip starts where the column ends",
+    layout?.rail && layout?.tabstrip && layout?.toolbar
+      ? layout.tabstrip.y === layout.toolbar.bottom &&
+        layout.tabstrip.x === layout.rail.right &&
+        layout.tabstrip.h > 0
       : false,
     layout,
   );
   check(
-    "the stage spans the window's full width",
-    layout?.stage?.x === 0 && layout?.stage?.w === layout?.innerWidth,
+    "the stage sits under the strip and fills the rest of the right column",
+    layout?.stage && layout?.tabstrip && layout?.rail
+      ? layout.stage.y === layout.tabstrip.bottom &&
+        layout.stage.x === layout.rail.right &&
+        layout.stage.right === layout.innerWidth &&
+        layout.stage.bottom === layout.innerHeight
+      : false,
     layout,
   );
   check(
@@ -182,23 +209,32 @@ try {
   );
   check("both instances stay alive behind the one stage", staged?.instances === 2, staged);
 
-  // --- 2. The caption reservation lives on the page strip -------------------
+  // --- 2. The caption reservation lives on the address row -------------------
   //
-  // The window buttons are painted over the *right* end of the strip. The
-  // reservation survives the retirement of the column: the strip keeps it, and
-  // there is no column left that could ever need one.
+  // The window buttons are painted over the *right* end of the address row, so
+  // that row reserves their width. The page strip no longer reaches the corner,
+  // so it must reserve nothing — a strip that still carried the band kept a dead
+  // gap whose right edge lined up with no control.
   const reservation = await client.evaluate(`(() => {
+    const row = document.querySelector('.toolbar');
     const strip = document.querySelector('.tabstrip');
     return {
+      rowPaddingRight: row ? getComputedStyle(row).paddingRight : null,
+      rowRight: row ? Math.round(row.getBoundingClientRect().right) : null,
       stripPaddingRight: strip ? getComputedStyle(strip).paddingRight : null,
       stripRight: strip ? Math.round(strip.getBoundingClientRect().right) : null,
       innerWidth: window.innerWidth,
     };
   })()`);
   check(
-    "the page strip reserves the caption band",
-    Number.parseFloat(reservation?.stripPaddingRight ?? "0") >=
+    "the address row reserves the caption band",
+    Number.parseFloat(reservation?.rowPaddingRight ?? "0") >=
       (layout?.controlsWidth ?? 0) - 4,
+    reservation,
+  );
+  check(
+    "the page strip reserves nothing for the caption buttons",
+    Number.parseFloat(reservation?.stripPaddingRight ?? "0") === 0,
     reservation,
   );
 
@@ -235,7 +271,7 @@ try {
     invariants,
   );
   check(
-    "a third instance joins the rail without growing the stage a cell",
+    "a third instance joins the account column without growing the stage a cell",
     invariants?.heldId != null &&
       invariants?.parkedActives?.every((width) => width === 0) &&
       invariants?.instances === 3 &&
@@ -258,13 +294,12 @@ try {
   check("the app menu is named", Boolean(entry?.label), entry);
   check("the app menu has no native title", entry?.nativeTitle === null, entry);
 
-  // --- 4. The menu no longer carries the retired workbench door -------------
+  // --- 4. The menu carries nothing that opens a column ----------------------
   //
-  // The menu row that opened the workbench column went out with the column;
-  // the [管理] button at the rail's right end is the one door to the
-  // management pages now. What must hold instead: the row is gone, the menu
-  // still anchors inside the window, and an open menu still lets the header's
-  // empty space be clicked through to the window.
+  // The menu row that opened the workbench column went out with the column. What
+  // must hold instead: the row is gone, the menu still anchors inside the
+  // window, and an open menu still lets the header's empty space be clicked
+  // through to the window.
   const menu = await client.evaluate(`(async () => {
     const button = document.querySelector('[data-app-menu]');
     if (!button) return { error: 'no menu button' };
@@ -377,12 +412,11 @@ try {
   await client.evaluate(`document.querySelector('[data-app-menu]')?.click()`);
   await wait(300);
 
-  // --- 5. The on-stage chip reads apart, in both themes ---------------------
+  // --- 5. The on-stage item reads apart, in both themes ----------------------
   //
-  // The dock's group rules went out with the dock. What still has to read
-  // apart is what the new header puts side by side: the on-stage rail chip
-  // against the idle ones, in dark and light both. A bare string difference
-  // would accept "both null", so the assertion also refuses transparent fills.
+  // What the account column puts side by side is the on-stage item against the
+  // idle ones, in dark and light both. A bare string difference would accept
+  // "both null", so the assertion also refuses transparent fills.
   const themeFills = [];
   for (const theme of ["dark", "light"]) {
     // Set the renderer's own switch: the CSS under test is keyed on
@@ -399,14 +433,14 @@ try {
         return el ? getComputedStyle(el).backgroundColor : null;
       };
       return {
-        rail: fill('.rail'),
+        rail: fill('[data-account-rail]'),
         onStage: fill('[data-instance-chip][data-on-stage="1"]'),
         idle: fill('[data-instance-chip][data-on-stage="0"]'),
         strip: fill('.tabstrip'),
       };
     })()`);
     const transparent = (c) => c === null || c === "rgba(0, 0, 0, 0)" || c === "transparent";
-    check(`${theme}: the rail renders with a surface of its own`, !transparent(probe?.rail), probe);
+    check(`${theme}: the account column renders with a surface of its own`, !transparent(probe?.rail), probe);
     check(
       `${theme}: the on-stage chip reads apart from the idle one`,
       !transparent(probe?.onStage) && probe?.onStage !== probe?.idle,

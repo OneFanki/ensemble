@@ -67,7 +67,18 @@ const activeTab = ref<SettingsSection>("general");
  * the view is settings, so returning to the requested section after a manual
  * change has to be a new request even though the prop still names the same one.
  */
-const props = defineProps<{ section?: SettingsSection; sectionSeq?: number }>();
+const props = defineProps<{
+  section?: SettingsSection;
+  sectionSeq?: number;
+  /**
+   * Rendered inside the management pane rather than as its own full window.
+   *
+   * The pane's band already carries the caption reservation and the way back,
+   * so the page's own title bar would duplicate both; embedded hides it and
+   * the page goes straight to its navigation column.
+   */
+  embedded?: boolean;
+}>();
 watch(
   () => props.sectionSeq,
   () => {
@@ -421,7 +432,11 @@ async function submitMaster() {
       exactly like the browser's tab strip, so switching into settings does not
       move the window controls.
     -->
-    <header class="settings-head drag-region" :data-platform="store.snapshot?.platform ?? 'win32'">
+    <header
+      v-if="!props.embedded"
+      class="settings-head drag-region"
+      :data-platform="store.snapshot?.platform ?? 'win32'"
+    >
       <button
         type="button"
         class="back no-drag"

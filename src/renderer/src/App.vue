@@ -1,28 +1,20 @@
 <script setup lang="ts">
 import type { IdentityDraft, LoginCaptureNotice, Site, SiteDraft } from "@shared/types";
 import type { UpdateCheckResult } from "@shared/update";
-import { ChevronLeft } from "lucide-vue-next";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import BrowserPage from "./components/BrowserPage.vue";
 import GuestPool from "./components/GuestPool.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import HttpAuthDialog from "./components/HttpAuthDialog.vue";
 import type { HttpAuthChallenge } from "@shared/ipc";
-import FlowsPage from "./components/FlowsPage.vue";
-import IdentitiesPage from "./components/IdentitiesPage.vue";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
+import ManagePane, { type ManageSection } from "./components/ManagePane.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
-import SettingsPage, { type SettingsSection } from "./components/SettingsPage.vue";
+import type { SettingsSection } from "./components/SettingsPage.vue";
 import SiteDialog from "./components/SiteDialog.vue";
-import SitesPage from "./components/SitesPage.vue";
-import BookmarksPage from "./components/BookmarksPage.vue";
-import MessagesPage from "./components/MessagesPage.vue";
-import AiActivityPage from "./components/AiActivityPage.vue";
-import ProfilesPage from "./components/ProfilesPage.vue";
 import GuideDialog from "./components/GuideDialog.vue";
-import TagsPage from "./components/TagsPage.vue";
 import ToastStack from "./components/ToastStack.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
 import { type Locale, setLocale, tr } from "./i18n";
@@ -37,32 +29,30 @@ import { useWorkspaceStore } from "./stores/workspace";
 /**
  * Everything that can be on screen.
  *
- * The stage is single-cell (ADR 0012): the browser is the default page and the
- * management pages replace it in the same pane, reached from the instance
- * rail's [管理] menu. `settings` still covers the whole window with its own tab
- * bar, because it changes the workspace rather than showing part of it.
+ * The stage is single-cell (ADR 0012): the browser is the default surface and
+ * the management pane (P1-2) is the only other one — sites, accounts, AI
+ * activity and settings live inside it as sections, so a page is no longer a
+ * destination of its own.
  *
  * `views` is gone from here (P1-3): the saved-view pages and dialogs are
  * retired from the UI; the workspace data keeps the `views` field for
  * compatibility, with no page to open.
  */
-type View =
-  | "browser"
-  | "messages"
-  | "ai"
-  | "sites"
-  | "identities"
-  | "flows"
-  | "tags"
-  | "bookmarks"
-  | "profiles"
-  | "settings";
+type View = "browser" | "manage";
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
 const confirm = useConfirmStore();
 const navigation = useNavigationStore();
 const view = ref<View>("browser");
+/**
+ * The management pane's section on screen.
+ *
+ * The shell owns it so the pane remembers where the user was when it reopens,
+ * and so the app menu, the AI panel and the bell can all ask for a specific
+ * section without reaching into the pane.
+ */
+const manageSection = ref<ManageSection>("sites");
 /**
  * Whether the opening splash is still covering the shell.
  *
@@ -217,20 +207,10 @@ onMounted(async () => {
   void store.mcpStatus();
   applyTheme(store.settings.theme);
   setLocale(resolvedLocale.value);
-  const saved = store.settings.lastView;
-  // The browser is the default page; returning to where the user left off beats
-  // resetting them to a management page they only visited once. Bookmarks and
-  // profiles are never restored for the same reason settings is not: they are
-  // places you go to change something, not where work sits. A saved "views"
-  // (the retired page) falls through to the browser like any unknown value.
-  view.value =
-    saved === "sites" ||
-    saved === "identities" ||
-    saved === "flows" ||
-    saved === "tags" ||
-    saved === "browser"
-      ? saved
-      : "browser";
+  // The browser is the only surface a launch restores to: it is where work
+  // sits. Management pages were never restored for the same reason, and the
+  // pane inherits that rule now that it holds them all.
+  view.value = "browser";
   // The main process asks for the browser page when a tool or a shortcut opens a
   // page in it, so the result is never hidden behind a management page. Already
   // being there is the common case (a tab click inside the browser page), and
@@ -310,58 +290,57 @@ onUnmounted(() => {
 
 function switchView(next: View) {
   view.value = next;
-  // "settings", "bookmarks" and "profiles" are deliberately not persisted as the
-  // view to restore: settings is a place you go to change something, and the
-  // other two are management pages whose content is also reachable from the
-  // browser. Restoring any of them on launch would look like the app opened on
-  // the wrong screen.
-  if (next !== "settings" && next !== "bookmarks" && next !== "profiles") {
-    void store.saveSettings({ lastView: next });
-  }
+  /*
+   * Nothing is persisted as the view to restore. The browser is where work
+   * sits, so a launch always lands there; the management pane is a place you
+   * go to change something, and opening the app on it would look like the app
+   * opened on the wrong screen. (The saved `lastView` setting stays in the
+   * schema for workspaces that carry one; its value is simply ignored.)
+   */
 }
 
 /**
- * The browser toolbar's way into the management pages.
+ * The browser toolbar's way into the management pane.
  *
- * The menu names a destination; without one it lands on Settings, because the
- * menu's other rows are already there to be clicked instead.
+ * The caller names a destination; without one it lands on the settings section,
+ * because the rows that still name a destination are the ones a user clicked on
+ * purpose. Settings keeps the section the user left it at: reopening the pane
+ * should not reset the tab they were reading.
  */
 function openConsole(
-  target: "sites" | "bookmarks" | "profiles" | "settings" | "messages" | "ai" = "settings",
+  target: Extract<ManageSection, "sites" | "settings" | "ai" | "messages"> = "settings",
 ) {
   if (target === "settings") {
-    openSettings("general");
+    openSettings(settingsSection.value);
     return;
   }
-  switchView(target);
+  openManage(target);
 }
 
 /**
- * Opens Settings at a named section.
+ * Opens the management pane, optionally on a named section.
  *
- * Settings covers the window, so it is a view of its own rather than a series of
- * sidebar rows. The section travels as a request (with a counter) rather than as
- * a prop the page mirrors: the page stays mounted, and coming back to the same
- * section after the user picked another one has to count as a new request.
+ * The section is kept when none is named, so [管理] and the pane's own close
+ * arrow behave like two sides of one door: leave and return, and the pane is
+ * where the user left it.
+ */
+function openManage(section?: ManageSection) {
+  if (section) manageSection.value = section;
+  switchView("manage");
+}
+
+/**
+ * Opens the settings section of the management pane.
+ *
+ * The section travels as a request (with a counter) rather than as a prop the
+ * page mirrors: the page stays mounted while the pane shows it, and coming back
+ * to the same section after the user picked another one has to count as a new
+ * request.
  */
 function openSettings(section: SettingsSection = "general") {
   settingsSection.value = section;
   settingsSectionSeq.value += 1;
-  switchView("settings");
-}
-
-/**
- * The instance rail's [管理] menu: the way into the management pages.
- *
- * TODO(第二波·管理窗格): these pages collapse into a dedicated pane; the button
- * stays, only what it opens changes. Settings keeps its own full-window shell.
- */
-function manageTo(target: string): void {
-  if (target === "settings") {
-    openSettings("general");
-    return;
-  }
-  switchView(target as View);
+  openManage("settings");
 }
 
 /**
@@ -404,7 +383,7 @@ navigation.bind((next, tab) => {
     openSettings((tab as SettingsSection | undefined) ?? settingsSection.value);
     return;
   }
-  switchView(next as View);
+  openManage(next as ManageSection);
 });
 
 /**
@@ -727,80 +706,41 @@ async function handleLocale(locale: LocaleSetting) {
     </Transition>
 
     <!--
-      One pane for everything except settings: the browser fills it, and a
-      management page replaces it in the same pane. The stage is single-cell
-      (ADR 0012) and the instance rail is the window's first row; [管理] at its
-      right end is how the management pages are reached (TODO(第二波·管理窗格):
-      they collapse into a dedicated pane, this list is the interim shape).
-
-      Settings still covers the window with its own tab bar, because it changes
-      the workspace rather than showing part of it.
+      One pane for everything: the browser fills it, and the management pane
+      (站点 / 账号 / AI 记录 / 设置, with 书签 / 标签 / 消息 below a rule)
+      replaces it when [管理] is pressed. The stage is single-cell (ADR 0012)
+      and the instance rail is the window's first row; [管理] at its right end
+      is the pane's only entrance.
     -->
-    <SettingsPage
-      v-if="view === 'settings'"
-      :section="settingsSection"
-      :section-seq="settingsSectionSeq"
-      @back="switchView('browser')"
-      @theme="handleTheme"
-      @locale="handleLocale"
-      @update-found="(result) => (updatePrompt = result)"
-    />
-
-    <main v-else class="pane" :class="{ 'pane-console': view !== 'browser' }">
-      <!--
-        The band the native window controls own, and the way back.
-
-        Management pages are ordinary in-flow HTML with a 24px top padding, so
-        their first row — the page title and its action buttons — landed right
-        under the caption buttons drawn by the OS, and the right-hand button
-        was clipped in half. This band reserves the caption area and is the
-        draggable strip a frameless window needs; without it the whole page
-        has no way to move the window at all.
-
-        The back arrow is the page's way back to the browser: with the
-        navigation column gone, this band is where the way back lives. It is
-        the same door the browser's instance rail opens in the other direction.
-      -->
-      <div v-if="view !== 'browser'" class="pane-band drag-region" :data-platform="platform">
-        <button
-          type="button"
-          class="pane-back no-drag"
-          :aria-label="tr('app.backToBrowser')"
-          v-tooltip="tr('app.backToBrowser')"
-          data-nav="browser"
-          @click="switchView('browser')"
-        >
-          <ChevronLeft :size="14" />
-        </button>
-      </div>
+    <main class="pane">
       <BrowserPage
         v-if="view === 'browser'"
         :obscured="overlayOpen"
         @open-console="openConsole"
-        @manage="manageTo"
+        @manage="openManage()"
         @open-guide="openGuide"
         @update-found="(result) => (updatePrompt = result)"
         @save-capture="saveCapturedLogin"
       />
-      <SitesPage
-        v-else-if="view === 'sites'"
-        @new-site="openNewSite"
-        @edit-site="openEditSite"
+      <ManagePane
+        v-else
+        :section="manageSection"
+        :settings-section="settingsSection"
+        :settings-section-seq="settingsSectionSeq"
+        @close="switchView('browser')"
+        @navigate="manageSection = $event"
+        @theme="handleTheme"
+        @locale="handleLocale"
+        @update-found="(result) => (updatePrompt = result)"
+        @new-site="openNewSite()"
+        @edit-site="openEditSite($event)"
         @open-site="openSite"
-        @add-identity="openNewIdentity"
-      />
-      <IdentitiesPage
-        v-else-if="view === 'identities'"
-        @new-identity="openNewIdentity"
-        @edit-identity="openEditIdentity"
+        @add-identity="openNewIdentity($event)"
+        @new-identity="openNewIdentity($event)"
+        @edit-identity="openEditIdentity($event)"
         @session-health="healthOpen = true"
+        @save-capture="saveCapturedLogin"
       />
-      <FlowsPage v-else-if="view === 'flows'" />
-      <TagsPage v-else-if="view === 'tags'" />
-      <MessagesPage v-else-if="view === 'messages'" @save-capture="saveCapturedLogin" />
-      <AiActivityPage v-else-if="view === 'ai'" />
-      <ProfilesPage v-else-if="view === 'profiles'" />
-      <BookmarksPage v-else />
     </main>
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
@@ -973,17 +913,16 @@ async function handleLocale(locale: LocaleSetting) {
 }
 
 /*
- * The content pane: the browser page, or a management page in its place.
+ * The content pane: the browser page, or the management pane in its place.
  *
  * There is no sidebar: the pane is the window, and the instance rail — the
- * browser page's own first row — is where navigation lives. A management page
- * is not a different screen, it is this pane showing something else.
+ * browser page's own first row — is where navigation lives. The management pane
+ * is not a different screen, it is this pane showing something else, and it
+ * owns its own caption band and covering surface (see ManagePane).
  *
  * No background and no stacking of its own while the browser shows: pages are
  * real compositing surfaces stacked at `z-index: 1` at the app root, so a pane
- * that painted a background would cover the very page it is framing. The
- * management pages get their own covering surface below, only while one of
- * them is showing.
+ * that painted a background would cover the very page it is framing.
  */
 .pane {
   flex: 1 1 auto;
@@ -992,66 +931,6 @@ async function handleLocale(locale: LocaleSetting) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-/*
- * A management page, holding the pane.
- *
- * This is where the covering surface belongs: the page has to paint over the
- * parked guests, and it is the one case where an opaque layer is correct. Above
- * the pool by number rather than by arrival order — parking the guests when the
- * view changes is a timing bet, and the guest layer can still be composited for
- * a frame after its element has moved, which showed up as the two swapping
- * places twice on the way in.
- */
-.pane-console {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--content);
-  position: relative;
-  z-index: 2;
-  overflow: hidden;
-}
-
-/*
- * The caption band above a management page.
- *
- * Same height as the browser's tab strip, so switching between the browser and a
- * management page does not move the window's own buttons or the page's first row.
- * The right padding is what keeps page-head-actions out from under the caption
- * buttons.
- */
-.pane-band {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  height: var(--titlebar-height);
-  /* Windows/Linux reserve the right corner for the caption buttons. */
-  padding-right: var(--window-controls-width, 138px);
-}
-
-/* The band inherits the pane's background so it reads as part of the page frame
-   rather than as a second toolbar. */
-.pane-console > .pane-band {
-  background: var(--frame);
-}
-
-/* The way back to the browser, at the band's leading edge. */
-.pane-back {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  margin-left: 6px;
-  border-radius: var(--radius);
-  color: var(--muted);
-}
-
-.pane-back:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
 }
 
 /*

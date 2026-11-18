@@ -25,7 +25,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
-  Bookmark as BookmarkIcon,
   BookOpenText,
   Bug,
   Check,
@@ -37,7 +36,6 @@ import {
   FolderOpen,
   Info,
   KeyRound,
-  Layers,
   LayoutGrid,
   Minus,
   Monitor,
@@ -94,10 +92,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** Open a management page; `null` means "settings", the menu's default. */
-  openConsole: [view?: "sites" | "bookmarks" | "profiles" | "settings" | "messages" | "ai"];
-  /** A management page was chosen from the instance rail; the shell owns it. */
-  manage: [view: string];
+  /** Open the management pane on a section; omitted means "settings". */
+  openConsole: [view?: "sites" | "settings" | "messages" | "ai"];
+  /** The rail's [管理] was pressed; the shell owns the pane. */
+  manage: [];
   /** The app menu's guide entry; the shell owns the dialog. */
   openGuide: [];
   /** A manual update check from the menu found something to install. */
@@ -188,7 +186,7 @@ function toggleAppMenu(): void {
 /** How the window was asked to quit; the main process owns what that means. */
 const appPlatform = computed(() => workspace.snapshot?.platform ?? "win32");
 
-function openPageFromMenu(view: "sites" | "bookmarks" | "profiles" | "settings"): void {
+function openPageFromMenu(view: "settings"): void {
   appMenuOpen.value = false;
   emit("openConsole", view);
 }
@@ -1515,7 +1513,7 @@ function fillMessage(reason?: string): string {
       running in the background. The rail owns the window's drag band too —
       its empty stretches move the window, like a tab strip.
     -->
-    <InstanceRail @manage="(view) => emit('manage', view)" />
+    <InstanceRail @manage="emit('manage')" />
     <!--
       The second row: the pages of the instance on stage.
 
@@ -2159,26 +2157,6 @@ function fillMessage(reason?: string): string {
             <span>{{ t("app.cleanSession") }}</span>
           </button>
           <div class="app-menu-rule" role="separator"></div>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="bookmarks"
-            @click="openPageFromMenu('bookmarks')"
-          >
-            <BookmarkIcon :size="14" />
-            <span>{{ t("app.bookmarks") }}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="profiles"
-            @click="openPageFromMenu('profiles')"
-          >
-            <Layers :size="14" />
-            <span>{{ t("app.profiles") }}</span>
-          </button>
           <!--
             Developer tools and AI access: both are "tools for this browser",
             not something a page visit is about. They used to sit in the toolbar

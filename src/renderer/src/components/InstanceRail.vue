@@ -10,7 +10,7 @@
  *
  * The row ends with [+ 启动] (pick several accounts, launch them all: the first
  * takes the stage, the rest sit in the list) and, at the far right, [管理] —
- * the standing entrance to the management pages.
+ * the standing entrance to the management pane.
  *
  * Overflow folds rather than scrolls away: entries that do not fit collapse
  * into a "+N" button whose menu lists them, so an entry is never reachable by
@@ -311,62 +311,13 @@ async function launchPickedIdentities(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
-/* 管理: the standing entrance to the management pages.               */
+/* 管理: the standing entrance to the management pane.                */
 /* ------------------------------------------------------------------ */
 
-const manageOpen = ref(false);
-const manageRoot = ref<HTMLElement | null>(null);
-const managePanel = ref<HTMLElement | null>(null);
-
-onClickOutside(manageRoot, (event) => {
-  const target = event.target as Node | null;
-  if (target && managePanel.value?.contains(target)) return;
-  manageOpen.value = false;
-});
-
-function onManageKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") manageOpen.value = false;
-}
-
-watch(manageOpen, (open) => {
-  if (open) {
-    document.addEventListener("keydown", onManageKeydown);
-    void nextTick(() => {
-      managePanel.value?.querySelector<HTMLElement>("button")?.focus();
-    });
-  } else {
-    document.removeEventListener("keydown", onManageKeydown);
-  }
-});
-
-/**
- * The management destinations, while the shell still hosts them as pages.
- *
- * TODO(第二波·管理窗格): this list collapses to the pane's own navigation
- * (站点 / 账号 / AI 记录 / 设置) when the management pane lands; the button
- * stays, only what it opens changes.
- */
-const manageTargets = computed(() => [
-  { view: "sites" as const, label: t("app.sites") },
-  { view: "identities" as const, label: t("app.identities") },
-  { view: "messages" as const, label: t("app.messages") },
-  { view: "ai" as const, label: t("app.aiActivityTitle") },
-  { view: "bookmarks" as const, label: t("app.bookmarks") },
-  { view: "profiles" as const, label: t("app.profiles") },
-  { view: "flows" as const, label: t("app.flows") },
-  { view: "tags" as const, label: t("app.tags") },
-  { view: "settings" as const, label: t("app.settings") },
-]);
-
 const emit = defineEmits<{
-  /** A management page was chosen; the shell owns the switch. */
-  manage: [view: string];
+  /** Open the management pane; the shell owns it and its sections. */
+  manage: [];
 }>();
-
-function manageTo(view: string): void {
-  manageOpen.value = false;
-  emit("manage", view);
-}
 
 /* ------------------------------------------------------------------ */
 /* The fold's menu: the entries the row could not fit.                */
@@ -541,34 +492,19 @@ function activateFromFold(item: RailItem): void {
       </div>
     </div>
 
-    <!-- 管理: the standing entrance to the management pages. -->
-    <div ref="manageRoot" class="rail-manage">
+    <!-- 管理: the standing entrance to the management pane. -->
+    <div class="rail-manage">
       <button
         type="button"
         class="rail-btn"
         :aria-label="t('app.railManage')"
-        :aria-expanded="manageOpen"
-        :aria-haspopup="true"
         data-manage-btn
         v-tooltip="t('app.railManage')"
-        @click="manageOpen = !manageOpen"
+        @click="emit('manage')"
       >
         <LayoutGrid :size="13" />
         <span>{{ t("app.railManage") }}</span>
       </button>
-      <div v-if="manageOpen" ref="managePanel" class="rail-panel rail-panel-right" role="menu" data-manage-panel>
-        <button
-          v-for="target in manageTargets"
-          :key="target.view"
-          type="button"
-          role="menuitem"
-          class="manage-item"
-          :data-manage-item="target.view"
-          @click="manageTo(target.view)"
-        >
-          {{ target.label }}
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -830,7 +766,7 @@ function activateFromFold(item: RailItem): void {
   color: var(--text);
 }
 
-/* Shared dropdown panel for the two row-end buttons. */
+/* The launch picker's dropdown panel. */
 .rail-panel {
   position: absolute;
   top: calc(100% + 6px);
@@ -847,12 +783,6 @@ function activateFromFold(item: RailItem): void {
   gap: 4px;
   animation: rail-panel-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
-}
-
-.rail-panel-right {
-  left: auto;
-  right: 0;
-  transform-origin: top right;
 }
 
 @keyframes rail-panel-in {
@@ -926,21 +856,5 @@ function activateFromFold(item: RailItem): void {
 .launch-go:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.manage-item {
-  display: flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  text-align: left;
-}
-
-.manage-item:hover {
-  background: var(--surface-3);
-  color: var(--text);
 }
 </style>

@@ -53,21 +53,21 @@ describe("lastView", () => {
     expect(declared.sort()).toEqual([...VIEWS].sort());
   });
 
-  it("only names pages the shell can actually open", () => {
-    // A saved `lastView` that no page handles restores the shell to a blank
-    // pane. The shell's own `View` union is the list of what it can open —
-    // plus "settings", which covers the window and is deliberately never
-    // persisted as the view to restore.
+  it("only names surfaces the shell can actually open", () => {
+    // A saved `lastView` that no page handles must not land on a blank pane.
+    // The shell has exactly two surfaces since the management pane (P1-2):
+    // the browser and the pane. The schema above keeps the pre-pane values so
+    // old workspaces round-trip, and App.vue restores every one of them to the
+    // browser — the pane is never a surface to launch on.
     const shell = read("src/renderer/src/App.vue");
     const union = shell.slice(
       shell.indexOf("type View ="),
       shell.indexOf("const store = useWorkspaceStore"),
     );
-    const pages = [...union.matchAll(/\| "([a-z-]+)"/g)].map((match) => match[1]);
-    expect(pages).toContain("settings");
-    expect(pages.filter((page) => page !== "settings").sort()).toEqual([...VIEWS].sort());
-    // The views page is retired: no page may answer "views" again.
-    expect(pages).not.toContain("views");
+    // The first member has no leading `|`, so the union is asserted as written.
+    expect(union).toContain('type View = "browser" | "manage"');
+    // The retired "views" page is out: no page may answer "views" again.
+    expect(union).not.toContain("views");
   });
 });
 

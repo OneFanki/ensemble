@@ -54,12 +54,19 @@ describe("a page header carries a title, not a subtitle", () => {
   });
 
   it("keeps the numeric count as a slot, which is a figure rather than a sentence", () => {
-    // IdentitiesPage's "12 账号 · 3 运行中" lives in the `#note` slot and has to
-    // survive: deleting the number would lose information, which is the opposite
-    // of the redundancy this rule removes.
-    const identities = pages.find((page) => page.path.endsWith("IdentitiesPage.vue"));
-    expect(identities?.text).toMatch(/<template #note>/);
-    expect(identities?.text).toContain("app.identityCount");
+    // IdentitiesPage lost its heading when it became a floating pane: the button
+    // that opens the pane already names it and the filter tabs carry the count
+    // ("全部 4"), so a title plus a subtitle was two lines restating what the
+    // user had just clicked and what the tabs already said.
+    //
+    // The rule this test protects is unchanged for the pages that still wear a
+    // header: a figure may go under a title, a sentence may not. The slot is
+    // therefore allowed to be empty across the app (it is, right now); what is
+    // forbidden is filling it with prose.
+    for (const page of pages.filter((item) => /<template #note>/.test(item.text))) {
+      // Every note that exists interpolates a count message; prose would not.
+      expect(page.text, page.path).toMatch(/\{\{\s*\$t\("app\.\w+Count"/);
+    }
   });
 
   it("no longer offers a note prop, so no page can reach for one", () => {

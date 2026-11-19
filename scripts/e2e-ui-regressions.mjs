@@ -357,14 +357,14 @@ try {
     const filters = document.querySelector('.group-filters');
     const scroll = document.querySelector('.chip-scroll');
     const chips = [...document.querySelectorAll('.group-chip')];
-    const toolbar = document.querySelector('.toolbar');
+    const bar = document.querySelector('.page.identities .filter-bar');
     const tops = new Set(chips.map((chip) => Math.round(chip.getBoundingClientRect().top)));
     return {
       hasStrip: Boolean(filters),
       chips: chips.length,
       rows: tops.size,
       stripHeight: filters ? Math.round(filters.getBoundingClientRect().height) : null,
-      toolbarHeight: toolbar ? Math.round(toolbar.getBoundingClientRect().height) : null,
+      filterBarHeight: bar ? Math.round(bar.getBoundingClientRect().height) : null,
       scrollable: scroll ? scroll.scrollWidth > scroll.clientWidth : null,
       overflowX: scroll ? getComputedStyle(scroll).overflowX : null,
     };

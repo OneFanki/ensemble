@@ -34,7 +34,6 @@ import IconButton from "./ui/IconButton.vue";
 import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 import TextField from "./ui/TextField.vue";
 import GroupHeader from "./ui/GroupHeader.vue";
-import PageHeader from "./ui/PageHeader.vue";
 
 const emit = defineEmits<{
   newSite: [];
@@ -557,67 +556,81 @@ function setMode(next: "use" | "edit"): void {
 
 <template>
   <section class="page identities" :data-mode="mode">
-    <PageHeader :title="$t('app.identities')" numeric>
-      <template #note>
-        {{ $t("app.identityCount", { count: store.identities.length }) }}
-        <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
-      </template>
-      <template #actions>
-        <!-- The two faces are one switch, not two pages: "use" is what the pane
-             is for, "edit" is the maintenance pass. A pencil rather than the word
-             "edit" because it sits beside actions that are used ten times more
-             often, and a verb there would read as a third primary action. -->
-        <div class="mode-switch" role="group" :aria-label="$t('app.accountMode')">
-          <button
-            type="button"
-            class="mode"
-            :class="{ on: mode === 'use' }"
-            :aria-pressed="mode === 'use'"
-            data-mode-use
-            v-tooltip="$t('app.accountModeUseHint')"
-            @click="setMode('use')"
-          >
-            <LayoutGrid :size="13" />
-          </button>
-          <button
-            type="button"
-            class="mode"
-            :class="{ on: mode === 'edit' }"
-            :aria-pressed="mode === 'edit'"
-            data-mode-edit
-            v-tooltip="$t('app.accountModeEditHint')"
-            @click="setMode('edit')"
-          >
-            <Pencil :size="13" />
-          </button>
-        </div>
-        <!-- Only the edit face writes. On the tile face these two buttons were
-             the page's primary actions competing with the thing the page is for
-             (opening an account); on the edit face they are exactly right. -->
-        <template v-if="mode === 'edit'">
-          <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
-            <Plus :size="13" />
-            {{ $t("app.newIdentity") }}
-          </AppButton>
-          <AppButton data-new-site @click="emit('newSite')">
-            <Globe :size="13" />
-            {{ $t("app.newSite") }}
-          </AppButton>
-        </template>
-      </template>
-    </PageHeader>
+    <!--
+      A bar, not a title.
+
+      The pane is opened from a button that already says "多账号", so a heading
+      repeating it — and a subtitle repeating the count that the filter tabs
+      already carry — is two lines of text to read on every visit that answer
+      nothing. What the bar holds instead is the two things that are not
+      repeated anywhere else: the face switch on the left, the write actions on
+      the right.
+
+      The switch is pinned left on purpose. It used to sit with the actions, so
+      switching to the edit face pushed it a hundred pixels left when two buttons
+      appeared beside it — a control that moves when you use it.
+    -->
+    <header class="pane-bar">
+      <div class="mode-switch" role="group" :aria-label="$t('app.accountMode')">
+        <button
+          type="button"
+          class="mode"
+          :class="{ on: mode === 'use' }"
+          :aria-pressed="mode === 'use'"
+          data-mode-use
+          v-tooltip="$t('app.accountModeUseHint')"
+          @click="setMode('use')"
+        >
+          <LayoutGrid :size="13" />
+        </button>
+        <button
+          type="button"
+          class="mode"
+          :class="{ on: mode === 'edit' }"
+          :aria-pressed="mode === 'edit'"
+          data-mode-edit
+          v-tooltip="$t('app.accountModeEditHint')"
+          @click="setMode('edit')"
+        >
+          <Pencil :size="13" />
+        </button>
+      </div>
+      <!-- Two writes, one of them primary. Creating an account is the everyday
+           act; creating a site happens once per system. They used to be two
+           equal-weight buttons, which made the bar read as a menu of verbs rather
+           than "this is the thing you do here". The site door is still one click
+           away, as an icon with the word in its tooltip. -->
+      <div v-if="mode === 'edit'" class="pane-bar-actions">
+        <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
+          <Plus :size="13" />
+          {{ $t("app.newIdentity") }}
+        </AppButton>
+        <button
+          type="button"
+          class="bar-icon"
+          :aria-label="$t('app.newSite')"
+          :title="$t('app.newSite')"
+          data-new-site
+          @click="emit('newSite')"
+        >
+          <Globe :size="13" />
+        </button>
+      </div>
+    </header>
 
     <div v-if="store.credentials?.warning" class="vault-banner">
       {{ store.credentials.warning }}
     </div>
 
     <!--
-      The toolbar is the edit face's: filters, bulk selection and the health
-      check are all things you reach for while rearranging. The tile face answers
-      "which one do I open" and needs only the search field, which it carries
-      itself.
+      One row of filtering. The face has three kinds of control — a status
+      filter, a search field, and two switches that act on the whole list — and
+      they used to occupy two rows because the group strip was a separate band
+      underneath. Everything that filters now shares this row; everything that
+      acts on the list sits at its right end as icon buttons, so the row's height
+      is one control, not two.
     -->
-    <div v-if="mode === 'edit' && store.identities.length" class="toolbar">
+    <div v-if="mode === 'edit' && store.identities.length" class="filter-bar">
       <div class="tabs" role="tablist" :aria-label="$t('app.identities')">
         <button
           type="button"
@@ -654,46 +667,70 @@ function setMode(next: "use" | "edit"): void {
         <Search :size="12" />
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
-      <AppButton v-if="!selecting" data-batch-select :title="$t('app.batchSelectHint')"
-        @click="startSelecting">
-        <CheckSquare :size="12" />
-        {{ $t("app.batchSelect") }}
-      </AppButton>
-      <GroupCollapseAll
-        v-if="!selecting && groups.length > 1"
-        :all-collapsed="allCollapsed"
-        @toggle="groupCollapse.toggleAll(groupKeys)"
-      />
+      <!-- Bulk selection and the health sweep are actions over the whole list, so
+           they are icons at the row's end: a text button for each pushed the
+           search field down to 130px in a 720px pane. -->
+      <div class="filter-actions">
+        <button
+          v-if="!selecting"
+          type="button"
+          class="bar-icon"
+          :aria-label="$t('app.batchSelect')"
+          :title="$t('app.batchSelectHint')"
+          data-batch-select
+          @click="startSelecting"
+        >
+          <CheckSquare :size="13" />
+        </button>
+        <GroupCollapseAll
+          v-if="!selecting && groups.length > 1"
+          :all-collapsed="allCollapsed"
+          @toggle="groupCollapse.toggleAll(groupKeys)"
+        />
+        <button
+          type="button"
+          class="bar-icon"
+          :class="{ on: groupsPanelOpen }"
+          :aria-label="$t('app.manageSiteGroups')"
+          :aria-expanded="groupsPanelOpen"
+          :title="$t('app.manageSiteGroups')"
+          data-manage-groups
+          @click="groupsPanelOpen = !groupsPanelOpen"
+        >
+          <Tags :size="13" />
+        </button>
+        <button
+          type="button"
+          class="bar-icon"
+          :aria-label="$t('app.sessionHealth')"
+          :title="$t('app.sessionHealth')"
+          data-session-health
+          @click="emit('sessionHealth')"
+        >
+          <HeartPulse :size="13" />
+        </button>
+      </div>
     </div>
 
     <!--
-      Group filters get their own strip, one line high, scrolled sideways.
-      A wrapping list was fine with three groups and pushed the sections off
-      screen with fifteen; a fixed-height strip keeps the page layout stable no
-      matter how many groups exist.
-
-      Health sits at the strip's far end rather than in the toolbar: six controls
-      in a 720px pane made the toolbar wrap and left "session health" alone on a
-      second line. It is a whole-workspace sweep like the group filter, so the
-      strip is where it belongs — and the strip draws whenever either is wanted,
-      so a workspace with no groups still reaches the health check.
+      The site-group filter, on its own line and only when there are groups to
+      choose between. One group is not a choice — "全部" and that group select the
+      same accounts — so the line only appears from two groups up.
     -->
     <div
-      v-if="mode === 'edit' && (filterGroups.length > 0 || store.identities.length > 0)"
+      v-if="mode === 'edit' && filterGroups.length > 1"
       class="group-filters"
       data-group-filters
     >
-      <template v-if="filterGroups.length">
-        <span class="filters-label">{{ $t("app.siteGroups") }}</span>
-        <div class="chip-scroll">
-          <button
-            type="button"
-            class="group-chip"
-            :class="{ on: groupFilter === null }"
-            @click="groupFilter = null"
-          >
-            {{ $t("app.filterAll") }}
-          </button>
+      <div class="chip-scroll">
+        <button
+          type="button"
+          class="group-chip"
+          :class="{ on: groupFilter === null }"
+          @click="groupFilter = null"
+        >
+          {{ $t("app.filterAll") }}
+        </button>
         <button
           v-for="group in filterGroups"
           :key="group.id"
@@ -708,37 +745,6 @@ function setMode(next: "use" | "edit"): void {
           {{ group.name }}
         </button>
       </div>
-      <!-- Managing groups is part of the filter strip: it is where a new group is
-           created, and a strip with no chips has no such place — so the button goes
-           with the chips, and only health survives an empty group list. -->
-      <button
-        v-if="filterGroups.length"
-        type="button"
-        class="manage-groups"
-        :class="{ on: groupsPanelOpen }"
-        :aria-label="$t('app.manageSiteGroups')"
-        :aria-expanded="groupsPanelOpen"
-        :title="$t('app.manageSiteGroups')"
-        data-manage-groups
-        @click="groupsPanelOpen = !groupsPanelOpen"
-      >
-        <Tags :size="12" />
-      </button>
-      </template>
-      <!-- Health sits at the far end of the filter strip rather than in the
-           toolbar: six controls in a 720px pane made the toolbar wrap and left
-           "session health" alone on a second line. It is a whole-workspace sweep
-           like the group filter, so this strip is where it belongs. -->
-      <button
-        type="button"
-        class="manage-groups"
-        :aria-label="$t('app.sessionHealth')"
-        :title="$t('app.sessionHealth')"
-        data-session-health
-        @click="emit('sessionHealth')"
-      >
-        <HeartPulse :size="12" />
-      </button>
     </div>
 
     <!-- Groups are managed where they are applied. The editor is the same
@@ -1170,6 +1176,43 @@ function setMode(next: "use" | "edit"): void {
 </template>
 
 <style scoped>
+/*
+ * A floating pane is not a window.
+ *
+ * `.page`'s 24/28 padding is the mockup's full-page rhythm; at the pane's 720px
+ * it puts the list 28px off the edge and leaves a band of nothing under the bar.
+ * The pane's own edges already separate it from the page behind, so the content
+ * only needs breathing room, not a margin.
+ */
+.page.identities {
+  padding: 14px 16px 12px;
+}
+
+/*
+ * The pane's one fixed row: face switch on the left, write actions on the right.
+ *
+ * It is a header rather than a `PageHeader` because a page header exists to say
+ * the page's name, and this pane's name is already on the button that opened it.
+ * Keeping it a single row also keeps the content's top edge still: the bar's
+ * height does not change when the edit face's two buttons appear, so nothing
+ * below it moves between faces.
+ */
+.pane-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding-bottom: 12px;
+}
+
+.pane-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 .vault-banner {
   margin-top: 12px;
   padding: 8px 11px;
@@ -1181,13 +1224,51 @@ function setMode(next: "use" | "edit"): void {
   color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
-.toolbar {
+/*
+ * One row of filtering: status tabs, the search field, then icon actions.
+ *
+ * `nowrap` on purpose. The row has one control of each kind plus three icons; a
+ * wrap put the third icon on a line of its own, which is what made the top of the
+ * pane look assembled rather than designed. The search field absorbs the slack
+ * instead (`flex: 1 1 auto`), so a narrower pane shortens the field before
+ * anything drops to a second line.
+ */
+.filter-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
-  margin: 16px 0 12px;
+  gap: 8px;
+  margin: 0 0 10px;
   flex: 0 0 auto;
+  min-width: 0;
+}
+
+.filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* The filter row's icon buttons: same 26px target and same quiet colour as the
+   tabs beside them, so the row reads as one band of controls. */
+.bar-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+}
+
+.bar-icon:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.bar-icon.on {
+  background: var(--selected);
+  color: var(--text);
 }
 
 .tabs {
@@ -1227,27 +1308,19 @@ function setMode(next: "use" | "edit"): void {
   color: var(--accent-text);
 }
 
+/* The search field takes the row's slack rather than a fixed 200px: with tabs and
+   three icons on the same line, a fixed width is what made the row wrap. */
 .search {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 7px;
   border: 1px solid var(--line-soft);
   background: var(--bg-elevated);
   border-radius: var(--radius);
-  padding: 6px 9px;
-  width: 200px;
-  min-width: 130px;
-  flex: 0 1 200px;
+  padding: 5px 9px;
+  flex: 1 1 auto;
+  min-width: 96px;
   color: var(--faint);
-}
-
-/* Kept out of the header: three action buttons crowded the title at the minimum
-   window width, and the expired filter next to it is the same mental context. */
-.health {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: 11.5px;
 }
 
 .select-bar {
@@ -1320,23 +1393,38 @@ function setMode(next: "use" | "edit"): void {
   padding: 1px 2px 2px 1px;
 }
 
-.cards > .group-head {
-  margin-top: 18px;
+/*
+ * Groups are separated by air, not by a rule.
+ *
+ * The wrapper is what the drag handlers and the insertion line attach to, so the
+ * spacing rules moved onto it. They used to name `.cards > .group-head`, which
+ * stopped matching the moment a wrapper was introduced — and the symptom was
+ * exactly what the rule had been added to prevent: the group's own bottom rule
+ * sat a few pixels above the table's cap and the two read as one doubled line
+ * glued to the content under it.
+ *
+ * The heading draws no rule at all now. Three gaps do the work, and their
+ * difference is the hierarchy: 22px above a heading (a new site starts), 6px
+ * under it (the table belongs to it), and nothing under a table's foot (the next
+ * heading's own gap separates them). Without that difference a table's foot and
+ * the next heading were equidistant from everything, which is what made the
+ * groups read as one long list.
+ */
+.cards > .site-head-wrap {
+  /* 28px above a heading vs 6px under it: the ratio is what says "a new site
+     starts here" instead of "the table continues with a label". At 22 the two
+     gaps were close enough that a table's foot and the next heading read as one
+     run. */
+  margin-top: 28px;
 }
 
-.cards > .group-head:first-child {
+.cards > .site-head-wrap:first-child {
   margin-top: 0;
 }
 
-/* The group header's hairline is its own bottom edge — useful when the group is
-   folded and the label is the last thing in it. Above a table it is not: the
-   table's cap is already a full border a few pixels lower, and two hairlines that
-   close together read as one doubled rule, which is what made the group and the
-   table look glued together. The cap is the separator; the group label just gets
-   room above it. */
-.cards > .group-head:has(+ .id-table-head) {
-  border-bottom-color: transparent;
-  padding-bottom: 10px;
+.cards > .site-head-wrap :deep(.group-head) {
+  border-bottom: 0;
+  padding-bottom: 6px;
 }
 
 .id-table-head {
@@ -1594,23 +1682,18 @@ function setMode(next: "use" | "edit"): void {
   cursor: grabbing;
 }
 
-/* One fixed line of chips that scrolls sideways. Wrapping made the toolbar grow
-   with every group, pushing the sections out of view once a workspace had a
-   dozen of them. */
+/* One fixed line of chips that scrolls sideways. Wrapping made the bar grow with
+   every group, pushing the sections out of view once a workspace had a dozen of
+   them. */
 .group-filters {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  margin: -6px 0 12px;
+  /* Tight under the filter row — the two are one block of controls — and the
+     first group heading's own 22px is what separates them from the list. */
+  margin: 0 0 6px;
   flex: 0 0 auto;
-}
-
-.filters-label {
-  flex: 0 0 auto;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--faint);
 }
 
 .chip-scroll {
@@ -1643,22 +1726,6 @@ function setMode(next: "use" | "edit"): void {
   border-color: color-mix(in srgb, var(--tag) 52%, var(--line));
   background: color-mix(in srgb, var(--tag) 10%, transparent);
   color: color-mix(in srgb, var(--tag) 78%, var(--text));
-}
-
-.manage-groups {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-soft);
-  color: var(--faint);
-}
-
-.manage-groups:hover {
-  color: var(--text);
-  border-color: var(--line);
 }
 
 .chip-dot {
@@ -1896,11 +1963,19 @@ function setMode(next: "use" | "edit"): void {
   text-overflow: ellipsis;
 }
 
-/* The role is the one chip that may push the others aside rather than being cut:
-   "数据管理员 · 读写" truncated to "数据管理…" is the same as no label at all. */
+/* The role must not be cut: "数据管理员 · 读写" truncated to "数据管理…" is the
+   same as no label at all. But letting it take 62% left the password chip with
+   whatever was left, which is how every row in a narrow pane read
+   "member 未设…". It may push, not dominate: the cap is half the column, and the
+   password chip shares the rest. */
 .meta-row > .tag-role {
   flex: 0 1 auto;
-  max-width: 62%;
+  max-width: 50%;
+}
+
+.meta-row > .tag.plain {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* The counter never shrinks: a half-drawn "+" is worse than a missing chip. */

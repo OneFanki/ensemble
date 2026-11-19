@@ -1546,7 +1546,7 @@ function fillMessage(reason?: string): string {
       >
         <Plus :size="14" />
       </button>
-      <div class="strip-drag"></div>
+      <div class="strip-drag drag-region"></div>
     </div>
 
     <div class="toolbar" :data-platform="platform">

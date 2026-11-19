@@ -155,27 +155,29 @@ describe("the address bar and the new-tab search box are one control", () => {
     expect(shell).toContain("--accent");
   });
 
-  it("the focus rules draw rightward and then stop", () => {
-    // Two straight strips whose background-size grows from zero: the accent is
-    // already in the strip, so widening it *is* the draw. There is no second
-    // stage — the dash this replaced had to travel a full lap and then fade a
-    // stroke in behind it, which is what made a focus click feel slow.
-    expect(shell).toContain("background-size: 0% 100%");
-    expect(shell).toContain("background-size: 100% 100%");
-    expect(shell).toContain("background-position: left center");
-    // A gradient narrower than its box hides by having nowhere to paint, so it
-    // must not also be tiled across the strip.
-    expect(shell).toContain("background-repeat: no-repeat");
+  it("the focus outline closes at rest and opens left to right", () => {
+    // One overlay carries the whole outline and the reveal is a clip wipe: closed
+    // at rest (`inset(0 100% 0 0)` — nothing from the right edge inward) and open
+    // when focused (`inset(0 0 0 0)`). Opening the clip from the right is what
+    // makes the line appear to travel left to right.
+    //
+    // Why not the two horizontal strips this replaces: strips inset by the corner
+    // radius never lit the left and right sides, so a focused field read as a
+    // broken ring. All four edges are part of the state.
+    expect(shell).toContain("clip-path: inset(0 100% 0 0)");
+    expect(shell).toContain("clip-path: inset(0 0 0 0)");
+    expect(shell).toContain("border: 2px solid var(--accent)");
+    expect(shell).toContain("border-radius: var(--shell-radius, var(--radius))");
     // Nothing loops, and no SVG dash travels the perimeter any more.
     expect(shell).not.toContain("infinite");
     expect(shell).not.toContain("sweep-line");
     expect(shell).not.toContain("stroke-dashoffset");
   });
 
-  it("the focus rules are the settled state, not a prelude to one", () => {
+  it("the focus outline is the settled state, not a prelude to one", () => {
     // The motion has to finish on the thing the field keeps. A delayed opacity
     // fade on a separate stroke meant a click took two stages to look done.
     expect(shell).not.toMatch(/transition-delay:\s*\d+m?s/);
-    expect(shell).toMatch(/transition:\s*background-size\s+170ms\s+linear/);
+    expect(shell).toMatch(/clip-path\s+170ms\s+linear/);
   });
 });

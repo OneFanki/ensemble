@@ -15,24 +15,23 @@
  * state. A CSS border cannot hold that, and the field inside is borderless too
  * — it draws nothing of its own, so the shell is the only thing with an edge.
  *
- * ## The focus state: two rules that draw rightward
+ * ## The focus state: one outline, wiped in from the left
  *
- * The top and bottom edges are each a linear gradient whose *background size*
- * animates from 0% to 100% of the width, anchored left. Nothing travels around
- * the perimeter: the accent simply appears along both horizontal edges at once,
- * starting at the left end and reaching the right end one width later. Two
- * nested pseudo-elements, no SVG, no keyframes for position — the browser only
- * repaints the two 2px strips.
+ * The whole perimeter lights up as a single 2px accent outline. The animation is
+ * a clip wipe — the overlay is clipped to `inset(0 100% 0 0)` at rest and opens
+ * to `inset(0)`, which reveals the left edge first, then both horizontal edges
+ * running rightward, then the right edge. Nothing travels around the perimeter,
+ * no keyframes for position, and 170ms linear is the whole thing.
  *
- * It is 170ms and linear, and it *is* the settled state: when it finishes there
- * is nothing left to swap in. That is the whole point — the previous version
- * ran a dash one full lap (500ms) and then faded a second stroke in behind it
- * (another 350ms), so a click took almost a second to look finished.
+ * It *is* the settled state: when the wipe finishes there is nothing left to
+ * swap in. That is the point — the version before this one ran a dash a full lap
+ * (500ms) and then faded a second stroke in behind it (another 350ms), so a
+ * click took almost a second to look finished.
  *
- * The vertical edges are deliberately not drawn. A full frame around a field
- * that already sits in a toolbar reads as a second border; the two horizontal
- * rules are enough to say "this is the field you are typing in", and they are
- * the edges the eye is already tracking along the row.
+ * The two-strip version that briefly replaced it drew only the horizontal edges,
+ * inset by the corner radius. On a real window that read as a broken outline —
+ * the left and right sides never lit and the corners were simply missing. A
+ * closed shape is what "this is the field you are typing in" looks like.
  */
 withDefaults(
   defineProps<{
@@ -61,9 +60,9 @@ withDefaults(
 <template>
   <component :is="as" class="input-shell" :class="[size, { flat }]">
     <slot />
-    <!-- The resting edge only. The focus rules are pseudo-elements: two straight
-         strips that grow rightward, which a stroke on this rect cannot express
-         (a dash on a rect travels around the perimeter). -->
+    <!-- The resting edge only. The focus outline is a pseudo-element: one
+         overlay whose clip opens left to right, which a static stroke cannot
+         express. -->
     <svg class="sweep" aria-hidden="true">
       <rect class="shell-outline" />
     </svg>
@@ -116,7 +115,6 @@ withDefaults(
   stroke: var(--line);
 }
 
-.input-shell.flat::before,
 .input-shell.flat::after {
   display: none;
 }
@@ -158,62 +156,50 @@ withDefaults(
 }
 
 /*
- * The focus rules.
+ * The focus state.
  *
- * Two straight 2px strips, one per horizontal edge, pinned to the left end with
- * a background gradient that is `--accent` for its whole length and transparent
- * after it. Animating `background-size` from 0% to 100% therefore draws the line
- * rightward instead of sliding a highlight along it: the colour is already there
- * once the strip is wide enough to be seen.
+ * One overlay carries the whole outline — all four edges and the rounded
+ * corners — and the animation is a wipe from the left end to the right one: the
+ * clip is opened from `inset(0 100% 0 0)` to `inset(0)`, so the left vertical
+ * edge appears first, both horizontal edges run rightward, and the right
+ * vertical edge arrives last. 170ms, linear.
  *
- * Why not the SVG dash this replaces: a dash rides the perimeter, so the same
- * animation had to travel the two short vertical edges too, and the only way to
- * end "settled" was a second stroke fading in behind it. That two-stage finish
- * (500ms lap + 350ms fade) is what made a focus click feel slow. These rules
- * have no second stage — when the width arrives, the state is complete.
+ * Why the whole perimeter instead of two horizontal strips: strips inset by the
+ * corner radius leave the left and right edges unlit and cut the corners off
+ * completely, which reads as a broken outline rather than a focused field. The
+ * wipe gives the same "draws itself leftward to rightward" motion while ending
+ * on a closed shape.
  *
- * `linear`, not eased: the strip's width *is* the progress, so an ease would
+ * `linear`, not eased: the revealed width *is* the progress, so an ease would
  * read as the field hesitating and then rushing. 170ms is short enough to be a
  * response to the click and long enough to see the direction.
  *
- * Anchored at the bottom edge so the top rule sits just inside the outer edge;
- * both use the shell's own radius so they hug the corners instead of cutting
- * across them. `inset-inline` keeps them clear of the rounded caps.
+ * The overlay is 2px on a `border`, so it lands a pixel inside the shell's edge
+ * and covers the resting hairline instead of sitting a second line beside it.
  */
-.input-shell::before,
 .input-shell::after {
   content: "";
   position: absolute;
-  left: var(--shell-radius, var(--radius));
-  right: var(--shell-radius, var(--radius));
-  height: 2px;
-  border-radius: 1px;
-  background-image: linear-gradient(var(--accent), var(--accent));
-  background-repeat: no-repeat;
-  background-position: left center;
-  background-size: 0% 100%;
+  inset: 0;
+  border: 2px solid var(--accent);
+  border-radius: var(--shell-radius, var(--radius));
+  clip-path: inset(0 100% 0 0);
+  opacity: 0;
   pointer-events: none;
 }
 
-.input-shell::before {
-  top: 0;
-}
-
-.input-shell::after {
-  bottom: 0;
-}
-
-.input-shell:focus-within::before,
 .input-shell:focus-within::after {
-  background-size: 100% 100%;
-  transition: background-size 170ms linear;
+  clip-path: inset(0 0 0 0);
+  opacity: 1;
+  transition:
+    clip-path 170ms linear,
+    opacity 90ms linear;
 }
 
-/* Leaving focus drops both rules at once: a line that eased out for as long as
+/* Leaving focus drops the outline at once: a line that unwound for as long as
    it took to draw would still be visible after the caret moved on. */
-.input-shell:not(:focus-within)::before,
 .input-shell:not(:focus-within)::after {
-  transition: background-size 90ms var(--ease-out);
+  transition: opacity 90ms var(--ease-out);
 }
 
 /*

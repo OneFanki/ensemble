@@ -108,6 +108,34 @@ describe("the active tab and the toolbar share one surface", () => {
 });
 
 /**
+ * The window can always be moved by its top band.
+ *
+ * `-webkit-app-region: drag` is invisible in the markup and in every screenshot,
+ * so losing it is silent: the window simply stops moving and nothing else looks
+ * different. That is exactly what happened — `8afada5` removed the band while the
+ * address row briefly occupied the top, and when `e376007` moved the tab strip
+ * back up only the spacer came with it, leaving the whole top row inert.
+ *
+ * The assertion is on the row that meets the top edge, not on any particular
+ * element inside it: whatever the strip is called, the band between the tabs and
+ * the caption buttons has to declare the drag region.
+ */
+describe("the top band still drags the window", () => {
+  it("marks the tab strip's free stretch as a drag region", () => {
+    const strip = ruleBody(BROWSER, ".tabstrip");
+    expect(strip).not.toMatch(/-webkit-app-region:\s*no-drag/);
+    // Either the strip itself drags, or the spacer between the last tab and the
+    // caption buttons does. The spacer is the current shape; which one is used
+    // must not matter to this contract, only that one of them is there.
+    const stripDrags =
+      /-webkit-app-region:\s*drag/.test(strip) ||
+      /\.strip-drag\s*\{[^}]*-webkit-app-region:\s*drag/.test(BROWSER);
+    const spacerDrags = /class="strip-drag drag-region"/.test(BROWSER);
+    expect(stripDrags || spacerDrags).toBe(true);
+  });
+});
+
+/**
  * A selected row has to sit on a surface it can be told apart from.
  *
  * Settings' column used to carry no background at all — it inherited the page's

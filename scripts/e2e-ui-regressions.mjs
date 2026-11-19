@@ -1324,21 +1324,24 @@ try {
     const readRule = (pseudo) => {
       const style = getComputedStyle(box, pseudo);
       return {
-        height: style.height,
-        backgroundImage: style.backgroundImage,
-        backgroundSize: style.backgroundSize,
-        backgroundPosition: style.backgroundPosition,
-        left: style.left,
-        right: style.right,
+        clipPath: style.clipPath,
+        opacity: style.opacity,
+        borderTopWidth: style.borderTopWidth,
+        borderRightWidth: style.borderRightWidth,
+        borderBottomWidth: style.borderBottomWidth,
+        borderLeftWidth: style.borderLeftWidth,
+        borderTopColor: style.borderTopColor,
+        borderRadius: style.borderRadius,
+        content: style.content,
       };
     };
-    const resting = { top: readRule("::before"), bottom: readRule("::after") };
+    const resting = readRule("::after");
     input.focus();
-    // Past the 170ms draw: the rules are at full width and stay there.
+    // Past the 170ms wipe: the outline is fully open and stays there.
     await new Promise((r) => setTimeout(r, 300));
     const b = box.getBoundingClientRect();
     const i = input.getBoundingClientRect();
-    const focused = { top: readRule("::before"), bottom: readRule("::after") };
+    const focused = readRule("::after");
     const outline = getComputedStyle(box.querySelector('.shell-outline'));
     return {
       centreGap: Math.abs((b.top + b.bottom) / 2 - (i.top + i.bottom) / 2),
@@ -1347,8 +1350,6 @@ try {
       focused,
       outlineWidth: outline.strokeWidth,
       borderWidth: getComputedStyle(box).borderTopWidth,
-      // The rules must sit on the two horizontal edges, not drift into the box
-      // or the rounded caps.
       boxWidth: b.width,
       radius: parseFloat(getComputedStyle(box).getPropertyValue('--shell-radius')) || 0,
     };
@@ -1359,25 +1360,28 @@ try {
     newTabField,
   );
   check(
-    "the focus rules rest at zero width and draw to full width",
-    // `left center` resolves to `0% 50%`: the 0% is the anchor, and it is what
-    // makes the strip grow rightward rather than from the middle out.
+    "the focus outline is closed at rest and fully open when focused",
+    // A clip wipe, not two strips: at rest the overlay is clipped to nothing
+    // (`inset(0px 100% ...)`) and when focused the clip is `inset(0px)`. The
+    // direction of the reveal is the browser's to interpolate; what the assertion
+    // holds is that the end states are closed and open, so the field ends up with
+    // all four edges rather than only its top and bottom.
     newTabField?.matchesFocus === true &&
-      newTabField.resting.top.backgroundSize.startsWith("0%") &&
-      newTabField.resting.bottom.backgroundSize.startsWith("0%") &&
-      newTabField.focused.top.backgroundSize.startsWith("100%") &&
-      newTabField.focused.bottom.backgroundSize.startsWith("100%") &&
-      newTabField.focused.top.backgroundPosition.startsWith("0%") &&
-      newTabField.focused.bottom.backgroundPosition.startsWith("0%"),
+      /100%/.test(newTabField.resting.clipPath) &&
+      !/100%/.test(newTabField.focused.clipPath) &&
+      newTabField.focused.opacity === "1",
     newTabField,
   );
   check(
-    "both focus rules are 2px accent strips inset by the shell radius",
-    newTabField?.focused.top.height === "2px" &&
-      newTabField?.focused.bottom.height === "2px" &&
-      newTabField.focused.top.backgroundImage.includes("gradient") &&
-      parseFloat(newTabField.focused.top.left) > 0 &&
-      Math.abs(parseFloat(newTabField.focused.top.left) - newTabField.radius) < 1 &&
+    "the focus outline covers all four edges of the field",
+    // The regression this locks: the two-strip version lit the top and bottom
+    // edges only, so the left and right sides never highlighted and the corners
+    // were missing entirely — a broken ring on a focused field.
+    ["top", "right", "bottom", "left"].every(
+      (edge) => newTabField?.focused[`border${edge[0].toUpperCase()}${edge.slice(1)}Width`] === "2px",
+    ) &&
+      newTabField?.focused.borderTopColor !== "rgba(0, 0, 0, 0)" &&
+      parseFloat(newTabField?.focused.borderRadius ?? "0") >= newTabField.radius &&
       newTabField?.outlineWidth === "1px" &&
       parseFloat(newTabField?.borderWidth ?? "1") === 0,
     newTabField,

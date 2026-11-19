@@ -10,7 +10,8 @@ import type { HttpAuthChallenge } from "@shared/ipc";
 import IdentityDialog from "./components/IdentityDialog.vue";
 import LoginCaptureBar from "./components/LoginCaptureBar.vue";
 import Logo from "./components/Logo.vue";
-import ManageLayer, { type ManageLayerId, type MoreTab } from "./components/ManageLayer.vue";
+import AiActivityLayer from "./components/AiActivityLayer.vue";
+import ManageLayer, { type ManageLayerId } from "./components/ManageLayer.vue";
 import SessionHealthDialog from "./components/SessionHealthDialog.vue";
 import SettingsPage, { type SettingsSection } from "./components/SettingsPage.vue";
 import SiteDialog from "./components/SiteDialog.vue";
@@ -56,8 +57,8 @@ const view = ref<View>("browser");
  * bell can all name a destination without reaching into the layer.
  */
 const layer = ref<ManageLayerId | null>(null);
-/** Which 「更多」 section is on screen; kept across open/close. */
-const moreTab = ref<MoreTab>("bookmarks");
+/** The full AI activity log, as a layer of its own. */
+const aiLayerOpen = ref(false);
 /**
  * Whether the opening splash is still covering the shell.
  *
@@ -309,41 +310,43 @@ function switchView(next: View) {
 }
 
 /**
- * The browser's ways into the workspace's pages.
+ * The browser's ways into the workspace.
  *
- * Three destinations are layers over the page (站点 / 账号 / 更多), and settings
- * is the one full-window page left. The caller names a destination; without one
- * it lands on settings, because the rows that still name one are the ones a
- * user clicked on purpose.
+ * Accounts are a layer over the page; settings is the full-window page. The AI
+ * activity log is its own layer, reached from the AI panel in the address row.
+ * The caller names a destination; without one it lands on settings, because the
+ * rows that still name one are the ones a user clicked on purpose.
  */
-function openConsole(target: "sites" | "identities" | "settings" | "messages" | "ai" = "settings") {
+function openConsole(target: "identities" | "settings" | "messages" | "ai" = "settings") {
   if (target === "settings") {
     openSettings(settingsSection.value);
     return;
   }
   if (target === "messages" || target === "ai") {
-    moreTab.value = target;
-    openLayer("more");
+    aiLayerOpen.value = true;
+    layer.value = null;
+    if (view.value !== "browser") view.value = "browser";
     return;
   }
   openLayer(target);
 }
 
 /**
- * Opens a management layer over the page.
+ * Opens the account layer over the page.
  *
- * Switching between layers is this same assignment, so two of them cannot be
- * open at once: there is one value, and mounting follows it.
+ * One value, one possible layer: mounting follows it, so two can never stack.
  */
 function openLayer(next: ManageLayerId): void {
   // Settings covers the window; a layer opening from inside it is a request to
   // come back to the page first.
   if (view.value !== "browser") view.value = "browser";
+  aiLayerOpen.value = false;
   layer.value = next;
 }
 
 function closeLayer(): void {
   layer.value = null;
+  aiLayerOpen.value = false;
 }
 
 /**
@@ -401,7 +404,16 @@ navigation.bind((next, tab) => {
     openSettings((tab as SettingsSection | undefined) ?? settingsSection.value);
     return;
   }
-  openConsole(next as "sites" | "identities" | "messages" | "ai");
+  /*
+   * One caller still names the old destination: the flows page's "go create a
+   * site" button. Sites live on the account page now, so that name lands there
+   * rather than becoming a dead end.
+   */
+  if (next === "sites") {
+    openConsole("identities");
+    return;
+  }
+  openConsole(next as "identities" | "messages" | "ai");
 });
 
 /**
@@ -427,7 +439,6 @@ function openNewSite(seed?: Partial<SiteDraft>) {
     authCheckSignedOut: "",
     // No opinion: follow the global setting until someone decides otherwise.
     autoSubmit: undefined,
-    tagIds: [],
     ...seed,
   };
 }
@@ -482,7 +493,6 @@ function openNewIdentity(siteId?: string) {
     passwordMode: "inherit",
     startPath: "/",
     extraFields: [],
-    tagIds: [],
   };
 }
 
@@ -503,7 +513,6 @@ function openEditIdentity(identityId: string) {
     passwordMode: identity.passwordMode,
     ...(identity.credentialFrom ? { credentialFrom: identity.credentialFrom } : {}),
     extraFields: identity.extraFields ? identity.extraFields.map((field) => ({ ...field })) : [],
-    tagIds: identity.tagIds ? [...identity.tagIds] : [],
     note: identity.note,
   };
 }
@@ -515,15 +524,39 @@ function openEditIdentity(identityId: string) {
  * 做兼容性 round-trip，只是不再有页面打开它们。
  */
 
-async function saveSite(draft: SiteDraft) {
+/**
+ * Saves a site, and its first account when the dialog collected one.
+ *
+ * The account is written after the site, against the id that save just
+ * returned: the site dialog has no id for a new site, so the shell is the only
+ * place that can thread one write into the next. A failed account save leaves
+ * the site in place and reports through the store — losing the site because its
+ * optional first account was wrong would be the worse outcome.
+ */
+async function saveSite(
+  draft: SiteDraft,
+  firstAccount?: { name: string; username: string; password: string },
+) {
   const result = await store.saveSite(draft);
-  if (result) {
-    siteDraft.value = null;
-    const saved = draft.id
-      ? result.sites.find((item) => item.id === draft.id)
-      : result.sites.find((item) => item.name === draft.name);
-    if (saved) store.markSiteUsed(saved.id);
-  }
+  if (!result) return;
+  siteDraft.value = null;
+  const saved = draft.id
+    ? result.sites.find((item) => item.id === draft.id)
+    : result.sites.find((item) => item.name === draft.name);
+  if (!saved) return;
+  store.markSiteUsed(saved.id);
+  if (!firstAccount) return;
+  await store.saveIdentity({
+    siteId: saved.id,
+    name: firstAccount.name,
+    username: firstAccount.username,
+    role: "admin",
+    color: "teal",
+    passwordMode: firstAccount.password ? "custom" : "inherit",
+    startPath: "/",
+    extraFields: [],
+    ...(firstAccount.password ? { password: firstAccount.password } : {}),
+  });
 }
 
 async function saveIdentity(draft: IdentityDraft) {
@@ -604,7 +637,6 @@ async function saveCapturedLogin(notice: LoginCaptureNotice): Promise<void> {
           )
           .map((field) => ({ ...field })),
       ],
-      tagIds: existing.tagIds ? [...existing.tagIds] : [],
       note: existing.note,
       captureToken: notice.token,
     };
@@ -621,7 +653,6 @@ async function saveCapturedLogin(notice: LoginCaptureNotice): Promise<void> {
     // Pre-filled so a multi-tenant site keeps its tenant: it is part of which
     // account this is, and the login that just happened typed it.
     extraFields: (notice.extraFields ?? []).map((field) => ({ ...field })),
-    tagIds: [],
     captureToken: notice.token,
   };
 }
@@ -684,7 +715,23 @@ async function createSiteFromIdentity(input: { name: string; baseUrl: string }) 
   identityDraft.value = { ...draft, siteId: saved.id };
 }
 
+/**
+ * Deletes a site after asking.
+ *
+ * The confirmation is not optional: this write takes every account under the
+ * site, their saved passwords, their flows and their running windows with it.
+ * The site dialog's delete button is one click; without this, one stray press
+ * inside a form the user opened to *edit* would destroy a whole environment.
+ */
 async function deleteSite(siteId: string) {
+  const site = store.sites.find((item) => item.id === siteId);
+  const accepted = await confirm.ask({
+    title: tr("app.delete"),
+    body: tr("app.deleteSiteConfirm", { name: site?.name ?? "" }),
+    confirmLabel: tr("app.delete"),
+    tone: "danger",
+  });
+  if (!accepted) return;
   await store.deleteSite(siteId);
   siteDraft.value = null;
 }
@@ -748,28 +795,28 @@ async function handleLocale(locale: LocaleSetting) {
         @theme="handleTheme"
         @locale="handleLocale"
         @update-found="(result) => (updatePrompt = result)"
+        @save-capture="saveCapturedLogin"
       />
     </main>
 
     <!--
-      The management layers, all through one shell: 站点 / 账号 / 更多. One value
-      selects which page is inside, so switching is an assignment and two layers
-      can never stack.
+      The account layer: one value selects what is inside, so two layers can
+      never stack. Sites ride inside it as group headers, so there is no second
+      management layer to switch to.
     -->
     <ManageLayer
       :layer="layer"
-      :more-tab="moreTab"
       @close="closeLayer"
-      @update-more-tab="moreTab = $event"
       @new-site="openNewSite()"
       @edit-site="openEditSite($event)"
-      @open-site="openSite"
-      @add-identity="openNewIdentity($event)"
       @new-identity="openNewIdentity($event)"
       @edit-identity="openEditIdentity($event)"
       @session-health="healthOpen = true"
       @save-capture="saveCapturedLogin"
     />
+
+    <!-- The full AI activity log, opened from the AI panel in the address row. -->
+    <AiActivityLayer v-if="aiLayerOpen" @close="aiLayerOpen = false" />
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in
@@ -816,7 +863,6 @@ async function handleLocale(locale: LocaleSetting) {
     <SiteDialog
       v-if="siteDraft"
       :draft="siteDraft"
-      :tags="store.snapshot?.tags ?? []"
       @close="siteDraft = null"
       @save="saveSite"
       @delete="deleteSite(siteDraft!.id!)"

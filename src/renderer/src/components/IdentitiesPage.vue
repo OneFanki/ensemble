@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { Identity, RoleColor } from "@shared/types";
+import type { Identity, RoleColor, Site, SiteGroup } from "@shared/types";
 import {
   Check,
   CheckSquare,
   Download,
+  Globe,
   HeartPulse,
-  LayoutGrid,
   Link2,
   Pencil,
   Play,
@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Square,
+  Tags,
   Users,
 } from "lucide-vue-next";
 import { computed, ref } from "vue";
@@ -23,6 +24,7 @@ import { useWorkspaceStore } from "../stores/workspace";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
+import SiteGroupsEditor from "./SiteGroupsEditor.vue";
 import AppButton from "./ui/AppButton.vue";
 import EmptyState from "./ui/EmptyState.vue";
 import FormField from "./ui/FormField.vue";
@@ -33,6 +35,8 @@ import GroupHeader from "./ui/GroupHeader.vue";
 import PageHeader from "./ui/PageHeader.vue";
 
 const emit = defineEmits<{
+  newSite: [];
+  editSite: [siteId: string];
   newIdentity: [siteId?: string];
   editIdentity: [id: string];
   sessionHealth: [];
@@ -238,8 +242,10 @@ async function doExport(): Promise<void> {
   }
 }
 
-/** Tag filter; `null` means every account. */
-const tagFilter = ref<string | null>(null);
+/** Site-group filter; `null` means every account. */
+const groupFilter = ref<string | null>(null);
+/** The inline group manager, closed until asked for. */
+const groupsPanelOpen = ref(false);
 
 const visibleIdentities = computed(() => {
   const term = query.value.trim().toLowerCase();
@@ -247,7 +253,9 @@ const visibleIdentities = computed(() => {
     const running = Boolean(store.instanceFor(identity.id));
     if (filter.value === "running" && !running) return false;
     if (filter.value === "expired" && identity.status !== "expired") return false;
-    if (tagFilter.value && !store.tagsForIdentity(identity).includes(tagFilter.value)) return false;
+    if (groupFilter.value && !store.groupsForIdentity(identity).includes(groupFilter.value)) {
+      return false;
+    }
     if (!term) return true;
     return (
       identity.name.toLowerCase().includes(term) ||
@@ -258,18 +266,43 @@ const visibleIdentities = computed(() => {
 });
 
 /**
- * Accounts grouped by site.
+ * One section per site, in stored site order.
  *
- * This replaced a title-bar site switcher: one global "current site" scoped
- * every page at once, which the embedded browser never honoured. Grouping keeps
- * the same information visible without hiding anything.
+ * The section header is the site: name, address, account count, the groups it is
+ * filed under, and the controls that edit or delete the site itself. A site with
+ * no accounts still gets a section — that is how a freshly created site appears
+ * before its first account exists, and hiding it would make "create a site" look
+ * like it had failed.
  */
 const groups = computed(() => {
-  const result: Array<{ siteId: string; name: string; url: string; people: Identity[] }> = [];
+  const result: Array<{
+    siteId: string;
+    name: string;
+    url: string;
+    site?: Site;
+    siteGroups: SiteGroup[];
+    people: Identity[];
+    total: number;
+  }> = [];
   for (const site of store.sites) {
     const people = visibleIdentities.value.filter((identity) => identity.siteId === site.id);
-    if (people.length === 0) continue;
-    result.push({ siteId: site.id, name: site.name, url: site.baseUrl, people });
+    const total = store.identities.filter((identity) => identity.siteId === site.id).length;
+    // A filter or a search that excludes every account also removes the section,
+    // but the group filter is about the site: a matching site keeps its place.
+    const matchesGroup =
+      !groupFilter.value || Boolean(site.tagIds?.includes(groupFilter.value));
+    if (people.length === 0 && (termActive.value || filter.value !== "all" || !matchesGroup)) {
+      continue;
+    }
+    result.push({
+      siteId: site.id,
+      name: site.name,
+      url: site.baseUrl,
+      site,
+      siteGroups: store.siteGroups.filter((group) => site.tagIds?.includes(group.id)),
+      people,
+      total,
+    });
   }
   const orphans = visibleIdentities.value.filter(
     (identity) => !store.sites.some((site) => site.id === identity.siteId),
@@ -279,23 +312,21 @@ const groups = computed(() => {
       siteId: "__orphan__",
       name: t("app.identityOrphanSite"),
       url: "",
+      siteGroups: [],
       people: orphans,
+      total: orphans.length,
     });
   }
   return result;
 });
 
+const termActive = computed(() => query.value.trim().length > 0);
+
 const groupKeys = computed(() => groups.value.map((group) => group.siteId));
 const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
 
-/** Tags that actually appear on some account, so the filter never lists dead ends. */
-const filterTags = computed(() => {
-  const used = new Set<string>();
-  for (const identity of store.identities) {
-    for (const tagId of store.tagsForIdentity(identity)) used.add(tagId);
-  }
-  return (store.snapshot?.tags ?? []).filter((tag) => used.has(tag.id));
-});
+/** Groups that hold at least one site, so the filter never lists dead ends. */
+const filterGroups = computed(() => store.siteGroups.filter((group) => store.sitesInGroup(group.id).length > 0));
 
 const runningCount = computed(
   () => store.identities.filter((identity) => store.instanceFor(identity.id)).length,
@@ -432,13 +463,19 @@ function extraFacts(identity: Identity): string[] {
         <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
       </template>
       <template #actions>
-        <!-- With no accounts at all, the empty state below carries this action
-             beside the sentence that explains it; showing it here as well is the
-             same button twice on one page. Filtered-to-nothing still keeps it:
-             there the remedy is not to create another account. -->
-        <AppButton v-if="store.identities.length" variant="primary" @click="emit('newIdentity')">
+        <!-- The account door keeps the primary slot at every size, including an
+             empty list: it is the page's main action, and the account form can
+             create the site inline when there is none. -->
+        <AppButton variant="primary" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
+        </AppButton>
+        <!-- The site door sits beside it, because this is the only page sites
+             exist on now: a site is the grouping of its accounts, so "another
+             site" and "another account" belong to the same bar. -->
+        <AppButton data-new-site @click="emit('newSite')">
+          <Globe :size="13" />
+          {{ $t("app.newSite") }}
         </AppButton>
       </template>
     </PageHeader>
@@ -506,36 +543,54 @@ function extraFacts(identity: Identity): string[] {
     </div>
 
     <!--
-      Tag filters get their own strip, one line high, scrolled sideways.
-      A wrapping list was fine with three tags and pushed the cards off screen
-      with fifteen; a fixed-height strip keeps the page layout stable no matter
-      how many tags exist.
+      Group filters get their own strip, one line high, scrolled sideways.
+      A wrapping list was fine with three groups and pushed the sections off
+      screen with fifteen; a fixed-height strip keeps the page layout stable no
+      matter how many groups exist.
     -->
-    <div v-if="filterTags.length" class="tag-filters">
-      <span class="filters-label">{{ $t("app.tags") }}</span>
+    <div v-if="filterGroups.length" class="group-filters" data-group-filters>
+      <span class="filters-label">{{ $t("app.siteGroups") }}</span>
       <div class="chip-scroll">
         <button
           type="button"
-          class="tag-chip"
-          :class="{ on: tagFilter === null }"
-          @click="tagFilter = null"
+          class="group-chip"
+          :class="{ on: groupFilter === null }"
+          @click="groupFilter = null"
         >
           {{ $t("app.filterAll") }}
         </button>
         <button
-          v-for="tag in filterTags"
-          :key="tag.id"
+          v-for="group in filterGroups"
+          :key="group.id"
           type="button"
-          class="tag-chip"
-          :class="{ on: tagFilter === tag.id }"
-          :style="{ '--tag': `var(--role-${tag.color})` }"
-          :aria-pressed="tagFilter === tag.id"
-          @click="tagFilter = tagFilter === tag.id ? null : tag.id"
+          class="group-chip"
+          :class="{ on: groupFilter === group.id }"
+          :style="{ '--tag': `var(--role-${group.color})` }"
+          :aria-pressed="groupFilter === group.id"
+          @click="groupFilter = groupFilter === group.id ? null : group.id"
         >
           <span class="chip-dot"></span>
-          {{ tag.name }}
+          {{ group.name }}
         </button>
       </div>
+      <button
+        type="button"
+        class="manage-groups"
+        :class="{ on: groupsPanelOpen }"
+        :aria-label="$t('app.manageSiteGroups')"
+        :aria-expanded="groupsPanelOpen"
+        :title="$t('app.manageSiteGroups')"
+        data-manage-groups
+        @click="groupsPanelOpen = !groupsPanelOpen"
+      >
+        <Tags :size="12" />
+      </button>
+    </div>
+
+    <!-- Groups are managed where they are applied. The editor is the same
+         component the settings tab uses, so the two cannot diverge. -->
+    <div v-if="groupsPanelOpen" class="groups-panel" data-groups-panel>
+      <SiteGroupsEditor />
     </div>
 
     <!--
@@ -650,21 +705,44 @@ function extraFacts(identity: Identity): string[] {
           :name="group.name"
           :count="group.people.length"
           :collapsed="groupCollapse.isCollapsed(group.siteId)"
+          :data-site-head="group.siteId"
           @toggle="groupCollapse.toggle(group.siteId)"
         >
           <template #meta>
             <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
+            <!-- The site's own groups, so "which filing is this in" is answered
+                 where the site is, not one dialog away. -->
+            <span
+              v-for="siteGroup in group.siteGroups"
+              :key="siteGroup.id"
+              class="group-badge"
+              :style="{ '--tag': `var(--role-${siteGroup.color})` }"
+            >
+              <span class="badge-dot"></span>{{ siteGroup.name }}
+            </span>
           </template>
           <template #actions>
-            <button
-              v-if="group.siteId !== '__orphan__'"
-              type="button"
-              class="group-add"
-              :title="$t('app.newIdentityHere')"
-              @click.stop="emit('newIdentity', group.siteId)"
-            >
-              <Plus :size="11" />
-            </button>
+            <template v-if="group.siteId !== '__orphan__'">
+              <button
+                type="button"
+                class="group-icon"
+                :title="$t('app.newIdentityHere')"
+                :data-add-identity="group.siteId"
+                @click.stop="emit('newIdentity', group.siteId)"
+              >
+                <Plus :size="11" />
+              </button>
+              <button
+                type="button"
+                class="group-icon"
+                :title="$t('app.editThisSite')"
+                :aria-label="$t('app.editThisSite')"
+                :data-edit-site="group.siteId"
+                @click.stop="emit('editSite', group.siteId)"
+              >
+                <Pencil :size="11" />
+              </button>
+            </template>
           </template>
         </GroupHeader>
         <template v-if="!groupCollapse.isCollapsed(group.siteId)">
@@ -834,6 +912,9 @@ function extraFacts(identity: Identity): string[] {
         :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
       >
         <template #icon><Users :size="22" /></template>
+        <!-- Always the account door. A site with no accounts still needs a way
+             to get its first one, and the account form starts on the site that
+             was most recently used. -->
         <AppButton variant="primary" @click="emit('newIdentity')">
           <Plus :size="13" />
           {{ $t("app.newIdentity") }}
@@ -1045,8 +1126,7 @@ function extraFacts(identity: Identity): string[] {
   min-width: 0;
 }
 
-.group-add {
-  margin-left: auto;
+.group-icon {
   width: 18px;
   height: 18px;
   display: grid;
@@ -1056,14 +1136,37 @@ function extraFacts(identity: Identity): string[] {
   color: var(--faint);
 }
 
-.group-add:hover {
+.group-icon:hover {
   color: var(--text);
   border-color: var(--line);
 }
 
+/* A site's memberships, drawn as small filled pills so several can sit on one
+   line beside the address without reading as buttons. */
+.group-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  color: color-mix(in srgb, var(--tag) 78%, var(--text));
+  background: color-mix(in srgb, var(--tag) 10%, transparent);
+  white-space: nowrap;
+}
+
+.badge-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--tag);
+}
+
 /* One fixed line of chips that scrolls sideways. Wrapping made the toolbar grow
-   with every tag, pushing the cards out of view once a workspace had a dozen. */
-.tag-filters {
+   with every group, pushing the sections out of view once a workspace had a
+   dozen of them. */
+.group-filters {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1090,7 +1193,7 @@ function extraFacts(identity: Identity): string[] {
   scrollbar-width: thin;
 }
 
-.tag-chip {
+.group-chip {
   --tag: var(--accent);
   background: transparent;
   flex: 0 0 auto;
@@ -1105,10 +1208,26 @@ function extraFacts(identity: Identity): string[] {
   white-space: nowrap;
 }
 
-.tag-chip.on {
+.group-chip.on {
   border-color: color-mix(in srgb, var(--tag) 52%, var(--line));
   background: color-mix(in srgb, var(--tag) 10%, transparent);
   color: color-mix(in srgb, var(--tag) 78%, var(--text));
+}
+
+.manage-groups {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  color: var(--faint);
+}
+
+.manage-groups:hover {
+  color: var(--text);
+  border-color: var(--line);
 }
 
 .chip-dot {

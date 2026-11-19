@@ -92,7 +92,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   /** Open a shell-owned page or layer; omitted means "settings". */
-  openConsole: [view?: "sites" | "identities" | "settings" | "messages" | "ai"];
+  openConsole: [view?: "identities" | "settings" | "messages" | "ai"];
   /** The account column asked for a management layer, or for it to close. */
   "update:layer": [layer: AccountRailLayer | null];
   /** The app menu's guide entry; the shell owns the dialog. */
@@ -447,11 +447,10 @@ function toggleAiPanel(): void {
 }
 
 /**
- * Leaves the panel for the AI activity page.
+ * Leaves the panel for the full activity log.
  *
- * Through the shell's `openConsole` like every other page switch: this component
- * does not own the pane, and calling the navigation store directly bypassed the
- * shell's own bookkeeping (the sidebar's selection and the saved last view).
+ * Through the shell's `openConsole`: this component does not own the layer, and
+ * calling a store directly would bypass the shell's bookkeeping.
  */
 function openAiConsole(): void {
   aiPanelOpen.value = false;

@@ -9,16 +9,19 @@
 
 补齐 AI 操作页面的能力：动作缺口、网络观察、环境模拟、元素句柄、流程编排脚本与
 能力查询；修掉几处会让页面「看起来死了」的阻塞，并把流程的原始 CDP 步骤做成有
-档位判定的逃生口。同一波把浏览器界面收成单舞台加左栏账号列：管理改成浮层，账号
-即档案，页面可拆出到独立窗口，冻结与更新提示也换上新的规则。
+档位判定的逃生口。同一波把浏览器界面收成单舞台加左栏账号列：标签行回到窗口首行，
+账号按站点分组集中在左栏一个入口里，页面可拆出到独立窗口，冻结与更新提示也换上
+新的规则。
 
 ### 中文
 
 #### 新增
 
-- **单舞台与左栏账号列**。主界面收成一个舞台：窗口顶带是贯穿整宽的地址栏，左栏是竖向账号列（站点图标 + 账号名 + AI 三态点 + 冻结标识），点谁谁上台，其余实例在后台保持登录运行、AI 照常驱动。左栏底部是 [+ 启动] 与站点 / 账号 / 更多三个入口。视图页与分组、布局编排入口撤除，工作区数据里的 `views` 字段原样保留、读写不丢。[+ 启动] 可勾选多个账号一次拉起：第一个上台，其余后台待命。AI 状态是一枚三态点——正在操作呼吸、30 分钟内动过常亮、其余无标，悬停显示最后动作时间，明细在「更多」的 AI 记录里。
+- **单舞台与左栏账号列**。主界面收成一个舞台：标签行在窗口首行，地址栏整宽占第二行，左栏是竖向账号列（站点图标 + 账号名 + AI 三态点 + 冻结标识），点谁谁上台，其余实例在后台保持登录运行、AI 照常驱动。左栏只有「账号」一个入口，点开是浮层里的账号页。视图页与分组、布局编排入口撤除，工作区数据里的 `views` 字段原样保留、读写不丢。[+ 启动] 先选站点再选账号，单选即可开页，一次只需要拉起多个时才切到多选。AI 状态是一枚三态点——正在操作呼吸、30 分钟内动过常亮、其余无标，悬停显示最后动作时间，明细在地址栏旁的 AI 记录面板里。
 - **新建会话直达空白**。主按钮点开就是一张空白页：不预选站点、不弹账号面板；要按站点或账号开页时，再从选择面板走明确的一步。
-- **管理改成浮层**。站点、账号、书签、标签、消息、AI 记录从整页改成浮在页面上的浮层，页面不卸载、位置不动，可以一边看页面一边操作；同一族浮层之间直接切换，再点同一位入口或按 Esc 收起。设置仍是整页，走应用菜单。
+- **站点成为账号的分组，站点页退役**。站点不再是独立的页面，而是账号页上的分组头：组头显示站点名、地址与所属分组，展开就是它的账号；「新建站点」按钮就在账号页上，站点与分组的编辑也在原地完成。账号归属于唯一的站点，不再需要先理解「站点」和「账号」两个并列概念。
+- **标签改称站点分组，只作用于站点**。原来的标签现在叫站点分组，只用来给站点归类；账号与视图上的标签在读入时丢弃——它们本来就跟着站点走，账号页的分组也一直按站点划分。
+- **更多退出舞台，内容页收进设置**。左栏不再有「更多」入口；书签、消息、流程与站点分组都搬进设置页，设置页的 tab 分成「偏好」（通用、引擎、凭据、数据、MCP、关于）与「内容」两组。AI 记录留在地址栏旁的按钮里：面板只列最近几条，「查看全部」把同一份日志摊开在浮层里，看的地方还是浏览器上方。
 - **档案并入账号**。每个账号的登录数据（Cookie、会话）各自独立保存，新建账号不再问隔离：说明与「清除会话数据」收进账号表单的高级折叠项，默认收起。没有账号的页面——新标签页、书签、地址栏输入——统一落在默认会话。检测到自建档案时，设置页出现一次性迁移向导：可合并（磁盘数据保留，已登录页面需重新登录），也可选择保留并不再提示。
 - **实例拆出到独立窗口**。页面可从标签右键菜单拆到独立的 OS 窗口，配合系统分屏与多显示器并排观察；再点一次收回主舞台，同一实例同时只允许一个拆出窗口。空白页没有内容可搬，不提供拆出。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留。MCP 侧新增 `pop_out_browser_tab`（run 档）。
 - **冻结按「用户可见」判定**。窗口最小化或隐藏到托盘时，台上页面照常冻结；批量启动落在后台的实例与 AI 开出的页面闲置后同样入冻。豁免原因随页面状态可见（`sleepExempt`：台上可见 / 有声 / AI 在操作 / 策略等），AI 据此判断谁在占资源；左栏条目带冻结标识（全部页冻结灰标、部分冻结半标），退出时打点记录冻结状态。
@@ -52,15 +55,16 @@
 #### 优化
 
 - **地址栏与搜索框的聚焦效果改为一笔画到底**。原来是描边绕外框跑一整圈（500ms）、再等 350ms 才淡入稳定态，点进去将近一秒才「亮好」。现在改成上下两条边同时从左端向右铺开，170ms 到位，铺满即是终态，没有第二段。竖边不再绘制——输入框本来就嵌在一行里，四面封口会读成第二个边框。
+- **界面与工具说明统一改称「账号」**。同一个东西原来在界面里叫「身份」、在数据里叫 identity、在工具说明里又是另一个说法；现在界面、错误提示与 MCP 工具描述一律叫账号，只有存储字段仍是 `identity`，不影响已有数据。
 - **MCP 返回体瘦身**。列表返回封顶：`list_flows` 流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截到前 200 字符、超 60 步截到 60（`run_flow` 用完整定义，不受预览截断影响）；书签只回 `hasFavicon` 标记，图标内容不再进上下文；浏览器状态类返回只保留决策字段，图标 data: URL、窗口几何、缩放等渲染层数据不出走；`evaluate_browser_page` 返回值超过 64KB 时拒绝返回并说明，先在表达式里聚合或分页再取小结果。
 - **`run_flow` 的 `click` / `fill` 改为调用与工具相同的实现**。两份逐行相同的代码合并成一份，流程自动继承「点击落点」诊断。
 - **e2e 的 CDP 客户端抽成一份**。43 个脚本曾各自内联一份约 27 行的 WebSocket 客户端，29 份字节级相同——现在统一在 `scripts/lib/e2e-cdp.mjs`。
 - **e2e 的内联 CDP 客户端归零**。截图、DOM 解析与代理脚本里剩下的 3 份内联客户端也改用 `scripts/lib/e2e-cdp.mjs`，脚本目录里的 WebSocket 连接代码只剩公共客户端这一份。
 - **README 截图重出，设备度量覆盖首次真正生效**。截图脚本的 `Emulation.setDeviceMetricsOverride` 把参数名写成了 `deviceScale`（正确名是 `deviceScaleFactor`），这条命令一直被协议拒绝；旧内联客户端把协议错误吞成 `undefined`，脚本对失败毫无察觉。换用公共客户端后错误直接报出，修正参数名后全量重出 45 张，两张清单早有而文件缺失的引导页图一并补齐。
-- **站点页与账号页的表头/分组分割线不再叠在一起**。
-- **站点页与账号页收成一套表格，操作列的宽间隔与图文混杂一并修掉**。
+- **账号页收成一套表格，分组头与表头不再叠两层线，操作列也不再又宽又乱**。
   - **「列表 / 表格」两态合并为表格**。两者共用同一份行标记、同一条网格线，差别只有 6px 行距和一行列头——不是两种视图，是同一个表格少画一行字。切换按钮与两项设置随之删除；页面现在无条件按表格排：每组的列头是顶盖，组内最后一行是桌脚，中间的行只保留侧边与下边框。
-  - **操作列不再又宽又乱**。账号行的三个文字动作与站点行的「新建身份」都改成了图标按钮，同一簇里不再混两种宽度和两种字号；紧凑启动控件从 22px 提到 24px，与 `IconButton` 等高，整簇贴齐列尾。原先账号行的操作组会吸收列内所有空余宽度，于是三个动作贴左、铅笔孤零零贴右——现在整簇是一个右对齐的簇。腾出来的宽度还给了地址、角色与状态这些要读的列。
+  - **站点作为分组头，不再另起一页**。原先站点页与账号页各自画一遍表头，站点分组的分割线又叠在表头上；现在站点就是账号页上的分组头，一行承担站点名、地址、所属分组与「新建账号」入口，下面直接排它的账号，只有一层列头。
+  - **操作列不再又宽又乱**。账号行的三个文字动作与站点行上的新建入口都改成了图标按钮，同一簇里不再混两种宽度和两种字号；紧凑启动控件从 22px 提到 24px，与 `IconButton` 等高，整簇贴齐列尾。原先账号行的操作组会吸收列内所有空余宽度，于是三个动作贴左、铅笔孤零零贴右——现在整簇是一个右对齐的簇。腾出来的宽度还给了地址、角色与状态这些要读的列。
 
 ### English
 
@@ -68,15 +72,17 @@ Fills in what an AI can do to a page — the missing actions, network observatio
 environment emulation, element handles, flow scripting and capability queries —
 fixes several ways a page could look dead, and turns a flow's raw CDP step into a
 tiered escape hatch. The same wave collapses the browser surface into a single
-stage with an account column on the left: management becomes a layer, profiles
-fold into accounts, pages pop out to their own window, and new rules for freezing
-and update notes.
+stage with an account column on the left: the tab strip returns to the window's
+top row, accounts sit under one entry grouped by site, pages pop out to their own
+window, and new rules for freezing and update notes.
 
 #### Added
 
-- **One stage, an account column on the left.** The main window is a single stage: the top band is a full-width address row, and the left column lists running accounts (site icon, account name, AI status dot and freeze badge). Click an entry to bring it on stage; the rest keep running signed-in in the background, still drivable by AI. The foot of the column carries [+ Launch] and three entries — Sites / Accounts / More. The views page and its grouping and layout choreography are gone (the `views` field in workspace data is kept untouched, and read-write round-trips lose nothing). [+ Launch] takes a multi-select: the first account lands on stage, the rest wait in the background. The AI status is a three-state dot — breathing while operating, steady when active within 30 minutes, nothing otherwise — and hovering shows the last action time; details live in AI activity under More.
+- **One stage, an account column on the left.** The main window is a single stage: the tab strip owns the window's top row, the address row spans the second, and the left column lists running accounts (site icon, account name, AI status dot and freeze badge). Click an entry to bring it on stage; the rest keep running signed-in in the background, still drivable by AI. The column carries a single entry — Accounts — which opens the accounts pane as a layer. The views page and its grouping and layout choreography are gone (the `views` field in workspace data is kept untouched, and read-write round-trips lose nothing). [+ Launch] asks for a site and then an account, one selection per launch; multi-select is a step you take when you actually need several. The AI status is a three-state dot — breathing while operating, steady when active within 30 minutes, nothing otherwise — and hovering shows the last action time; details live in the AI activity panel beside the address bar.
 - **New sessions start blank.** The primary button opens a blank page directly: no site preselected, no account panel; picking a site or account is an explicit step from the chooser when wanted.
-- **Management is a layer.** Sites, accounts, bookmarks, tags, messages and AI activity open as panes floating over the page rather than replacing it: the page stays mounted and keeps its rectangle, so it can be read beside the pane. Panes in the same family switch directly into one another, and clicking the same entry again or pressing Esc dismisses the pane. Settings is the one full-window page left, reached from the app menu.
+- **A site is an account's group, and the sites page retires.** A site is no longer a page of its own but a group heading on the accounts page: the heading carries the site name, its address and its group, and expands to its accounts. "New site" sits on the accounts page too, and site and group editing happen in place. An account belongs to exactly one site, so there are no longer two parallel concepts to learn.
+- **Tags become site groups and apply to sites only.** What used to be tags are now site groups, purely for sorting sites into groups; tags on accounts and views are dropped at read time — they follow the site anyway, and the accounts page has always grouped by site.
+- **More leaves the stage and content pages move into settings.** The column has no More entry any more; bookmarks, messages, flows and site groups all live in the settings page, whose tabs split into two groups, Preferences (general, engines, vault, data, MCP, about) and Content. AI activity stays on the button beside the address bar: the panel lists the newest entries, and "show all" lays the same log out in a layer above the browser.
 - **Profiles fold into accounts.** Every account already keeps its own cookies and session data, so creating an account no longer asks about isolation: the note and "clear session data" live in a collapsed advanced fold of the account form. Account-less surfaces — new tabs, bookmarks, typed addresses — all land in the default session. When created profiles exist, Settings offers a one-time merge wizard: merge them (data stays on disk; signed-in pages will need to sign in again), or keep them and never ask again.
 - **Pop an instance out to its own window.** A page can move to its own OS window from the tab's context menu for side-by-side comparison via system split screen or multiple monitors; clicking again docks it back, and one popped-out window per instance. A blank page has nothing to move and is not offered. Popping out reloads the page: SPA in-memory state is not kept, but signed-in state and storage stay with the session partition. New MCP tool `pop_out_browser_tab` (run tier).
 - **Freezing follows user visibility.** With the window minimized or hidden to the tray, the on-stage page freezes as usual; background members of a batch launch and pages opened by AI freeze after idle like anything else. Exemption reasons are published per page (`sleepExempt`: on-stage visible / audible / AI active / policy …), so AI can tell what is holding resources; the left column carries a freeze badge (grey when every page is frozen, half when some are), and quit-time telemetry records the freeze state.
@@ -110,15 +116,16 @@ and update notes.
 #### Improved
 
 - **The address bar and search box now light up in one stroke.** The old focus state ran a border dash a full lap around the outline (500ms) and then waited another 350ms for the settled stroke to fade in — nearly a second before a click looked finished. Now the top and bottom edges fill from the left end at the same time, 170ms, and the filled state *is* the settled state: there is no second stage. The vertical edges are no longer drawn — the field already sits inside a row, and closing all four sides read as a second border.
+- **The UI and the tool descriptions now say "account" everywhere.** The same thing was called an identity in the UI, `identity` in storage and something else again in tool descriptions; the UI, error messages and MCP tool descriptions all say account now, while the stored field stays `identity`, so existing data is unaffected.
 - **Slimmer MCP payloads.** List returns are capped: `list_flows` returns the first 50 flows and marks `truncated` beyond that, with step values clipped to 200 characters and flows to 60 steps (`run_flow` keeps using the full definition, unaffected by the preview clipping); bookmarks come back as a `hasFavicon` flag instead of icon bytes; browser-state returns keep only decision fields — icon data: URLs, window geometry, zoom and other renderer-only data never leave the app; and `evaluate_browser_page` refuses results over 64 KB with a note — aggregate or paginate inside the expression and fetch a small result.
 - **`run_flow`'s `click` and `fill` now call the same code as the tools.** Two line-for-line copies became one, and flows inherit the click's hit diagnostic.
 - **The e2e CDP client is one file.** 43 scripts each inlined a ~27-line WebSocket client, 29 of them byte-identical; they now share `scripts/lib/e2e-cdp.mjs`.
 - **No inline CDP clients are left in e2e.** The last 3 inlined copies — the screenshot, DOM-resolver and proxy scripts — now use `scripts/lib/e2e-cdp.mjs` too; the scripts directory holds exactly one WebSocket client.
 - **README screenshots re-shot, and the device-metrics override takes effect for the first time.** The screenshot script spelled `Emulation.setDeviceMetricsOverride`'s parameter `deviceScale` instead of `deviceScaleFactor`, so the protocol refused the command on every run; the old inline client turned protocol errors into `undefined` and the script never noticed. The shared client surfaces the error, and with the name fixed all 45 screenshots were re-shot, including the two guide pages that were listed but whose files were missing.
-- **The sites and identities tables no longer stack their header rule on a group rule.**
-- **The sites and identities pages collapse into one table, and the actions column loses its wide gaps and mixed text-plus-icon clutter.**
+- **The accounts page becomes one table, its group headings stop doubling the header rule, and the actions column loses its wide gaps and mixed text-plus-icon clutter.**
   - **The list / table toggle is gone; the table stays**. Both modes shared the same row markup and the same grid line — the only differences were a 6px gap and a header row. That is not two views, it is one table with a line of text left out. The toggle and its two settings keys are removed, and the layout is now unconditional: each group's header is the cap, its last row is the foot, and the rows between keep only their side and bottom rules.
-  - **The actions column is no longer wide and ragged**. The three text actions on an account row and the "new identity" button on a site row are icon buttons now, so no cluster mixes two widths and two type sizes. The compact launch control went from 22px to 24px to match `IconButton`, and each cluster is pinned to the right edge of its column. The old session group absorbed every spare pixel of the column, which put three actions at the left and a lone pencil at the right; there is one right-aligned cluster now. The width that freed up went back to the columns people actually read — address, role, status.
+  - **A site is a group heading, not a page of its own.** The sites page and the accounts page each drew a header row before, and a site group's rule stacked on top of it; now a site is a heading on the accounts page, carrying its name, address, group and new-account entry on one row, with its accounts directly beneath it and a single header row.
+  - **The actions column is no longer wide and ragged**. The three text actions on an account row and the new-account entry on a site heading are icon buttons now, so no cluster mixes two widths and two type sizes. The compact launch control went from 22px to 24px to match `IconButton`, and each cluster is pinned to the right edge of its column. The old session group absorbed every spare pixel of the column, which put three actions at the left and a lone pencil at the right; there is one right-aligned cluster now. The width that freed up went back to the columns people actually read — address, role, status.
 
 ## [2.2.1] - 2026-11-16
 

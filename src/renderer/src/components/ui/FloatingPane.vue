@@ -129,12 +129,24 @@ onBeforeUnmount(() => {
         data-floating-pane
       >
         <header class="pane-head">
-          <h2 class="sr-only">{{ label }}</h2>
+          <!--
+            The title is drawn, not hidden.
+
+            The head holds one close button, and a band with a lone "×" in the
+            far corner reads as a strip that lost its content — the user cannot
+            tell what the pane is called or why it ends there. The heading is the
+            answer, and it costs the height the band already had.
+          -->
+          <h2 class="pane-title">{{ label }}</h2>
           <div class="pane-head-actions">
+            <!-- The caller's own controls sit in the head too: they act on the
+                 pane as a whole (which face to show), not on its content. -->
+            <slot name="head" />
             <IconButton
               :ariaLabel="t('app.close')"
               :title="t('app.close')"
               size="sm"
+              data-pane-close
               @click="emit('close')"
             >
               <X :size="13" />
@@ -188,15 +200,22 @@ onBeforeUnmount(() => {
  * address row finishes, so both stay reachable, and it ends at the window's
  * bottom edge — the page area, exactly.
  */
+/*
+ * The pane: 60% of the window, capped so a 4K window does not produce a
+ * kilometre-wide list. It starts where the page area starts — which is the
+ * account column's width when the column is showing and the window's left edge
+ * when it is collapsed, hence the variable rather than the token directly — and
+ * ends at the window's bottom edge.
+ */
 .floating-pane {
   position: absolute;
   top: calc(var(--titlebar-height) + var(--address-row-height));
   bottom: 0;
-  left: var(--account-rail-width);
+  left: var(--pane-left, 0);
   display: flex;
   flex-direction: column;
   width: min(720px, 60vw);
-  max-width: calc(100vw - var(--account-rail-width));
+  max-width: calc(100vw - var(--pane-left, 0px));
   border-right: 1px solid var(--line);
   background: var(--content);
   box-shadow: var(--shadow-menu);
@@ -220,17 +239,34 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  height: 32px;
-  padding: 0 6px;
+  gap: var(--space-4);
+  /* A floor, not a height: on the edit face the head also carries the primary
+     write action, and a fixed 36px would clip it. */
+  min-height: 40px;
+  padding: 4px 6px 4px 14px;
   background: var(--frame);
   border-bottom: 1px solid var(--line-soft);
 }
 
+.pane-title {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .pane-head-actions {
+  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-3);
+  flex: 0 0 auto;
 }
 
 /*

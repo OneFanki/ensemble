@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { openRail } from "./lib/e2e-nav.mjs";
 
 const GRACE_MS = 1_500;
 const SWEEP_MS = 200;
@@ -133,6 +134,9 @@ try {
     throw error;
   }
   check("app window appeared", true);
+  // The account rail starts collapsed; this suite reads its chips.
+  await client.evaluate(openRail());
+  await wait(400);
   await wait(3000);
 
   // MCP is how an AI drives a page; the sleep feature has to apply to that path

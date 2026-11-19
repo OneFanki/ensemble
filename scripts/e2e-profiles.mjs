@@ -32,6 +32,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { openRail } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-profiles-"));
@@ -204,6 +205,9 @@ try {
     throw error;
   }
   check("app window appeared", true);
+  // The account rail starts collapsed; this suite reads its chips.
+  await client.evaluate(openRail());
+  await wait(400);
   await wait(3000);
 
   // --- 1. The account form's isolation fold, closed by default -------------
@@ -321,7 +325,7 @@ try {
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    document.querySelector('[data-floating-pane] [data-pane-close]')?.click();
     await wait(700);
   `,
   );

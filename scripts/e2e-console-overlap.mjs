@@ -32,6 +32,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { openRail } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const DEBUG_PORT = "0";
@@ -118,6 +119,9 @@ try {
     throw error;
   }
   check("app window appeared", true);
+  // The account rail starts collapsed; this suite reads its chips.
+  await client.evaluate(openRail());
+  await wait(400);
   await wait(3400);
 
   await client.evaluate(`(async () => {
@@ -273,7 +277,7 @@ try {
   // 6. Closing must clear both, and the page must still be on stage — there was
   //    nothing to bring back.
   const back = await client.evaluate(`(async () => {
-    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    document.querySelector('[data-floating-pane] [data-pane-close]')?.click();
     await new Promise((r) => setTimeout(r, 700));
     const state = await window.ensemble.getEmbeddedState();
     const stage = document.querySelector('.stage')?.getBoundingClientRect();

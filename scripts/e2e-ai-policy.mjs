@@ -25,6 +25,7 @@ import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow } from "./lib/e2e-cdp.mjs";
+import { openRail } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -212,6 +213,9 @@ try {
 
   const client = await connectRenderer();
   check("renderer reachable", Boolean(client));
+  // The account rail starts collapsed; this suite reads its AI dots.
+  await client.evaluate(openRail());
+  await wait(400);
 
   /**
    * Reads the click counter inside the embedded page itself.

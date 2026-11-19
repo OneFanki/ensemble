@@ -231,12 +231,21 @@ async function openConsolePage(client, view) {
   // The accounts pane opens on its launch face, and every suite here is about the
   // editing face (columns, row actions, group folding, drag). Switch once, here,
   // rather than teaching fifteen assertions about two faces.
+  //
+  // Retried: the pane's root mounts before the page inside it has drawn its
+  // head, so a single click can land on nothing. Asking the page for its face
+  // until it answers is what makes this independent of that mount order.
   if (opened && (view === "identities" || view === "sites")) {
-    await client.evaluate(`(async () => {
-      document.querySelector('[data-mode-edit]')?.click();
-      await new Promise((r) => setTimeout(r, 400));
-      return true;
-    })()`);
+    await waitFor(
+      client,
+      `(async () => {
+        if (document.querySelector('.page.identities[data-mode="edit"]')) return true;
+        document.querySelector('[data-mode-edit]')?.click();
+        await new Promise((r) => setTimeout(r, 150));
+        return Boolean(document.querySelector('.page.identities[data-mode="edit"]'));
+      })()`,
+      5000,
+    );
   }
   return opened;
 }
@@ -244,7 +253,7 @@ async function openConsolePage(client, view) {
 /** Back to the browser surface: the pane closes, the browser stays mounted. */
 async function backToBrowser(client) {
   await client.evaluate(`(async () => {
-    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    document.querySelector('[data-floating-pane] [data-pane-close]')?.click();
     await new Promise((r) => setTimeout(r, 450));
     // Settings is the one page that still replaces the browser.
     document.querySelector('.page.settings .settings-head .back')?.click();
@@ -1869,7 +1878,7 @@ try {
   // own instance and leave the stage mounted.
   const dockSwitch = await client.evaluate(`(async () => {
     if (document.querySelector('[data-floating-pane]')) {
-      document.querySelector('[data-floating-pane] .pane-head button')?.click();
+      document.querySelector('[data-floating-pane] [data-pane-close]')?.click();
       await new Promise((r) => setTimeout(r, 500));
     }
     const chip = [...document.querySelectorAll('[data-instance-chip]')].find(
@@ -2345,7 +2354,7 @@ try {
       for (const el of document.querySelectorAll('[data-floating-pane] [data-more-tab], [data-floating-pane] .page')) {
         if (el.dataset.moreTab) entries.push(el.dataset.moreTab);
       }
-      document.querySelector('[data-floating-pane] .pane-head button')?.click();
+      document.querySelector('[data-floating-pane] [data-pane-close]')?.click();
       await wait(300);
     }
     // An old workspace still carries saved views; the shell keeps the data

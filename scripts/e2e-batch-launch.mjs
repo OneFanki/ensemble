@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
+import { openRail } from "./lib/e2e-nav.mjs";
 
 const PAGE_PORT = await freePort();
 const MCP_PORT = await freePort();
@@ -259,6 +260,9 @@ try {
     throw error;
   }
   check("app window appeared", true);
+  // The account rail starts collapsed; this suite reads its chips.
+  await client.evaluate(openRail());
+  await wait(400);
   await wait(2000);
 
   // --- The accounts pane's launch face: tiles grouped by site, one click opens.

@@ -37,6 +37,7 @@ import {
   Minus,
   Monitor,
   MoreHorizontal,
+  PanelLeft,
   Pin,
   PictureInPicture2,
   Plus,
@@ -125,6 +126,57 @@ const address = ref("");
 const findText = ref("");
 const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
 const findOpen = ref(false);
+
+/**
+ * Whether the account rail is showing.
+ *
+ * Collapsed by default: the rail answers "which of my accounts is running", and a
+ * fresh window has none — the tab strip and the page are the whole browser, and
+ * the rail is something you open when you have accounts to switch between. The
+ * toggle is the leftmost control of the tab strip, where every browser puts its
+ * sidebar switch.
+ *
+ * Remembered across restarts: a user who works with the rail open should not have
+ * to open it on every launch.
+ */
+const railOpen = ref(readRailOpen());
+
+function readRailOpen(): boolean {
+  try {
+    return window.localStorage.getItem("ensemble.rail.open") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function toggleRail(): void {
+  railOpen.value = !railOpen.value;
+  try {
+    window.localStorage.setItem("ensemble.rail.open", railOpen.value ? "1" : "0");
+  } catch {
+    // A full quota must not break the toggle; the layout still changes, it just
+    // forgets after a restart.
+  }
+}
+
+/**
+ * Tells the floating pane where the page area starts.
+ *
+ * The pane is teleported to `<body>`, so it cannot see whether the rail is
+ * mounted — it only knows the width token, which is a lie while the rail is
+ * collapsed. Publishing an offset keeps the two in step without the pane
+ * reaching back into the browser's state.
+ */
+watch(
+  railOpen,
+  (open) => {
+    document.documentElement.style.setProperty(
+      "--pane-left",
+      open ? "var(--account-rail-width)" : "0px",
+    );
+  },
+  { immediate: true },
+);
 
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
 /** The AI endpoint's live state, shown beside the app menu's AI entry. */
@@ -1452,6 +1504,21 @@ function fillMessage(reason?: string): string {
       computed from.
     -->
     <div class="tabstrip" :data-platform="platform">
+      <!-- The sidebar switch, at the strip's left end where every browser puts
+           it. It belongs to the strip rather than to the rail because a
+           collapsed rail has no surface of its own to carry the control. -->
+      <button
+        type="button"
+        class="rail-toggle"
+        :class="{ on: railOpen }"
+        :aria-label="railOpen ? t('app.railHide') : t('app.railShow')"
+        :aria-pressed="railOpen"
+        :title="railOpen ? t('app.railHide') : t('app.railShow')"
+        data-rail-toggle
+        @click="toggleRail"
+      >
+        <PanelLeft :size="14" />
+      </button>
       <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
         <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
           <button
@@ -2195,6 +2262,7 @@ function fillMessage(reason?: string): string {
     </div>
     <div class="work-area">
       <AccountRail
+        v-if="railOpen"
         :active-layer="layer"
         @open-layer="emit('update:layer', $event)"
         @close-layer="emit('update:layer', null)"
@@ -2875,6 +2943,34 @@ function fillMessage(reason?: string): string {
   color: var(--muted);
   flex: 0 0 26px;
   margin: 0 2px;
+}
+
+/*
+ * The account-rail switch, at the strip's left end.
+ *
+ * Same size and hover as the new-tab button at the other end of the tab row, so
+ * the strip's two ends read as one band of controls; the `on` state is the
+ * accented fill the app uses for "this panel is showing".
+ */
+.rail-toggle {
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius);
+  color: var(--muted);
+  flex: 0 0 26px;
+  margin: 0 2px 0 0;
+}
+
+.rail-toggle:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.rail-toggle.on {
+  color: var(--accent-text);
 }
 
 .strip-add:hover {

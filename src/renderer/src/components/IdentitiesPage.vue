@@ -7,7 +7,6 @@ import {
   Globe,
   GripVertical,
   HeartPulse,
-  LayoutGrid,
   Link2,
   Pencil,
   Play,
@@ -552,6 +551,14 @@ function setMode(next: "use" | "edit"): void {
   mode.value = next;
   if (next === "use") endSelecting();
 }
+
+/*
+ * The face switch belongs to the pane's head, not to the page body: it chooses
+ * which face of the pane is showing, which is a fact about the pane. So the pane
+ * owns the control and this page owns the state — the pane calls down through
+ * these.
+ */
+defineExpose({ mode, setMode });
 </script>
 
 <template>
@@ -570,54 +577,6 @@ function setMode(next: "use" | "edit"): void {
       switching to the edit face pushed it a hundred pixels left when two buttons
       appeared beside it — a control that moves when you use it.
     -->
-    <header class="pane-bar">
-      <div class="mode-switch" role="group" :aria-label="$t('app.accountMode')">
-        <button
-          type="button"
-          class="mode"
-          :class="{ on: mode === 'use' }"
-          :aria-pressed="mode === 'use'"
-          data-mode-use
-          v-tooltip="$t('app.accountModeUseHint')"
-          @click="setMode('use')"
-        >
-          <LayoutGrid :size="13" />
-        </button>
-        <button
-          type="button"
-          class="mode"
-          :class="{ on: mode === 'edit' }"
-          :aria-pressed="mode === 'edit'"
-          data-mode-edit
-          v-tooltip="$t('app.accountModeEditHint')"
-          @click="setMode('edit')"
-        >
-          <Pencil :size="13" />
-        </button>
-      </div>
-      <!-- Two writes, one of them primary. Creating an account is the everyday
-           act; creating a site happens once per system. They used to be two
-           equal-weight buttons, which made the bar read as a menu of verbs rather
-           than "this is the thing you do here". The site door is still one click
-           away, as an icon with the word in its tooltip. -->
-      <div v-if="mode === 'edit'" class="pane-bar-actions">
-        <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ $t("app.newIdentity") }}
-        </AppButton>
-        <button
-          type="button"
-          class="bar-icon"
-          :aria-label="$t('app.newSite')"
-          :title="$t('app.newSite')"
-          data-new-site
-          @click="emit('newSite')"
-        >
-          <Globe :size="13" />
-        </button>
-      </div>
-    </header>
-
     <div v-if="store.credentials?.warning" class="vault-banner">
       {{ store.credentials.warning }}
     </div>

@@ -19,22 +19,43 @@
  * snippets here are the single copy.
  */
 
+/**
+ * Makes sure the account rail is showing.
+ *
+ * The rail is collapsed by default — a fresh window has no running accounts, and
+ * the rail exists to switch between them — so its switch is the leftmost control
+ * of the tab strip. Everything that reaches the accounts pane or reads a rail
+ * entry has to open it first; doing that here keeps eight suites from each
+ * repeating the click.
+ */
+const ensureRail = `
+  if (!document.querySelector('[data-account-rail]')) {
+    document.querySelector('[data-rail-toggle]')?.click();
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (document.querySelector('[data-account-rail]')) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+  }
+`;
+
 /** The floating pane's root, once it has been mounted. */
 const PANE = "[data-floating-pane]";
 
 /**
  * Closes a floating pane, leaving the browser underneath.
  *
- * The pane's own close control is the way out — a real button, so a script does
- * not depend on keyboard state or on a pointer event reaching the scrim. Esc is
- * the user's other gesture and is covered by the console-overlap suite; the
- * scrim press is only a fallback here, for a build whose head band has no
- * control.
+ * The close control is addressed by its own hook, not "the first button in the
+ * head": the head also carries the face switch, and when the switch was added the
+ * first button became "show the launch face" — so this helper stopped closing
+ * anything and left the pane open, which showed up in unrelated suites as clicks
+ * landing on a pane that should have been gone.
+ *
+ * The scrim press is the fallback, for a build whose head has no control.
  */
 const closePane = `
   const pane = document.querySelector(${JSON.stringify(PANE)});
   if (pane) {
-    const closeBtn = pane.querySelector('.pane-head button');
+    const closeBtn = pane.querySelector('[data-pane-close]');
     if (closeBtn) closeBtn.click();
     else pane.querySelector('[data-floating-scrim]')?.dispatchEvent(
       new PointerEvent('pointerdown', { bubbles: true }),
@@ -57,6 +78,7 @@ const ensureBrowser = `
     await new Promise((done) => setTimeout(done, 350));
   }
   await new Promise((done) => setTimeout(done, 120));
+  ${ensureRail}
   if (!document.querySelector('[data-account-rail]')) return false;
 `;
 
@@ -193,5 +215,27 @@ export function backToBrowser() {
   return `(async () => {
     ${ensureBrowser}
     return true;
+  })()`;
+}
+
+/**
+ * Opens the account rail if it is collapsed, as an expression to `evaluate`.
+ *
+ * The rail is collapsed by default, so any suite that reads a chip, a freeze
+ * badge or an AI dot has to open it first. `openNav` already does this on its way
+ * to the accounts pane; suites that stay on the browser surface need it on its
+ * own.
+ */
+export function openRail() {
+  return `(async () => {
+    // Retried, not clicked once: the switch is in the first paint but its click
+    // handler is Vue's, so a click that lands before hydration reaches nothing —
+    // and the rail then stays absent for the whole suite.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (document.querySelector('[data-account-rail]')) return true;
+      document.querySelector('[data-rail-toggle]')?.click();
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    return Boolean(document.querySelector('[data-account-rail]'));
   })()`;
 }

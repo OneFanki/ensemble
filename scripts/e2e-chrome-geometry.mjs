@@ -28,7 +28,7 @@ import { join, resolve } from "node:path";
 import { waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
-import { goTo, backToBrowser } from "./lib/e2e-nav.mjs";
+import { goTo, backToBrowser, openRail } from "./lib/e2e-nav.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-chrome-"));
 const uuid = (i) =>
@@ -90,6 +90,9 @@ try {
     throw error;
   }
   check("app window appeared", true);
+  // The account rail starts collapsed; this suite reads its chips.
+  await client.evaluate(openRail());
+  await wait(400);
   await wait(3400);
 
   // The app opens with one blank page already on stage; one more call adds the

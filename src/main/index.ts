@@ -63,7 +63,7 @@ import {
   passwordOwnerSchema,
   settingsPatchSchema,
   siteDraftSchema,
-  tagDraftSchema,
+  siteGroupDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
 import { detectBookmarkSources, type BookmarkImportSource as DetectSource } from "@core/bookmarks-import";
@@ -89,8 +89,8 @@ import type {
   RoleColor,
   SettingsPatch,
   SiteDraft,
+  SiteGroupDraft,
   SlotRect,
-  TagDraft,
   ViewDraft,
   WorkspaceSnapshot,
 } from "@shared/types";
@@ -3086,20 +3086,20 @@ function registerIpc(workspace: WorkspaceService): void {
     return workspace.snapshot();
   });
 
-  handle(IPC.tagSave, (draft: TagDraft) => {
-    workspace.saveTag(tagDraftSchema.parse(draft));
+  handle(IPC.siteGroupSave, (draft: SiteGroupDraft) => {
+    workspace.saveSiteGroup(siteGroupDraftSchema.parse(draft));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.tagDelete, (id: string) => {
-    workspace.deleteTag(String(id));
+  handle(IPC.siteGroupDelete, (id: string) => {
+    workspace.deleteSiteGroup(String(id));
     broadcastWorkspace();
     return workspace.snapshot();
   });
 
-  handle(IPC.tagMove, (id: string, toIndex: number) => {
-    workspace.moveTag(String(id), Number(toIndex));
+  handle(IPC.siteGroupMove, (id: string, toIndex: number) => {
+    workspace.moveSiteGroup(String(id), Number(toIndex));
     broadcastWorkspace();
     return workspace.snapshot();
   });

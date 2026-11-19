@@ -10,7 +10,7 @@ let dir: string;
 let service: WorkspaceService;
 
 beforeEach(async () => {
-  dir = mkdtempSync(join(tmpdir(), "ensemble-tags-"));
+  dir = mkdtempSync(join(tmpdir(), "ensemble-groups-"));
   service = new WorkspaceService({
     userDataDir: dir,
     profileRoot: join(dir, "profiles"),
@@ -35,74 +35,83 @@ async function makeSite(tagIds?: string[]) {
   });
 }
 
-describe("tags", () => {
-  it("creates a tag and attaches it to a site", async () => {
-    const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = await makeSite([tag.id]);
-    expect(site.tagIds).toEqual([tag.id]);
-    expect(service.snapshot().tags).toHaveLength(1);
+describe("site groups", () => {
+  it("creates a group and attaches it to a site", async () => {
+    const group = service.saveSiteGroup({ name: "后台系统", color: "teal" });
+    const site = await makeSite([group.id]);
+    expect(site.tagIds).toEqual([group.id]);
+    expect(service.snapshot().siteGroups).toHaveLength(1);
   });
 
   it("rejects a duplicate name regardless of case", () => {
-    service.saveTag({ name: "后台系统", color: "teal" });
-    expect(() => service.saveTag({ name: "后台系统", color: "rose" })).toThrow();
+    service.saveSiteGroup({ name: "后台系统", color: "teal" });
+    expect(() => service.saveSiteGroup({ name: "后台系统", color: "rose" })).toThrow();
   });
 
-  it("allows renaming a tag without tripping its own duplicate check", () => {
-    const tag = service.saveTag({ name: "后台", color: "teal" });
-    const renamed = service.saveTag({ id: tag.id, name: "后台系统", color: "amber" });
+  it("allows renaming a group without tripping its own duplicate check", () => {
+    const group = service.saveSiteGroup({ name: "后台", color: "teal" });
+    const renamed = service.saveSiteGroup({ id: group.id, name: "后台系统", color: "amber" });
     expect(renamed.name).toBe("后台系统");
     expect(renamed.color).toBe("amber");
   });
 
-  it("ignores tag ids that do not exist", async () => {
-    const site = await makeSite(["missing-tag"]);
+  it("ignores group ids that do not exist", async () => {
+    const site = await makeSite(["missing-group"]);
     // An unknown id would make the site vanish from every group, so it is dropped.
     expect(site.tagIds).toBeUndefined();
   });
 
-  it("keeps only known tags when a site has a mix", async () => {
-    const real = service.saveTag({ name: "前台", color: "blue" });
+  it("keeps only known groups when a site has a mix", async () => {
+    const real = service.saveSiteGroup({ name: "前台", color: "blue" });
     const site = await makeSite([real.id, "ghost"]);
     expect(site.tagIds).toEqual([real.id]);
   });
 
-  it("deleting a tag unlinks it but keeps the site", async () => {
-    const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = await makeSite([tag.id]);
+  it("deleting a group unlinks it but keeps the site and its accounts", async () => {
+    const group = service.saveSiteGroup({ name: "后台系统", color: "teal" });
+    const site = await makeSite([group.id]);
+    const account = await service.saveIdentity({
+      siteId: site.id,
+      name: "管理员 · 主账号",
+      username: "admin@example.test",
+      role: "admin",
+      color: "amber",
+      passwordMode: "inherit",
+    });
 
-    service.deleteTag(tag.id);
+    service.deleteSiteGroup(group.id);
 
     const snapshot = service.snapshot();
-    expect(snapshot.tags).toHaveLength(0);
+    expect(snapshot.siteGroups).toHaveLength(0);
     const survivor = snapshot.sites.find((item) => item.id === site.id);
     expect(survivor).toBeDefined();
     expect(survivor?.tagIds).toBeUndefined();
+    expect(snapshot.identities.find((item) => item.id === account.id)).toBeDefined();
   });
 
-  it("removing a site does not touch its tags", async () => {
-    const tag = service.saveTag({ name: "后台系统", color: "teal" });
-    const site = await makeSite([tag.id]);
+  it("removing a site does not touch its groups", async () => {
+    const group = service.saveSiteGroup({ name: "后台系统", color: "teal" });
+    const site = await makeSite([group.id]);
     service.deleteSite(site.id);
-    expect(service.snapshot().tags).toHaveLength(1);
+    expect(service.snapshot().siteGroups).toHaveLength(1);
   });
 
-  it("a site can carry several tags", async () => {
-    const a = service.saveTag({ name: "后台", color: "teal" });
-    const b = service.saveTag({ name: "测试", color: "rose" });
+  it("a site can carry several groups", async () => {
+    const a = service.saveSiteGroup({ name: "后台", color: "teal" });
+    const b = service.saveSiteGroup({ name: "测试", color: "rose" });
     const site = await makeSite([a.id, b.id]);
     expect(site.tagIds).toEqual([a.id, b.id]);
   });
 
-  it("deduplicates tag ids on save", async () => {
-    const tag = service.saveTag({ name: "后台", color: "teal" });
-    const site = await makeSite([tag.id, tag.id]);
-    expect(site.tagIds).toEqual([tag.id]);
+  it("deduplicates group ids on save", async () => {
+    const group = service.saveSiteGroup({ name: "后台", color: "teal" });
+    const site = await makeSite([group.id, group.id]);
+    expect(site.tagIds).toEqual([group.id]);
   });
 
-  it("tags identities with the same namespace as sites", async () => {
-    const tag = service.saveTag({ name: "生产", color: "rose" });
-    const site = await makeSite();
+  it("an account's groups are its site's, not its own", async () => {
+    const group = service.saveSiteGroup({ name: "生产", color: "rose" });
+    const site = await makeSite([group.id]);
     const identity = await service.saveIdentity({
       siteId: site.id,
       name: "管理员 · 主账号",
@@ -110,71 +119,20 @@ describe("tags", () => {
       role: "admin",
       color: "amber",
       passwordMode: "inherit",
-      tagIds: [tag.id],
     });
-    expect(identity.tagIds).toEqual([tag.id]);
-    expect(service.snapshot().tags.map((item) => item.name)).toEqual(["生产"]);
-  });
-
-  it("tags views with the same namespace", async () => {
-    const tag = service.saveTag({ name: "回归", color: "violet" });
-    const site = await makeSite();
-    const first = await service.saveIdentity({
-      siteId: site.id,
-      name: "成员",
-      username: "member@example.test",
-      role: "member",
-      color: "teal",
-      passwordMode: "inherit",
-    });
-    const view = service.saveView({
-      siteId: site.id,
-      name: "跨站点视图",
-      identityIds: [first.id],
-      layoutId: "2x1",
-      slotAssignments: {},
-      paths: {},
-      tagIds: [tag.id],
-    });
-    expect(view.tagIds).toEqual([tag.id]);
-  });
-
-  it("deleting a tag unlinks it from identities and views too", async () => {
-    const tag = service.saveTag({ name: "测试", color: "blue" });
-    const site = await makeSite([tag.id]);
-    const identity = await service.saveIdentity({
-      siteId: site.id,
-      name: "访客",
-      username: "guest@example.test",
-      role: "guest",
-      color: "violet",
-      passwordMode: "inherit",
-      tagIds: [tag.id],
-    });
-    const view = service.saveView({
-      siteId: site.id,
-      name: "视图",
-      identityIds: [identity.id],
-      layoutId: "2x1",
-      slotAssignments: {},
-      paths: {},
-      tagIds: [tag.id],
-    });
-
-    service.deleteTag(tag.id);
-
-    const snapshot = service.snapshot();
-    expect(snapshot.tags).toHaveLength(0);
-    expect(snapshot.sites[0]?.tagIds).toBeUndefined();
-    expect(snapshot.identities.find((item) => item.id === identity.id)?.tagIds).toBeUndefined();
-    expect(snapshot.views.find((item) => item.id === view.id)?.tagIds).toBeUndefined();
+    // Nothing to copy onto the account: the site is the grouping.
+    expect(identity).not.toHaveProperty("tagIds");
+    expect(service.snapshot().sites.find((item) => item.id === site.id)?.tagIds).toEqual([
+      group.id,
+    ]);
+    expect(service.snapshot().siteGroups.map((item) => item.name)).toEqual(["生产"]);
   });
 });
 
-describe("tag storage hygiene", () => {
-  it("drops malformed tags instead of failing the workspace", () => {
+describe("site group storage hygiene", () => {
+  it("drops malformed groups instead of failing the workspace", () => {
     const result = sanitizeWorkspace({
-      tags: [
+      siteGroups: [
         { id: "ok", name: "有效", color: "teal", createdAt: "2026-01-01T00:00:00.000Z" },
         { id: "no-name", name: "   ", color: "teal" },
         { id: "bad-color", name: "颜色错误", color: "chartreuse" },
@@ -182,14 +140,14 @@ describe("tag storage hygiene", () => {
       ] as never,
       sites: [],
     });
-    expect(result.tags.map((tag) => tag.id)).toEqual(["ok", "bad-color"]);
-    // An unknown colour falls back rather than dropping the tag.
-    expect(result.tags[1]?.color).toBe("slate");
+    expect(result.siteGroups.map((group) => group.id)).toEqual(["ok", "bad-color"]);
+    // An unknown colour falls back rather than dropping the group.
+    expect(result.siteGroups[1]?.color).toBe("slate");
   });
 
-  it("prunes tag references that point at tags which no longer exist", () => {
+  it("prunes group references that point at groups which no longer exist", () => {
     const result = sanitizeWorkspace({
-      tags: [{ id: "t1", name: "保留", color: "teal", createdAt: "2026-01-01T00:00:00.000Z" }],
+      siteGroups: [{ id: "t1", name: "保留", color: "teal", createdAt: "2026-01-01T00:00:00.000Z" }],
       sites: [
         {
           id: "s1",
@@ -198,6 +156,53 @@ describe("tag storage hygiene", () => {
           loginPath: "/login",
           autoSubmit: false,
           tagIds: ["t1", "t2"],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    } as never);
+    expect(result.sites[0]?.tagIds).toEqual(["t1"]);
+    expect(result.siteGroups).toHaveLength(1);
+  });
+
+  it("reads the list from the older `siteTags` key", () => {
+    const result = sanitizeWorkspace({
+      siteTags: [{ id: "t1", name: "旧标签", color: "teal", createdAt: "2026-01-01T00:00:00.000Z" }],
+      sites: [
+        {
+          id: "s1",
+          name: "站点",
+          baseUrl: "http://localhost:3000",
+          loginPath: "/login",
+          autoSubmit: false,
+          tagIds: ["t1"],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    } as never);
+    expect(result.siteGroups.map((group) => group.id)).toEqual(["t1"]);
+    expect(result.sites[0]?.tagIds).toEqual(["t1"]);
+  });
+
+  it("reads the list from the `tags` key a released build wrote", () => {
+    const result = sanitizeWorkspace({
+      tags: [{ id: "t1", name: "生产环境", color: "rose" }],
+      sites: [],
+    } as never);
+    expect(result.siteGroups).toHaveLength(1);
+    expect(result.siteGroups[0]?.name).toBe("生产环境");
+  });
+
+  it("keeps every account and site while dropping the old account labels", () => {    const result = sanitizeWorkspace({
+      tags: [{ id: "t1", name: "生产", color: "rose" }],
+      sites: [
+        {
+          id: "s1",
+          name: "站点",
+          baseUrl: "http://localhost:3000",
+          loginPath: "/login",
+          tagIds: ["t1"],
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
         },
@@ -226,39 +231,24 @@ describe("tag storage hygiene", () => {
           layoutId: "2x1",
           slotAssignments: {},
           paths: {},
-          tagIds: ["ghost", "t1"],
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-    } as never);
-    expect(result.sites[0]?.tagIds).toEqual(["t1"]);
-    expect(result.identities[0]?.tagIds).toEqual(["t1"]);
-    expect(result.views[0]?.tagIds).toEqual(["t1"]);
-    expect(result.tags).toHaveLength(1);
-  });
-
-  it("reads a workspace written when tags were site-only", () => {
-    const result = sanitizeWorkspace({
-      siteTags: [{ id: "t1", name: "旧标签", color: "teal", createdAt: "2026-01-01T00:00:00.000Z" }],
-      sites: [
-        {
-          id: "s1",
-          name: "站点",
-          baseUrl: "http://localhost:3000",
-          loginPath: "/login",
-          autoSubmit: false,
           tagIds: ["t1"],
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
         },
       ],
     } as never);
-    expect(result.tags.map((tag) => tag.id)).toEqual(["t1"]);
     expect(result.sites[0]?.tagIds).toEqual(["t1"]);
+    // The account and the view survive whole; only their own labels are gone.
+    const account = result.identities[0];
+    expect(account?.id).toBe("i1");
+    expect(account?.username).toBe("user@example.test");
+    expect(account).not.toHaveProperty("tagIds");
+    expect(result.views[0]?.id).toBe("v1");
+    expect(result.views[0]).not.toHaveProperty("tagIds");
+    expect(result.siteGroups).toHaveLength(1);
   });
 
-  it("a fresh workspace starts with no tags", () => {
-    expect(emptyWorkspace().tags).toEqual([]);
+  it("a fresh workspace starts with no groups", () => {
+    expect(emptyWorkspace().siteGroups).toEqual([]);
   });
 });

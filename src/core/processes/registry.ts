@@ -22,8 +22,8 @@ import type {
   LayoutPreset,
   LoginField,
   Site,
+  SiteGroup,
   SlotRect,
-  Tag,
   View,
 } from "@shared/types";
 
@@ -172,7 +172,16 @@ export function profileExists(profileDir: string): boolean {
 export interface WorkspaceData {
   version: 2;
   sites: Site[];
-  tags: Tag[];
+  /**
+   * Groups the sites are filed under.
+   *
+   * Stored as `siteGroups`. Files from builds that carried a wider tag
+   * namespace store the same list under `tags` (and, before that, `siteTags`);
+   * the reader accepts all three, the writer only the current one. That is the
+   * same "read the old key once, never write it again" rule the earlier
+   * `siteTags → tags` step used.
+   */
+  siteGroups: SiteGroup[];
   identities: Identity[];
   views: View[];
   flows: Flow[];
@@ -195,7 +204,7 @@ export function emptyWorkspace(): WorkspaceData {
   return {
     version: 2,
     sites: [],
-    tags: [],
+    siteGroups: [],
     identities: [],
     views: [],
     flows: [],
@@ -239,8 +248,6 @@ function sanitizeViews(input: unknown): View[] {
               : "2x2",
         slotAssignments: assignments,
         paths: view.paths && typeof view.paths === "object" ? view.paths : {},
-        // Dangling ids are pruned later, once the tag list is known.
-        ...(Array.isArray(view.tagIds) ? { tagIds: view.tagIds } : {}),
         ...(view.copiedFrom ? { copiedFrom: view.copiedFrom } : {}),
         createdAt: view.createdAt ?? new Date().toISOString(),
         updatedAt: view.updatedAt ?? new Date().toISOString(),
@@ -300,30 +307,39 @@ function withoutSiteFields(sites: Site[]): Site[] {
   });
 }
 
-function sanitizeTags(input: unknown): Tag[] {
+/**
+ * Reads the site groups from disk without trusting them.
+ *
+ * A group is a name and a colour, so anything that does not parse is dropped
+ * rather than repaired. The list is read from `siteGroups` when a file has that
+ * key and from `tags` otherwise: the field was renamed in code while the stored
+ * key stays `tags` (see {@link WorkspaceData.tags}), so a hand-written file using
+ * either spelling opens the same way.
+ */
+function sanitizeSiteGroups(input: unknown): SiteGroup[] {
   if (!Array.isArray(input)) return [];
   const colors = new Set(["amber", "teal", "violet", "rose", "blue", "slate"]);
-  const tags: Tag[] = [];
+  const groups: SiteGroup[] = [];
   const seen = new Set<string>();
-  for (const raw of input as Tag[]) {
+  for (const raw of input as SiteGroup[]) {
     if (!raw || typeof raw.id !== "string" || typeof raw.name !== "string") continue;
     if (!raw.name.trim() || seen.has(raw.id)) continue;
     seen.add(raw.id);
-    tags.push({
+    groups.push({
       id: raw.id,
       name: raw.name.trim(),
       color: colors.has(raw.color) ? raw.color : "slate",
       createdAt: raw.createdAt ?? new Date().toISOString(),
     });
   }
-  return tags;
+  return groups;
 }
 
 /**
- * Keeps only tag ids that still exist.
+ * Keeps only group ids that still exist.
  *
- * A dangling reference would make the entity vanish from every filter group
- * while looking fine on its own page, so it is dropped instead of stored.
+ * A dangling reference would make the site vanish from every group while looking
+ * fine on its own row, so it is dropped instead of stored.
  */
 function tagIdsOf(value: unknown, known: Set<string>): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -339,20 +355,34 @@ function withTagIds<T extends { tagIds?: string[] }>(item: T, tagIds: string[] |
   return { ...item, ...(tagIds ? { tagIds } : { tagIds: undefined }) };
 }
 
-function pruneDanglingTags(
-  sites: Site[],
-  identities: Identity[],
-  views: View[],
-  tags: Tag[],
-): { sites: Site[]; identities: Identity[]; views: View[] } {
-  const known = new Set(tags.map((tag) => tag.id));
-  return {
-    sites: sites.map((site) => withTagIds(site, tagIdsOf(site.tagIds, known))),
-    identities: identities.map((identity) =>
-      withTagIds(identity, tagIdsOf(identity.tagIds, known)),
-    ),
-    views: views.map((view) => withTagIds(view, tagIdsOf(view.tagIds, known))),
+/**
+ * Prunes group references, and drops the ones accounts and views used to carry.
+ *
+ * Accounts and views had their own labels from the same namespace. An account
+ * already belongs to exactly one site, so a label on the account described the
+ * same grouping a second time; the account page groups by site and never read
+ * it. Views have no page at all.
+ *
+ * Both fields are removed here rather than merely ignored. The stored file is
+ * rewritten by the next ordinary save anyway, and a field the types no longer
+ * declare must not survive into a snapshot where a future reader would have to
+ * guess whether it means anything. Nothing else about the account or the view is
+ * touched — ids, credentials and profile directories all carry over.
+ */
+function pruneAccountAndViewTags(identities: Identity[], views: View[]): {
+  identities: Identity[];
+  views: View[];
+} {
+  const strip = <T extends object>(item: T): T => {
+    const { tagIds: _dropped, ...rest } = item as T & { tagIds?: string[] };
+    return rest as T;
   };
+  return { identities: identities.map(strip), views: views.map(strip) };
+}
+
+function pruneDanglingGroups(sites: Site[], groups: SiteGroup[]): Site[] {
+  const known = new Set(groups.map((group) => group.id));
+  return sites.map((site) => withTagIds(site, tagIdsOf(site.tagIds, known)));
 }
 
 /**
@@ -485,25 +515,33 @@ export function sanitizeWorkspace(input: Partial<WorkspaceData>): WorkspaceData 
    * current is what emptied the site list and unlinked every account.
    */
   const source = Array.isArray(raw.environments) ? upgradeV1(raw) : raw;
-  // The tag namespace used to be site-only (`siteTags`). Same ids and colours,
-  // so the rename is a straight read; identities and views simply start with no
-  // tags of their own.
-  const tags = sanitizeTags(source.tags ?? raw["siteTags"]);
+  /*
+   * One list, three accepted spellings. `siteTags` was the site-only era;
+   * `tags` the era when accounts and views shared the namespace; `siteGroups`
+   * is the current key. Ids and colours carry over untouched, so a site's
+   * `tagIds` still resolve.
+   *
+   * Accounts and views used to carry `tagIds` from that shared namespace.
+   * `pruneAccountAndViewTags` removes them: an account already belongs to one
+   * site, so its own label described the same grouping twice, and views have no
+   * page. Every other field of both survives.
+   */
+  const siteGroups = sanitizeSiteGroups(
+    source.siteGroups ?? raw["siteGroups"] ?? raw["tags"] ?? raw["siteTags"],
+  );
   const sites = sanitizeSites(source.sites);
   const identities = Array.isArray(source.identities) ? source.identities : base.identities;
-  const pruned = pruneDanglingTags(
-    withoutSiteFields(sites),
+  const pruned = pruneAccountAndViewTags(
     inheritSiteFields(sites, identities),
     sanitizeViews(source.views),
-    tags,
   );
   return {
     version: 2,
-    sites: pruned.sites,
-    tags,
+    sites: pruneDanglingGroups(withoutSiteFields(sites), siteGroups),
+    siteGroups,
     identities: pruned.identities,
     views: pruned.views,
-    flows: sanitizeFlows(source.flows, new Set(pruned.sites.map((site) => site.id))),
+    flows: sanitizeFlows(source.flows, new Set(sites.map((site) => site.id))),
     instances: Array.isArray(source.instances) ? source.instances : base.instances,
     manualEngines: Array.isArray(source.manualEngines) ? source.manualEngines : base.manualEngines,
     layoutPresets: sanitizeLayoutPresets(source.layoutPresets),

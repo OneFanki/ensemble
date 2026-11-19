@@ -466,17 +466,17 @@ describe("MCP tools", () => {
     expect(service.snapshot().sites).toHaveLength(0);
   });
 
-  it("creates a site tag and lists it on the site", async () => {
+  it("creates a site group and lists it on the site", async () => {
     const created = await rpc(toolCall("save_site_tag", { name: "后台系统", color: "teal" }));
     expect(created.json.result.isError).toBeUndefined();
-    const tag = JSON.parse(created.json.result.content[0].text) as { id: string };
+    const group = JSON.parse(created.json.result.content[0].text) as { id: string };
 
     const site = await service.saveSite({
       name: "本地站点",
       baseUrl: "http://localhost:3000",
       loginPath: "/login",
       autoSubmit: false,
-      tagIds: [tag.id],
+      tagIds: [group.id],
     });
 
     const listed = await rpc(toolCall("list_sites", {}));
@@ -484,21 +484,21 @@ describe("MCP tools", () => {
       id: string;
       tags: string[];
     }>;
-    // The list reports tag names, not ids: the AI should not have to join tables.
+    // The list reports group names, not ids: the AI should not have to join tables.
     expect(sites.find((item) => item.id === site.id)?.tags).toEqual(["后台系统"]);
   });
 
   it("requires confirmation before deleting a tag", async () => {
-    const tag = service.saveTag({ name: "后台系统", color: "teal" });
+    const tag = service.saveSiteGroup({ name: "后台系统", color: "teal" });
     await server.update({ allowDelete: true });
 
     const refused = await rpc(toolCall("delete_site_tag", { id: tag.id }));
     expect(refused.json.result.isError).toBe(true);
-    expect(service.snapshot().tags).toHaveLength(1);
+    expect(service.snapshot().siteGroups).toHaveLength(1);
 
     const confirmed = await rpc(toolCall("delete_site_tag", { id: tag.id, confirm: true }));
     expect(confirmed.json.result.isError).toBeUndefined();
-    expect(service.snapshot().tags).toHaveLength(0);
+    expect(service.snapshot().siteGroups).toHaveLength(0);
   });
 
   it("exposes the tag tools under their new names and keeps the old ones working", async () => {
@@ -526,7 +526,7 @@ describe("MCP tools", () => {
       name: "客户环境 · 预发",
       color: "rose",
     });
-    expect(service.snapshot().tags).toHaveLength(1);
+    expect(service.snapshot().siteGroups).toHaveLength(1);
   });
 
   it("logs tool calls but never the password", async () => {

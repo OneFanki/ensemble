@@ -6,10 +6,10 @@ import { WorkspaceService } from "@core/service";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 /**
- * Site order is one global list drawn inside tag groups: a site with two tags
- * appears in two groups, and both follow the same stored order. Reordering is
+ * Site order is one global list drawn inside groups: a site with two groups
+ * appears under both, and both follow the same stored order. Reordering is
  * therefore an array splice, and moving a site between groups stays an edit of
- * its tags.
+ * its group membership.
  */
 let dir: string;
 let service: WorkspaceService;
@@ -72,19 +72,19 @@ describe("site ordering", async () => {
     expect(() => service.moveSite("does-not-exist", 0)).toThrow();
   });
 
-  it("keeps tag membership untouched", async () => {
-    const tag = service.saveTag({ name: "后台系统", color: "teal" });
+  it("keeps group membership untouched", async () => {
+    const group = service.saveSiteGroup({ name: "后台系统", color: "teal" });
     const tagged = await service.saveSite({
       name: "甲",
       baseUrl: "http://localhost:3000",
       loginPath: "/login",
       autoSubmit: false,
-      tagIds: [tag.id],
+      tagIds: [group.id],
     });
     await addSite("乙");
     service.moveSite(tagged.id, 1);
     expect(service.snapshot().sites.find((site) => site.id === tagged.id)?.tagIds).toEqual([
-      tag.id,
+      group.id,
     ]);
   });
 });

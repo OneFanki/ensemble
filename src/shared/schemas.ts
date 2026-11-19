@@ -58,7 +58,7 @@ export const siteDraftSchema = z.object({
   clearSitePassword: z.boolean().optional(),
 });
 
-export const tagDraftSchema = z.object({
+export const siteGroupDraftSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(1).max(40),
   color: z.enum(["amber", "teal", "violet", "rose", "blue", "slate"]),
@@ -78,7 +78,6 @@ export const identityDraftSchema = z.object({
   password: z.string().max(500).optional(),
   captureToken: z.string().min(1).max(80).optional(),
   extraFields: z.array(loginFieldSchema).max(6).optional(),
-  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
   note: z.string().max(1000).optional(),
 });
 
@@ -90,7 +89,6 @@ export const viewDraftSchema = z.object({
   layoutId: z.string().min(1).max(64),
   slotAssignments: z.record(z.string(), z.number().int().min(0).max(15)),
   paths: z.record(z.string(), pathValue),
-  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
 });
 
 export const layoutPresetDraftSchema = z.object({

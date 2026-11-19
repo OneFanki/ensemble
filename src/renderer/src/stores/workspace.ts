@@ -36,7 +36,8 @@ import type {
   SettingsPatch,
   Site,
   SiteDraft,
-  TagDraft,
+  SiteGroup,
+  SiteGroupDraft,
   View,
   ViewDraft,
   WorkspaceSnapshot,
@@ -348,6 +349,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   const sites = computed<Site[]>(() => snapshot.value?.sites ?? []);
+  /** Site groups in stored order; the order is the order of the site sections. */
+  const siteGroups = computed<SiteGroup[]>(() => snapshot.value?.siteGroups ?? []);
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
   const views = computed<View[]>(() => snapshot.value?.views ?? []);
   const flows = computed<Flow[]>(() => snapshot.value?.flows ?? []);
@@ -459,25 +462,20 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   });
 
   /**
-   * Tags that apply to an identity: its own plus its site's.
+   * Group ids that apply to an identity: the ones on its site.
    *
-   * Filtering with either level means a tag on the site covers every account
-   * there, without copying it onto each identity.
+   * An account has no groups of its own — the site it belongs to is the group.
+   * This answers for the account page's group header and its filter, which both
+   * speak in terms of "which section is this row under".
    */
-  function tagsForIdentity(identity: Identity): string[] {
+  function groupsForIdentity(identity: Identity): string[] {
     const site = sites.value.find((item) => item.id === identity.siteId);
-    return [...new Set([...(identity.tagIds ?? []), ...(site?.tagIds ?? [])])];
+    return [...(site?.tagIds ?? [])];
   }
 
-  /** Tags of a view: its own plus every member's identity and site tags. */
-  function tagsForView(view: View): string[] {
-    const collected = new Set<string>(view.tagIds ?? []);
-    for (const identityId of view.identityIds) {
-      const identity = identities.value.find((item) => item.id === identityId);
-      if (!identity) continue;
-      for (const tagId of tagsForIdentity(identity)) collected.add(tagId);
-    }
-    return [...collected];
+  /** The sites filed under one group, in stored order. */
+  function sitesInGroup(groupId: string): Site[] {
+    return sites.value.filter((site) => site.tagIds?.includes(groupId));
   }
 
   function identityPasswordSet(identity: Identity): boolean {
@@ -552,18 +550,18 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     });
   }
 
-  async function saveTag(draft: TagDraft) {
-    return run("site", () => window.ensemble.saveTag(toPlain(draft)));
+  async function saveSiteGroup(draft: SiteGroupDraft) {
+    return run("site", () => window.ensemble.saveSiteGroup(toPlain(draft)));
   }
 
-  async function deleteTag(id: string) {
-    return run("site", () => window.ensemble.deleteTag(id));
+  async function deleteSiteGroup(id: string) {
+    return run("site", () => window.ensemble.deleteSiteGroup(id));
   }
 
-  /** Drag-to-reorder for the tag list; the array order is the group order. */
-  async function moveTag(id: string, toIndex: number) {
+  /** Drag-to-reorder for the group list; the array order is the site section order. */
+  async function moveSiteGroup(id: string, toIndex: number) {
     return run("site", async () => {
-      apply(await window.ensemble.moveTag(id, toIndex));
+      apply(await window.ensemble.moveSiteGroup(id, toIndex));
     });
   }
 
@@ -1155,6 +1153,7 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     aiActions,
     lastAiTabId,
     sites,
+    siteGroups,
     identities,
     views,
     engines,
@@ -1167,8 +1166,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     recentSiteId,
     identitiesOf,
     identityCountBySite,
-    tagsForIdentity,
-    tagsForView,
+    groupsForIdentity,
+    sitesInGroup,
     markSiteUsed,
     defaultEngine,
     layoutPresets,
@@ -1189,9 +1188,9 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     saveSite,
     deleteSite,
     moveSite,
-    saveTag,
-    deleteTag,
-    moveTag,
+    saveSiteGroup,
+    deleteSiteGroup,
+    moveSiteGroup,
     saveIdentity,
     deleteIdentity,
     linkIdentitiesToSite,

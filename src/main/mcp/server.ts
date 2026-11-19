@@ -39,7 +39,7 @@ import {
   layoutPresetDraftSchema,
   settingsPatchSchema,
   siteDraftSchema,
-  tagDraftSchema,
+  siteGroupDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
 import type {
@@ -2573,67 +2573,67 @@ export class McpServer {
       },
       {
         name: "list_sites",
-        description: "列出所有站点（被测目标作用域），含各自的标签。",
+        description: "列出所有站点（被测目标作用域），含各自的站点分组。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
-          const tags = new Map(snapshot.tags.map((tag) => [tag.id, tag.name]));
+          const groups = new Map(snapshot.siteGroups.map((group) => [group.id, group.name]));
           return snapshot.sites.map((site) => ({
             ...siteSummary(site),
-            tags: (site.tagIds ?? []).map((id) => tags.get(id) ?? id),
+            tags: (site.tagIds ?? []).map((id) => groups.get(id) ?? id),
           }));
         },
       },
       {
         name: "list_site_tags",
-        description: "列出站点标签。标签只用于归类展示，不影响任何业务规则。",
+        description: "列出站点分组。分组只用于归类展示，不影响任何业务规则。",
         kind: "read",
         inputSchema: object({}),
-        run: () => service.snapshot().tags,
+        run: () => service.snapshot().siteGroups,
       },
       {
         name: "save_tag",
         description:
-          "创建或重命名标签。标签是一套全局命名空间，站点、账号、视图都能挂；用户界面上它现在是左侧导航的一页。删除标签不会影响站点和账号。",
+          "创建或重命名站点分组。分组只作用于站点，用来在账号页把站点归到一起；不影响账号、流程或任何业务规则。",
         kind: "write",
         inputSchema: object(
           {
-            id: string("标签 id；省略表示新建"),
-            name: string("标签名称"),
+            id: string("分组 id；省略表示新建"),
+            name: string("分组名称"),
             color: {
               type: "string",
               enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
-              description: "标签颜色",
+              description: "分组颜色",
             },
           },
           ["name", "color"],
         ),
         run: (args) => {
-          const draft = tagDraftSchema.parse({
+          const draft = siteGroupDraftSchema.parse({
             ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
             name: args["name"],
             color: args["color"],
           });
-          return service.saveTag(draft);
+          return service.saveSiteGroup(draft);
         },
       },
       {
         name: "delete_tag",
         description:
-          "删除标签，并从所有站点、账号、视图上解除关联。这些对象本身不受影响。破坏性操作，必须传 confirm: true。",
+          "删除站点分组，并从所有站点上解除关联。站点与账号本身不受影响。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("标签 id"), confirm: { type: "boolean" } }, [
+        inputSchema: object({ id: string("分组 id"), confirm: { type: "boolean" } }, [
           "id",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
           const id = String(args["id"] ?? "");
-          if (!service.snapshot().tags.some((tag) => tag.id === id)) {
-            throw new Error(`标签不存在：${id}`);
+          if (!service.snapshot().siteGroups.some((group) => group.id === id)) {
+            throw new Error(`站点分组不存在：${id}`);
           }
-          service.deleteTag(id);
+          service.deleteSiteGroup(id);
           return { deleted: id };
         },
       },
@@ -2648,19 +2648,19 @@ export class McpServer {
         hidden: true,
         inputSchema: object(
           {
-            id: string("标签 id；省略表示新建"),
-            name: string("标签名称"),
+            id: string("分组 id；省略表示新建"),
+            name: string("分组名称"),
             color: {
               type: "string",
               enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
-              description: "标签颜色",
+              description: "分组颜色",
             },
           },
           ["name", "color"],
         ),
         run: (args) =>
-          service.saveTag(
-            tagDraftSchema.parse({
+          service.saveSiteGroup(
+            siteGroupDraftSchema.parse({
               ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
               name: args["name"],
               color: args["color"],
@@ -2672,17 +2672,17 @@ export class McpServer {
         description: "delete_tag 的旧名称，行为相同。破坏性操作，必须传 confirm: true。",
         kind: "danger",
         hidden: true,
-        inputSchema: object({ id: string("标签 id"), confirm: { type: "boolean" } }, [
+        inputSchema: object({ id: string("分组 id"), confirm: { type: "boolean" } }, [
           "id",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
           const id = String(args["id"] ?? "");
-          if (!service.snapshot().tags.some((tag) => tag.id === id)) {
-            throw new Error(`标签不存在：${id}`);
+          if (!service.snapshot().siteGroups.some((group) => group.id === id)) {
+            throw new Error(`站点分组不存在：${id}`);
           }
-          service.deleteTag(id);
+          service.deleteSiteGroup(id);
           return { deleted: id };
         },
       },
@@ -3067,7 +3067,7 @@ export class McpServer {
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
             tagIds: {
               type: "array",
-              description: "站点标签 id 列表，只用于归类展示",
+              description: "站点分组 id 列表，只用于归类展示",
               items: { type: "string" },
             },
           },
@@ -3102,7 +3102,7 @@ export class McpServer {
       {
         name: "update_site",
         description:
-          "修改站点。只传需要改的字段。tagIds 传数组即整体替换标签（空数组清空），不传保持不变。",
+          "修改站点。只传需要改的字段。tagIds 传数组即整体替换站点分组（空数组清空），不传保持不变。",
         kind: "write",
         inputSchema: object(
           {
@@ -3117,7 +3117,7 @@ export class McpServer {
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
             tagIds: {
               type: "array",
-              description: "站点标签 id 列表，只用于归类展示；整体替换，空数组清空",
+              description: "站点分组 id 列表，只用于归类展示；整体替换，空数组清空",
               items: { type: "string" },
             },
           },

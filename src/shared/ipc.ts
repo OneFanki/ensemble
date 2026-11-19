@@ -41,8 +41,8 @@ import type {
   ReloginBatchResult,
   SettingsPatch,
   SiteDraft,
+  SiteGroupDraft,
   SlotRect,
-  TagDraft,
   ViewCopyResult,
   ViewDraft,
   ViewRestoreOutcome,
@@ -99,12 +99,12 @@ export const IPC = {
   siteDelete: "site:delete",
   /** Reorders sites; the stored array order is the display order. */
   siteMove: "site:move",
-  /** Creates or renames a display-only site tag. */
-  tagSave: "site-tag:save",
-  /** Deletes a tag and unlinks it from every site; sites themselves stay. */
-  tagDelete: "site-tag:delete",
-  /** Reorders tags; the array order is the group order on every page. */
-  tagMove: "site-tag:move",
+  /** Creates or renames a site group. */
+  siteGroupSave: "site-group:save",
+  /** Deletes a site group and unfiles its sites; the sites themselves stay. */
+  siteGroupDelete: "site-group:delete",
+  /** Reorders site groups; the array order is the order of the site sections. */
+  siteGroupMove: "site-group:move",
   identitySave: "identity:save",
   identityDelete: "identity:delete",
   /** Points a batch of accounts at one site; also re-links accounts with none. */
@@ -463,10 +463,10 @@ export interface EnsembleApi {
   deleteSite(id: string): Promise<WorkspaceSnapshot>;
   /** Moves a site within the list; the stored array order is the display order. */
   moveSite(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
-  saveTag(draft: TagDraft): Promise<WorkspaceSnapshot>;
-  deleteTag(id: string): Promise<WorkspaceSnapshot>;
-  /** Moves a tag within the list; the array order is the group order. */
-  moveTag(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
+  saveSiteGroup(draft: SiteGroupDraft): Promise<WorkspaceSnapshot>;
+  deleteSiteGroup(id: string): Promise<WorkspaceSnapshot>;
+  /** Moves a group within the list; the array order is the site section order. */
+  moveSiteGroup(id: string, toIndex: number): Promise<WorkspaceSnapshot>;
   saveIdentity(draft: IdentityDraft): Promise<WorkspaceSnapshot>;
   deleteIdentity(id: string): Promise<WorkspaceSnapshot>;
   /**

@@ -51,8 +51,8 @@ import type {
   SettingsPatch,
   Site,
   SiteDraft,
-  Tag,
-  TagDraft,
+  SiteGroup,
+  SiteGroupDraft,
   View,
   ViewCopyResult,
   ViewDraft,
@@ -319,7 +319,7 @@ export class WorkspaceService {
   snapshot(): WorkspaceSnapshot {
     return {
       sites: this.data.sites,
-      tags: this.data.tags,
+      siteGroups: this.data.siteGroups,
       bookmarks: [...this.data.bookmarks].sort((a, b) => a.order - b.order),
       bookmarkFolders: [...this.data.bookmarkFolders].sort((a, b) => a.order - b.order),
       identities: this.data.identities,
@@ -437,56 +437,56 @@ export class WorkspaceService {
   }
 
   /**
-   * Keeps only tag ids that exist. An unknown id is dropped rather than stored:
+   * Keeps only group ids that exist. An unknown id is dropped rather than stored:
    * a stale reference would make the site silently disappear from every group.
    */
   private resolveTagIds(tagIds: string[] | undefined): string[] | undefined {
     if (!tagIds) return undefined;
-    const known = new Set(this.data.tags.map((tag) => tag.id));
+    const known = new Set(this.data.siteGroups.map((group) => group.id));
     const kept = [...new Set(tagIds.filter((id) => known.has(id)))];
     return kept.length > 0 ? kept : undefined;
   }
 
   /**
-   * Creates or renames a tag.
+   * Creates or renames a site group.
    *
-   * One namespace for sites, identities and views: the same word describes the
-   * same grouping wherever it is applied.
+   * A group is a name, a colour and a place in the list. It carries no
+   * behaviour: no launch setting, no permission, nothing an account inherits.
    */
-  saveTag(draft: TagDraft): Tag {
+  saveSiteGroup(draft: SiteGroupDraft): SiteGroup {
     const name = draft.name.trim();
-    if (!name) throw new Error(t("error.tagName"));
-    const duplicate = this.data.tags.find(
-      (tag) => tag.id !== draft.id && tag.name.toLowerCase() === name.toLowerCase(),
+    if (!name) throw new Error(t("error.groupName"));
+    const duplicate = this.data.siteGroups.find(
+      (group) => group.id !== draft.id && group.name.toLowerCase() === name.toLowerCase(),
     );
-    if (duplicate) throw new Error(t("error.tagDuplicate"));
+    if (duplicate) throw new Error(t("error.groupDuplicate"));
     if (draft.id) {
-      const existing = this.data.tags.find((tag) => tag.id === draft.id);
-      if (!existing) throw new Error(t("error.tagMissing"));
+      const existing = this.data.siteGroups.find((group) => group.id === draft.id);
+      if (!existing) throw new Error(t("error.groupMissing"));
       existing.name = name;
       existing.color = draft.color;
       this.persist();
       return existing;
     }
-    const tag: Tag = {
+    const group: SiteGroup = {
       id: randomUUID(),
       name,
       color: draft.color,
       createdAt: new Date().toISOString(),
     };
-    this.data.tags.push(tag);
+    this.data.siteGroups.push(group);
     this.persist();
-    return tag;
+    return group;
   }
 
   /**
-   * Removes a tag and unlinks it from sites, identities and views.
+   * Removes a group and unfiles its sites.
    *
-   * Nothing else changes: a tag never owned behaviour, so deleting one only
-   * changes how things are found.
+   * The sites and every account under them stay exactly where they were; they
+   * simply stop carrying this group in their header.
    */
-  deleteTag(id: string): void {
-    this.data.tags = this.data.tags.filter((tag) => tag.id !== id);
+  deleteSiteGroup(id: string): void {
+    this.data.siteGroups = this.data.siteGroups.filter((group) => group.id !== id);
     const now = new Date().toISOString();
     for (const site of this.data.sites) {
       if (!site.tagIds?.includes(id)) continue;
@@ -494,35 +494,23 @@ export class WorkspaceService {
       site.tagIds = kept.length > 0 ? kept : undefined;
       site.updatedAt = now;
     }
-    for (const identity of this.data.identities) {
-      if (!identity.tagIds?.includes(id)) continue;
-      const kept = identity.tagIds.filter((tagId) => tagId !== id);
-      identity.tagIds = kept.length > 0 ? kept : undefined;
-      identity.updatedAt = now;
-    }
-    for (const view of this.data.views) {
-      if (!view.tagIds?.includes(id)) continue;
-      const kept = view.tagIds.filter((tagId) => tagId !== id);
-      view.tagIds = kept.length > 0 ? kept : undefined;
-      view.updatedAt = now;
-    }
     this.persist();
   }
 
   /**
-   * Moves a tag within the list.
+   * Moves a group within the list.
    *
-   * The stored array order *is* the display order: the sites page draws one
-   * group per tag in this order, and every tag filter follows it. Tags have no
-   * `order` field for the same reason views do not — the array is the order.
+   * The stored array order *is* the order the site sections appear in. Groups
+   * have no `order` field for the same reason views do not — the array is the
+   * order.
    */
-  moveTag(id: string, toIndex: number): void {
-    const from = this.data.tags.findIndex((tag) => tag.id === id);
-    if (from < 0) throw new Error(t("error.tagMissing"));
-    const [moved] = this.data.tags.splice(from, 1);
+  moveSiteGroup(id: string, toIndex: number): void {
+    const from = this.data.siteGroups.findIndex((group) => group.id === id);
+    if (from < 0) throw new Error(t("error.groupMissing"));
+    const [moved] = this.data.siteGroups.splice(from, 1);
     if (!moved) return;
-    const target = Math.max(0, Math.min(this.data.tags.length, Math.trunc(toIndex)));
-    this.data.tags.splice(target, 0, moved);
+    const target = Math.max(0, Math.min(this.data.siteGroups.length, Math.trunc(toIndex)));
+    this.data.siteGroups.splice(target, 0, moved);
     this.persist();
   }
 
@@ -585,7 +573,6 @@ export class WorkspaceService {
     // anything: pointing at a missing or second-hand reference would produce an
     // identity that cannot log in and gives no clue why.
     const source = this.resolveCredentialSource(draft);
-    const tagIds = this.resolveTagIds(draft.tagIds);
 
     let identity: Identity;
     if (draft.id) {
@@ -611,7 +598,6 @@ export class WorkspaceService {
         credentialFrom: draft.passwordMode === "reference" ? draft.credentialFrom : undefined,
         // Extra login fields belong to the account, so they never follow a reference.
         extraFields: sanitizeLoginFields(draft.extraFields),
-        tagIds,
         note: source ? source.note : draft.note,
         updatedAt: now,
       });
@@ -631,7 +617,6 @@ export class WorkspaceService {
           ? { credentialFrom: draft.credentialFrom }
           : {}),
         extraFields: sanitizeLoginFields(draft.extraFields),
-        tagIds,
         note: source ? source.note : draft.note,
         status: "unknown",
         createdAt: now,
@@ -829,7 +814,6 @@ export class WorkspaceService {
     const known = new Set(this.data.identities.map((identity) => identity.id));
     const identityIds = draft.identityIds.filter((id) => known.has(id));
     if (identityIds.length === 0) throw new Error(t("error.viewMembers"));
-    const tagIds = this.resolveTagIds(draft.tagIds);
 
     const layout = this.presetFor(draft.layoutId);
     const slotAssignments = this.sanitizeAssignments(layout, identityIds, draft.slotAssignments);
@@ -843,7 +827,6 @@ export class WorkspaceService {
         layoutId: layout.id,
         slotAssignments,
         paths: draft.paths,
-        tagIds,
         updatedAt: now,
       });
       this.persist();
@@ -858,7 +841,6 @@ export class WorkspaceService {
       layoutId: layout.id,
       slotAssignments,
       paths: draft.paths,
-      tagIds,
       createdAt: now,
       updatedAt: now,
     };
@@ -945,8 +927,6 @@ export class WorkspaceService {
       // rather than copied over — the ids are different people on this site.
       slotAssignments: {},
       paths: {},
-      // Tags describe the arrangement, not the site it came from, so they follow.
-      ...(source.tagIds ? { tagIds: [...source.tagIds] } : {}),
       copiedFrom: { siteId: source.siteId, viewId: source.id },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1919,7 +1899,6 @@ export class WorkspaceService {
           loginPath: bundled.loginPath,
           ...(bundled.authCheckPath ? { authCheckPath: bundled.authCheckPath } : {}),
           autoSubmit: bundled.autoSubmit,
-          tagIds: [],
           createdAt: now,
           updatedAt: now,
         };

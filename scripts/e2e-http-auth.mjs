@@ -177,7 +177,19 @@ try {
     return true;
   })()`);
   await wait(400);
-  const dismissed = await client.evaluate("!Boolean(document.querySelector('.auth-form'))");
+  /*
+   * Waited for, not timed. A fixed 400ms here failed in roughly two runs out of
+   * three while the dialog always did close: dismissing goes renderer → IPC →
+   * main → `login` callback → next paint, and that chain sometimes lands after
+   * the sleep. The test then read the form as still open and reported a product
+   * failure that had not happened. `waitFor` is what the sibling assertion above
+   * already uses for the same event, so both now wait on the fact rather than
+   * on a guess.
+   */
+  const dismissed = await waitFor(
+    client,
+    "!Boolean(document.querySelector('.auth-form'))",
+  );
   // The dismissed navigation's resources challenged while the dialog was up
   // (they queue behind it); after the dismissal the count must stop growing —
   // no dialog again, no credentials, just the 401.

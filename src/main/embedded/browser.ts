@@ -172,6 +172,23 @@ const SLEEP_SWEEP_DEFAULT_MS = 10_000;
 const DIALOG_AUTO_DISMISS_MS = 30_000;
 
 /**
+ * How long a dispatched wheel event gets to reach the page.
+ *
+ * A wheel is queued against the compositor, so the page's own `wheel` listener
+ * runs on the next compositing frame — not when the CDP command returns. On a
+ * page that is being throttled (backgrounded, or a window another window covers)
+ * that frame can be a full second away: measured 1007ms between frames and
+ * 3068ms from dispatch to the page's listener, while the scroll itself applied
+ * in 0ms once the event arrived.
+ *
+ * The ceiling is deliberately above that measurement: it is only a safety net
+ * for a page that will never receive the event at all (one that went away
+ * mid-call). Reaching it means the position read-back is the only evidence
+ * there is, which is exactly the old behaviour.
+ */
+const WHEEL_DELIVERY_TIMEOUT_MS = 6_000;
+
+/**
  * 对话框挡路时，返回体与报错共用的一句话。
  *
  * 动作工具在对话框打开时返回结构化结果（dialog + hint），读工具把它作为
@@ -4897,6 +4914,41 @@ export class EmbeddedBrowser {
           els: chain,
           read: () => window.__ensembleScrollProbe.els.map((el) => ({ x: el.scrollLeft, y: el.scrollTop })),
         };
+        /*
+         * 同一支探针还装一个「本次滚轮是否已送达」的信号。
+         *
+         * 滚轮不是同步生效的：Chromium 把它排到下一个合成帧。页面被遮挡时
+         * （后台标签页、被别的窗口盖住的窗口）合成帧被压到约 1fps，实测从
+         * 派发到页面自己的 wheel 监听器触发隔了 3 秒，而调用两秒就返回了。
+         * 读回位置只看到「还没动」，于是把一次真实的滚动报成 moved: false；
+         * 下一次调用的基准又赶上这一轮迟到的滚动，把上一次的位移算进自己
+         * 头上（实测 880 = 1080 − 200）。
+         *
+         * 位置读数本身无法区分「没滚动」和「事件还没到」，所以这里先挂一个
+         * 一次性捕获监听：收到本轮 wheel 就 resolve true，超时 resolve
+         * false。等的是「输入到达」这个事实，不是猜一个时长。
+         *
+         * 装在这里而不是单开一条命令：它必须早于滚轮派发，而这条命令本来
+         * 就在派发之前、且是同一个执行上下文。
+         */
+        window.__ensembleWheelProbe?.cancel?.();
+        const delivery = {};
+        delivery.promise = new Promise((resolve) => {
+          let done = false;
+          let timer;
+          const finish = (arrived) => {
+            if (done) return;
+            done = true;
+            window.removeEventListener('wheel', onWheel, true);
+            clearTimeout(timer);
+            resolve(arrived);
+          };
+          const onWheel = () => finish(true);
+          window.addEventListener('wheel', onWheel, { capture: true, passive: true });
+          timer = setTimeout(() => finish(false), ${WHEEL_DELIVERY_TIMEOUT_MS});
+          delivery.cancel = () => finish(false);
+        });
+        window.__ensembleWheelProbe = delivery;
         return window.__ensembleScrollProbe.read();
       })()
     `;
@@ -4945,6 +4997,25 @@ export class EmbeddedBrowser {
         ...this.dialogOpenedFields(interrupted),
       };
     }
+    /*
+     * 等本轮滚轮真正送到页面，再读位移。
+     *
+     * 派发返回只代表事件进了 Chromium 的输入队列，页面的 wheel 监听器要到
+     * 下一个合成帧才跑；页面被节流时那一帧可能隔一秒以上（实测 1007ms 一帧，
+     * 派发到监听器 3068ms）。不在这里等，读回的位置永远是滚动前的，
+     * `moved` 就会把一次真实滚动报成 false——而且这颗迟到的滚动会落进下一次
+     * 调用的基准里，让下一次报出一个不属于自己的位移。
+     *
+     * 探针在派发前就装好了（见 collectProbe），所以这里只等结果，不再发命令。
+     * 超时不是失败：事件确实可能永远不来（页面在调用中途被销毁），那时位置
+     * 读回就是唯一证据，和旧行为一致。
+     */
+    await tab.cdp
+      .evaluate<boolean>(
+        `(window.__ensembleWheelProbe ? window.__ensembleWheelProbe.promise : Promise.resolve(false))`,
+        { awaitPromise: true, timeoutMs: WHEEL_DELIVERY_TIMEOUT_MS + 1_000 },
+      )
+      .catch(() => false);
     const after = await this.waitForScrollToSettle(tab);
     // Displacement per element on the chain; the report is the one that moved
     // most. Reading a single fixed container is how a chained scroll (inner list
@@ -7865,7 +7936,19 @@ export class EmbeddedBrowser {
     // this call was waiting out its window.
     const live = this.findTab(tabId)?.perf;
     if (!live) throw new Error("采样在测量期间被停止");
-    const observed = live.history.filter((sample) => sample.t >= windowStartT);
+    /*
+     * 两端都截断，才是「本次调用观测到的区间」。
+     *
+     * 上界原来漏了：采样器在整个等待期间照常写入，而 `observed` 只按
+     * `t >= windowStartT` 过滤，于是等待结束后到读 `history` 之间落进的样本
+     * 也被算进来，`metrics.maxAt` 能超过调用方要的 `durationMs`。实测在
+     * `durationMs: 1600` 下出现过 1394 与 1202 两个峰值时刻——它们还在窗口内，
+     * 但同一段代码允许更靠后的样本混进来，这让「本次区间」这个说法不成立。
+     */
+    const windowEndT = Math.max(0, Date.now() - perf.startedAt);
+    const observed = live.history.filter(
+      (sample) => sample.t >= windowStartT && sample.t <= windowEndT,
+    );
     const newest = observed[observed.length - 1];
     const oldestObserved = observed[0];
     const all = live.history;

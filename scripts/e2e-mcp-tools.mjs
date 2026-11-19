@@ -427,8 +427,13 @@ try {
       // The page thrashes layout on purpose: if layouts/s stays at zero, the
       // sampler is reporting a real page as idle.
       v?.metrics?.layouts?.max > 0 &&
+      // `maxAt` is the peak's offset from this window's own start, so the
+      // property worth asserting is that it lands inside the interval the
+      // caller asked for — not that it lands early. This used to be a literal
+      // 1200 against a 1600ms window, and failed one run in three on busy
+      // pages (peaks at 1394 and 1202) while CPU sat at 89–95%.
       typeof v?.metrics.cpu.maxAt === "number" &&
-      v.metrics.cpu.maxAt <= 1200,
+      v.metrics.cpu.maxAt <= v.durationMs,
   );
   record("the measurement reports real CPU and layout work", measured.ok, measured.value?.metrics);
 

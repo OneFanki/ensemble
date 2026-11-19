@@ -170,7 +170,11 @@
    */
   --titlebar-height: 34px;
   --address-row-height: 44px;
-  --account-rail-width: 148px;
+  /* Narrower than the 148 it was: the two status dots became corner badges on
+     the avatar instead of 7px flex items, so a row's width is decided by the
+     longest account name alone. 120 fitted only about five CJK glyphs and
+     truncated "管理员 · 主账号" to "管理员 ·…"; 132 keeps a six-glyph name whole. */
+  --account-rail-width: 132px;
   --dock-width: 244px;
 
   /* Spacing ladder. Anything that is not one of these should say why. */

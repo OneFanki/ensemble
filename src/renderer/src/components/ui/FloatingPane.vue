@@ -163,25 +163,22 @@ onBeforeUnmount(() => {
 }
 
 /*
- * Transparent on purpose.
+ * The scrim covers the whole window, not just the page area.
  *
- * It exists to receive the pointer, not to dim the window: the pane is a
- * work surface, and the page on the right stays readable while it is open. It
- * still has to be a real element — a `<webview>` guest takes the pointer for
- * itself, so a document-level listener would never hear the click that the
- * user aimed at the page.
+ * Clicking anywhere outside the pane closes it — including the account column
+ * and the address row. Those two used to be left clear so a click there could
+ * switch accounts or type an address while the pane stayed open. In practice the
+ * pane is 60% of the window and the user's aim when dismissing is "not on the
+ * pane", not "on the page area specifically"; leaving two live strips around it
+ * made dismissal fail exactly where the pointer was most likely to land.
  *
- * It covers the page area only, not the account column: the column is how the
- * user switches to another account while a layer is open, and a scrim over it
- * would turn that first click into a dismissal and the second into the switch.
- * The address row is left alone for the same reason — it is chrome, not page.
+ * It has to be a real element rather than a document listener: a `<webview>`
+ * guest takes the pointer for itself, so a document-level listener would never
+ * hear the click the user aimed at the page.
  */
 .floating-scrim {
   position: absolute;
-  top: calc(var(--titlebar-height) + var(--address-row-height));
-  left: var(--account-rail-width);
-  right: 0;
-  bottom: 0;
+  inset: 0;
   background: transparent;
 }
 

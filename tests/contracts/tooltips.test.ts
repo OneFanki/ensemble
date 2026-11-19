@@ -77,7 +77,7 @@ describe("hover labels", () => {
     // item's hint, which is the account name — the fact a truncated label hides.
     // No native `title` may creep back in: every hint here is the app's own drawn
     // layer.
-    expect(rail).toContain('v-tooltip="t(\'app.railAccounts\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.railAccountsHint\')"');
     expect(rail).toContain('v-tooltip="item.account"');
     expect(rail).not.toMatch(/:title="t\('app\./);
     expect(rail).not.toMatch(/\s:title="/);

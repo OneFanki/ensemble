@@ -239,4 +239,32 @@ describe("the account column", () => {
     expect(list).toMatch(/overflow-y:\s*auto/);
     expect(list).not.toMatch(/overflow-x:\s*auto/);
   });
+
+  it("keeps the accounts entry above the list, not below it", () => {
+    // It is the column's only high-frequency action — almost every launch goes
+    // through it — and at the foot it was the first thing pushed out of view once
+    // enough accounts were running. Markup order is the assertion: the entry's
+    // block comes before the list's.
+    const head = RAIL.indexOf('class="rail-head');
+    const list = RAIL.indexOf('class="rail-list');
+    expect(head).toBeGreaterThan(0);
+    expect(list).toBeGreaterThan(0);
+    expect(head).toBeLessThan(list);
+  });
+
+  it("gives the status dots no layout space", () => {
+    // Both are corner badges now. Inline they were 7px flex items between the
+    // avatar and the name, which cost every name two characters of width — the
+    // narrow column then truncated names that had fitted before.
+    //
+    // Read with a regex rather than `ruleBody`: these two rules carry comments,
+    // and a naive brace scan stops at the first `}` inside one.
+    for (const selector of ["\\.ai-dot", "\\.freeze-dot"]) {
+      const match = new RegExp(`\\n${selector} \\{[^}]*\\}`).exec(RAIL);
+      expect(match, `${selector} must exist`).not.toBeNull();
+      const body = match?.[0] ?? "";
+      expect(body).toMatch(/position:\s*absolute/);
+      expect(body).not.toMatch(/flex:\s*0 0/);
+    }
+  });
 });

@@ -17,7 +17,7 @@ import { aiDotState, lastActionAtByTab } from "@shared/ai-dot";
 import type { EmbeddedTab } from "@shared/embedded";
 import { type InstanceFreezeState, instanceFreezeState } from "@shared/instance-freeze";
 import type { Identity, RoleColor } from "@shared/types";
-import { ExternalLink, PictureInPicture2, Users, X } from "lucide-vue-next";
+import { ExternalLink, PictureInPicture2, UsersRound, X } from "lucide-vue-next";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
@@ -278,6 +278,29 @@ function markAvatarBroken(instanceId: string): void {
     data-account-rail
     :aria-label="t('app.railLabel')"
   >
+    <!--
+      管理入口在顶部，不在底部。
+
+      它是这一栏里唯一的高频动作：每开一个账号几乎都要经过它，而底部那一行在
+      账号多的时候正好被列表压在下面。「多账号」而不是「账号」：这里管的是多个
+      账号的清单，叫「账号」会读成「我自己登录的那个账号」。单条账号仍然叫账号。
+    -->
+    <div class="rail-head no-drag">
+      <button
+        type="button"
+        class="entry-btn"
+        :class="{ active: activeLayer === 'identities' }"
+        :aria-label="t('app.railAccounts')"
+        :aria-pressed="activeLayer === 'identities'"
+        v-tooltip="t('app.railAccountsHint')"
+        data-rail-entry="identities"
+        @click="toggleLayer('identities')"
+      >
+        <UsersRound :size="13" />
+        <span>{{ t("app.railAccounts") }}</span>
+      </button>
+    </div>
+
     <div class="rail-list no-drag" role="tablist" :aria-label="t('app.railLabel')">
       <button
         v-for="item in items"
@@ -325,7 +348,13 @@ function markAvatarBroken(instanceId: string): void {
           aria-hidden="true"
           data-popout-mark
         />
-        <!-- AI 状态点：呼吸 = 正在操作，常亮 = 30 分钟内动过，无标 = 其它。 -->
+        <!--
+          状态挂在头像的角上，不占行宽。
+
+          这两个点原来各占 7px 的横向空间，加在头像与名字之间，一行里挤了三个
+          元素；而它们说的是「这个头像代表的东西现在什么状态」，本来就是头像的一
+          部分。作为角标挂上去之后，行宽只由名字决定，栏可以更窄。
+        -->
         <span
           v-if="!item.external && item.dot !== 'idle'"
           class="ai-dot"
@@ -333,7 +362,6 @@ function markAvatarBroken(instanceId: string): void {
           :data-ai-dot="item.dot"
           v-tooltip="item.dotTip"
         ></span>
-        <!-- 冻结标识：灰标 = 全部页面休眠，半标 = 部分休眠，无标 = 全醒。 -->
         <span
           v-if="!item.external && item.freeze !== 'awake'"
           class="freeze-dot"
@@ -354,26 +382,6 @@ function markAvatarBroken(instanceId: string): void {
           <X :size="11" />
         </span>
       </button>
-    </div>
-
-    <div class="rail-foot no-drag">
-      <!-- 管理入口：账号页。站点页与「更多」都并入了账号页，启动面板也收进了
-           那里——左栏只负责「哪些账号正在跑」，挑一个账号打开属于账号页。 -->
-      <nav class="rail-entries no-drag" :aria-label="t('app.railManage')">
-        <button
-          type="button"
-          class="entry-btn"
-          :class="{ active: activeLayer === 'identities' }"
-          :aria-label="t('app.railAccounts')"
-          :aria-pressed="activeLayer === 'identities'"
-          v-tooltip="t('app.railAccounts')"
-          data-rail-entry="identities"
-          @click="toggleLayer('identities')"
-        >
-          <Users :size="14" />
-          <span>{{ t("app.railAccounts") }}</span>
-        </button>
-      </nav>
     </div>
   </aside>
 </template>
@@ -490,15 +498,27 @@ function markAvatarBroken(instanceId: string): void {
 }
 
 /*
- * AI 状态点。呼吸 = 正在操作；常亮 = 30 分钟内动过；无标 = 其它。
+ * AI 状态点，挂成头像的角标。呼吸 = 正在操作；常亮 = 30 分钟内动过；无标 = 其它。
  * 状态同时写在 data-ai-dot 上，测试不必等动画。
+ *
+ * Positioned against the row, not the avatar, because the avatar is a 20px square
+ * with `overflow: hidden` for the favicon — a badge inside it would be clipped.
+ * The row is `position: relative`, and the offsets below are the avatar's own box
+ * (7px padding + 20px) so the dot lands on its bottom-right corner. It takes no
+ * layout space, which is the point: the name gets the whole remaining width.
  */
 .ai-dot {
-  width: 7px;
-  height: 7px;
+  position: absolute;
+  left: 21px;
+  bottom: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  flex: 0 0 7px;
   background: var(--accent);
+  /* A ring in the rail's own colour, so the dot reads as sitting on the avatar
+     rather than as a hole punched in it. */
+  box-shadow: 0 0 0 1.5px var(--frame);
+  pointer-events: none;
 }
 
 .ai-dot.active {
@@ -522,13 +542,23 @@ function markAvatarBroken(instanceId: string): void {
   }
 }
 
-/* 冻结标识：全标 = 全部页面休眠，半标 = 部分休眠。 */
+/*
+ * 冻结标识：全标 = 全部页面休眠，半标 = 部分休眠。
+ *
+ * Also a corner badge, on the opposite corner from the AI dot so the two never
+ * collide: AI state is about the account, freeze state is about its pages, and a
+ * row can honestly be both ("AI just opened it, and it has since gone to sleep").
+ */
 .freeze-dot {
-  width: 7px;
-  height: 7px;
+  position: absolute;
+  right: 4px;
+  bottom: 5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  flex: 0 0 7px;
   background: color-mix(in srgb, var(--text) 55%, transparent);
+  box-shadow: 0 0 0 1.5px var(--frame);
+  pointer-events: none;
 }
 
 .freeze-dot.partial {
@@ -539,15 +569,32 @@ function markAvatarBroken(instanceId: string): void {
   );
 }
 
-/* 关闭：悬停才出现，和浏览器标签上的叉一样安静。 */
+/* 顶部：管理入口。列表从这里往下铺，入口不会随账号变多被挤走。 */
+.rail-head {
+  flex: 0 0 auto;
+  padding: 5px 5px 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/*
+ * 关闭：悬停才出现，和浏览器标签上的叉一样安静。
+ *
+ * 绝对定位在行的右端，不参与布局：它只在悬停时出现，却一直占着 17px，等于
+ * 每个账号名平时都短了两个字——窄栏里这就是「管理员 · 主…」和完整名字的差别。
+ * 现在名字铺到行尾，叉在悬停时盖在上面。
+ */
 .item-close {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
   width: 17px;
   height: 17px;
   border-radius: 3px;
   color: var(--faint);
-  flex: 0 0 17px;
+  background: var(--frame);
   opacity: 0;
   cursor: pointer;
 }
@@ -562,66 +609,9 @@ function markAvatarBroken(instanceId: string): void {
   color: var(--red);
 }
 
-/* 底部：启动 + 三个管理入口。 */
-.rail-foot {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 6px 10px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.rail-launch {
-  position: relative;
-}
-
-.launch-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  width: 100%;
-  height: 28px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--chrome);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
-.launch-btn svg {
-  color: var(--accent);
-}
-
-.launch-btn:hover {
-  background: var(--field);
-  border-color: color-mix(in srgb, var(--line) 60%, var(--accent));
-  color: var(--text);
-}
-
 /*
  * 面板向上展开：按钮在最下面，往下开会被窗口边缘裁掉。
  */
-.launch-panel {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: var(--z-popover);
-  width: 268px;
-  padding: 4px;
-  border-radius: var(--radius);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-menu);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  animation: rail-panel-in var(--motion-base) var(--ease-out);
-  transform-origin: bottom left;
-}
-
 @keyframes rail-panel-in {
   from {
     opacity: 0;
@@ -630,63 +620,6 @@ function markAvatarBroken(instanceId: string): void {
 }
 
 /* 头部：第二级带返回上一级的出口，搜索框两级共用。 */
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px;
-}
-
-.panel-back {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px 0 4px;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.panel-back:hover {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.panel-site-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.panel-search {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 24px;
-  padding: 0 7px;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  background: var(--field);
-  font-size: var(--fs-sm);
-  color: var(--text);
-  outline: 0;
-}
-
-.panel-search:focus {
-  border-color: var(--line);
-}
-
-.panel-list {
-  max-height: 280px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
 .launch-row {
   display: flex;
   align-items: center;
@@ -741,20 +674,6 @@ function markAvatarBroken(instanceId: string): void {
   font-size: var(--fs-2xs);
   color: var(--faint);
   flex: none;
-}
-
-.panel-empty {
-  margin: 0;
-  padding: 10px;
-  font-size: var(--fs-sm);
-  color: var(--faint);
-}
-
-/* 只剩一个管理入口：整行一个格子，不必再撑成三栏的图标网格。 */
-.rail-entries {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
 }
 
 .entry-btn {

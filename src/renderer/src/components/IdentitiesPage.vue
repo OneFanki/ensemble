@@ -268,6 +268,31 @@ const groupFilter = ref<string | null>(null);
 /** The inline group manager, closed until asked for. */
 const groupsPanelOpen = ref(false);
 
+/**
+ * The search term, matched against accounts *and* their site.
+ *
+ * Account names repeat across sites — "管理员" exists on every system — so a
+ * name-only search answers a question nobody asked ("which of these twelve
+ * 管理员"). Matching the site name too makes "订单" narrow to that system's
+ * accounts, which is how people actually remember where an account lives. Both
+ * terms are tried together rather than being separate search modes: no one has to
+ * decide which kind of search they are doing.
+ */
+const matchesTerm = (identity: Identity, term: string): boolean => {
+  if (
+    identity.name.toLowerCase().includes(term) ||
+    identity.username.toLowerCase().includes(term) ||
+    identity.role.toLowerCase().includes(term)
+  ) {
+    return true;
+  }
+  const site = store.sites.find((item) => item.id === identity.siteId);
+  return Boolean(
+    site &&
+      (site.name.toLowerCase().includes(term) || site.baseUrl.toLowerCase().includes(term)),
+  );
+};
+
 const visibleIdentities = computed(() => {
   const term = query.value.trim().toLowerCase();
   return store.identities.filter((identity) => {
@@ -278,11 +303,7 @@ const visibleIdentities = computed(() => {
       return false;
     }
     if (!term) return true;
-    return (
-      identity.name.toLowerCase().includes(term) ||
-      identity.username.toLowerCase().includes(term) ||
-      identity.role.toLowerCase().includes(term)
-    );
+    return matchesTerm(identity, term);
   });
 });
 

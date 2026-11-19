@@ -10,8 +10,9 @@ export const messages = {
   zh: {
     app: {
       name: "Ensemble",
-      identities: "账号",
-      railAccounts: "账号",
+      identities: "多账号",
+      railAccounts: "多账号",
+      railAccountsHint: "多账号：按站点整理的所有账号",
       views: "视图",
       sites: "站点",
       engines: "引擎",
@@ -1167,6 +1168,7 @@ export const messages = {
       name: "Ensemble",
       identities: "Accounts",
       railAccounts: "Accounts",
+      railAccountsHint: "All accounts, organised by site",
       views: "Views",
       sites: "Sites",
       engines: "Engines",

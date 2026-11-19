@@ -478,7 +478,7 @@ describe("browser tool calls", () => {
     await startServer(fakeSurface());
     const { json } = await rpc(toolCall("open_browser_tab", { identityId: "nope" }));
     expect(json.result.isError).toBe(true);
-    expect(json.result.content[0].text).toContain("身份不存在");
+    expect(json.result.content[0].text).toContain("账号不存在");
     expect(calls).toHaveLength(0);
   });
 

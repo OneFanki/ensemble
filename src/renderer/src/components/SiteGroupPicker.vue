@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import type { Tag } from "@shared/types";
+import type { SiteGroup } from "@shared/types";
 import { useI18n } from "vue-i18n";
 
 /**
- * Multi-select chips for the shared tag namespace.
+ * Multi-select chips for site groups.
  *
- * Sites, identities and views all use the same tags, so one control keeps the
- * interaction identical everywhere and the colours mean the same thing.
+ * A site can be filed under more than one group, so this is a toggle list rather
+ * than a dropdown: the answer is "which of these apply", and seeing every group
+ * at once is the only way to answer that without opening something.
  */
 const props = defineProps<{
   modelValue: string[] | undefined;
-  tags: Tag[];
-  /** Shown when the user has not created any tags yet. */
+  groups: SiteGroup[];
+  /** Shown when the user has not created any groups yet. */
   emptyHint?: string;
 }>();
 
@@ -26,32 +27,32 @@ function toggle(id: string): void {
 </script>
 
 <template>
-  <div class="tag-picker">
+  <div class="group-picker">
     <button
-      v-for="tag in tags"
-      :key="tag.id"
+      v-for="group in groups"
+      :key="group.id"
       type="button"
-      class="tag-toggle"
-      :class="{ on: modelValue?.includes(tag.id) }"
-      :style="{ '--tag': `var(--role-${tag.color})` }"
-      :aria-pressed="Boolean(modelValue?.includes(tag.id))"
-      @click="toggle(tag.id)"
+      class="group-toggle"
+      :class="{ on: modelValue?.includes(group.id) }"
+      :style="{ '--tag': `var(--role-${group.color})` }"
+      :aria-pressed="Boolean(modelValue?.includes(group.id))"
+      @click="toggle(group.id)"
     >
-      <span class="tag-dot"></span>
-      {{ tag.name }}
+      <span class="group-dot"></span>
+      {{ group.name }}
     </button>
-    <span v-if="!tags.length" class="tag-empty">{{ emptyHint ?? t("app.tagsNone") }}</span>
+    <span v-if="!groups.length" class="group-empty">{{ emptyHint ?? t("app.siteGroupsNone") }}</span>
   </div>
 </template>
 
 <style scoped>
-.tag-picker {
+.group-picker {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.tag-toggle {
+.group-toggle {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -64,18 +65,18 @@ function toggle(id: string): void {
   transition: border-color var(--motion-base) var(--ease-out), color var(--motion-base) var(--ease-out), background var(--motion-base) var(--ease-out);
 }
 
-.tag-toggle:hover {
+.group-toggle:hover {
   color: var(--text-secondary);
   border-color: var(--line);
 }
 
-.tag-toggle.on {
+.group-toggle.on {
   border-color: color-mix(in srgb, var(--tag) 52%, var(--line));
   background: color-mix(in srgb, var(--tag) 10%, transparent);
   color: color-mix(in srgb, var(--tag) 78%, var(--text));
 }
 
-.tag-dot {
+.group-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -83,11 +84,11 @@ function toggle(id: string): void {
   opacity: 0.72;
 }
 
-.tag-toggle.on .tag-dot {
+.group-toggle.on .group-dot {
   opacity: 1;
 }
 
-.tag-empty {
+.group-empty {
   font-size: 10.5px;
   color: var(--faint);
 }

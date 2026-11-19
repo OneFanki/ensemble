@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { SiteDraft, Tag } from "@shared/types";
+import type { SiteDraft } from "@shared/types";
 import { Trash2 } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
-import TagPicker from "./TagPicker.vue";
+import SiteGroupPicker from "./SiteGroupPicker.vue";
 import AppButton from "./ui/AppButton.vue";
 import Checkbox from "./ui/Checkbox.vue";
 import FormField from "./ui/FormField.vue";
@@ -14,12 +14,16 @@ import TextField from "./ui/TextField.vue";
 
 const props = defineProps<{
   draft: SiteDraft;
-  tags?: Tag[];
 }>();
 
 const emit = defineEmits<{
   close: [];
-  save: [draft: SiteDraft];
+  /**
+   * `firstAccount` is set when the user filled the optional account section
+   * while creating a site. The shell saves the site first and then creates the
+   * account on it — one dialog, one step, no second form to fill in a row.
+   */
+  save: [draft: SiteDraft, firstAccount?: { name: string; username: string; password: string }];
   delete: [];
 }>();
 
@@ -27,7 +31,7 @@ const form = reactive<SiteDraft>({ ...props.draft });
 const { t } = useI18n();
 const store = useWorkspaceStore();
 const error = reactive<{ message: string | null }>({ message: null });
-const tags = computed(() => props.tags ?? []);
+const siteGroups = computed(() => store.siteGroups);
 
 /**
  * The password field is local state, not part of `form`.
@@ -39,6 +43,20 @@ const tags = computed(() => props.tags ?? []);
  */
 const passwordDraft = ref("");
 const clearPassword = ref(false);
+
+/**
+ * The optional first account, only offered while creating a site.
+ *
+ * A site with no account cannot open anything signed in, so the common path is
+ * "new site, then its first login". Asking for it here saves a second dialog and
+ * a trip back to the page — and leaving both fields empty is the answer for a
+ * site that is only being filed before its logins are known.
+ */
+const firstAccountName = ref("");
+const firstAccountUsername = ref("");
+const firstAccountPassword = ref("");
+
+const showingFirstAccount = computed(() => !form.id);
 
 /**
  * Whether this site already has a default password.
@@ -109,19 +127,38 @@ function submit() {
     error.message = t("app.errCheckPath");
     return;
   }
-  emit("save", {
-    ...form,
-    name: form.name.trim(),
-    baseUrl: form.baseUrl.trim(),
-    authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
-    authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
-    authTokenKey: (form.authTokenKey ?? "").trim() || undefined,
-    authTokenHeader: (form.authTokenHeader ?? "").trim() || undefined,
-    // Only what the user actually did. An empty input and an unfelt checkbox
-    // both mean "leave the stored password alone".
-    ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
-    ...(clearPassword.value && !passwordDraft.value ? { clearSitePassword: true } : {}),
-  });
+  // Half a first account is an error worth naming: a username with no display
+  // name (or the other way round) used to be a silently skipped save when this
+  // lived on the old site page, which is why both fields are required together.
+  const accountName = firstAccountName.value.trim();
+  const accountUsername = firstAccountUsername.value.trim();
+  if (showingFirstAccount.value && Boolean(accountName) !== Boolean(accountUsername)) {
+    error.message = t("app.errFirstAccountPair");
+    return;
+  }
+  emit(
+    "save",
+    {
+      ...form,
+      name: form.name.trim(),
+      baseUrl: form.baseUrl.trim(),
+      authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
+      authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
+      authTokenKey: (form.authTokenKey ?? "").trim() || undefined,
+      authTokenHeader: (form.authTokenHeader ?? "").trim() || undefined,
+      // Only what the user actually did. An empty input and an unfelt checkbox
+      // both mean "leave the stored password alone".
+      ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
+      ...(clearPassword.value && !passwordDraft.value ? { clearSitePassword: true } : {}),
+    },
+    accountName && accountUsername
+      ? {
+          name: accountName,
+          username: accountUsername,
+          password: firstAccountPassword.value,
+        }
+      : undefined,
+  );
 }
 
 const namePlaceholder = computed(() => t("app.siteNameExample"));
@@ -149,8 +186,8 @@ function normalizePath(event: Event) {
         <TextField v-model="form.name" :placeholder="namePlaceholder" />
       </FormField>
 
-      <FormField as="div" :label="$t('app.tags')">
-        <TagPicker v-model="form.tagIds" :tags="tags" />
+      <FormField as="div" :label="$t('app.siteGroups')">
+        <SiteGroupPicker v-model="form.tagIds" :groups="siteGroups" />
       </FormField>
 
       <FormField :label="$t('app.envUrlLabel')">
@@ -278,6 +315,44 @@ function normalizePath(event: Event) {
           {{ $t("app.siteDefaultPasswordClear") }}
         </Checkbox>
         <p v-if="clearPassword" class="hint warn">{{ $t("app.siteDefaultPasswordClearNote") }}</p>
+      </section>
+
+      <!-- Creating a site is the moment its first login is known. Filling these
+           two fields saves leaving for the account form and coming back; leaving
+           them empty is the answer for a site that is only being filed now. -->
+      <section v-if="showingFirstAccount" class="group">
+        <div class="group-head">
+          <span class="group-title">{{ $t("app.firstAccountTitle") }}</span>
+          <span class="hint">{{ $t("app.firstAccountOptional") }}</span>
+        </div>
+
+        <div class="row">
+          <FormField grow :label="$t('app.displayName')">
+            <TextField
+              v-model="firstAccountName"
+              data-first-account-name
+              :placeholder="$t('app.displayNameExample')"
+            />
+          </FormField>
+          <FormField grow :label="$t('app.username')">
+            <TextField
+              v-model="firstAccountUsername"
+              mono
+              data-first-account-username
+              placeholder="admin@test.local"
+            />
+          </FormField>
+        </div>
+
+        <FormField :label="$t('app.password')">
+          <TextField
+            v-model="firstAccountPassword"
+            type="password"
+            mono
+            autocomplete="new-password"
+            :placeholder="$t('app.firstAccountPasswordHint')"
+          />
+        </FormField>
       </section>
 
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>

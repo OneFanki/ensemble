@@ -10,7 +10,6 @@ import ComboBox from "./ComboBox.vue";
 import ExtraLoginFields from "./ExtraLoginFields.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
-import TagPicker from "./TagPicker.vue";
 import AppButton from "./ui/AppButton.vue";
 import FormField from "./ui/FormField.vue";
 import LinkButton from "./ui/LinkButton.vue";
@@ -364,10 +363,6 @@ async function rebuildProfile() {
             @click="form.color = color"
           ></button>
         </div>
-      </FormField>
-
-      <FormField as="div" :label="$t('app.tags')">
-        <TagPicker v-model="form.tagIds" :tags="store.snapshot?.tags ?? []" />
       </FormField>
 
       <section class="group">

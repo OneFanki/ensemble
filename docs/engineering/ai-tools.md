@@ -11,7 +11,7 @@
 | 档位 | 含义 | 典型工具 |
 | --- | --- | --- |
 | `read` | 只读。不改工作区、不动页面。 | `list_*`、`read_browser_page`、`wait_browser` |
-| `write` | 改工作区数据（站点、身份、视图、书签、设置）。 | `create_*`、`update_*`、`save_*` |
+| `write` | 改工作区数据（站点、账号、视图、书签、设置）。 | `create_*`、`update_*`、`save_*` |
 | `run` | 驱动浏览器：启动窗口、操作内置页面、跑流程。 | `launch_*`、`open_browser_*`、`click_browser_element` |
 | `danger` | 删除且不可撤销。一律要求 `confirm: true`。 | `delete_*` |
 
@@ -40,11 +40,11 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `get_workspace_summary` | read | — | 无 | 站点 / 身份 / 视图 / 运行中实例的数量与名称 |
+| `get_workspace_summary` | read | — | 无 | 站点 / 账号 / 视图 / 运行中实例的数量与名称 |
 | `update_settings` | write | — | 无。凭据、密钥库、MCP 端口与令牌不接受修改 | 改动后的键值 |
 | `list_sites` / `list_site_tags`（站点分组）/ `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码；`list_bookmarks` 不回传图标内容，只有 `hasFavicon` 标记；`list_flows` 返回 `{ flows, total }`——流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截断到前 200 字符、步骤多于 60 条截到 60 并标 `stepsTruncated`（`run_flow` 用完整定义，不受预览截断影响） |
 | `create_site` / `update_site` / `create_identity` / `create_identities` / `update_identity` / `link_identities_to_site` / `set_password` | write | — | 无。密码只写不读，返回值里没有明文字段 | 新建或更新后的对象，`create_identities` 额外带 `failures` |
-| `detach_identity_reference` | write | — | 无。已经是独立身份时无变化 | 断开后的身份 |
+| `detach_identity_reference` | write | — | 无。已经是独立账号时无变化 | 断开后的账号 |
 | `create_view` / `update_view` / `set_view_layout` / `create_layout_preset` / `copy_view_to_site` | write | — | 无 | 视图或预设 |
 | `save_flow` / `save_tag`（站点分组）/ `save_bookmark` | write | — | 无 | 保存后的对象；`save_flow` 的步骤值截断（同 `list_flows`）、超 60 步截到 60 并标 `stepsTruncated`；`save_bookmark` 返回 `hasFavicon` 而非图标内容 |
 | `save_site_tag` | write | — | `save_tag` 的旧名称，行为相同；不广播给客户端 | 同 `save_tag` |
@@ -64,7 +64,7 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案。`sleeping: true` 的页面已被冻结（操作会先自动唤醒）；醒着但闲置的页面带 `sleepExempt` 说明没冻的原因（`on-stage-visible` / `audible` / `ai-active` / `policy` 等），两者都没有的下一轮扫描即冻结——判断哪个页在占资源并自行 close 用它 | 标签 id、所属身份、档案、标题、地址、布局、静音/有声、休眠状态与豁免原因 |
+| `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案。`sleeping: true` 的页面已被冻结（操作会先自动唤醒）；醒着但闲置的页面带 `sleepExempt` 说明没冻的原因（`on-stage-visible` / `audible` / `ai-active` / `policy` 等），两者都没有的下一轮扫描即冻结——判断哪个页在占资源并自行 close 用它 | 标签 id、所属账号、档案、标题、地址、布局、静音/有声、休眠状态与豁免原因 |
 | `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_tab` 的页面落自己的实例、不占台上格位（台外照常可读，闲置后休眠，操作前自动唤醒），`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接。被 beforeunload 拦下时快速返回 `cancelled: "beforeunload"`（页面留在原地且可继续操作），用 `handle_browser_dialog` 决定去留 | `{ tab }`；被拦时另有 `cancelled` 与 `note` |
 | `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态摘要 |

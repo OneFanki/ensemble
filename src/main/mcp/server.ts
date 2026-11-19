@@ -658,17 +658,17 @@ const identityProps = (): Record<string, unknown> => ({
   color: {
     type: "string",
     enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
-    description: "身份色",
+    description: "账号色",
   },
   engineId: string("覆盖站点默认引擎"),
   startPath: string("起始路径，默认 /"),
   note: string("备注"),
   credentialFrom: string(
-    "引用另一个身份的凭据（跨站点复用）。传了就忽略 password，被引用的身份不能再是引用",
+    "引用另一个账号的凭据（跨站点复用）。传了就忽略 password，被引用的账号不能再是引用",
   ),
   extraFields: {
     type: "array",
-    description: "该身份专用的额外登录字段，例如每个租户自己的租户名",
+    description: "该账号专用的额外登录字段，例如每个租户自己的租户名",
     items: object({ label: string("字段名"), value: string("字段值") }, ["label", "value"]),
   },
 });
@@ -806,7 +806,7 @@ const WRITABLE_SETTINGS = [
 const writableSettingsProps = (): Record<string, unknown> => ({
   theme: { type: "string", enum: ["dark", "light", "system"], description: "界面主题" },
   locale: { type: "string", enum: [...LOCALE_SETTINGS], description: "界面语言" },
-  layout: string("单独启动身份时使用的窗口布局 id，例如 2x2 / free"),
+  layout: string("单独启动账号时使用的窗口布局 id，例如 2x2 / free"),
   defaultEngineId: string("外部启动时默认使用的浏览器引擎 id"),
   autoFillOnLaunch: { type: "boolean", description: "启动后自动填充已保存的账号密码" },
   autoSubmitLogin: { type: "boolean", description: "填充后自动提交登录表单（站点可覆盖）" },
@@ -2438,7 +2438,7 @@ export class McpServer {
     };
     const findIdentity = (id: unknown): Identity => {
       const identity = service.snapshot().identities.find((item) => item.id === id);
-      if (!identity) throw new Error(`身份不存在：${String(id)}`);
+      if (!identity) throw new Error(`账号不存在：${String(id)}`);
       return identity;
     };
     const findView = (id: unknown): View => {
@@ -2481,7 +2481,7 @@ export class McpServer {
     return [
       {
         name: "get_workspace_summary",
-        description: "查看当前 Ensemble 工作区概览：站点、身份、视图、运行中浏览器的数量与名称。",
+        description: "查看当前 Ensemble 工作区概览：站点、账号、视图、运行中浏览器的数量与名称。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -2758,9 +2758,9 @@ export class McpServer {
       },
       {
         name: "list_identities",
-        description: "列出身份。可按 siteId 过滤。不会返回密码。",
+        description: "列出账号。可按 siteId 过滤。不会返回密码。",
         kind: "read",
-        inputSchema: object({ siteId: string("只看该站点的身份") }),
+        inputSchema: object({ siteId: string("只看该站点的账号") }),
         run: (args) => {
           const siteId = args["siteId"];
           return service
@@ -2801,7 +2801,7 @@ export class McpServer {
       {
         name: "save_flow",
         description:
-          "保存一个流程：一串在某个站点里可重复执行的步骤。动作步骤：navigate / fill / click / select / press / login / wait / read；script 步骤用一段 JS 做循环与条件的编排，能调用的只有动作原语（navigate / click / fill / select / press / hover / scroll / check / setFiles / drag / wait / read，不含 login 与 cdp）；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨身份与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
+          "保存一个流程：一串在某个站点里可重复执行的步骤。动作步骤：navigate / fill / click / select / press / login / wait / read；script 步骤用一段 JS 做循环与条件的编排，能调用的只有动作原语（navigate / click / fill / select / press / hover / scroll / check / setFiles / drag / wait / read，不含 login 与 cdp）；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨账号与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
         kind: "write",
         inputSchema: object(
           {
@@ -3158,7 +3158,7 @@ export class McpServer {
       {
         name: "create_identity",
         description:
-          "录入一个账号身份。password 只写入加密凭据库，不会回显；不传则继承站点默认密码。",
+          "录入一个账号。password 只写入加密凭据库，不会回显；不传则继承站点默认密码。",
         kind: "write",
         inputSchema: object({ siteId: string("所属站点 id"), ...identityProps() }, [
           "siteId",
@@ -3176,7 +3176,7 @@ export class McpServer {
       {
         name: "create_identities",
         description:
-          "批量录入账号身份。每项字段与 create_identity 相同（不含 siteId）。部分失败会在 failures 里返回，不影响已成功的条目。",
+          "批量录入账号。每项字段与 create_identity 相同（不含 siteId）。部分失败会在 failures 里返回，不影响已成功的条目。",
         kind: "write",
         inputSchema: object(
           {
@@ -3240,7 +3240,7 @@ export class McpServer {
           if (ids.length === 0) throw new Error("identityIds 不能为空");
           const known = new Set(service.snapshot().identities.map((identity) => identity.id));
           const missing = ids.filter((id) => !known.has(id));
-          if (missing.length > 0) throw new Error(`身份不存在：${missing.join(", ")}`);
+          if (missing.length > 0) throw new Error(`账号不存在：${missing.join(", ")}`);
           const { linked } = service.linkIdentitiesToSite(ids, site.id);
           return { siteId: site.id, linked, requested: ids.length };
         },
@@ -3248,11 +3248,11 @@ export class McpServer {
       {
         name: "update_identity",
         description:
-          "修改身份资料。password 只写入凭据库，不回显。siteId 可以把账号改挂到另一个站点，也用于给丢失站点归属的账号重新关联。",
+          "修改账号资料。password 只写入凭据库，不回显。siteId 可以把账号改挂到另一个站点，也用于给丢失站点归属的账号重新关联。",
         kind: "write",
         inputSchema: object(
           {
-            id: string("身份 id"),
+            id: string("账号 id"),
             siteId: string("改挂到这个站点 id，可省略"),
             name: string("显示名称"),
             username: string("账号"),
@@ -3297,7 +3297,7 @@ export class McpServer {
       {
         name: "set_password",
         description:
-          "单独写入密码（只写不读）。ownerKind 为 site 时写站点默认密码，为 identity 时写身份密码。",
+          "单独写入密码（只写不读）。ownerKind 为 site 时写站点默认密码，为 identity 时写账号密码。",
         kind: "write",
         inputSchema: object(
           {
@@ -3306,7 +3306,7 @@ export class McpServer {
               enum: ["site", "identity"],
               description: "归属类型",
             },
-            ownerId: string("站点或身份 id"),
+            ownerId: string("站点或账号 id"),
             password: string("密码"),
           },
           ["ownerKind", "ownerId", "password"],
@@ -3333,7 +3333,7 @@ export class McpServer {
               type: "array",
               minItems: 1,
               items: { type: "string" },
-              description: "成员身份 id，按启动顺序",
+              description: "成员账号 id，按启动顺序",
             },
             layoutId: string("布局 id，默认 2x2"),
             slotAssignments: {
@@ -3462,10 +3462,10 @@ export class McpServer {
       {
         name: "launch_identity",
         description:
-          "用外部浏览器单独启动一个身份（保真校验路径）。同屏对比请用 open_browser_tab 走内置浏览器。",
+          "用外部浏览器单独启动一个账号（保真校验路径）。同屏对比请用 open_browser_tab 走内置浏览器。",
         kind: "run",
         inputSchema: object(
-          { identityId: string("身份 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
+          { identityId: string("账号 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
           ["identityId"],
         ),
         run: async (args) => {
@@ -3516,21 +3516,21 @@ export class McpServer {
       },
       {
         name: "check_auth",
-        description: "检测某个身份是否仍处于登录状态。",
+        description: "检测某个账号是否仍处于登录状态。",
         kind: "run",
-        inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
+        inputSchema: object({ identityId: string("账号 id") }, ["identityId"]),
         run: async (args) => service.checkAuth(String(args["identityId"] ?? "")),
       },
       {
         name: "detach_identity_reference",
         description:
-          "把引用别的账号的身份断开成独立副本：当前解析出的密码会写成它自己的密码，此后两边各改各的。已经是独立身份时无变化。",
+          "断开该账号的凭据引用，变成本地独立副本：当前解析出的密码会写成它自己的密码，此后两边各改各的。已经是独立账号时无变化。",
         kind: "write",
-        inputSchema: object({ identityId: string("身份 id") }, ["identityId"]),
+        inputSchema: object({ identityId: string("账号 id") }, ["identityId"]),
         run: async (args) => {
           const id = String(args["identityId"] ?? "");
           if (!service.snapshot().identities.some((item) => item.id === id)) {
-            throw new Error(`身份不存在：${id}`);
+            throw new Error(`账号不存在：${id}`);
           }
           return identitySummary(await service.detachReference(id));
         },
@@ -3538,7 +3538,7 @@ export class McpServer {
       {
         name: "copy_view_to_site",
         description:
-          "把一个视图复制到另一个站点。成员按用户名匹配：目标站点已有同名账号就直接使用，没有就新建一个引用该账号凭据的身份（登录态各自独立）。副本与原视图独立，不会实时同步。",
+          "把一个视图复制到另一个站点。成员按用户名匹配：目标站点已有同名账号就直接使用，没有就新建一个凭据引用自该账号的账号（登录态各自独立）。副本与原视图独立，不会实时同步。",
         kind: "write",
         inputSchema: object(
           {
@@ -3552,9 +3552,9 @@ export class McpServer {
       },
       {
         name: "delete_identity",
-        description: "删除身份及其凭据。破坏性操作，必须传 confirm: true。",
+        description: "删除账号及其凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("身份 id"), confirm: { type: "boolean" } }, [
+        inputSchema: object({ id: string("账号 id"), confirm: { type: "boolean" } }, [
           "id",
           "confirm",
         ]),
@@ -3567,7 +3567,7 @@ export class McpServer {
       },
       {
         name: "delete_view",
-        description: "删除视图（不影响身份）。破坏性操作，必须传 confirm: true。",
+        description: "删除视图（不影响账号）。破坏性操作，必须传 confirm: true。",
         kind: "danger",
         inputSchema: object({ id: string("视图 id"), confirm: { type: "boolean" } }, [
           "id",
@@ -3582,7 +3582,7 @@ export class McpServer {
       },
       {
         name: "delete_site",
-        description: "删除站点及其下全部身份、视图与凭据。破坏性操作，必须传 confirm: true。",
+        description: "删除站点及其下全部账号、视图与凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
         inputSchema: object({ id: string("站点 id"), confirm: { type: "boolean" } }, [
           "id",
@@ -3629,7 +3629,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属身份、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；其余页面属于默认档案或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
+          "列出内置浏览器当前打开的标签页（id、所属账号、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；其余页面属于默认档案或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
         kind: "read",
         inputSchema: object({}),
         run: () => projectState(surface().state()),
@@ -3658,7 +3658,7 @@ export class McpServer {
       {
         name: "open_browser_view",
         description:
-          "把保存好的视图（一组身份 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，用 launch_view，或让用户自己切过去。",
+          "把保存好的视图（一组账号 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，用 launch_view，或让用户自己切过去。",
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: async (args) => {
@@ -3676,13 +3676,13 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该身份独立的会话分区，登录态持久保存且与其他身份隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
           url: string("要打开的地址；省略则打开空白页"),
-          identityId: string("身份 id；省略则使用一次性的干净会话"),
+          identityId: string("账号 id；省略则使用一次性的干净会话"),
           siteId: string("站点 id；仅用于界面分组显示"),
-          label: string("标签页显示名；通常用身份名"),
+          label: string("标签页显示名；通常用账号名"),
         }),
         run: async (args) => {
           const rawUrl =
@@ -3694,7 +3694,7 @@ export class McpServer {
           const identity = identityId
             ? this.options.service.snapshot().identities.find((item) => item.id === identityId)
             : undefined;
-          if (identityId && !identity) throw new Error(`身份不存在：${identityId}`);
+          if (identityId && !identity) throw new Error(`账号不存在：${identityId}`);
           const siteId = (typeof args["siteId"] === "string" && args["siteId"]) || identity?.siteId;
           const label = typeof args["label"] === "string" ? args["label"] : identity?.name;
           return projectTab(
@@ -3890,7 +3890,7 @@ export class McpServer {
       {
         name: "check_element_visible",
         description:
-          "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同身份的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄指向的元素已被移出 DOM 时会报找不到，此时改用 selector 检查（找不到会返回 exists: false）。",
+          "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同账号的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄指向的元素已被移出 DOM 时会报找不到，此时改用 selector 检查（找不到会返回 exists: false）。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -4295,7 +4295,7 @@ export class McpServer {
       {
         name: "fill_browser_login",
         description:
-          "用该标签页所属身份保存的账号密码填充登录表单。密码始终留在主进程，不会出现在返回值里。跨域页面会被拒绝。",
+          "用该标签页所属账号保存的账号密码填充登录表单。密码始终留在主进程，不会出现在返回值里。跨域页面会被拒绝。",
         kind: "run",
         inputSchema: object({ tabId: tabIdProp() }),
         inputTarget: (args) => tabId(args),
@@ -4744,7 +4744,7 @@ export class McpServer {
       {
         name: "compose_view",
         description:
-          "把当前已经打开的若干标签页直接组合成一个视图（自由组合）：新建视图定义，并把这些页面按给定顺序摆进布局格位。标签页必须都已绑定身份；省略 siteId 时从标签页推断归属站点。组合后这些页面从原来所在的视图或游离栏移动到新视图。",
+          "把当前已经打开的若干标签页直接组合成一个视图（自由组合）：新建视图定义，并把这些页面按给定顺序摆进布局格位。标签页必须都已绑定账号；省略 siteId 时从标签页推断归属站点。组合后这些页面从原来所在的视图或游离栏移动到新视图。",
         kind: "write",
         inputSchema: object(
           {
@@ -4792,7 +4792,7 @@ export class McpServer {
           const identityless = picked.filter((tab) => !tab.identityId).map((tab) => tab.id);
           if (identityless.length > 0) {
             throw new Error(
-              `这些标签页没有绑定身份，无法保存为视图定义（视图按身份记录成员）：${identityless.join(", ")}。` +
+              `这些标签页没有绑定账号，无法保存为视图定义（视图按账号记录成员）：${identityless.join(", ")}。` +
                 "请用 open_browser_tab 带 identityId 重新打开。",
             );
           }
@@ -4808,7 +4808,7 @@ export class McpServer {
           const identityIds = picked.map((tab) => tab.identityId!);
           if (new Set(identityIds).size !== identityIds.length) {
             throw new Error(
-              "同一个身份有两个标签页，无法同时成为视图成员：视图定义按身份记录成员。请只保留一个。",
+              "同一个账号有两个标签页，无法同时成为视图成员：视图定义按账号记录成员。请只保留一个。",
             );
           }
           // A page keeps its identity id in its tab record even after that
@@ -4823,7 +4823,7 @@ export class McpServer {
             .map((tab) => tab.id);
           if (gone.length > 0) {
             throw new Error(
-              `这些标签页所属的身份已被删除，无法保存为视图成员：${gone.join(", ")}。请先重新创建身份并打开页面。`,
+              `这些标签页所属的账号已被删除，无法保存为视图成员：${gone.join(", ")}。请先重新创建账号并打开页面。`,
             );
           }
 
@@ -5001,7 +5001,7 @@ export class McpServer {
       },
       {
         name: "close_browser_tab",
-        description: "关闭内置浏览器的一个标签页。只关页面，不影响该身份的登录态。",
+        description: "关闭内置浏览器的一个标签页。只关页面，不影响该账号的登录态。",
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
         run: (args) => projectState(surface().closeTab(String(args["tabId"] ?? ""))),

@@ -62,7 +62,7 @@ const RULES: CdpRule[] = [
   {
     match: ["Network.setCookie", "Network.setCookies", "Network.clearBrowserCookies"],
     tier: "deny",
-    reason: "直接改写指定分区的 cookie，绕过身份隔离",
+    reason: "直接改写指定分区的 cookie，绕过账号隔离",
   },
   {
     match: ["Runtime.addBinding"],

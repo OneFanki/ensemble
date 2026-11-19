@@ -1452,6 +1452,104 @@ function fillMessage(reason?: string): string {
       rectangle is what every page node, resize handle and DevTools split is
       computed from.
     -->
+    <div class="tabstrip" :data-platform="platform">
+      <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
+        <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
+          <button
+            v-for="page in windowPages"
+            :key="page.id"
+            type="button"
+            role="tab"
+            class="tab"
+            :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
+            :aria-selected="page.id === windowActivePageId"
+            :data-tab-id="page.id"
+            :data-sleep="sleepStateOf(page)"
+            :title="pageTitle(page)"
+            draggable="true"
+            @click="activateWindowPage(page.id)"
+            @mousedown="onWindowPageMouseDown"
+            @auxclick="onWindowPageAuxClick(page, $event)"
+            @dragstart="onWindowPageDragStart(page, $event)"
+            @dragend="onWindowPageDragEnd"
+            @dragover="onStripTabDragOver(page, $event)"
+            @dragleave="onStripTabDragLeave(page)"
+            @drop="onStripTabDrop(page, $event)"
+            @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
+          >
+            <!-- One icon slot, three states: loading, asleep, or the site. The
+                 spinner used to replace the close button, which left a loading
+                 tab with no way to close it and moved the close when it
+                 finished. -->
+            <span class="tab-fav">
+              <span
+                v-if="page.loading"
+                class="tab-loading"
+                :aria-label="t('app.browserLoading')"
+              ></span>
+              <Snowflake
+                v-else-if="page.sleeping"
+                :size="12"
+                class="tab-sleep"
+                :aria-label="t('app.tabSleeping')"
+              />
+              <TabIcon v-else :src="page.favicon" :size="13" />
+            </span>
+            <span class="tab-label">{{ store.titleOf(page) }}</span>
+            <Pin
+              v-if="!page.sleeping && page.sleepPolicy === 'never'"
+              :size="10"
+              class="tab-keep"
+              :aria-label="t('app.tabNeverSleep')"
+            />
+            <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
+                 图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
+            <span
+              v-if="page.everAudible"
+              class="tab-audio"
+              :class="{ muted: page.muted }"
+              role="button"
+              tabindex="0"
+              :data-audio="page.muted ? 'muted' : 'audible'"
+              :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+              v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+              @click.stop="void store.setMuted(page.id, !page.muted)"
+              @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
+              @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
+            >
+              <VolumeX v-if="page.muted" :size="11" />
+              <Volume2 v-else :size="11" />
+            </span>
+            <!-- Always rendered. A close affordance that exists only on the
+                 current tab turns "close these four" into four hover round
+                 trips; the resting state is quiet enough not to compete. -->
+            <span
+              class="tab-close"
+              role="button"
+              tabindex="0"
+              :aria-label="t('app.browserCloseTab')"
+              :data-close-tab="page.id"
+              @click.stop="store.closeTab(page.id)"
+              @keydown.enter.stop="store.closeTab(page.id)"
+              @keydown.space.prevent.stop="store.closeTab(page.id)"
+            >
+              <X :size="10" />
+            </span>
+          </button>
+        </TransitionGroup>
+      </div>
+      <button
+        type="button"
+        class="strip-add"
+        :aria-label="t('app.browserNewTabHere')"
+        v-tooltip="t('app.browserNewTabHere')"
+        @click="addWindowPage"
+      >
+        <Plus :size="14" />
+      </button>
+      <div class="strip-drag"></div>
+    </div>
+
     <div class="toolbar" :data-platform="platform">
       <button
         type="button"
@@ -2096,7 +2194,6 @@ function fillMessage(reason?: string): string {
         </div>
       </div>
     </div>
-
     <div class="work-area">
       <AccountRail
         :active-layer="layer"
@@ -2104,103 +2201,6 @@ function fillMessage(reason?: string): string {
         @close-layer="emit('update:layer', null)"
       />
       <div class="content-col">
-        <div class="tabstrip">
-          <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
-            <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
-              <button
-                v-for="page in windowPages"
-                :key="page.id"
-                type="button"
-                role="tab"
-                class="tab"
-                :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
-                :aria-selected="page.id === windowActivePageId"
-                :data-tab-id="page.id"
-                :data-sleep="sleepStateOf(page)"
-                :title="pageTitle(page)"
-                draggable="true"
-                @click="activateWindowPage(page.id)"
-                @mousedown="onWindowPageMouseDown"
-                @auxclick="onWindowPageAuxClick(page, $event)"
-                @dragstart="onWindowPageDragStart(page, $event)"
-                @dragend="onWindowPageDragEnd"
-                @dragover="onStripTabDragOver(page, $event)"
-                @dragleave="onStripTabDragLeave(page)"
-                @drop="onStripTabDrop(page, $event)"
-                @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
-              >
-                <!-- One icon slot, three states: loading, asleep, or the site. The
-                     spinner used to replace the close button, which left a loading
-                     tab with no way to close it and moved the close when it
-                     finished. -->
-                <span class="tab-fav">
-                  <span
-                    v-if="page.loading"
-                    class="tab-loading"
-                    :aria-label="t('app.browserLoading')"
-                  ></span>
-                  <Snowflake
-                    v-else-if="page.sleeping"
-                    :size="12"
-                    class="tab-sleep"
-                    :aria-label="t('app.tabSleeping')"
-                  />
-                  <TabIcon v-else :src="page.favicon" :size="13" />
-                </span>
-                <span class="tab-label">{{ store.titleOf(page) }}</span>
-                <Pin
-                  v-if="!page.sleeping && page.sleepPolicy === 'never'"
-                  :size="10"
-                  class="tab-keep"
-                  :aria-label="t('app.tabNeverSleep')"
-                />
-                <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
-                     图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
-                <span
-                  v-if="page.everAudible"
-                  class="tab-audio"
-                  :class="{ muted: page.muted }"
-                  role="button"
-                  tabindex="0"
-                  :data-audio="page.muted ? 'muted' : 'audible'"
-                  :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-                  v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-                  @click.stop="void store.setMuted(page.id, !page.muted)"
-                  @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
-                  @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
-                >
-                  <VolumeX v-if="page.muted" :size="11" />
-                  <Volume2 v-else :size="11" />
-                </span>
-                <!-- Always rendered. A close affordance that exists only on the
-                     current tab turns "close these four" into four hover round
-                     trips; the resting state is quiet enough not to compete. -->
-                <span
-                  class="tab-close"
-                  role="button"
-                  tabindex="0"
-                  :aria-label="t('app.browserCloseTab')"
-                  :data-close-tab="page.id"
-                  @click.stop="store.closeTab(page.id)"
-                  @keydown.enter.stop="store.closeTab(page.id)"
-                  @keydown.space.prevent.stop="store.closeTab(page.id)"
-                >
-                  <X :size="10" />
-                </span>
-              </button>
-            </TransitionGroup>
-          </div>
-          <button
-            type="button"
-            class="strip-add"
-            :aria-label="t('app.browserNewTabHere')"
-            v-tooltip="t('app.browserNewTabHere')"
-            @click="addWindowPage"
-          >
-            <Plus :size="14" />
-          </button>
-          <div class="strip-drag"></div>
-        </div>
       <div ref="stage" class="stage">
         <!--
           The zoom readout, for a gesture the chrome never sees.
@@ -2570,7 +2570,7 @@ function fillMessage(reason?: string): string {
   flex: 1 1 auto;
 }
 
-/* The row under the address bar: column + page area, no gap between them. */
+/* The row under the tab strip: column + page area, no gap between them. */
 .work-area {
   flex: 1 1 auto;
   min-height: 0;
@@ -2579,7 +2579,7 @@ function fillMessage(reason?: string): string {
   align-items: stretch;
 }
 
-/* The right column: page strip above the stage. */
+/* The right column: the address row above the stage. */
 .content-col {
   flex: 1 1 auto;
   min-width: 0;
@@ -2591,20 +2591,33 @@ function fillMessage(reason?: string): string {
 /* ---------------------------------------------------------------------------
  * Tab strip
  *
- * The band is the frame colour; the active tab is the chrome colour with no
- * bottom edge, so the strip and the address row below it read as one surface.
- * The strip now lives in the right column, under the address row: it no longer
- * meets the window's top-right corner, so it no longer reserves the caption
- * band — that moved to the address row, which is the row that reaches it.
+ * The window's first row, the way every browser draws it: tabs on top, the
+ * address row beneath them, the page under that. The band is the frame colour
+ * and the active tab is the chrome colour with no bottom edge, so the strip and
+ * the address row read as one surface.
+ *
+ * Because this row meets the window's top-right corner, *it* reserves the
+ * caption band — the native buttons are painted over the client area there.
+ * Exactly one row reserves it; when both this and the address row did, the
+ * address row's share became a dead gap on its right.
  * ------------------------------------------------------------------------ */
 .tabstrip {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: var(--tabstrip-height);
+  height: var(--titlebar-height);
   padding-left: 4px;
   background: var(--frame);
+}
+
+.tabstrip[data-platform="win32"],
+.tabstrip[data-platform="linux"] {
+  padding-right: calc(var(--window-controls-width, 138px) + 6px);
+}
+
+.tabstrip[data-platform="darwin"] {
+  padding-left: 82px;
 }
 
 /*
@@ -3000,26 +3013,21 @@ function fillMessage(reason?: string): string {
   display: flex;
   align-items: center;
   gap: 2px;
-  height: var(--titlebar-height);
+  height: var(--address-row-height);
   padding: 0 8px;
   background: var(--chrome);
   flex: 0 0 auto;
 }
 
 /*
- * The address row is the window's top band, so *it* owns the caption reserve.
+ * The address row is the second row now, so it no longer reaches the window's
+ * top-right corner and no longer reserves the caption band — that belongs to
+ * the tab strip above it. Leaving the reserve here too would push the app menu
+ * a hundred pixels off the right edge for no reason.
  *
- * The native buttons are painted over the client area at the top-right corner;
- * the row that reaches that corner has to leave their width empty, or they
- * cover the app menu. Exactly one row reserves it — when both the address row
- * and the strip did, the strip's share became a dead gap whose right edge no
- * longer lined up with anything. macOS keeps the traffic lights on the left.
+ * macOS keeps the traffic lights on the left, on the first row; the address row
+ * still indents past them because they hang over the band it occupies.
  */
-.toolbar[data-platform="win32"],
-.toolbar[data-platform="linux"] {
-  padding-right: calc(var(--window-controls-width, 138px) + 8px);
-}
-
 .toolbar[data-platform="darwin"] {
   padding-left: 82px;
 }

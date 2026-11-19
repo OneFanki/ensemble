@@ -735,16 +735,15 @@ function isDarkTheme(theme: AppSettings["theme"]): boolean {
 }
 
 /**
- * Height of the window's top band — the address row, which is also the drag
+ * Height of the window's top band — the tab strip, which is also the drag
  * region and the surface that reserves the caption area.
  *
- * Must match `--titlebar-height` in `tokens.css` (`44px`): the OS draws the
+ * Must match `--titlebar-height` in `tokens.css` (`34px`): the OS draws the
  * window buttons over the client area at this height, so a mismatch either
- * leaves a gap under them or has them overlap the controls. The row is 44px
- * because it carries an input and a dozen icon buttons; it was 34px when the
- * top row was only a tab strip.
+ * leaves a gap under them or has them overlap the controls. The strip is the
+ * window's first row; the address row sits under it and has its own height.
  */
-const TITLEBAR_HEIGHT = 44;
+const TITLEBAR_HEIGHT = 34;
 
 function titleBarOverlay(theme: AppSettings["theme"]): Electron.TitleBarOverlay {
   return { ...TITLEBAR_COLORS[isDarkTheme(theme) ? "dark" : "light"], height: TITLEBAR_HEIGHT };

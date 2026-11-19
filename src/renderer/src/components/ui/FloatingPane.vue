@@ -178,7 +178,7 @@ onBeforeUnmount(() => {
  */
 .floating-scrim {
   position: absolute;
-  top: var(--titlebar-height);
+  top: calc(var(--titlebar-height) + var(--address-row-height));
   left: var(--account-rail-width);
   right: 0;
   bottom: 0;
@@ -193,7 +193,7 @@ onBeforeUnmount(() => {
  */
 .floating-pane {
   position: absolute;
-  top: var(--titlebar-height);
+  top: calc(var(--titlebar-height) + var(--address-row-height));
   bottom: 0;
   left: var(--account-rail-width);
   display: flex;

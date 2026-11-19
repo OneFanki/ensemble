@@ -156,20 +156,21 @@
   /*
    * Window geometry.
    *
-   * `--titlebar-height` is *the* window's top band: the address row. It is also
-   * the band the native caption buttons are drawn in, so it must equal
+   * `--titlebar-height` is *the* window's top band: the tab strip, which is
+   * also the band the native caption buttons are drawn in, so it must equal
    * `TITLEBAR_HEIGHT` in `src/main/index.ts` — the OS paints the buttons over
    * the client area at that height, and a CSS-only change puts them off centre.
    * One token for both quantities on purpose: when they were two values, the
    * row that actually met the corner was never the row the constant described.
    *
-   * The page strip is no longer the window's top edge (the address row is), so
-   * it has its own height. `--toolbar-height` is gone rather than kept as an
-   * alias: two names for one band is exactly how the two drifted apart.
+   * The address row sits *under* the tabs, so it has its own height. The two
+   * must not share a token: the strip is what meets the corner, and giving the
+   * address row the titlebar token is what made the caption buttons hang half
+   * a band too high.
    */
-  --titlebar-height: 44px;
-  --tabstrip-height: 34px;
-  --account-rail-width: 196px;
+  --titlebar-height: 34px;
+  --address-row-height: 44px;
+  --account-rail-width: 160px;
   --dock-width: 244px;
 
   /* Spacing ladder. Anything that is not one of these should say why. */

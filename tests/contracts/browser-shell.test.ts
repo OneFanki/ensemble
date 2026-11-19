@@ -72,28 +72,29 @@ describe("the active tab and the toolbar share one surface", () => {
     expect(tab).not.toMatch(/border-bottom/);
   });
 
-  it("sizes the top row and the page strip from their own tokens", () => {
-    // The address row is the window's top band, so it takes the titlebar token;
-    // the page strip sits under it inside the right column and has its own
-    // height. Giving the strip the titlebar token is what made the two bands
-    // fight over the caption area.
-    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--titlebar-height\)/);
-    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--tabstrip-height\)/);
-    expect(ruleBody(BROWSER, ".tabstrip")).not.toMatch(/height:\s*var\(--titlebar-height\)/);
+  it("sizes the top row and the address row from their own tokens", () => {
+    // The tab strip is the window's first row, so it takes the titlebar token —
+    // it is the row the caption buttons are drawn in. The address row sits
+    // beneath it and has its own height. Swapping these is what made the
+    // caption buttons hang half a band too high (and, before that, what made a
+    // second reservation push the app menu off the right edge).
+    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--address-row-height\)/);
+    expect(ruleBody(BROWSER, ".toolbar")).not.toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(TOKENS).toMatch(/--titlebar-height:\s*\d+px/);
-    expect(TOKENS).toMatch(/--tabstrip-height:\s*\d+px/);
+    expect(TOKENS).toMatch(/--address-row-height:\s*\d+px/);
   });
 
   it("keeps the native window buttons level with the row that meets them", () => {
     // The OS draws the caption buttons over the client area at `TITLEBAR_HEIGHT`
-    // pixels. Three things therefore have to name the same number, and the
-    // assertion is written against the *height of the row that meets the corner*,
+    // pixels. Every row that meets the top-right corner has to name the same
+    // number, and the assertion is written against the *height of those rows*,
     // not against two literals agreeing: when the values matched but the row was
     // something else, this test stayed green while the top row was 10px taller
-    // than the buttons that hang over it.
+    // than the buttons hanging over it.
     //
     // 1. Main's constant, which positions the overlay.
-    // 2. The token the address row is sized from.
+    // 2. The token the tab strip is sized from — the browser's first row.
     // 3. Settings' own band, so switching between the browser and settings does
     //    not move the window buttons.
     const declared = /--titlebar-height:\s*(\d+)px/.exec(TOKENS)?.[1];
@@ -101,7 +102,7 @@ describe("the active tab and the toolbar share one surface", () => {
     expect(declared).toBeDefined();
     expect(mirrored).toBe(declared);
 
-    expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(ruleBody(SETTINGS, ".settings-head")).toMatch(/height:\s*var\(--titlebar-height\)/);
   });
 });

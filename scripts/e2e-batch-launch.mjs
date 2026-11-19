@@ -261,63 +261,56 @@ try {
   check("app window appeared", true);
   await wait(2000);
 
-  // --- The account column's launch panel: site → account, one click launches.
+  // --- The accounts pane's launch face: tiles grouped by site, one click opens.
   //
-  // The panel used to be a flat multi-select list with a confirm button. It is
-  // now a two-level cascade: the first level lists sites, the second that
-  // site's accounts, and picking an account launches it immediately. This is
-  // the UI path the batch IPC below is fed by, so its contract is asserted here
-  // rather than left to the renderer's own suite.
+  // The panel used to be a flat multi-select list with a confirm button, then a
+  // two-level cascade on the account rail. It is now the accounts pane's launch
+  // face: sites are headings and accounts are tiles, and clicking a tile opens
+  // it. The rail keeps only "which accounts are running", so there is no second
+  // entry point left to drift from this one.
+  //
+  // This is the UI path the batch IPC below is fed by, so its contract is
+  // asserted here rather than left to the renderer's own suite.
   const cascade = await client.evaluate(`(async () => {
-    document.querySelector('[data-launch-btn]')?.click();
-    await new Promise((done) => setTimeout(done, 400));
-    const sites = [...document.querySelectorAll('[data-launch-site]')].map((el) => ({
-      id: el.dataset.launchSiteId,
-      text: (el.textContent || '').trim(),
+    document.querySelector('[data-rail-entry="identities"]')?.click();
+    await new Promise((done) => setTimeout(done, 700));
+    const tileFace = Boolean(document.querySelector('[data-tile-face]'));
+    const sites = [...document.querySelectorAll('.tile-group')].map((el) => ({
+      name: (el.querySelector('.tile-head-name')?.textContent || '').trim(),
+      tiles: [...el.querySelectorAll('[data-account-tile]')].map((t) => t.dataset.accountTile),
     }));
     const flatRows = document.querySelectorAll('[data-launch-row]').length;
-    document.querySelector('[data-launch-site-id="${site.id}"]')?.click();
-    await new Promise((done) => setTimeout(done, 350));
-    const accounts = [...document.querySelectorAll('[data-launch-row]')].map((el) =>
-      el.dataset.launchRowId,
-    );
-    const hasBack = Boolean(document.querySelector('[data-launch-back]'));
 
     const before = (await window.ensemble.getEmbeddedState()).tabs.length;
-    document.querySelector('[data-launch-row-id="${alpha.id}"]')?.click();
+    document.querySelector('[data-account-tile="${alpha.id}"]')?.click();
     await new Promise((done) => setTimeout(done, 2600));
     const state = await window.ensemble.getEmbeddedState();
     const created = state.tabs.filter((tab) => tab.identityId === "${alpha.id}");
     return {
+      tileFace,
       sites,
       flatRows,
-      accounts,
-      hasBack,
       before,
       after: state.tabs.length,
       created: created.length,
-      panelOpen: Boolean(document.querySelector('[data-launch-panel]')),
       railShowsAccount: [...document.querySelectorAll('[data-instance-chip] .chip-account')]
         .map((el) => el.textContent.trim())
         .includes("账号甲"),
     };
   })()`);
   check(
-    "the launch panel is a site → account cascade, not a flat account list",
-    Array.isArray(cascade?.sites) &&
+    "the launch face groups accounts under their site instead of one flat list",
+    cascade?.tileFace === true &&
+      Array.isArray(cascade?.sites) &&
       cascade.sites.length === 1 &&
-      cascade.sites[0].id === site.id &&
-      cascade.flatRows === 0 &&
-      cascade.hasBack === true &&
-      Array.isArray(cascade?.accounts) &&
-      cascade.accounts.includes(alpha.id) &&
-      cascade.accounts.includes(beta.id),
+      cascade.sites[0].tiles.includes(alpha.id) &&
+      cascade.sites[0].tiles.includes(beta.id) &&
+      cascade.flatRows === 0,
     cascade,
   );
   check(
-    "picking one account launches exactly one instance and closes the panel",
-    cascade?.panelOpen === false &&
-      cascade.after === cascade.before + 1 &&
+    "clicking a tile launches exactly that one account",
+    cascade?.after === cascade.before + 1 &&
       cascade.created === 1 &&
       cascade.railShowsAccount === true,
     cascade,

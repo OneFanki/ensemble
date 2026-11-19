@@ -227,7 +227,18 @@ async function openConsolePage(client, view) {
     view === "settings" || view.startsWith("settings-")
       ? `Boolean(document.querySelector('.page.settings'))`
       : `Boolean(document.querySelector('[data-floating-pane]'))`;
-  return waitFor(client, marker, 5000);
+  const opened = await waitFor(client, marker, 5000);
+  // The accounts pane opens on its launch face, and every suite here is about the
+  // editing face (columns, row actions, group folding, drag). Switch once, here,
+  // rather than teaching fifteen assertions about two faces.
+  if (opened && (view === "identities" || view === "sites")) {
+    await client.evaluate(`(async () => {
+      document.querySelector('[data-mode-edit]')?.click();
+      await new Promise((r) => setTimeout(r, 400));
+      return true;
+    })()`);
+  }
+  return opened;
 }
 
 /** Back to the browser surface: the pane closes, the browser stays mounted. */
@@ -2350,24 +2361,27 @@ try {
   );
 
   // --- The browser page's standing navigation -------------------------------
-  // [+ 启动] and the three management entries on the account rail are the only
-  // navigation on the browser surface. Everything else — sections, message
-  // centre, flows — lives inside a floating layer, so there must be no section
-  // rows on the browser page itself.
+  // The account rail carries exactly one entry. Everything else — sections,
+  // message centre, flows, and launching an account — lives inside a floating
+  // layer, so there must be no section rows and no launch button on the browser
+  // surface itself.
   const navEntries = await client.evaluate(`(() => {
     const railEntries = [...document.querySelectorAll('[data-rail-entry]')].map((el) =>
       el.getAttribute('data-rail-entry'),
     );
     return {
       railEntries,
-      hasLaunch: Boolean(document.querySelector('[data-launch-btn]')),
+      // The launch control moved into the accounts pane, where picking an account
+      // is the whole point of the page. Its absence here is the assertion: a
+      // second entry point was a duplicate of that page.
+      launchButtonOnRail: Boolean(document.querySelector('[data-launch-btn]')),
       sectionsOnBrowser: document.querySelectorAll('[data-more-tab]').length,
       paneOpen: Boolean(document.querySelector('[data-floating-pane]')),
     };
   })()`);
   check(
-    "the browser page carries its launch control and the one rail entry",
-    navEntries?.hasLaunch === true &&
+    "the browser page carries one rail entry and no second launch button",
+    navEntries?.launchButtonOnRail === false &&
       navEntries?.railEntries?.length === 1 &&
       navEntries.railEntries.join(",") === "identities" &&
       navEntries.sectionsOnBrowser === 0 &&

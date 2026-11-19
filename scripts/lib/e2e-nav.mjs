@@ -75,6 +75,12 @@ const awaitPane = `
  * Always from the browser: a pane that is already open is dismissed first, so
  * every arrival is a real mount. Suites that rely on "go there" meaning
  * "freshly mounted" would otherwise read a copy left over from an earlier step.
+ *
+ * The pane mounts on its launch face — tiles you click to open — because that is
+ * what the pane is for almost every time. A suite that asserts on rows, columns,
+ * group folding or drag ordering wants the edit face, so `nav` decides: the
+ * `identities` destination switches to edit, and `accounts-use` leaves the launch
+ * face alone for the suites that test it.
  */
 const openLayer = `
   ${ensureBrowser}
@@ -83,6 +89,15 @@ const openLayer = `
   entry.click();
   await new Promise((done) => setTimeout(done, 450));
   ${awaitPane}
+`;
+
+/** Switches the accounts pane to its edit face, if it is not there already. */
+const toEditFace = `
+  if (!document.querySelector('[data-mode-edit][aria-pressed="true"]')) {
+    document.querySelector('[data-mode-edit]')?.click();
+    await new Promise((done) => setTimeout(done, 350));
+  }
+  if (!document.querySelector('.page.identities[data-mode="edit"]')) return false;
 `;
 
 /**
@@ -121,11 +136,17 @@ const CONTENT_SECTIONS = new Set(["bookmarks", "messages", "flows", "groups"]);
  * remembers.
  *
  * `sites` is accepted as an alias for `identities`: sites are what that pane
- * shows, and old call sites should not have to know that.
+ * shows, and old call sites should not have to know that. `accounts-use` is the
+ * one destination that stops on the launch face.
  */
 export function openNav(nav) {
-  if (nav === "sites" || nav === "identities") {
-    return `(async () => {${openLayer}return true;})()`;
+  if (nav === "identities" || nav === "sites") {
+    return `(async () => {${openLayer}${toEditFace}return true;})()`;
+  }
+  if (nav === "accounts-use") {
+    return `(async () => {${openLayer}
+      if (!document.querySelector('.page.identities[data-mode="use"]')) return false;
+      return true;})()`;
   }
   const section =
     nav === "settings" ? null : nav.startsWith("settings-") ? nav.slice("settings-".length) : nav;

@@ -17,18 +17,8 @@ import { aiDotState, lastActionAtByTab } from "@shared/ai-dot";
 import type { EmbeddedTab } from "@shared/embedded";
 import { type InstanceFreezeState, instanceFreezeState } from "@shared/instance-freeze";
 import type { Identity, RoleColor } from "@shared/types";
-import { onClickOutside } from "@vueuse/core";
-import {
-  ChevronLeft,
-  ChevronRight,
-  ExternalLink,
-  Globe,
-  PictureInPicture2,
-  Plus,
-  Users,
-  X,
-} from "lucide-vue-next";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ExternalLink, PictureInPicture2, Users, X } from "lucide-vue-next";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -215,6 +205,9 @@ const externalItems = computed<RailItem[]>(() =>
 
 const items = computed<RailItem[]>(() => [...embeddedItems.value, ...externalItems.value]);
 
+/** 站点图标加载失败的条目，退回文字头像。 */
+const failedAvatars = ref<Set<string>>(new Set());
+
 /**
  * 点一个条目。
  *
@@ -253,181 +246,6 @@ async function closeItem(item: RailItem): Promise<void> {
   }
   for (const page of embedded.instancePages(item.instanceId)) {
     await embedded.closeTab(page.id);
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* + 启动：站点 → 账号两级，点一个账号就拉起。                          */
-/* ------------------------------------------------------------------ */
-
-const launchOpen = ref(false);
-const launchRoot = ref<HTMLElement | null>(null);
-const launchPanel = ref<HTMLElement | null>(null);
-/** 单选：数组保留批量的形状，但这里永远只装一个 id。 */
-const launchPicked = ref<string[]>([]);
-/** 当前看的是哪个站点；`null` 表示第一级（站点列表）。 */
-const launchSiteId = ref<string | null>(null);
-/** 搜索词：第一级按站点名或账号名筛，第二级按账号筛。 */
-const launchTerm = ref("");
-/** 站点图标加载失败的条目，退回文字头像。 */
-const failedAvatars = ref<Set<string>>(new Set());
-
-onClickOutside(launchRoot, (event) => {
-  const target = event.target as Node | null;
-  if (target && launchPanel.value?.contains(target)) return;
-  launchOpen.value = false;
-});
-
-function onLaunchKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") launchOpen.value = false;
-}
-
-watch(launchOpen, (open) => {
-  if (open) {
-    launchPicked.value = [];
-    launchSiteId.value = null;
-    launchTerm.value = "";
-    document.addEventListener("keydown", onLaunchKeydown);
-    void nextTick(() => launchPanel.value?.querySelector<HTMLElement>("input")?.focus());
-  } else {
-    document.removeEventListener("keydown", onLaunchKeydown);
-  }
-});
-
-/** 已经在跑的账号不能再启动一次：列表里直接标出来。 */
-const launchChoices = computed(() => {
-  const running = new Set(embeddedItems.value.map((item) => item.instanceId));
-  return workspace.identities.map((identity) => {
-    const pages = embedded.tabs.filter((tab) => tab.identityId === identity.id);
-    const instanceRunning = pages.some((tab) => running.has(tab.instanceId));
-    return { identity, running: instanceRunning };
-  });
-});
-
-/** 一个站点分组：站点和它下面的账号；孤儿账号自成一组。 */
-interface LaunchGroup {
-  id: string;
-  name: string;
-  accounts: Array<{ identity: Identity; running: boolean }>;
-}
-
-const ORPHAN_GROUP_ID = "__orphan__";
-
-/** 站点列表按站点分，账号不会跨站点混在一屏；孤儿账号沿用账号页的叫法。 */
-const launchGroups = computed<LaunchGroup[]>(() => {
-  const result: LaunchGroup[] = [];
-  for (const site of workspace.sites) {
-    const accounts = launchChoices.value.filter(
-      (choice) => choice.identity.siteId === site.id,
-    );
-    if (!accounts.length) continue;
-    result.push({ id: site.id, name: site.name, accounts });
-  }
-  const orphans = launchChoices.value.filter(
-    (choice) => !workspace.sites.some((site) => site.id === choice.identity.siteId),
-  );
-  if (orphans.length) {
-    result.push({ id: ORPHAN_GROUP_ID, name: t("app.identityOrphanSite"), accounts: orphans });
-  }
-  return result;
-});
-
-function matchesTerm(identity: Identity, term: string): boolean {
-  return (
-    identity.name.toLowerCase().includes(term) ||
-    identity.username.toLowerCase().includes(term) ||
-    identity.role.toLowerCase().includes(term)
-  );
-}
-
-/** 第一级：搜索命中的站点名，或站点里至少有一个账号命中。 */
-const filteredGroups = computed<LaunchGroup[]>(() => {
-  const term = launchTerm.value.trim().toLowerCase();
-  if (!term) return launchGroups.value;
-  return launchGroups.value
-    .map((group) =>
-      group.name.toLowerCase().includes(term)
-        ? group
-        : { ...group, accounts: group.accounts.filter((choice) => matchesTerm(choice.identity, term)) },
-    )
-    .filter((group) => group.accounts.length > 0);
-});
-
-const activeGroup = computed<LaunchGroup | null>(
-  () => launchGroups.value.find((group) => group.id === launchSiteId.value) ?? null,
-);
-
-/** 第二级：当前站点下的账号，按同一个搜索词过滤。 */
-const visibleAccounts = computed<Array<{ identity: Identity; running: boolean }>>(() => {
-  const group = activeGroup.value;
-  if (!group) return [];
-  const term = launchTerm.value.trim().toLowerCase();
-  if (!term) return group.accounts;
-  return group.accounts.filter((choice) => matchesTerm(choice.identity, term));
-});
-
-function groupAccountCount(group: LaunchGroup): number {
-  return filteredGroups.value.find((item) => item.id === group.id)?.accounts.length ?? 0;
-}
-
-function enterSite(group: LaunchGroup): void {
-  launchSiteId.value = group.id;
-  // 第一级的搜索词是在找站点；带进第二级会把账号一并筛掉。
-  launchTerm.value = "";
-  void nextTick(() =>
-    launchPanel.value?.querySelector<HTMLElement>("[data-launch-row]")?.focus(),
-  );
-}
-
-function backToSites(): void {
-  launchSiteId.value = null;
-  void nextTick(() =>
-    launchPanel.value?.querySelector<HTMLElement>("[data-launch-site]")?.focus(),
-  );
-}
-
-/** 方向键在行间移动；第一级 → 键进入站点，第二级 ← 键返回。Esc 由文档监听统一关闭。 */
-function onPanelKeydown(event: KeyboardEvent): void {
-  const rows = Array.from(
-    launchPanel.value?.querySelectorAll<HTMLElement>("[data-launch-item]:not([disabled])") ?? [],
-  );
-  if (!rows.length) return;
-  const active = document.activeElement as HTMLElement | null;
-  const index = active ? rows.indexOf(active) : -1;
-  if (event.key === "ArrowDown") {
-    event.preventDefault();
-    rows[(index + 1 + rows.length) % rows.length]?.focus();
-  } else if (event.key === "ArrowUp") {
-    event.preventDefault();
-    rows[(index - 1 + rows.length) % rows.length]?.focus();
-  } else if (event.key === "ArrowRight" && index >= 0) {
-    if (rows[index]?.hasAttribute("data-launch-site")) {
-      event.preventDefault();
-      rows[index]?.click();
-    }
-  } else if (event.key === "ArrowLeft" && launchSiteId.value) {
-    event.preventDefault();
-    backToSites();
-  }
-}
-
-const launching = ref(false);
-
-/** 点一个账号就拉起：单选没有「确认」这一步。 */
-async function launchChoice(choice: { identity: Identity; running: boolean }): Promise<void> {
-  if (choice.running || launching.value) return;
-  launchPicked.value = [choice.identity.id];
-  await launchPickedIdentities();
-}
-
-async function launchPickedIdentities(): Promise<void> {
-  if (!launchPicked.value.length || launching.value) return;
-  launching.value = true;
-  try {
-    await embedded.openIdentitiesInNewView(launchPicked.value.slice());
-  } finally {
-    launching.value = false;
-    launchOpen.value = false;
   }
 }
 
@@ -539,118 +357,8 @@ function markAvatarBroken(instanceId: string): void {
     </div>
 
     <div class="rail-foot no-drag">
-      <!-- [+ 启动]：站点 → 账号两级，点一个账号就立刻拉起。 -->
-      <div ref="launchRoot" class="rail-launch">
-        <button
-          type="button"
-          class="launch-btn"
-          :aria-label="t('app.railLaunch')"
-          :aria-expanded="launchOpen"
-          :aria-haspopup="true"
-          data-launch-btn
-          v-tooltip="t('app.railLaunch')"
-          @click="launchOpen = !launchOpen"
-        >
-          <Plus :size="13" />
-          <span>{{ t("app.railLaunch") }}</span>
-        </button>
-        <div
-          v-if="launchOpen"
-          ref="launchPanel"
-          class="launch-panel"
-          data-launch-panel
-          @keydown="onPanelKeydown"
-        >
-          <p v-if="!launchChoices.length" class="panel-empty">{{ t("app.noIdentitiesYet") }}</p>
-          <p v-else-if="!launchGroups.length" class="panel-empty">{{ t("app.railLaunchNoSites") }}</p>
-          <template v-else>
-            <div class="panel-head">
-              <button
-                v-if="launchSiteId"
-                type="button"
-                class="panel-back"
-                :aria-label="t('app.railLaunchBack')"
-                data-launch-back
-                v-tooltip="t('app.railLaunchBack')"
-                @click="backToSites"
-              >
-                <ChevronLeft :size="12" />
-                <span class="panel-site-name">{{ activeGroup?.name }}</span>
-              </button>
-              <input
-                v-model="launchTerm"
-                class="panel-search"
-                type="search"
-                :placeholder="
-                  launchSiteId ? t('app.railLaunchSearchAccounts') : t('app.railLaunchSearchSites')
-                "
-                data-launch-search
-              />
-            </div>
-
-            <!-- 第一级：站点。每行是「站点名 + 该站点下的账号数」。 -->
-            <div
-              v-if="!launchSiteId"
-              class="panel-list"
-              role="group"
-              :aria-label="t('app.railLaunchPickSite')"
-            >
-              <button
-                v-for="group in filteredGroups"
-                :key="group.id"
-                type="button"
-                class="launch-row launch-site"
-                data-launch-site
-                data-launch-item
-                :data-launch-site-id="group.id"
-                @click="enterSite(group)"
-              >
-                <Globe :size="12" class="row-icon" aria-hidden="true" />
-                <span class="chip-account">{{ group.name }}</span>
-                <span class="row-state">
-                  {{ t("app.railLaunchAccountCount", { count: groupAccountCount(group) }) }}
-                </span>
-                <ChevronRight :size="11" class="row-chev" aria-hidden="true" />
-              </button>
-              <p v-if="!filteredGroups.length" class="panel-empty">{{ t("app.railLaunchNoMatch") }}</p>
-            </div>
-
-            <!-- 第二级：该站点下的账号。点一行即启动。 -->
-            <div
-              v-else
-              class="panel-list"
-              role="group"
-              :aria-label="t('app.railLaunchPick')"
-            >
-              <button
-                v-for="choice in visibleAccounts"
-                :key="choice.identity.id"
-                type="button"
-                class="launch-row"
-                :class="{ running: choice.running }"
-                data-launch-row
-                data-launch-item
-                :data-launch-row-id="choice.identity.id"
-                :disabled="choice.running"
-                @click="launchChoice(choice)"
-              >
-                <span
-                  class="row-color"
-                  :style="{ background: `var(--role-${choice.identity.color ?? 'amber'})` }"
-                  aria-hidden="true"
-                ></span>
-                <span class="chip-account">{{ choice.identity.name }}</span>
-                <span v-if="choice.running" class="row-state">{{ t("app.railRunning") }}</span>
-              </button>
-              <p v-if="!visibleAccounts.length" class="panel-empty">
-                {{ t("app.railLaunchNoMatch") }}
-              </p>
-            </div>
-          </template>
-        </div>
-      </div>
-
-      <!-- 管理入口：账号页。站点页与「更多」都并入了账号页。 -->
+      <!-- 管理入口：账号页。站点页与「更多」都并入了账号页，启动面板也收进了
+           那里——左栏只负责「哪些账号正在跑」，挑一个账号打开属于账号页。 -->
       <nav class="rail-entries no-drag" :aria-label="t('app.railManage')">
         <button
           type="button"

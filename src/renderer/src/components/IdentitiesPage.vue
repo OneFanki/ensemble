@@ -5,7 +5,9 @@ import {
   CheckSquare,
   Download,
   Globe,
+  GripVertical,
   HeartPulse,
+  LayoutGrid,
   Link2,
   Pencil,
   Play,
@@ -48,9 +50,28 @@ const { t } = useI18n();
 const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
 /**
- * Selection mode. The cards are buttons that launch (or open) on click, so
+ * Which of the page's two faces is showing.
+ *
+ * `use` (the default) answers one question: "which account do I open now". It
+ * shows tiles — avatar, name, one status dot — and a click launches. That is what
+ * this page is for almost every time it is opened, and a row table was the wrong
+ * shape for it: a table is for reading rows field by field, which is what
+ * *changing* accounts needs.
+ *
+ * `edit` is the low-frequency face: rows with every field, per-row actions,
+ * selection for bulk work, and the only place sites and groups are rearranged.
+ * Everything that writes lives here, so the tile face stays clickable without
+ * "was that the row I meant to edit?" mistakes.
+ *
+ * The state is remembered for the session only: opening the pane always starts on
+ * `use`, because arriving at a management table when you meant to open an account
+ * is the failure this split exists to prevent.
+ */
+const mode = ref<"use" | "edit">("use");
+/**
+ * Selection mode. The rows are buttons that launch (or open) on click, so
  * launching a handful one by one means every new browser window covers the next
- * card. In this mode a click toggles a checkbox instead, and one action launches
+ * row. In this mode a click toggles a checkbox instead, and one action launches
  * the whole selection into a single layout.
  */
 const selecting = ref(false);
@@ -453,30 +474,115 @@ function extraFacts(identity: Identity): string[] {
   for (const field of identity.extraFields ?? []) facts.push(field.label);
   return facts;
 }
+
+/* ------------------------------------------------------------------ */
+/* Reordering, edit face only                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Sites reorder by dragging a grip on their group heading.
+ *
+ * The grip rather than the whole heading: the heading is also a fold target and
+ * carries two buttons, and a heading-wide drag swallows the first click of
+ * "collapse" every time. Only the edit face draws the grip, because ordering is
+ * maintenance — on the tile face a tile that both launches and starts a drag is
+ * a tile that does the wrong thing half the time.
+ *
+ * Accounts deliberately do not reorder. Their order inside a site is the stored
+ * array order and there is no `moveIdentity` behind it; a handle that did nothing
+ * would be worse than no handle.
+ */
+
+const draggingSiteId = ref<string | null>(null);
+/** The heading the pointer is over, which draws the insertion line. */
+const dropSiteId = ref<string | null>(null);
+
+function onSiteDragStart(siteId: string, event: DragEvent): void {
+  draggingSiteId.value = siteId;
+  event.dataTransfer?.setData("text/plain", siteId);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onSiteDragOver(siteId: string, event: DragEvent): void {
+  if (!draggingSiteId.value || draggingSiteId.value === siteId) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dropSiteId.value = siteId;
+}
+
+function onSiteDragLeave(siteId: string): void {
+  if (dropSiteId.value === siteId) dropSiteId.value = null;
+}
+
+async function onSiteDrop(siteId: string): Promise<void> {
+  const movingId = draggingSiteId.value;
+  onSiteDragEnd();
+  if (!movingId || movingId === siteId) return;
+  const toIndex = store.sites.findIndex((site) => site.id === siteId);
+  if (toIndex >= 0) await store.moveSite(movingId, toIndex);
+}
+
+function onSiteDragEnd(): void {
+  draggingSiteId.value = null;
+  dropSiteId.value = null;
+}
+
+/** Switching to the tile face ends any selection: the bar belongs to edit. */
+function setMode(next: "use" | "edit"): void {
+  mode.value = next;
+  if (next === "use") endSelecting();
+}
 </script>
 
 <template>
-  <section class="page identities">
+  <section class="page identities" :data-mode="mode">
     <PageHeader :title="$t('app.identities')" numeric>
       <template #note>
         {{ $t("app.identityCount", { count: store.identities.length }) }}
         <template v-if="runningCount"> · {{ $t("app.statusRunning") }} {{ runningCount }}</template>
       </template>
       <template #actions>
-        <!-- The account door keeps the primary slot at every size, including an
-             empty list: it is the page's main action, and the account form can
-             create the site inline when there is none. -->
-        <AppButton variant="primary" @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ $t("app.newIdentity") }}
-        </AppButton>
-        <!-- The site door sits beside it, because this is the only page sites
-             exist on now: a site is the grouping of its accounts, so "another
-             site" and "another account" belong to the same bar. -->
-        <AppButton data-new-site @click="emit('newSite')">
-          <Globe :size="13" />
-          {{ $t("app.newSite") }}
-        </AppButton>
+        <!-- The two faces are one switch, not two pages: "use" is what the pane
+             is for, "edit" is the maintenance pass. A pencil rather than the word
+             "edit" because it sits beside actions that are used ten times more
+             often, and a verb there would read as a third primary action. -->
+        <div class="mode-switch" role="group" :aria-label="$t('app.accountMode')">
+          <button
+            type="button"
+            class="mode"
+            :class="{ on: mode === 'use' }"
+            :aria-pressed="mode === 'use'"
+            data-mode-use
+            v-tooltip="$t('app.accountModeUseHint')"
+            @click="setMode('use')"
+          >
+            <LayoutGrid :size="13" />
+          </button>
+          <button
+            type="button"
+            class="mode"
+            :class="{ on: mode === 'edit' }"
+            :aria-pressed="mode === 'edit'"
+            data-mode-edit
+            v-tooltip="$t('app.accountModeEditHint')"
+            @click="setMode('edit')"
+          >
+            <Pencil :size="13" />
+          </button>
+        </div>
+        <!-- Only the edit face writes. On the tile face these two buttons were
+             the page's primary actions competing with the thing the page is for
+             (opening an account); on the edit face they are exactly right. -->
+        <template v-if="mode === 'edit'">
+          <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
+            <Plus :size="13" />
+            {{ $t("app.newIdentity") }}
+          </AppButton>
+          <AppButton data-new-site @click="emit('newSite')">
+            <Globe :size="13" />
+            {{ $t("app.newSite") }}
+          </AppButton>
+        </template>
       </template>
     </PageHeader>
 
@@ -485,11 +591,12 @@ function extraFacts(identity: Identity): string[] {
     </div>
 
     <!--
-      The whole bar is a set of filters and batch actions over a list. With no
-      accounts, "all 0 / running 0 / expired 0" is three ways to see nothing and
-      the batch buttons have nothing to act on, so the bar is not drawn at all.
+      The toolbar is the edit face's: filters, bulk selection and the health
+      check are all things you reach for while rearranging. The tile face answers
+      "which one do I open" and needs only the search field, which it carries
+      itself.
     -->
-    <div v-if="store.identities.length" class="toolbar">
+    <div v-if="mode === 'edit' && store.identities.length" class="toolbar">
       <div class="tabs" role="tablist" :aria-label="$t('app.identities')">
         <button
           type="button"
@@ -536,10 +643,6 @@ function extraFacts(identity: Identity): string[] {
         :all-collapsed="allCollapsed"
         @toggle="groupCollapse.toggleAll(groupKeys)"
       />
-      <AppButton class="health" @click="emit('sessionHealth')">
-        <HeartPulse :size="13" />
-        {{ $t("app.sessionHealth") }}
-      </AppButton>
     </div>
 
     <!--
@@ -547,18 +650,29 @@ function extraFacts(identity: Identity): string[] {
       A wrapping list was fine with three groups and pushed the sections off
       screen with fifteen; a fixed-height strip keeps the page layout stable no
       matter how many groups exist.
+
+      Health sits at the strip's far end rather than in the toolbar: six controls
+      in a 720px pane made the toolbar wrap and left "session health" alone on a
+      second line. It is a whole-workspace sweep like the group filter, so the
+      strip is where it belongs — and the strip draws whenever either is wanted,
+      so a workspace with no groups still reaches the health check.
     -->
-    <div v-if="filterGroups.length" class="group-filters" data-group-filters>
-      <span class="filters-label">{{ $t("app.siteGroups") }}</span>
-      <div class="chip-scroll">
-        <button
-          type="button"
-          class="group-chip"
-          :class="{ on: groupFilter === null }"
-          @click="groupFilter = null"
-        >
-          {{ $t("app.filterAll") }}
-        </button>
+    <div
+      v-if="mode === 'edit' && (filterGroups.length > 0 || store.identities.length > 0)"
+      class="group-filters"
+      data-group-filters
+    >
+      <template v-if="filterGroups.length">
+        <span class="filters-label">{{ $t("app.siteGroups") }}</span>
+        <div class="chip-scroll">
+          <button
+            type="button"
+            class="group-chip"
+            :class="{ on: groupFilter === null }"
+            @click="groupFilter = null"
+          >
+            {{ $t("app.filterAll") }}
+          </button>
         <button
           v-for="group in filterGroups"
           :key="group.id"
@@ -573,7 +687,11 @@ function extraFacts(identity: Identity): string[] {
           {{ group.name }}
         </button>
       </div>
+      <!-- Managing groups is part of the filter strip: it is where a new group is
+           created, and a strip with no chips has no such place — so the button goes
+           with the chips, and only health survives an empty group list. -->
       <button
+        v-if="filterGroups.length"
         type="button"
         class="manage-groups"
         :class="{ on: groupsPanelOpen }"
@@ -584,6 +702,21 @@ function extraFacts(identity: Identity): string[] {
         @click="groupsPanelOpen = !groupsPanelOpen"
       >
         <Tags :size="12" />
+      </button>
+      </template>
+      <!-- Health sits at the far end of the filter strip rather than in the
+           toolbar: six controls in a 720px pane made the toolbar wrap and left
+           "session health" alone on a second line. It is a whole-workspace sweep
+           like the group filter, so this strip is where it belongs. -->
+      <button
+        type="button"
+        class="manage-groups"
+        :aria-label="$t('app.sessionHealth')"
+        :title="$t('app.sessionHealth')"
+        data-session-health
+        @click="emit('sessionHealth')"
+      >
+        <HeartPulse :size="12" />
       </button>
     </div>
 
@@ -692,7 +825,75 @@ function extraFacts(identity: Identity): string[] {
       </template>
     </Modal>
 
-    <div class="page-body">
+    <!--
+      The tile face.
+      
+      One tile per account, grouped by site, and a click opens it. No pills, no
+      column headers, no per-row action cluster: three pieces of information
+      (name, who, whether it is running) and a target large enough to hit. This is
+      the shape that stops the pane reading like a web admin console — a table is
+      for reading rows field by field, which is the edit face's job.
+      
+      The site heading stays because a site is the only grouping an account has,
+      but it carries no controls here: the count is enough, and every button that
+      used to sit on it lives one switch away.
+    -->
+    <div v-if="mode === 'use'" class="tile-face" data-tile-face>
+      <div v-if="store.identities.length" class="tile-search">
+        <label class="search">
+          <Search :size="12" />
+          <input v-model="query" type="search" :placeholder="$t('app.search')" />
+        </label>
+      </div>
+
+      <div v-for="group in groups" :key="group.siteId" class="tile-group">
+        <div class="tile-head">
+          <span class="tile-head-name">{{ group.name }}</span>
+          <span class="tile-head-count mono">{{ group.people.length }}</span>
+        </div>
+        <div class="tiles">
+          <button
+            v-for="identity in group.people"
+            :key="identity.id"
+            type="button"
+            class="tile"
+            :class="{ running: Boolean(store.instanceFor(identity.id)) }"
+            :style="{ '--role': roleVar(identity.color) }"
+            :data-account-tile="identity.id"
+            :title="`${identity.name} · ${identity.role}`"
+            @click="launch(identity)"
+          >
+            <span class="tile-avatar">{{ identity.name.slice(0, 1) }}</span>
+            <span class="tile-text">
+              <span class="tile-name">{{ identity.name }}</span>
+              <span class="tile-role">{{ identity.role }}</span>
+            </span>
+            <span
+              class="tile-dot"
+              :class="{
+                live: Boolean(store.instanceFor(identity.id)),
+                expired: identity.status === 'expired',
+              }"
+              :aria-label="statusLabel(identity)"
+            ></span>
+          </button>
+        </div>
+      </div>
+
+      <EmptyState
+        v-if="!visibleIdentities.length"
+        :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
+      >
+        <template #icon><Users :size="22" /></template>
+        <AppButton variant="primary" @click="emit('newIdentity')">
+          <Plus :size="13" />
+          {{ $t("app.newIdentity") }}
+        </AppButton>
+      </EmptyState>
+    </div>
+
+    <!-- The edit face: rows with every field, actions, and the write entries. -->
+    <div v-else class="page-body">
       <div class="cards">
       <!-- Grouped by site; a view may span sites, so the account page no longer
            hides everything outside one global "current site". -->
@@ -701,6 +902,14 @@ function extraFacts(identity: Identity): string[] {
              and this row is what the eye is on when it wants the section gone.
              The address and the add button ride in slots because they belong to
              this page, not to every grouped list. -->
+        <div
+          class="site-head-wrap"
+          :class="{ dragging: draggingSiteId === group.siteId, drop: dropSiteId === group.siteId }"
+          :data-site-row="group.siteId"
+          @dragover="onSiteDragOver(group.siteId, $event)"
+          @dragleave="onSiteDragLeave(group.siteId)"
+          @drop.prevent="onSiteDrop(group.siteId)"
+        >
         <GroupHeader
           :name="group.name"
           :count="group.people.length"
@@ -723,6 +932,19 @@ function extraFacts(identity: Identity): string[] {
           </template>
           <template #actions>
             <template v-if="group.siteId !== '__orphan__'">
+              <!-- The reorder handle. Sites are the only ordered list on this
+                   page, and until now theirs had no way in from the interface. -->
+              <span
+                class="group-grip"
+                draggable="true"
+                :title="$t('app.dragReorder')"
+                :aria-label="$t('app.dragReorder')"
+                :data-site-grip="group.siteId"
+                @dragstart.stop="onSiteDragStart(group.siteId, $event)"
+                @dragend="onSiteDragEnd"
+              >
+                <GripVertical :size="11" />
+              </span>
               <button
                 type="button"
                 class="group-icon"
@@ -745,6 +967,7 @@ function extraFacts(identity: Identity): string[] {
             </template>
           </template>
         </GroupHeader>
+        </div>
         <template v-if="!groupCollapse.isCollapsed(group.siteId)">
           <!-- One header per group: the columns are per group because a group is
                the local table. A single header above the page would sit apart
@@ -1161,6 +1384,193 @@ function extraFacts(identity: Identity): string[] {
   height: 4px;
   border-radius: 50%;
   background: var(--tag);
+}
+
+/* ------------------------------------------------------------------ */
+/* The use face                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A tile is a launch target, not a row of data.
+ *
+ * The page is a floating pane, never a full window, so "how much fits" is decided
+ * by about 700px of width: three tiles per row, each about 30px shorter than the
+ * table row it replaces, and no column rules. What the tile drops (password mode,
+ * browser, extra fields) is exactly what the edit face is for.
+ */
+.mode-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.mode {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+}
+
+.mode:hover {
+  color: var(--text-secondary);
+}
+
+.mode.on {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.tile-face {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 4px;
+}
+
+.tile-search .search {
+  margin-left: 0;
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.tile-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tile-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+.tile-head-count {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.tiles {
+  display: grid;
+  /* A consistent column width across groups, rather than stretching two tiles to
+     fill a row that could hold three. `auto-fill` keeps the empty track, so a
+     site with two accounts puts them at the same size as a site with five —
+     stretching is what makes a two-account group look like a different widget
+     from a five-account one. */
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.tile {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.tile:hover {
+  border-color: color-mix(in srgb, var(--role) 55%, var(--line));
+  background: var(--bg-elevated);
+}
+
+.tile-avatar {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--role) 18%, transparent);
+  color: color-mix(in srgb, var(--role) 78%, var(--text));
+  font-size: 12px;
+}
+
+.tile-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.tile-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-role {
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+.tile-dot.live {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.tile-dot.expired {
+  background: var(--red);
+}
+
+/* ------------------------------------------------------------------ */
+/* Site reordering (edit face)                                         */
+/* ------------------------------------------------------------------ */
+
+.site-head-wrap.dragging {
+  opacity: 0.5;
+}
+
+/* Insertion line: the heading below the pointer receives the dragged site. */
+.site-head-wrap.drop {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.group-grip {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 18px;
+  flex: 0 0 16px;
+  color: var(--faint);
+  cursor: grab;
+}
+
+.group-grip:active {
+  cursor: grabbing;
 }
 
 /* One fixed line of chips that scrolls sideways. Wrapping made the toolbar grow

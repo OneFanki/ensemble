@@ -174,10 +174,13 @@ async function openAccountForm(client) {
     for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
       await wait(80);
     }
-    // The new-account action lives in the page header (or, with no accounts at
-    // all, in the empty state); both are the page's primary action.
+    // The pane opens on its launch face, where the header carries the view switch
+    // and no write action at all: creating an account is a write, so it lives on
+    // the edit face. Switch there first, then take that face's primary action.
+    document.querySelector('[data-mode-edit]')?.click();
+    await wait(350);
     const newAccount =
-      document.querySelector('.page.identities .page-head-actions button') ??
+      document.querySelector('[data-new-account]') ??
       document.querySelector('.page.identities .empty-actions button');
     newAccount?.click();
     await wait(600);
@@ -271,6 +274,12 @@ try {
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Rows and their per-row actions are the edit face's; the launch face has
+    // tiles and no edit affordance at all.
+    if (!document.querySelector('[data-mode-edit][aria-pressed="true"]')) {
+      document.querySelector('[data-mode-edit]')?.click();
+      await wait(350);
+    }
     document.querySelector('[data-edit-identity]')?.click();
     await wait(700);
     document.querySelector('[data-advanced-toggle]')?.click();

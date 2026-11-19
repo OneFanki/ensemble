@@ -100,7 +100,7 @@ try {
     return {
       emptyState: document.querySelectorAll('.stage-empty').length,
       newTabAction: document.querySelector('.stage-empty-action')?.textContent?.trim() ?? null,
-      launch: Boolean(document.querySelector('[data-launch-btn]')),
+      launchOnRail: Boolean(document.querySelector('[data-launch-btn]')),
       railEntries: document.querySelectorAll('[data-rail-entry]').length,
       address: document.querySelector('.address input')?.value ?? null,
       cells: document.querySelectorAll('.slot-empty').length,
@@ -109,10 +109,11 @@ try {
   check("a workspace with nothing running shows the stage's empty state", empty?.emptyState === 1, empty);
   check("the empty state offers the new-tab action", Boolean(empty?.newTabAction), empty);
   check(
-    "the rail keeps its launching and management entrances available",
-    // One management entry now: sites and groups are configured inside the
-    // accounts pane, and everything else moved to settings.
-    empty?.launch === true && empty?.railEntries === 1,
+    "the rail keeps one management entrance and carries no launch button",
+    // One entry: sites and groups are configured inside the accounts pane, and
+    // everything else moved to settings. Launching lives there too — the rail
+    // lists what is running, it does not pick what to start.
+    empty?.launchOnRail === false && empty?.railEntries === 1,
     empty,
   );
   check("a blank page leaves the address bar empty", empty?.address === "", empty?.address);

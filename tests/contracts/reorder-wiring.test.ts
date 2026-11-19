@@ -61,11 +61,19 @@ describe("reorder wiring contract", () => {
     );
   });
 
-  it("no page carries a second site or group reorder implementation", () => {
-    // Sites have no list of their own any more: they are the sections of the
-    // account page. The only group reorder is the one the editor owns.
+  it("keeps one reorder implementation per list, and the account page owns sites", () => {
+    // Groups: the editor is the only implementation; both entrances (the account
+    // page's inline panel and the settings tab) render it.
+    //
+    // Sites: the account page's edit face is the only place a site row exists — a
+    // site is the heading of its accounts — so the grip there is the one and only
+    // site reorder. It reaches the store rather than splicing locally, which the
+    // assertion above locks.
     const accountPage = read("src/renderer/src/components/IdentitiesPage.vue");
+    expect(accountPage).toMatch(/store\.moveSite\(/);
     expect(accountPage).not.toMatch(/store\.moveSiteGroup\(/);
-    expect(accountPage).not.toMatch(/onSiteDrag/);
+    // The grip lives only on the edit face: ordering is maintenance, and a tile
+    // that both launches and starts a drag does the wrong thing half the time.
+    expect(accountPage).toMatch(/class="group-grip"/);
   });
 });

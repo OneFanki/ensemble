@@ -439,11 +439,9 @@ try {
 
   // --- Site groups are a settings section now --------------------------------
   //
-  // They used to be "tags", lived behind the account rail's [管理] menu and were
-  // created in a dialog. Two things changed at once: the concept narrowed to
-  // "which section a site is filed under" (so it belongs with the other
-  // configuration), and AGENTS rule 22 replaced the dialog with an inline
-  // composer — a name and a colour have nothing to interrupt.
+  // They used to be "tags" and lived behind the account rail's [管理] menu. What
+  // changed is the concept: it narrowed to "which section a site is filed
+  // under", so it belongs with the other configuration.
   await openConsolePage(client, "groups");
   await waitFor(client, `Boolean(document.querySelector('.site-groups'))`);
   const groupsPage = await client.evaluate(`(() => {
@@ -466,37 +464,39 @@ try {
     { rows: groupsPage?.rows, expectedAtLeast: siteGroups.length },
   );
 
-  // Creating happens in a strip above the list, and the strip has a way out
-  // that is not "save" — the two failures the old dialog contract stood in for.
-  const groupComposer = await client.evaluate(`(async () => {
+  // Creating happens in a dialog, and the dialog has a way out that is not
+  // "save" — the two failures the inline form used to have: it pushed the list
+  // down, and it had no single place to close from.
+  const groupDialog = await client.evaluate(`(async () => {
     const api = window.ensemble;
     const opener = document.querySelector('[data-group-new], [data-group-create]');
     opener?.click();
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 400));
     const input = document.querySelector('[data-group-name]');
-    const opened = Boolean(input);
+    const inDialog = Boolean(input?.closest('[role="dialog"]'));
     if (input) {
-      input.value = '内联分组';
+      input.value = '弹窗分组';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
     document.querySelector('[data-group-color="rose"]')?.click();
     document.querySelector('[data-group-save]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
+    await new Promise((r) => setTimeout(r, 800));
     const after = await api.getWorkspace();
-    const saved = after.siteGroups.find((g) => g.name === '内联分组');
+    const saved = after.siteGroups.find((g) => g.name === '弹窗分组');
     return {
-      opened,
+      opened: Boolean(input),
+      inDialog,
       closed: document.querySelector('[data-group-name]') === null,
       color: saved?.color ?? null,
-      hasCancel: Boolean(document.querySelector('[data-group-cancel]')),
     };
   })()`);
   check(
-    "creating a site group uses the inline composer and saves the picked colour",
-    groupComposer?.opened === true &&
-      groupComposer?.closed === true &&
-      groupComposer?.color === "rose",
-    groupComposer,
+    "creating a site group happens in a dialog and saves the picked colour",
+    groupDialog?.opened === true &&
+      groupDialog?.inDialog === true &&
+      groupDialog?.closed === true &&
+      groupDialog?.color === "rose",
+    groupDialog,
   );
 
   await openConsolePage(client, "settings");

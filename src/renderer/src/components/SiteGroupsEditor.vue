@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import type { RoleColor, SiteGroup } from "@shared/types";
-import { GripVertical, Pencil, Plus, Tags, Trash2, X } from "lucide-vue-next";
+import { GripVertical, Pencil, Plus, Tags, Trash2 } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
+import Modal from "./Modal.vue";
 import AppButton from "./ui/AppButton.vue";
 import EmptyState from "./ui/EmptyState.vue";
+import FormField from "./ui/FormField.vue";
 import IconButton from "./ui/IconButton.vue";
 import TextField from "./ui/TextField.vue";
 
@@ -18,11 +20,10 @@ import TextField from "./ui/TextField.vue";
  * settings tab. Two implementations of "create a group" would drift on the
  * first change.
  *
- * Writing happens in a strip above the list, not in a dialog: a group is a name
- * and a colour, there is nothing to interrupt, and closing a dialog would only
- * bring the user back to the same list. The strip takes the place of the create
- * button while it is open, so it does not push the list down by more than its
- * own height, and editing a row opens the same strip pre-filled.
+ * Both writing actions happen in one dialog. A group is a name and a colour, and
+ * creating and editing are the same two fields — an inline form in the page body
+ * pushed the list around, and a row that turned into inputs made the list jump
+ * by a row height every time it was used.
  */
 const store = useWorkspaceStore();
 const confirm = useConfirmStore();
@@ -32,30 +33,26 @@ const GROUP_COLORS: RoleColor[] = ["amber", "teal", "violet", "rose", "blue", "s
 
 const groups = computed(() => store.siteGroups);
 
-/** The strip's draft. `group` absent means "create", present means "edit". */
-const composer = ref<{ group?: SiteGroup; name: string; color: RoleColor } | null>(null);
+/**
+ * The dialog's draft. `group` absent means "create", present means "edit that
+ * row"; `color` is kept here rather than read from the row so the swatches can
+ * preview a choice without saving it.
+ */
+const dialog = ref<{ group?: SiteGroup; name: string; color: RoleColor } | null>(null);
 const error = ref("");
-const nameInput = ref<InstanceType<typeof TextField> | null>(null);
 
-async function openCreate(): Promise<void> {
+function openCreate(): void {
   error.value = "";
-  composer.value = { name: "", color: "slate" };
-  await Promise.resolve();
-  nameInput.value?.focus();
+  dialog.value = { name: "", color: "slate" };
 }
 
 function openEdit(group: SiteGroup): void {
   error.value = "";
-  composer.value = { group, name: group.name, color: group.color };
-}
-
-function close(): void {
-  composer.value = null;
-  error.value = "";
+  dialog.value = { group, name: group.name, color: group.color };
 }
 
 async function submit(): Promise<void> {
-  const draft = composer.value;
+  const draft = dialog.value;
   if (!draft) return;
   const name = draft.name.trim();
   if (!name) {
@@ -63,17 +60,17 @@ async function submit(): Promise<void> {
     return;
   }
   // `run` in the store reports failures as a toast and answers `undefined`, so
-  // the strip only closes when the write landed.
+  // the dialog only closes when the write landed.
   const saved = await store.saveSiteGroup({
     ...(draft.group ? { id: draft.group.id } : {}),
     name,
     color: draft.color,
   });
   if (saved === undefined) return;
-  // Closing is written here rather than through `close()`: the guard above has
-  // to *precede* it in the same block, and a helper call hides that ordering
-  // from a reader (and from the contract test that locks it).
-  composer.value = null;
+  // Closing is written here rather than through a `close()` helper: the guard
+  // above has to *precede* it in the same block, and a helper call hides that
+  // ordering from a reader (and from the contract test that locks it).
+  dialog.value = null;
   error.value = "";
 }
 
@@ -140,44 +137,9 @@ async function remove(group: SiteGroup): Promise<void> {
 
 <template>
   <div class="site-groups-editor">
-    <!-- Create and edit share one strip, in the list's own place: a group is two
-         values, so an overlay would be more furniture than the task needs. -->
-    <form v-if="composer" class="composer" data-group-composer @submit.prevent="submit">
-      <div class="composer-fields">
-        <TextField
-          ref="nameInput"
-          v-model="composer.name"
-          type="text"
-          maxlength="60"
-          :placeholder="$t('app.groupNamePlaceholder')"
-          data-group-name
-        />
-        <div class="color-row">
-          <button
-            v-for="color in GROUP_COLORS"
-            :key="color"
-            type="button"
-            class="color-dot"
-            :class="{ picked: composer.color === color }"
-            :style="{ background: `var(--role-${color})` }"
-            :aria-label="color"
-            :data-group-color="color"
-            @click="composer.color = color"
-          ></button>
-        </div>
-        <AppButton variant="primary" type="submit" data-group-save>
-          {{ composer.group ? $t("app.save") : $t("app.groupCreate") }}
-        </AppButton>
-        <IconButton :ariaLabel="$t('app.cancel')" @click="close">
-          <X :size="12" />
-        </IconButton>
-      </div>
-      <p v-if="error" class="error" role="alert">{{ error }}</p>
-    </form>
-
     <div class="editor-toolbar">
       <span class="editor-title">{{ $t("app.siteGroups") }}</span>
-      <AppButton v-if="!composer" data-group-new @click="openCreate">
+      <AppButton data-group-new @click="openCreate">
         <Plus :size="12" />
         {{ $t("app.groupCreate") }}
       </AppButton>
@@ -228,13 +190,56 @@ async function remove(group: SiteGroup): Promise<void> {
       </div>
     </div>
 
-    <EmptyState v-else-if="!composer" :text="$t('app.noSiteGroups')">
+    <EmptyState v-else :text="$t('app.noSiteGroups')">
       <template #icon><Tags :size="18" /></template>
       <AppButton @click="openCreate">
         <Plus :size="12" />
         {{ $t("app.groupCreate") }}
       </AppButton>
     </EmptyState>
+
+    <Modal
+      v-if="dialog"
+      :open="true"
+      :title="dialog.group ? $t('app.groupEdit') : $t('app.groupCreate')"
+      width="420px"
+      @close="dialog = null"
+    >
+      <form class="form" @submit.prevent="submit">
+        <FormField :label="$t('app.groupName')">
+          <TextField
+            v-model="dialog.name"
+            type="text"
+            maxlength="60"
+            :placeholder="$t('app.groupNamePlaceholder')"
+            data-group-name
+          />
+        </FormField>
+        <FormField as="div" :label="$t('app.groupColor')">
+          <span class="color-row">
+            <button
+              v-for="color in GROUP_COLORS"
+              :key="color"
+              type="button"
+              class="color-dot"
+              :class="{ picked: dialog.color === color }"
+              :style="{ background: `var(--role-${color})` }"
+              :aria-label="color"
+              :data-group-color="color"
+              @click="dialog.color = color"
+            ></button>
+          </span>
+        </FormField>
+        <p v-if="error" class="error" role="alert">{{ error }}</p>
+      </form>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="dialog = null">{{ $t("app.cancel") }}</AppButton>
+        <AppButton variant="primary" data-group-save @click="submit">
+          {{ dialog.group ? $t("app.save") : $t("app.groupCreate") }}
+        </AppButton>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -245,26 +250,10 @@ async function remove(group: SiteGroup): Promise<void> {
   gap: 10px;
 }
 
-.composer {
+.form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
-  border-radius: var(--radius);
-  background: var(--bg-elevated);
-}
-
-.composer-fields {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.composer-fields > .input {
-  flex: 1 1 200px;
-  min-width: 160px;
+  gap: 13px;
 }
 
 .color-row {

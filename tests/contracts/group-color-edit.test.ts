@@ -15,7 +15,7 @@ function body(start: string, end: string): string {
 }
 
 describe("site group editing contract", () => {
-  it("saves the colour chosen in the composer instead of echoing the stored one", () => {
+  it("saves the colour chosen in the dialog instead of echoing the stored one", () => {
     // The bug this locks: edit mode only ever sent `color: group.color`, so a
     // group's colour was unreachable after creation even though the data layer
     // (`WorkspaceService.saveSiteGroup`) already accepted a new one.
@@ -24,41 +24,41 @@ describe("site group editing contract", () => {
     expect(submit).toMatch(/color:\s*draft\.color/);
   });
 
-  it("offers the colour swatches in the composer", () => {
+  it("offers the colour swatches in the dialog", () => {
     expect(page.match(/v-for="color in GROUP_COLORS"/g)?.length).toBe(1);
     expect(page).toMatch(/data-group-color/);
   });
 
   it("writes both fields on every submit, so a colour-only edit lands", () => {
-    // The row has one composer for create and edit; nothing about it is allowed to
+    // The dialog serves create and edit; nothing about it is allowed to
     // short-circuit on "the name did not change", which is what silently dropped
     // colour-only edits before.
     const submit = body("async function submit", "const draggedId");
     expect(submit).toMatch(/name,\s*\n?\s*color:\s*draft\.color/);
   });
 
-  it("keeps the pending colour out of the row until the composer is saved", () => {
+  it("keeps the pending colour out of the row until the dialog is saved", () => {
     // The row draws the stored colour. A preview rendered straight into the list
-    // would make closing the composer look like it saved something.
+    // would make closing the dialog look like it saved something.
     expect(page).toMatch(/:style="\{ '--tag': `var\(--role-\$\{group\.color\}\)` \}"/);
   });
 
   it("closes only after a successful write", () => {
     const submit = body("async function submit", "const draggedId");
     // `run` answers `undefined` on a rejection, so the guard must come before
-    // the assignment that closes the composer.
+    // the assignment that closes the dialog.
     const guard = submit.indexOf("saved === undefined");
-    const close = submit.indexOf("composer.value = null");
+    const close = submit.indexOf("dialog.value = null");
     expect(guard).toBeGreaterThanOrEqual(0);
     expect(close).toBeGreaterThan(guard);
   });
 
-  it("presents create and edit as one composer, never as row inputs", () => {
-    // AGENTS.md rule 22: a two-value composer does not need a modal. What it
-    // must not become is a row that turns into inputs — that reflowed the list
-    // under the pointer and is the bug this shape exists to avoid.
-    expect(page).toMatch(/<form v-if="composer"/);
-    expect(page).toMatch(/data-group-composer/);
+  it("has no inline form in the page body", () => {
+    // The rule this page is the reason for: a form that appears in the layout
+    // pushes the list it belongs to, and the one under the create row stayed
+    // open after a successful save. Create and edit share one dialog.
+    expect(page).toMatch(/<Modal/);
+    expect(page).not.toMatch(/<form[^>]*v-if=/);
     expect(page).not.toMatch(/editingGroupId/);
   });
 });

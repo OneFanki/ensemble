@@ -269,79 +269,13 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
-  // --- Sites: one table, always -------------------------------------------
-  await go(client, "sites");
-  check(
-    "the sites page rendered both seeded rows",
-    await waitFor(client, `document.querySelectorAll('.sites .env-card').length === 2`),
-  );
-  const sitesTable = await client.evaluate(`(() => {
-    const heads = [...document.querySelectorAll('.sites .env-table-head')];
-    const rows = [...document.querySelectorAll('.sites .env-card')];
-    return {
-      heads: heads.length,
-      labels: heads[0]
-        ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
-        : [],
-      // No view switch survives on the page, and no mode class either: the table
-      // is the layout, not one of two.
-      toggle: Boolean(document.querySelector('.sites [data-view-toggle]')),
-      modeClass:
-        document.querySelector('.sites .env-grid')?.className.match(/view-(list|table)/)?.[0] ?? null,
-      // One row: grip, name, address, facts, actions, all on the same line.
-      cells: rows.map((row) => row.children.length),
-      singleLine: rows.every((row) => {
-        const centers = [...row.children].map((cell) => {
-          const rect = cell.getBoundingClientRect();
-          return Math.round(rect.top + rect.height / 2);
-        });
-        return new Set(centers).size === 1;
-      }),
-      dragHook: Boolean(rows[0]?.querySelector('.site-grip')),
-    };
-  })()`);
-  check(
-    "the sites page draws one header row per group, with no view switch",
-    sitesTable?.heads === 2 &&
-      JSON.stringify(sitesTable?.labels) === JSON.stringify(["站点", "地址", "账号与视图", "操作"]) &&
-      sitesTable?.toggle === false &&
-      sitesTable?.modeClass === null,
-    sitesTable,
-  );
-  check(
-    "site rows are one horizontal line with the drag grip",
-    Array.isArray(sitesTable?.cells) &&
-      sitesTable.cells.length === 2 &&
-      sitesTable.cells.every((count) => count === 5) &&
-      sitesTable.singleLine === true &&
-      sitesTable.dragHook === true,
-    sitesTable,
-  );
-  const sitesAlignment = await client.evaluate(
-    alignmentScript(".sites .env-card", ".sites .env-table-head"),
-  );
-  check(
-    "site table rows share the header's columns and stay on one line",
-    sitesAlignment?.rows === 2 &&
-      sitesAlignment?.headers === 5 &&
-      sitesAlignment?.columns === 5 &&
-      sitesAlignment?.headerAligned === true &&
-      sitesAlignment?.uniform === true &&
-      sitesAlignment?.singleLine === true,
-    sitesAlignment,
-  );
-
-  const sitesActions = await client.evaluate(actionsScript(".sites .env-card", ".card-actions"));
-  check(
-    "every site row's actions are icons of one size, ending on one right edge",
-    sitesActions?.rows === 2 &&
-      Array.isArray(sitesActions?.counts) &&
-      sitesActions.counts.every((count) => count === 4) &&
-      sitesActions.worded === 0 &&
-      sitesActions.heights?.length === 1 &&
-      new Set(sitesActions.rightEdges).size === 1,
-    sitesActions,
-  );
+  // --- Sites: folded into the accounts page --------------------------------
+  //
+  // A site used to have its own table. It is a heading now: the accounts page
+  // groups accounts under the site they belong to, and the site is configured
+  // from that heading. The table assertions that lived here are gone with the
+  // page — the accounts table below is the one that still exists, and it
+  // carries the same column discipline.
 
   // --- Identities: the same table shape ------------------------------------
   await go(client, "identities");

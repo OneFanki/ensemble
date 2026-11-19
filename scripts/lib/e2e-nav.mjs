@@ -1,21 +1,22 @@
 /**
  * Getting to the app's own pages from an automated run.
  *
- * Navigation lives in the account column on the left: three entries at its foot
- * (`[data-rail-entry="sites"|"identities"|"more"]`) open a floating pane over the
- * page. The browser is never replaced — the stage keeps its rectangle and the
- * pages stay on it — so "go to a page" is one click on an entry, not a view
- * switch.
+ * There are exactly two destinations now:
  *
- * Two destinations need a second click inside their pane:
- * - **More** hosts four sections (`[data-more-tab]`: bookmarks / tags / messages /
- *   ai), and flows is a tab of the AI section (`[data-ai-tab="flows"]`).
- * - **Settings** is the one full-window page left. It opens from the app menu
- *   (`[data-app-menu]` → `[data-menu-item="settings"]`) and keeps its own
- *   section list (`[data-section]`).
+ * 1. **Accounts** — the single entry at the foot of the account column
+ *    (`[data-rail-entry="identities"]`). It opens a floating pane over the page;
+ *    the browser is never replaced, so "go there" is one click, not a view
+ *    switch. Sites and site groups are configured inside it (a site is the
+ *    heading of its accounts), which is why there is no separate sites page.
+ * 2. **Settings** — the one full-window page left, opened from the app menu
+ *    (`[data-app-menu]` → `[data-menu-item="settings"]`). Bookmarks, messages,
+ *    flows and site groups live there as `[data-section]` tabs.
  *
- * Repeating that in fifteen suites is how the selectors drift apart; the snippets
- * here are the single copy.
+ * AI activity is not a destination: it is the panel behind the toolbar's AI
+ * button, which knows how to show the full history.
+ *
+ * Repeating that in fifteen suites is how the selectors drift apart; the
+ * snippets here are the single copy.
  */
 
 /** The floating pane's root, once it has been mounted. */
@@ -45,7 +46,7 @@ const closePane = `
 /**
  * Puts the browser page on screen.
  *
- * The browser is always mounted now; what can be covering it is a floating pane
+ * The browser is always mounted; what can be covering it is the accounts pane
  * or the settings page. Both are dismissed here — the pane by its own close
  * control, settings by the arrow in its title bar.
  */
@@ -69,44 +70,19 @@ const awaitPane = `
 `;
 
 /**
- * Opens a floating pane by its rail entry.
+ * Opens the accounts pane.
  *
  * Always from the browser: a pane that is already open is dismissed first, so
  * every arrival is a real mount. Suites that rely on "go there" meaning
  * "freshly mounted" would otherwise read a copy left over from an earlier step.
  */
-function openLayer(entry) {
-  return `
-    ${ensureBrowser}
-    const entry = document.querySelector('[data-rail-entry="${entry}"]');
-    if (!entry) return false;
-    entry.click();
-    await new Promise((done) => setTimeout(done, 450));
-    ${awaitPane}
-  `;
-}
-
-/** Opens a `[data-more-tab]` section inside the More pane. */
-function moreTab(target) {
-  return `
-    ${openLayer("more")}
-    const moreBtn = document.querySelector('[data-more-tab="${target}"]');
-    if (!moreBtn) return false;
-    if (moreBtn.getAttribute('aria-selected') !== 'true') moreBtn.click();
-    await new Promise((done) => setTimeout(done, 450));
-    if (!document.querySelector('[data-more-tab="${target}"][aria-selected="true"]')) {
-      return false;
-    }
-  `;
-}
-
-/** The flows tab inside the AI section. */
-const FLOWS_TAB = `
-  const flowsTab = document.querySelector('[data-ai-tab="flows"]');
-  if (!flowsTab) return false;
-  if (flowsTab.getAttribute('aria-selected') !== 'true') flowsTab.click();
+const openLayer = `
+  ${ensureBrowser}
+  const entry = document.querySelector('[data-rail-entry="identities"]');
+  if (!entry) return false;
+  entry.click();
   await new Promise((done) => setTimeout(done, 450));
-  return Boolean(document.querySelector('[data-ai-tab="flows"][aria-selected="true"]'));
+  ${awaitPane}
 `;
 
 /**
@@ -132,42 +108,51 @@ function menuItem(target) {
   `;
 }
 
+/** Settings sections that moved out of the management pane. */
+const CONTENT_SECTIONS = new Set(["bookmarks", "messages", "flows", "groups"]);
+
 /**
  * Opens one of the app's pages.
  *
- * `nav` is a rail entry (`sites`, `identities`), a More section (`bookmarks`,
- * `tags`, `messages`, `ai`), the flows tab spelled `flows`, or a settings
- * section spelled `settings-<id>` (`settings-general`, `settings-mcp`, …).
+ * `nav` is either `identities` (the accounts pane, which also carries sites and
+ * site groups), or a settings section: a preference one (`general`, `engines`,
+ * `vault`, `data`, `mcp`, `about`) or a content one (`bookmarks`, `messages`,
+ * `flows`, `groups`). `settings` alone opens the page on whatever section it
+ * remembers.
+ *
+ * `sites` is accepted as an alias for `identities`: sites are what that pane
+ * shows, and old call sites should not have to know that.
  */
 export function openNav(nav) {
-  if (nav === "settings" || nav.startsWith("settings-")) {
-    const section = nav === "settings" ? null : nav.slice("settings-".length);
-    return `(async () => {
-      ${menuItem("settings")}
-      const wanted = ${JSON.stringify(section)};
-      if (wanted) {
-        const sectionTab = document.querySelector('.page.settings [data-section="' + wanted + '"]');
-        if (sectionTab && sectionTab.getAttribute('aria-selected') !== 'true') sectionTab.click();
-        await new Promise((done) => setTimeout(done, 450));
-      }
-      return Boolean(document.querySelector('.page.settings'));
-    })()`;
-  }
-  if (nav === "flows") {
-    return `(async () => {
-      ${moreTab("ai")}
-      ${FLOWS_TAB}
-    })()`;
-  }
   if (nav === "sites" || nav === "identities") {
-    return `(async () => {
-      ${openLayer(nav)}
-      return true;
-    })()`;
+    return `(async () => {${openLayer}return true;})()`;
+  }
+  const section =
+    nav === "settings" ? null : nav.startsWith("settings-") ? nav.slice("settings-".length) : nav;
+  const known =
+    section === null ||
+    section === "general" ||
+    section === "engines" ||
+    section === "vault" ||
+    section === "data" ||
+    section === "mcp" ||
+    section === "about" ||
+    CONTENT_SECTIONS.has(section);
+  if (!known) {
+    // An unknown destination is a suite bug, not a page: fail loudly instead of
+    // landing on settings and letting the assertions read the wrong screen.
+    return `(async () => false)()`;
   }
   return `(async () => {
-    ${moreTab(nav)}
-    return true;
+    ${menuItem("settings")}
+    const wanted = ${JSON.stringify(section)};
+    if (wanted) {
+      const sectionTab = document.querySelector('.page.settings [data-section="' + wanted + '"]');
+      if (!sectionTab) return false;
+      if (sectionTab.getAttribute('aria-selected') !== 'true') sectionTab.click();
+      await new Promise((done) => setTimeout(done, 450));
+    }
+    return Boolean(document.querySelector('.page.settings'));
   })()`;
 }
 
@@ -180,8 +165,8 @@ export async function goTo(client, nav, wait = 400) {
 /**
  * Back to the browser page.
  *
- * A floating pane goes away through its close control; settings has its own back
- * arrow. The browser is never unmounted, so there is nothing else to restore.
+ * Closing the pane is enough; the browser was never unmounted. Settings has its
+ * own way back, handled inside `ensureBrowser`.
  */
 export function backToBrowser() {
   return `(async () => {

@@ -151,7 +151,7 @@ try {
   // 2. One click on the rail entry, then a read. A layer is a render away, so
   //    the pane is not in the DOM yet — the point is that the page never left.
   const afterClick = await client.evaluate(`(() => {
-    const btn = document.querySelector('[data-rail-entry="sites"]');
+    const btn = document.querySelector('[data-rail-entry="identities"]');
     if (!btn) return { error: 'no sites entry on the account rail' };
     btn.click();
     const nodes = [...document.querySelectorAll('webview')];
@@ -305,7 +305,7 @@ try {
   // 7. The user's two other ways out: Esc and a press on the scrim. Both are
   //    the pane's own contract, and both have to leave the browser intact.
   const escClose = await client.evaluate(`(async () => {
-    document.querySelector('[data-rail-entry="sites"]')?.click();
+    document.querySelector('[data-rail-entry="identities"]')?.click();
     await new Promise((r) => setTimeout(r, 500));
     const opened = Boolean(document.querySelector('[data-floating-pane]'));
     const pane = document.querySelector('[data-floating-pane]');
@@ -317,7 +317,7 @@ try {
   check("Esc closes an open layer", escClose?.opened === true && escClose?.closed === true, escClose);
 
   const scrimClose = await client.evaluate(`(async () => {
-    document.querySelector('[data-rail-entry="more"]')?.click();
+    document.querySelector('[data-rail-entry="identities"]')?.click();
     await new Promise((r) => setTimeout(r, 500));
     const opened = Boolean(document.querySelector('[data-floating-pane]'));
     document.querySelector('[data-floating-scrim]')?.dispatchEvent(

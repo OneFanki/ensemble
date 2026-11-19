@@ -132,7 +132,16 @@ try {
   check("app window appeared", true);
   await wait(2500);
 
-  await client.evaluate(openNav("ai"));
+  // AI activity is no longer a destination: it is the panel behind the toolbar's
+  // AI button, and its "view all" link opens the full history in a layer. The
+  // records and their scroll container are the same components either way, so
+  // only the way in changed.
+  await client.evaluate(`(async () => {
+    document.querySelector('[data-ai-panel]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    document.querySelector('[data-ai-open-console]')?.click();
+    await new Promise((r) => setTimeout(r, 900));
+  })()`);
   const rendered = await waitFor(
     client,
     `document.querySelectorAll('[data-ai-record]').length >= 30`,

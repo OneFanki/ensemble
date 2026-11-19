@@ -110,7 +110,9 @@ try {
   check("the empty state offers the new-tab action", Boolean(empty?.newTabAction), empty);
   check(
     "the rail keeps its launching and management entrances available",
-    empty?.launch === true && empty?.railEntries === 3,
+    // One management entry now: sites and groups are configured inside the
+    // accounts pane, and everything else moved to settings.
+    empty?.launch === true && empty?.railEntries === 1,
     empty,
   );
   check("a blank page leaves the address bar empty", empty?.address === "", empty?.address);

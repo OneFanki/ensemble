@@ -161,12 +161,12 @@ try {
     captureRow ?? afterLogin,
   );
 
-  // 2) The two entry points agree that something is unread. The management
-  // pane's 更多 section carries the message centre (a row, so it can name the
-  // page); the toolbar bell only carries a red dot, because a number there
-  // widened the button and pushed it out of line with the icons beside it — so
-  // the bell is asserted on the dot, not on a number. The bell is read first:
-  // the placement is by attribute rather than by translated text.
+  // 2) The two entry points agree that something is unread. Settings → messages
+  // is the page (a named destination, so it can carry the unread state); the
+  // toolbar bell only carries a red dot, because a number there widened the
+  // button and pushed it out of line with the icons beside it — so the bell is
+  // asserted on the dot, not on a number. The bell is read first: the placement
+  // is by attribute rather than by translated text.
   const entryPoints = await client.evaluate(`(async () => {
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const out = {
@@ -175,15 +175,18 @@ try {
       menuItem: false,
       menuLabel: '',
     };
-    document.querySelector('[data-rail-entry="more"]')?.click();
-    for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
-      await wait(80);
-    }
-    const item = document.querySelector('[data-more-tab="messages"]');
+    // Messages moved from the account rail's "more" pane into settings, so the
+    // check follows it: open the app menu, go to settings, and look for the
+    // messages section tab.
+    document.querySelector('[data-app-menu]')?.click();
+    await wait(250);
+    document.querySelector('[data-menu-item="settings"]')?.click();
+    await wait(500);
+    const item = document.querySelector('.page.settings [data-section="messages"]');
     out.menuItem = Boolean(item);
     out.menuLabel = item?.textContent?.trim() ?? '';
     // Back to the browser: the checks below drive the bell on the toolbar.
-    document.querySelector('[data-floating-pane] .pane-head button')?.click();
+    document.querySelector('.page.settings .settings-head .back')?.click();
     await wait(600);
     return out;
   })()`);

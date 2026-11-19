@@ -32,7 +32,7 @@ const port = await freePort();
 const now = new Date().toISOString();
 const PAGE_URL = "http://127.0.0.1:3997";
 
-const tags = ["甲", "乙", "丙"].map((name, index) => ({
+const siteGroups = ["甲", "乙", "丙"].map((name, index) => ({
   id: `tag-${index}`,
   name,
   color: ["amber", "teal", "violet"][index],
@@ -76,7 +76,7 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    tags,
+    siteGroups,
     sites,
     identities: [],
     views: [],
@@ -167,35 +167,32 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
-  // --- Tags -----------------------------------------------------------------
-  await go(client, "tags");
+  // --- Site groups ----------------------------------------------------------
+  //
+  // Site groups used to be called tags and lived behind the account rail's
+  // "more" pane; they are a settings section now, and still reorder by drag.
+  await go(client, "groups");
   check(
-    "tags page rendered",
-    await waitFor(client, `document.querySelectorAll('.tags .row').length === 3`),
+    "site groups page rendered",
+    await waitFor(client, `document.querySelectorAll('.site-groups .row').length === 3`),
   );
-  const tagDrag = await dragRow(client, ".tags .row", 0, 2, { sourceSub: ".grip" });
-  const tagOrder = await client.evaluate(
-    `(async () => (await window.ensemble.getWorkspace()).tags.map((tag) => tag.name))()`,
+  const groupDrag = await dragRow(client, ".site-groups .row", 0, 2, { sourceSub: ".grip" });
+  const groupOrder = await client.evaluate(
+    `(async () => (await window.ensemble.getWorkspace()).siteGroups.map((g) => g.name))()`,
   );
-  check("tag row dragged from the grip", tagDrag?.ok === true, tagDrag);
-  check("tags reorder through the store", JSON.stringify(tagOrder) === JSON.stringify(["乙", "丙", "甲"]), tagOrder);
+  check("group row dragged from the grip", groupDrag?.ok === true, groupDrag);
+  check(
+    "site groups reorder through the store",
+    JSON.stringify(groupOrder) === JSON.stringify(["乙", "丙", "甲"]),
+    groupOrder,
+  );
 
-  // --- Sites (grouped by tag: one untagged group) ---------------------------
-  await go(client, "sites");
-  check(
-    "sites page rendered",
-    await waitFor(client, `document.querySelectorAll('.sites .env-card').length === 3`),
-  );
-  const siteDrag = await dragRow(client, ".sites .env-card", 0, 2, { sourceSub: ".site-grip" });
-  const siteOrder = await client.evaluate(
-    `(async () => (await window.ensemble.getWorkspace()).sites.map((site) => site.name))()`,
-  );
-  check("site card dragged from the grip", siteDrag?.ok === true, siteDrag);
-  check(
-    "sites reorder through the store",
-    JSON.stringify(siteOrder) === JSON.stringify(["站点乙", "站点丙", "站点甲"]),
-    siteOrder,
-  );
+  // --- Sites ---------------------------------------------------------------
+  //
+  // A site has no page of its own any more: it is the heading of its accounts on
+  // the accounts page, so there is no row to drag. Site order is still stored and
+  // still reorderable through `moveSite`, but the drag handle went away with the
+  // page — the assertion that checked it is gone too rather than faked.
 
   // --- Bookmark folders: top edge means "insert before" ---------------------
   await go(client, "bookmarks");

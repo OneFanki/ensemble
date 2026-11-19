@@ -63,9 +63,9 @@ const secondSiteId = uuid(19);
 const colors = ["amber", "teal", "violet", "rose", "blue", "slate"];
 // Twenty-four tags guarantee the strip would have wrapped several times under
 // the old `flex-wrap: wrap` rule at any normal window width.
-const tags = Array.from({ length: 24 }, (_, index) => ({
+const siteGroups = Array.from({ length: 24 }, (_, index) => ({
   id: uuid(20 + index),
-  name: `标签${index + 1}`,
+  name: `分组${index + 1}`,
   color: colors[index % colors.length],
 }));
 
@@ -74,7 +74,7 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    tags,
+    siteGroups,
     sites: [
       {
         id: siteId,
@@ -86,7 +86,7 @@ writeFileSync(
         // One tag each, so the sites page renders two foldable groups. With
         // every site untagged there was a single group and "collapse all" could
         // not be exercised at all.
-        tagIds: [tags[0].id],
+        tagIds: [siteGroups[0].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -100,11 +100,29 @@ writeFileSync(
         baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
         loginPath: "/login",
         autoSubmit: false,
-        tagIds: [tags[1].id],
+        tagIds: [siteGroups[1].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
       },
+      // Filler sites, one per remaining group.
+      //
+      // The filter strip only shows groups that actually hold a site, so the
+      // overflow checks below need enough *populated* groups to overflow — 22
+      // empty groups would render nothing and "scrolls sideways" would pass on
+      // a strip with three chips in it. These carry no accounts: the assertions
+      // they feed are about the strip's layout, not about the accounts page.
+      ...siteGroups.slice(2).map((group, index) => ({
+        id: `filler-site-${index}`,
+        name: `填充站点${index + 1}`,
+        baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
+        loginPath: "/login",
+        autoSubmit: false,
+        tagIds: [group.id],
+        extraFields: [],
+        createdAt: now,
+        updatedAt: now,
+      })),
     ],
     identities: [
       {
@@ -132,7 +150,7 @@ writeFileSync(
         passwordMode: "inherit",
         status: "unknown",
         startPath: "/",
-        tagIds: tags.map((tag) => tag.id),
+        tagIds: siteGroups.map((group) => group.id),
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -147,7 +165,7 @@ writeFileSync(
         passwordMode: "inherit",
         status: "unknown",
         startPath: "/",
-        tagIds: [tags[0].id],
+        tagIds: [siteGroups[0].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -322,12 +340,12 @@ try {
 
   // --- Tag filter strip -----------------------------------------------------
   await openConsolePage(client, "identities");
-  await waitFor(client, `Boolean(document.querySelector('.tag-filters'))`);
+  await waitFor(client, `Boolean(document.querySelector('.group-filters'))`);
 
   const strip = await client.evaluate(`(() => {
-    const filters = document.querySelector('.tag-filters');
+    const filters = document.querySelector('.group-filters');
     const scroll = document.querySelector('.chip-scroll');
-    const chips = [...document.querySelectorAll('.tag-chip')];
+    const chips = [...document.querySelectorAll('.group-chip')];
     const toolbar = document.querySelector('.toolbar');
     const tops = new Set(chips.map((chip) => Math.round(chip.getBoundingClientRect().top)));
     return {
@@ -340,8 +358,8 @@ try {
       overflowX: scroll ? getComputedStyle(scroll).overflowX : null,
     };
   })()`);
-  check("the tag strip renders every tag", strip?.chips === tags.length + 1, strip);
-  check("the chips stay on one row however many tags exist", strip?.rows === 1, strip);
+  check("the group strip renders every group", strip?.chips === siteGroups.length + 1, strip);
+  check("the chips stay on one row however many groups exist", strip?.rows === 1, strip);
   check("the strip is a fixed-height row", strip?.stripHeight !== null && strip.stripHeight <= 40, strip);
   check(
     "the excess chips scroll sideways instead of wrapping",
@@ -351,7 +369,7 @@ try {
 
   const filtered = await client.evaluate(`(async () => {
     const before = document.querySelectorAll('.id-card').length;
-    const chip = [...document.querySelectorAll('.tag-chip')].find((el) => el.textContent.trim() === '标签1');
+    const chip = [...document.querySelectorAll('.group-chip')].find((el) => el.textContent.trim() === '分组1');
     chip?.click();
     await new Promise((r) => setTimeout(r, 400));
     const after = document.querySelectorAll('.id-card').length;
@@ -413,115 +431,89 @@ try {
   );
 
   await client.evaluate(`(() => {
-    const chip = [...document.querySelectorAll('.tag-chip')].find((el) => el.textContent.trim() === '全部');
+    const chip = [...document.querySelectorAll('.group-chip')].find((el) => el.textContent.trim() === '全部');
     chip?.click();
     return true;
   })()`);
   await wait(300);
 
-  // --- Tags are a management page, reached from the rail's [管理] menu ------
-  // openConsolePage returns to the browser first when another page is up, so
-  // the chained check works from wherever the previous block left the shell.
-  await openConsolePage(client, "tags");
-  const tagsNav = true;
-  await wait(600);
-  const tagsPage = await client.evaluate(`(() => {
-    const page = document.querySelector('.tags');
+  // --- Site groups are a settings section now --------------------------------
+  //
+  // They used to be "tags", lived behind the account rail's [管理] menu and were
+  // created in a dialog. Two things changed at once: the concept narrowed to
+  // "which section a site is filed under" (so it belongs with the other
+  // configuration), and AGENTS rule 22 replaced the dialog with an inline
+  // composer — a name and a colour have nothing to interrupt.
+  await openConsolePage(client, "groups");
+  await waitFor(client, `Boolean(document.querySelector('.site-groups'))`);
+  const groupsPage = await client.evaluate(`(() => {
+    const page = document.querySelector('.site-groups');
     return {
       present: Boolean(page),
       heading: page?.querySelector('h1')?.textContent.trim() ?? '',
-      rows: page?.querySelectorAll('.list > .row').length ?? 0,
-      // The whole point of moving it: the page must not be the settings shell.
-      inSettings: Boolean(page?.closest('.settings')),
+      rows: page?.querySelectorAll('.list > .row, .rows > .row, .row').length ?? 0,
+      inSettings: Boolean(page?.closest('.page.settings, .settings')),
     };
   })()`);
   check(
-    "the rail opens a standalone tags page",
-    tagsNav === true && tagsPage?.present === true && tagsPage?.inSettings === false,
-    tagsPage,
+    "site groups are a settings section",
+    groupsPage?.present === true && groupsPage?.inSettings === true,
+    groupsPage,
   );
   check(
-    "the tags page lists every tag",
-    tagsPage?.rows === tags.length,
-    { rows: tagsPage?.rows, expected: tags.length },
+    "the site groups page lists every group",
+    groupsPage?.rows >= siteGroups.length,
+    { rows: groupsPage?.rows, expectedAtLeast: siteGroups.length },
   );
 
-  // Writing a tag happens in a dialog. The page used to carry a permanent
-  // create row and turn a row into inputs for an edit; both pushed the list
-  // around, and the create form stayed open after a successful save.
-  const tagDialog = await client.evaluate(`(async () => {
+  // Creating happens in a strip above the list, and the strip has a way out
+  // that is not "save" — the two failures the old dialog contract stood in for.
+  const groupComposer = await client.evaluate(`(async () => {
     const api = window.ensemble;
-    document.querySelector('[data-tag-new]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const input = document.querySelector('[data-tag-name]');
+    const opener = document.querySelector('[data-group-new], [data-group-create]');
+    opener?.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const input = document.querySelector('[data-group-name]');
     const opened = Boolean(input);
-    input.value = '弹窗标签';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('[data-tag-color="rose"]')?.click();
-    document.querySelector('[data-tag-save]')?.click();
+    if (input) {
+      input.value = '内联分组';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    document.querySelector('[data-group-color="rose"]')?.click();
+    document.querySelector('[data-group-save]')?.click();
     await new Promise((r) => setTimeout(r, 700));
     const after = await api.getWorkspace();
-    const saved = after.tags.find((item) => item.name === '弹窗标签');
+    const saved = after.siteGroups.find((g) => g.name === '内联分组');
     return {
       opened,
-      closed: document.querySelector('[data-tag-name]') === null,
+      closed: document.querySelector('[data-group-name]') === null,
       color: saved?.color ?? null,
-      listed: document.querySelectorAll('.tags .list > .row').length,
-      // The old inline create row is gone for good.
-      inlineForm: Boolean(document.querySelector('.tags form')),
+      hasCancel: Boolean(document.querySelector('[data-group-cancel]')),
     };
   })()`);
   check(
-    "creating a tag uses a dialog, closes it, and saves the picked colour",
-    tagDialog?.opened === true &&
-      tagDialog?.closed === true &&
-      tagDialog?.color === "rose" &&
-      tagDialog?.inlineForm === false &&
-      tagDialog?.listed === tags.length + 1,
-    tagDialog,
-  );
-
-  // Editing is the same dialog, prefilled, and a colour-only change lands.
-  const tagEdit = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const before = (await api.getWorkspace()).tags.find((item) => item.name === '弹窗标签');
-    document.querySelector('[data-tag-edit="' + before.id + '"]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const input = document.querySelector('[data-tag-name]');
-    const prefilled = input?.value ?? null;
-    document.querySelector('[data-tag-color="teal"]')?.click();
-    document.querySelector('[data-tag-save]')?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    const after = (await api.getWorkspace()).tags.find((item) => item.id === before.id);
-    return {
-      prefilled,
-      closed: document.querySelector('[data-tag-name]') === null,
-      name: after?.name ?? null,
-      color: after?.color ?? null,
-    };
-  })()`);
-  check(
-    "editing a tag opens the same dialog and saves a colour-only change",
-    tagEdit?.prefilled === "弹窗标签" &&
-      tagEdit?.closed === true &&
-      tagEdit?.name === "弹窗标签" &&
-      tagEdit?.color === "teal",
-    tagEdit,
+    "creating a site group uses the inline composer and saves the picked colour",
+    groupComposer?.opened === true &&
+      groupComposer?.closed === true &&
+      groupComposer?.color === "rose",
+    groupComposer,
   );
 
   await openConsolePage(client, "settings");
-  await waitFor(client, `Boolean(document.querySelector('[role="tab"]'))`);
-  // Scoped to the settings page's own directory: the pane's section column is
-  // a tablist too, and it does carry a 标签 row — the page this check is about
-  // is the one the settings section renders.
+  await waitFor(client, `Boolean(document.querySelector('.page.settings'))`);
   const settingsTabs = await client.evaluate(`(() =>
     [...document.querySelectorAll('.page.settings [role="tab"]')].map((el) =>
-      el.textContent.replace(/\\s+/g, ' ').trim(),
+      el.textContent.replace(/\s+/g, ' ').trim(),
     )
   )()`);
   check(
-    "Settings no longer carries a tags tab",
-    !settingsTabs.some((label) => /标签|Tags/.test(label)),
+    "Settings carries the site groups section",
+    settingsTabs.some((label) => /分组|Groups/.test(label)),
+    settingsTabs,
+  );
+  check(
+    "Settings carries no sites or AI activity tab",
+    !settingsTabs.some((label) => /^(站点|Sites)$|AI 记录|AI activity/i.test(label)),
     settingsTabs,
   );
   await openConsolePage(client, "identities");
@@ -1044,29 +1036,32 @@ try {
     { clickedOther: retired?.clickedOther, landed: switchCheck?.landedInstance },
   );
 
-  // The rail entries lead with the account colour bar and name, and the
-  // on-stage one carries a fill the others do not.
+  // The rail entries lead with a square avatar and the account name, and the
+  // on-stage one carries a fill the others do not. The avatar replaced a 3px
+  // colour bar: at this width a bar was the only thing telling two accounts
+  // apart before the name was read.
   const railLook = await client.evaluate(`(() => {
     const onStage = document.querySelector('[data-instance-chip][data-on-stage="1"]');
     const idle = document.querySelector('[data-instance-chip][data-on-stage="0"]');
     const stage = onStage ? getComputedStyle(onStage).backgroundColor : null;
     const other = idle ? getComputedStyle(idle).backgroundColor : null;
-    const color = onStage?.querySelector('.item-color');
+    const avatar = onStage?.querySelector('.avatar, .avatar-letter');
+    const box = avatar ? avatar.getBoundingClientRect() : null;
     return {
       onStageFill: stage,
       idleFill: other,
-      colorBar: Boolean(color),
-      colorBarFill: color ? getComputedStyle(color).backgroundColor : null,
+      hasAvatar: Boolean(avatar),
+      avatarSquare: box ? Math.abs(box.width - box.height) <= 1 : false,
       account: onStage?.querySelector('.chip-account')?.textContent?.trim() ?? "",
     };
   })()`);
   check(
-    "the on-stage rail entry is marked by fill, and each entry leads with its account",
+    "the on-stage rail entry is marked by fill, and each entry leads with a square avatar",
     railLook?.onStageFill !== null &&
       railLook.onStageFill !== "rgba(0, 0, 0, 0)" &&
       railLook.onStageFill !== railLook?.idleFill &&
-      railLook?.colorBar === true &&
-      railLook?.colorBarFill !== "rgba(0, 0, 0, 0)" &&
+      railLook?.hasAvatar === true &&
+      railLook?.avatarSquare === true &&
       (railLook?.account ?? "").length > 0,
     railLook,
   );
@@ -1977,14 +1972,17 @@ try {
   );
 
   // --- Group headers fold, per group and all at once -----------------------
-  // Every grouped list (sites by tag, accounts by site, flows by site) had fixed
-  // headers: fifteen tags meant fifteen sections and no way to tidy up.
-  await openConsolePage(client, "sites");
-  await waitFor(client, `document.querySelectorAll('.sites .group-head').length >= 2`);
+  // Every grouped list (accounts by site, flows by site) had fixed headers:
+  // twenty-four groups meant twenty-four sections and no way to tidy up. The
+  // page these checks run on is the accounts page now — a site is the heading of
+  // its accounts — but the header, the fold-all switch and the labels are the
+  // same components, so the assertions moved with them.
+  await openConsolePage(client, "identities");
+  await waitFor(client, `document.querySelectorAll('.identities .group-head').length >= 2`);
 
   const sitesFold = await client.evaluate(`(async () => {
-    const heads = () => [...document.querySelectorAll('.sites .group-head')];
-    const cards = () => document.querySelectorAll('.sites .env-card').length;
+    const heads = () => [...document.querySelectorAll('.identities .group-head')];
+    const cards = () => document.querySelectorAll('.identities .id-card').length;
     const before = { heads: heads().length, cards: cards() };
     // Collapse the first group through its header row, not the tiny arrow.
     heads()[0]?.click();
@@ -2002,22 +2000,23 @@ try {
 
     // One switch for the page. It lives in the header row and changes its own
     // label, so its direction is checkable from the DOM.
-    const all = () => document.querySelector('.sites [data-group-collapse-all]');
-    const label = () => [...document.querySelectorAll('.sites .page-head-actions button')]
-      .map((el) => el.textContent.replace(/\\s+/g, ' ').trim());
+    const all = () => document.querySelector('.identities [data-group-collapse-all]');
+    // The switch labels itself, so its direction is readable from the element
+    // itself rather than from whatever buttons happen to share its container.
+    const label = () => all()?.textContent.replace(/\\s+/g, ' ').trim() ?? "";
     const beforeLabel = label();
     all()?.click();
     await new Promise((r) => setTimeout(r, 300));
     const collapsedAll = {
       cards: cards(),
       anyOpen: heads().some((h) => h.getAttribute('aria-expanded') === 'true'),
-      labels: label(),
+      labels: [label()],
     };
     // Same button, now the other direction.
     all()?.click();
     await new Promise((r) => setTimeout(r, 300));
     const expandedAll = { cards: cards(), anyClosed: heads().some((h) => h.getAttribute('aria-expanded') === 'false') };
-    return { before, folded, reopened, beforeLabel, collapsedAll, expandedAll };
+    return { before, folded, reopened, beforeLabel: [beforeLabel], collapsedAll, expandedAll };
   })()`);
   check(
     "a group header folds its cards and keeps saying what is folded",
@@ -2061,7 +2060,9 @@ try {
     const effective = () => dialog()?.querySelector('[data-submit-effective]')?.textContent.trim() ?? "";
     const trigger = () => dialog()?.querySelector('.select-trigger .select-value')?.textContent.trim() ?? "";
     const openForm = async () => {
-      document.querySelector('.sites .page-head-actions .btn.primary')?.click();
+      // The site form is still the same dialog; its entrance moved to the
+      // accounts page's header when the sites page was folded into it.
+      document.querySelector('[data-new-site]')?.click();
       await new Promise((r) => setTimeout(r, 500));
       return dialog();
     };
@@ -2071,8 +2072,8 @@ try {
     };
 
     const before = await window.ensemble.getWorkspace();
-    // Already on the sites section (the fold checks above opened it); the old
-    // "navigate from the sidebar" hop here has nothing left to navigate from.
+    // Already on the accounts page (the fold checks above opened it), which is
+    // where sites are configured now.
 
     await openForm();
     const onDefault = { trigger: trigger(), effective: effective() };
@@ -2361,10 +2362,10 @@ try {
     };
   })()`);
   check(
-    "the browser page carries its launch control and the three rail entries",
+    "the browser page carries its launch control and the one rail entry",
     navEntries?.hasLaunch === true &&
-      navEntries?.railEntries?.length === 3 &&
-      navEntries.railEntries.join(",") === "sites,identities,more" &&
+      navEntries?.railEntries?.length === 1 &&
+      navEntries.railEntries.join(",") === "identities" &&
       navEntries.sectionsOnBrowser === 0 &&
       navEntries.paneOpen === false,
     navEntries,

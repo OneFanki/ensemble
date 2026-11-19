@@ -49,9 +49,15 @@ const page = createServer((req, res) => {
 <style>body{margin:0;font-family:system-ui}i{display:block}</style></head>
 <body><h1 id="head">busy</h1><div id="box"></div>
 <script>
-  // Forced synchronous layout plus restyles, repeatedly. This is the shape of
+  // Forced synchronous layout plus restyles, continuously. This is the shape of
   // work that shows up as CPU and as layouts/s — measuring an idle page would
   // prove nothing.
+  //
+  // A timer, not requestAnimationFrame: this page is opened by the tool into the
+  // background, where rAF is throttled to almost nothing and a measurement
+  // window can end up with no non-warmup sample at all (which reads as "the page
+  // is idle" — the exact false negative this page exists to prevent). A 40ms
+  // timer keeps thrashting at a steady rate regardless of visibility.
   var box = document.getElementById("box");
   setInterval(function () {
     for (var i = 0; i < 250; i += 1) {
@@ -62,7 +68,7 @@ const page = createServer((req, res) => {
       box.getBoundingClientRect();
     }
     while (box.childElementCount > 300) box.firstElementChild.remove();
-  }, 60);
+  }, 40);
 </script></body></html>`);
     return;
   }
@@ -414,7 +420,7 @@ try {
   record("a page that really works was opened for measurement", Boolean(busyTabId), busyTab?.url);
   const measured = await tool(
     "measure_browser_performance",
-    { tabId: busyTabId, durationMs: 1200 },
+    { tabId: busyTabId, durationMs: 1600 },
     (v) =>
       v?.samples >= 3 &&
       v?.metrics?.cpu?.max > 0 &&

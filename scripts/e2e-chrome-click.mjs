@@ -122,6 +122,7 @@ try {
     const tabBox = tab.getBoundingClientRect();
     return {
       toolbarHeight: Math.round(toolbarBox.height),
+      toolbarTop: Math.round(toolbarBox.top),
       toolbarBottom: Math.round(toolbarBox.bottom),
       railTop: Math.round(railBox.top),
       railRight: Math.round(railBox.right),
@@ -135,14 +136,17 @@ try {
     };
   })()`);
   check(
-    "the address row is the window's top band",
+    "the address row is the window's second band",
     geometry?.toolbarBottom > 0 && geometry?.railTop === geometry?.toolbarBottom,
     geometry,
   );
   check(
-    "the tab strip sits flush beside the account column",
-    geometry?.stripTop === geometry?.toolbarBottom &&
-      geometry?.stripLeft === geometry?.railRight,
+    "the page strip is the window's first row, above the address row",
+    // The strip spans the window now, not just the right column: it is the row
+    // the caption buttons sit in, and the address row starts under it.
+    geometry?.stripTop === 0 &&
+      geometry?.stripLeft === 0 &&
+      geometry?.toolbarTop === geometry?.stripTop + geometry?.stripHeight,
     geometry,
   );
   check(

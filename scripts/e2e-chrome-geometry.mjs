@@ -148,6 +148,24 @@ try {
   // edge: a column that started a row lower would leave a strip of frame beside
   // the address row, and one that stopped short would leave the stage without a
   // left neighbour it is anchored to.
+  // The tab strip is the window's first row, the address row is beneath it, and
+  // the column begins where the address row ends. A strip that sat under the
+  // address row would read as a bookmark bar, which is exactly the confusion
+  // this order fixes.
+  check(
+    "the page strip is the window's first row",
+    layout?.tabstrip ? layout.tabstrip.x === 0 && layout.tabstrip.y === 0 && layout.tabstrip.h > 0 : false,
+    layout,
+  );
+  check(
+    "the address row sits under the strip and spans the window",
+    layout?.toolbar && layout?.tabstrip
+      ? layout.toolbar.y === layout.tabstrip.bottom &&
+        layout.toolbar.x === 0 &&
+        layout.toolbar.w === layout.innerWidth
+      : false,
+    layout,
+  );
   check(
     "the account column starts under the address row and reaches the bottom",
     layout?.rail && layout?.toolbar
@@ -158,22 +176,23 @@ try {
       : false,
     layout,
   );
-  // The right column begins where the column ends: the strip's left edge is the
-  // column's right edge, and its top edge is the address row's bottom.
+  // The page area is the right column: it begins where the account column ends
+  // and where the address row ends, and it reaches both far edges. The strip is
+  // no longer the top of this column — it spans the whole window above the
+  // address row — so the column's first row is the address row's bottom.
   check(
-    "the page strip starts where the column ends",
-    layout?.rail && layout?.tabstrip && layout?.toolbar
-      ? layout.tabstrip.y === layout.toolbar.bottom &&
-        layout.tabstrip.x === layout.rail.right &&
-        layout.tabstrip.h > 0
+    "the page area starts where the column and the address row end",
+    layout?.rail && layout?.stage && layout?.toolbar
+      ? layout.stage.y === layout.toolbar.bottom &&
+        layout.stage.x === layout.rail.right &&
+        layout.stage.h > 0
       : false,
     layout,
   );
   check(
-    "the stage sits under the strip and fills the rest of the right column",
-    layout?.stage && layout?.tabstrip && layout?.rail
-      ? layout.stage.y === layout.tabstrip.bottom &&
-        layout.stage.x === layout.rail.right &&
+    "the stage fills the rest of the right column",
+    layout?.stage && layout?.rail
+      ? layout.stage.x === layout.rail.right &&
         layout.stage.right === layout.innerWidth &&
         layout.stage.bottom === layout.innerHeight
       : false,
@@ -209,12 +228,12 @@ try {
   );
   check("both instances stay alive behind the one stage", staged?.instances === 2, staged);
 
-  // --- 2. The caption reservation lives on the address row -------------------
+  // --- 2. The caption reservation lives on the tab strip ---------------------
   //
-  // The window buttons are painted over the *right* end of the address row, so
-  // that row reserves their width. The page strip no longer reaches the corner,
-  // so it must reserve nothing — a strip that still carried the band kept a dead
-  // gap whose right edge lined up with no control.
+  // The window buttons are painted over the *right* end of the window's first
+  // row, which is the tab strip, so that row reserves their width. The address
+  // row sits beneath it and must reserve nothing — a second reservation there
+  // would push the app menu a hundred pixels off the right edge for no reason.
   const reservation = await client.evaluate(`(() => {
     const row = document.querySelector('.toolbar');
     const strip = document.querySelector('.tabstrip');
@@ -227,14 +246,17 @@ try {
     };
   })()`);
   check(
-    "the address row reserves the caption band",
-    Number.parseFloat(reservation?.rowPaddingRight ?? "0") >=
+    "the page strip reserves the caption band",
+    Number.parseFloat(reservation?.stripPaddingRight ?? "0") >=
       (layout?.controlsWidth ?? 0) - 4,
     reservation,
   );
   check(
-    "the page strip reserves nothing for the caption buttons",
-    Number.parseFloat(reservation?.stripPaddingRight ?? "0") === 0,
+    "the address row reserves nothing for the caption buttons",
+    // Not exactly zero: the row's own 8px inset is margin, not a reservation.
+    // What must not happen is a second full caption-width gap here — that is
+    // what pushed the app menu a hundred pixels off the right edge.
+    Number.parseFloat(reservation?.rowPaddingRight ?? "999") < 20,
     reservation,
   );
 

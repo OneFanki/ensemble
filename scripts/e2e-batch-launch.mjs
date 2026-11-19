@@ -261,6 +261,76 @@ try {
   check("app window appeared", true);
   await wait(2000);
 
+  // --- The account column's launch panel: site → account, one click launches.
+  //
+  // The panel used to be a flat multi-select list with a confirm button. It is
+  // now a two-level cascade: the first level lists sites, the second that
+  // site's accounts, and picking an account launches it immediately. This is
+  // the UI path the batch IPC below is fed by, so its contract is asserted here
+  // rather than left to the renderer's own suite.
+  const cascade = await client.evaluate(`(async () => {
+    document.querySelector('[data-launch-btn]')?.click();
+    await new Promise((done) => setTimeout(done, 400));
+    const sites = [...document.querySelectorAll('[data-launch-site]')].map((el) => ({
+      id: el.dataset.launchSiteId,
+      text: (el.textContent || '').trim(),
+    }));
+    const flatRows = document.querySelectorAll('[data-launch-row]').length;
+    document.querySelector('[data-launch-site-id="${site.id}"]')?.click();
+    await new Promise((done) => setTimeout(done, 350));
+    const accounts = [...document.querySelectorAll('[data-launch-row]')].map((el) =>
+      el.dataset.launchRowId,
+    );
+    const hasBack = Boolean(document.querySelector('[data-launch-back]'));
+
+    const before = (await window.ensemble.getEmbeddedState()).tabs.length;
+    document.querySelector('[data-launch-row-id="${alpha.id}"]')?.click();
+    await new Promise((done) => setTimeout(done, 2600));
+    const state = await window.ensemble.getEmbeddedState();
+    const created = state.tabs.filter((tab) => tab.identityId === "${alpha.id}");
+    return {
+      sites,
+      flatRows,
+      accounts,
+      hasBack,
+      before,
+      after: state.tabs.length,
+      created: created.length,
+      panelOpen: Boolean(document.querySelector('[data-launch-panel]')),
+      railShowsAccount: [...document.querySelectorAll('[data-instance-chip] .chip-account')]
+        .map((el) => el.textContent.trim())
+        .includes("账号甲"),
+    };
+  })()`);
+  check(
+    "the launch panel is a site → account cascade, not a flat account list",
+    Array.isArray(cascade?.sites) &&
+      cascade.sites.length === 1 &&
+      cascade.sites[0].id === site.id &&
+      cascade.flatRows === 0 &&
+      cascade.hasBack === true &&
+      Array.isArray(cascade?.accounts) &&
+      cascade.accounts.includes(alpha.id) &&
+      cascade.accounts.includes(beta.id),
+    cascade,
+  );
+  check(
+    "picking one account launches exactly one instance and closes the panel",
+    cascade?.panelOpen === false &&
+      cascade.after === cascade.before + 1 &&
+      cascade.created === 1 &&
+      cascade.railShowsAccount === true,
+    cascade,
+  );
+  // Leave the column as it was: the batch checks below start from nothing.
+  await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    for (const tab of state.tabs) {
+      if (tab.identityId === "${alpha.id}") await window.ensemble.closeEmbeddedTab(tab.id);
+    }
+    await new Promise((done) => setTimeout(done, 800));
+  })()`);
+
   // --- First launch: signed out, the pipeline signs both accounts in. ---
   const tabs = await batchLaunch(client, site.id, [
     { identityId: alpha.id, label: "账号甲" },

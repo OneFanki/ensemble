@@ -73,14 +73,14 @@ describe("hover labels", () => {
   });
 
   it("gives every account-column control a label through the directive", () => {
-    // The column is the left of the page area: the [+ 启动] button and the three
-    // management entries carry drawn labels, and each item's hint is the account
-    // name — the fact a truncated label hides. No native `title` may creep back
-    // in: every hint here is the app's own drawn layer.
+    // The column is the left of the page area: the [+ 启动] button, the single
+    // accounts entry and the launch panel's back row carry drawn labels, and each
+    // item's hint is the account name — the fact a truncated label hides. No
+    // native `title` may creep back in: every hint here is the app's own drawn
+    // layer.
     expect(rail).toContain('v-tooltip="t(\'app.railLaunch\')"');
-    expect(rail).toContain('v-tooltip="t(\'app.sites\')"');
     expect(rail).toContain('v-tooltip="t(\'app.railAccounts\')"');
-    expect(rail).toContain('v-tooltip="t(\'app.more\')"');
+    expect(rail).toContain('v-tooltip="t(\'app.railLaunchBack\')"');
     expect(rail).toContain('v-tooltip="item.account"');
     expect(rail).not.toMatch(/:title="t\('app\./);
     expect(rail).not.toMatch(/\s:title="/);

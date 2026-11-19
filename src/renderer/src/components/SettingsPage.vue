@@ -3,22 +3,27 @@ import type { BundleImportResult, BundlePreview } from "@shared/accounts-transfe
 import type { LocaleSetting } from "@shared/locale";
 import type { ConnectivityProbeResult } from "@shared/proxy";
 import type { ImportPreview, ImportResult } from "@shared/transfer";
+import type { LoginCaptureNotice } from "@shared/types";
 import { RELEASES_PAGE_URL, REPOSITORY_URL, type UpdateCheckResult } from "@shared/update";
 import {
   ArrowLeft,
+  Bookmark,
   Bot,
   Copy,
   Database,
   Download,
   ExternalLink,
   Github,
+  Inbox,
   Info,
+  ListChecks,
   Monitor,
   Plus,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Tags,
   Upload,
 } from "lucide-vue-next";
 import { storeToRefs } from "pinia";
@@ -29,6 +34,10 @@ import { useConfirmStore } from "../stores/confirm";
 import { useWorkspaceStore } from "../stores/workspace";
 import SelectField from "./SelectField.vue";
 import AiPolicyEditor from "./AiPolicyEditor.vue";
+import BookmarksPage from "./BookmarksPage.vue";
+import FlowsPage from "./FlowsPage.vue";
+import MessagesPage from "./MessagesPage.vue";
+import SiteGroupsPage from "./SiteGroupsPage.vue";
 import AppButton from "./ui/AppButton.vue";
 import Checkbox from "./ui/Checkbox.vue";
 import HintIcon from "./ui/HintIcon.vue";
@@ -46,10 +55,25 @@ import TextField from "./ui/TextField.vue";
  * staying oriented in the workspace; settings is where you change the workspace
  * itself, and leaving a column of destinations on screen next to it would keep
  * offering trips away from the thing being changed.
+ *
+ * Two groups, one rule between them: **偏好** is how the app behaves, **内容** is
+ * the workspace's own lists (bookmarks, messages, flows, site groups). They were
+ * one flat column, and a list that mixes "dark theme" with "bookmarks" has no
+ * order to read — the split is the answer to "where would I look for this".
  */
-export type SettingsSection = "general" | "engines" | "vault" | "data" | "mcp" | "about";
+export type SettingsSection =
+  | "general"
+  | "engines"
+  | "vault"
+  | "data"
+  | "mcp"
+  | "about"
+  | "bookmarks"
+  | "messages"
+  | "flows"
+  | "groups";
 
-const tabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = [
+const preferenceTabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = [
   { id: "general", labelKey: "app.settingsTabGeneral", icon: SlidersHorizontal },
   { id: "engines", labelKey: "app.settingsTabEngines", icon: Monitor },
   { id: "vault", labelKey: "app.settingsTabVault", icon: ShieldCheck },
@@ -58,7 +82,31 @@ const tabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = 
   { id: "about", labelKey: "app.settingsTabAbout", icon: Info },
 ];
 
+/**
+ * The workspace's own lists.
+ *
+ * These used to be a 「更多」 layer over the browser, reachable only from a second
+ * entry at the foot of the account column. They are content, not a place you work
+ * in: a bookmark list, a message history, a set of flows and a set of groupings
+ * are things you open to change and then leave.
+ *
+ * AI activity is deliberately absent: it has an entry in the address bar's AI
+ * panel, which is where "what is it doing" is asked, and a second home for the
+ * same log would be one more place to check.
+ */
+const contentTabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = [
+  { id: "bookmarks", labelKey: "app.bookmarks", icon: Bookmark },
+  { id: "messages", labelKey: "app.messages", icon: Inbox },
+  { id: "flows", labelKey: "app.flows", icon: ListChecks },
+  { id: "groups", labelKey: "app.siteGroups", icon: Tags },
+];
+
 const activeTab = ref<SettingsSection>("general");
+
+/** Whether the current section is one of the workspace's own lists. */
+const contentSection = computed(
+  () => contentTabs.some((tab) => tab.id === activeTab.value),
+);
 
 /**
  * A section requested from outside (the toolbar's AI entry, the update prompt).
@@ -92,6 +140,8 @@ const emit = defineEmits<{
   theme: [theme: "dark" | "light" | "system"];
   locale: [locale: LocaleSetting];
   updateFound: [result: UpdateCheckResult];
+  /** A message row's "save account": the shell owns the account dialog. */
+  saveCapture: [notice: LoginCaptureNotice];
 }>();
 
 const store = useWorkspaceStore();
@@ -494,8 +544,28 @@ async function submitMaster() {
         come.
       -->
       <nav class="settings-nav" role="tablist" :aria-label="$t('app.settings')" aria-orientation="vertical">
+        <span class="nav-group-label">{{ $t("app.settingsGroupPreferences") }}</span>
         <button
-          v-for="tab in tabs"
+          v-for="tab in preferenceTabs"
+          :key="tab.id"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ active: activeTab === tab.id }"
+          :aria-selected="activeTab === tab.id"
+          :data-section="tab.id"
+          @click="activeTab = tab.id"
+        >
+          <component :is="tab.icon" :size="13" />
+          <span>{{ $t(tab.labelKey) }}</span>
+        </button>
+
+        <!-- The rule is the whole grouping: above it is how the app behaves,
+             below it is what the workspace holds. -->
+        <div class="nav-group-rule" role="separator"></div>
+        <span class="nav-group-label">{{ $t("app.settingsGroupContent") }}</span>
+        <button
+          v-for="tab in contentTabs"
           :key="tab.id"
           type="button"
           role="tab"
@@ -513,6 +583,16 @@ async function submitMaster() {
       <div class="settings-main">
         <PageHeader :title="$t('app.settings')" />
         <div class="scroll">
+          <!-- Content sections carry their own page and are mounted instead of
+               the settings cards. They keep their own headers, which is what
+               makes them the same lists as before with a different frame. -->
+          <template v-if="contentSection">
+            <BookmarksPage v-if="activeTab === 'bookmarks'" />
+            <MessagesPage v-else-if="activeTab === 'messages'" @save-capture="emit('saveCapture', $event)" />
+            <FlowsPage v-else-if="activeTab === 'flows'" />
+            <SiteGroupsPage v-else-if="activeTab === 'groups'" />
+          </template>
+          <template v-else>
           <SettingGroup v-if="activeTab === 'engines'" :title="$t('app.engineList')">
             <template #actions>
               <AppButton :disabled="scanning" @click="store.addManualEngine()">
@@ -1414,6 +1494,7 @@ async function submitMaster() {
               </div>
             </div>
           </SettingGroup>
+          </template>
         </div>
       </div>
     </div>
@@ -1597,6 +1678,31 @@ async function submitMaster() {
 
 .tab.active svg {
   color: inherit;
+}
+
+/*
+ * The two groups of the table of contents.
+ *
+ * A caption in the same faint weight as the page's column labels, and one rule
+ * between the groups. The rule is the only thing needed to say "that was the
+ * other kind of section": a second band or a boxed group would draw more than
+ * the difference it describes.
+ */
+.nav-group-label {
+  padding: 8px 9px 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.nav-group-label:first-child {
+  padding-top: 0;
+}
+
+.nav-group-rule {
+  height: 1px;
+  margin: 9px 9px 3px;
+  background: var(--line-soft);
 }
 
 /*

@@ -18,7 +18,6 @@ import { EMBEDDED_DEFAULT_PROFILE_ID } from "@shared/embedded";
 import type { AiActivitySiteGroup } from "@shared/types";
 import AiActivityDetail from "./AiActivityDetail.vue";
 import AiActivityRow from "./AiActivityRow.vue";
-import FlowsPage from "./FlowsPage.vue";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import GroupHeader from "./ui/GroupHeader.vue";
 import PageHeader from "./ui/PageHeader.vue";
@@ -30,16 +29,6 @@ import { useWorkspaceStore } from "../stores/workspace";
 const workspace = useWorkspaceStore();
 const confirm = useConfirmStore();
 const { t } = useI18n();
-
-/**
- * The page's two halves: the activity log and the flows that drive it.
- *
- * A flow is an AI action by definition — it lives here rather than as a second
- * top-level destination, so "what did the AI do" and "what can it do again"
- * share one entrance.
- */
-type AiTab = "activity" | "flows";
-const aiTab = ref<AiTab>("activity");
 
 const collapsed = ref<Record<string, boolean>>({});
 const expanded = ref<Record<string, boolean>>({});
@@ -109,44 +98,17 @@ async function clearAll(): Promise<void> {
   <section class="page">
     <PageHeader :title="$t('app.aiActivityTitle')">
       <template #actions>
-        <div class="ai-tabs" role="tablist" :aria-label="$t('app.aiActivityTitle')">
-          <button
-            type="button"
-            role="tab"
-            class="ai-tab"
-            :class="{ active: aiTab === 'activity' }"
-            :aria-selected="aiTab === 'activity'"
-            data-ai-tab="activity"
-            @click="aiTab = 'activity'"
-          >
-            {{ $t("app.aiTabActivity") }}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            class="ai-tab"
-            :class="{ active: aiTab === 'flows' }"
-            :aria-selected="aiTab === 'flows'"
-            data-ai-tab="flows"
-            @click="aiTab = 'flows'"
-          >
-            {{ $t("app.aiTabFlows") }}
-          </button>
-        </div>
-        <template v-if="aiTab === 'activity'">
-          <GroupCollapseAll
-            v-if="groups.length"
-            :all-collapsed="allCollapsed"
-            @toggle="toggleAll"
-          />
-          <AppButton size="sm" :disabled="groups.length === 0" data-ai-activity-clear @click="clearAll">
-            {{ $t("app.aiActivityClear") }}
-          </AppButton>
-        </template>
+        <GroupCollapseAll
+          v-if="groups.length"
+          :all-collapsed="allCollapsed"
+          @toggle="toggleAll"
+        />
+        <AppButton size="sm" :disabled="groups.length === 0" data-ai-activity-clear @click="clearAll">
+          {{ $t("app.aiActivityClear") }}
+        </AppButton>
       </template>
     </PageHeader>
 
-    <template v-if="aiTab === 'activity'">
     <EmptyState v-if="groups.length === 0" :text="$t('app.aiActivityEmpty')">
       <template #icon><Sparkles :size="20" /></template>
     </EmptyState>
@@ -189,54 +151,10 @@ async function clearAll(): Promise<void> {
         </section>
       </div>
     </div>
-    </template>
-
-    <!-- The flows tab renders the flows page in place; its own page frame
-         (padding, header) is the tab's content, so only the outer padding is
-         cancelled here — the page frame above has already inset the area. -->
-    <FlowsPage v-else class="flows-embedded" />
   </section>
 </template>
 
 <style scoped>
-/* The activity/flows switch: a segmented pair in the header's action row. */
-.ai-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--chrome);
-}
-
-.ai-tab {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
-.ai-tab:hover {
-  color: var(--text);
-}
-
-.ai-tab.active {
-  background: var(--selected);
-  color: var(--text);
-}
-
-/*
- * The flows page keeps its own page frame when it renders as a tab; only its
- * outer padding is dropped, because the frame above this area is already the
- * page's inset — doubling it would push the tab's content away from the tab.
- */
-.flows-embedded {
-  padding: 0;
-}
-
 .groups {
   display: flex;
   flex-direction: column;

@@ -42,11 +42,11 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 | --- | --- | --- | --- | --- |
 | `get_workspace_summary` | read | — | 无 | 站点 / 身份 / 视图 / 运行中实例的数量与名称 |
 | `update_settings` | write | — | 无。凭据、密钥库、MCP 端口与令牌不接受修改 | 改动后的键值 |
-| `list_sites` / `list_site_tags` / `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码；`list_bookmarks` 不回传图标内容，只有 `hasFavicon` 标记；`list_flows` 返回 `{ flows, total }`——流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截断到前 200 字符、步骤多于 60 条截到 60 并标 `stepsTruncated`（`run_flow` 用完整定义，不受预览截断影响） |
+| `list_sites` / `list_site_tags`（站点分组）/ `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码；`list_bookmarks` 不回传图标内容，只有 `hasFavicon` 标记；`list_flows` 返回 `{ flows, total }`——流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截断到前 200 字符、步骤多于 60 条截到 60 并标 `stepsTruncated`（`run_flow` 用完整定义，不受预览截断影响） |
 | `create_site` / `update_site` / `create_identity` / `create_identities` / `update_identity` / `link_identities_to_site` / `set_password` | write | — | 无。密码只写不读，返回值里没有明文字段 | 新建或更新后的对象，`create_identities` 额外带 `failures` |
 | `detach_identity_reference` | write | — | 无。已经是独立身份时无变化 | 断开后的身份 |
 | `create_view` / `update_view` / `set_view_layout` / `create_layout_preset` / `copy_view_to_site` | write | — | 无 | 视图或预设 |
-| `save_flow` / `save_tag` / `save_bookmark` | write | — | 无 | 保存后的对象；`save_flow` 的步骤值截断（同 `list_flows`）、超 60 步截到 60 并标 `stepsTruncated`；`save_bookmark` 返回 `hasFavicon` 而非图标内容 |
+| `save_flow` / `save_tag`（站点分组）/ `save_bookmark` | write | — | 无 | 保存后的对象；`save_flow` 的步骤值截断（同 `list_flows`）、超 60 步截到 60 并标 `stepsTruncated`；`save_bookmark` 返回 `hasFavicon` 而非图标内容 |
 | `save_site_tag` | write | — | `save_tag` 的旧名称，行为相同；不广播给客户端 | 同 `save_tag` |
 | `delete_site_tag` | danger | — | `delete_tag` 的旧名称，同样要求 `confirm: true`；不广播给客户端 | `{ ok: true }` |
 | `export_accounts` / `import_accounts` / `preview_accounts` | write / write / read | — | `export_accounts` 只有传 `passphrase` 才带密码；返回值永不含明文 | 文件路径与数量 / 合并结果 / 预演结果 |

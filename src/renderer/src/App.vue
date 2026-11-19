@@ -322,7 +322,15 @@ function openConsole(target: "identities" | "settings" | "messages" | "ai" = "se
     openSettings(settingsSection.value);
     return;
   }
-  if (target === "messages" || target === "ai") {
+  // Messages live in settings now (a named section), not in the AI layer. They
+  // were briefly routed here together with `ai` when the management pane was
+  // dismantled, which sent the bell's "open the message centre" to the wrong
+  // page.
+  if (target === "messages") {
+    openSettings("messages" as SettingsSection);
+    return;
+  }
+  if (target === "ai") {
     aiLayerOpen.value = true;
     layer.value = null;
     if (view.value !== "browser") view.value = "browser";

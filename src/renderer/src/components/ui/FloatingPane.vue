@@ -44,7 +44,28 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const isOpen = computed(() => props.open);
-useFloatingLayer(isOpen);
+/*
+ * 打开到关闭动画结束之间，浮层都算「在台上」。
+ *
+ * `useFloatingLayer` 管的是顶栏拖拽区与原生 DevTools 让位；关窗动画期间就把它
+ * 撤掉的话，最后 160ms 里顶栏会提前夺回拖拽角色，页面也会在浮层还没消失时就
+ * 被重新盖上来——动画看着像闪了一下。所以登记用 `rendered`，它比 `isOpen`
+ * 晚一步落下。
+ */
+const rendered = ref(props.open);
+useFloatingLayer(computed(() => rendered.value));
+
+watch(
+  isOpen,
+  (open) => {
+    if (open) rendered.value = true;
+  },
+  { immediate: true },
+);
+
+function onAfterLeave(): void {
+  rendered.value = false;
+}
 
 const panel = ref<HTMLElement | null>(null);
 
@@ -117,47 +138,49 @@ onBeforeUnmount(() => {
     makes "click anywhere else" work while a page is behind it.
   -->
   <Teleport to="body">
-    <div class="floating-layer" data-floating-pane-layer>
-      <div class="floating-scrim" data-floating-scrim @pointerdown="onScrimPointerDown"></div>
-      <section
-        ref="panel"
-        class="floating-pane"
-        role="dialog"
-        aria-modal="false"
-        :aria-label="label"
-        tabindex="-1"
-        data-floating-pane
-      >
-        <header class="pane-head">
-          <!--
-            The title is drawn, not hidden.
+    <Transition name="floating-pane" appear @after-leave="onAfterLeave">
+      <div v-if="isOpen" class="floating-layer" data-floating-pane-layer>
+        <div class="floating-scrim" data-floating-scrim @pointerdown="onScrimPointerDown"></div>
+        <section
+          ref="panel"
+          class="floating-pane"
+          role="dialog"
+          aria-modal="false"
+          :aria-label="label"
+          tabindex="-1"
+          data-floating-pane
+        >
+          <header class="pane-head">
+            <!--
+              The title is drawn, not hidden.
 
-            The head holds one close button, and a band with a lone "×" in the
-            far corner reads as a strip that lost its content — the user cannot
-            tell what the pane is called or why it ends there. The heading is the
-            answer, and it costs the height the band already had.
-          -->
-          <h2 class="pane-title">{{ label }}</h2>
-          <div class="pane-head-actions">
-            <!-- The caller's own controls sit in the head too: they act on the
-                 pane as a whole (which face to show), not on its content. -->
-            <slot name="head" />
-            <IconButton
-              :ariaLabel="t('app.close')"
-              :title="t('app.close')"
-              size="sm"
-              data-pane-close
-              @click="emit('close')"
-            >
-              <X :size="13" />
-            </IconButton>
+              The head holds one close button, and a band with a lone "×" in the
+              far corner reads as a strip that lost its content — the user cannot
+              tell what the pane is called or why it ends there. The heading is
+              the answer, and it costs the height the band already had.
+            -->
+            <h2 class="pane-title">{{ label }}</h2>
+            <div class="pane-head-actions">
+              <!-- The caller's own controls sit in the head too: they act on the
+                   pane as a whole (which face to show), not on its content. -->
+              <slot name="head" />
+              <IconButton
+                :ariaLabel="t('app.close')"
+                :title="t('app.close')"
+                size="sm"
+                data-pane-close
+                @click="emit('close')"
+              >
+                <X :size="13" />
+              </IconButton>
+            </div>
+          </header>
+          <div class="pane-body">
+            <slot />
           </div>
-        </header>
-        <div class="pane-body">
-          <slot />
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -216,21 +239,129 @@ onBeforeUnmount(() => {
   flex-direction: column;
   width: min(720px, 60vw);
   max-width: calc(100vw - var(--pane-left, 0px));
+  /*
+   * The edge is drawn, not implied by a shadow.
+   *
+   * The pane runs from just under the address row to the window's bottom, so
+   * there is no room on two of its four sides for a shadow to be seen — a
+   * `box-shadow` alone left it reading as "the page has been cut here", because a
+   * blurred, slightly-transparent surface with no hard boundary looks like the
+   * page continuing into a different colour. The hairline plus a real drop
+   * shadow on the side that does have room is what makes it a panel lying on
+   * top.
+   */
   border-right: 1px solid var(--line);
-  background: var(--content);
+  /*
+   * Frosted glass, not an opaque sheet.
+   *
+   * The pane floats over a live page; an opaque rectangle makes the page read as
+   * gone rather than covered. A blur keeps the page's colours moving under the
+   * surface while the pane's own text stays legible on the tint.
+   *
+   * Measured before adopting it, because the carrier is a `<webview>` guest and
+   * whether the compositor samples it is not obvious: a blur over a hard
+   * black/white stripe page turned into a soft vertical gradient, and the frame
+   * differed byte-for-byte from the same overlay without the filter. The control
+   * over the app's own HTML differed as well, so the method itself was sound.
+   *
+   * Two consequences of that measurement:
+   *
+   * 1. **The tint carries the legibility.** Fields, rows and buttons inside stay
+   *    fully opaque — glass is only the pane's own backdrop — and the tint is
+   *    strong enough (78%) that a white page underneath cannot wash out muted
+   *    text on top.
+   * 2. **A filtered element becomes the containing block for `position: fixed`
+   *    descendants.** Every popover inside the pane (`ComboBox`, `SelectField`)
+   *    teleports to `<body>`, so none is a layout descendant and none measures
+   *    its coordinates against this box. That is why this is safe here and was
+   *    deliberately avoided on the bookmark bar, which had fixed panels as real
+   *    descendants.
+   */
+  /*
+   * The tint, and why it is this strong.
+   *
+   * 78% was measured on a saturated page and it was not enough: four strong
+   * colour fields put visible red and green wash across the face switch, the
+   * search field and the table's header row — every one of those is text the user
+   * is trying to read, and the page underneath was competing with it. The blur is
+   * what makes this read as glass; the tint is what keeps the pane readable, and
+   * legibility wins. At 90% the colour drift is still visible along the pane's
+   * empty areas and edges, and it no longer crosses any glyph.
+   */
+  background: color-mix(in srgb, var(--content) 90%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
+  /*
+   * No `overflow: hidden` here.
+   *
+   * The body already clips its own scroll area, and this box has no rounded
+   * corners to protect. Keeping it would clip the drop shadow to nothing — and
+   * the shadow is doing real work now: a blurred, 90%-opaque surface that ends
+   * flush against the page reads as "the page was cut here" without one.
+   */
   box-shadow: var(--shadow-menu);
   z-index: 71;
-  overflow: hidden;
   outline: none;
-  animation: floating-pane-in var(--motion-slow) var(--ease-out);
   transform-origin: left center;
 }
 
-@keyframes floating-pane-in {
-  from {
-    opacity: 0;
-    transform: translateX(calc(-1 * var(--motion-shift))) scaleX(var(--motion-pop-scale));
-  }
+/*
+ * The head and body sit above the blurred backdrop, which they need to for
+ * stacking — but they add no fill of their own. Every surface inside the pane
+ * (the head's band, cards, fields, the filter row's buttons) states its own
+ * background, and a second translucent layer here would double-tint the gaps
+ * between them into a flat wash.
+ */
+.pane-head,
+.pane-body {
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * Open and close are the same motion in two directions.
+ *
+ * The pane used to animate in and then disappear in a single frame on close,
+ * which read as a glitch rather than a dismissal: the eye follows the panel in
+ * and then it is simply gone. A `Transition` (not an enter-only `animation`) is
+ * what makes both directions share a curve, and the leave has to be *faster*
+ * than the enter — dismissal should feel like getting out of the way, not like
+ * watching the panel reverse itself.
+ *
+ * `transform` and `opacity` only: both are compositor properties, so the blur
+ * underneath is never re-rasterised per frame.
+ */
+.floating-pane-enter-active {
+  transition:
+    opacity var(--motion-slow) var(--ease-out),
+    transform var(--motion-slow) var(--ease-out);
+}
+
+.floating-pane-leave-active {
+  transition:
+    opacity calc(var(--motion-base) * 0.75) var(--ease-out),
+    transform calc(var(--motion-base) * 0.75) var(--ease-out);
+}
+
+.floating-pane-enter-from,
+.floating-pane-leave-to {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--motion-shift))) scaleX(var(--motion-pop-scale));
+}
+
+/* The scrim fades with the pane; it has no motion of its own. */
+.floating-pane-enter-active .floating-scrim,
+.floating-pane-leave-active .floating-scrim {
+  transition: opacity var(--motion-slow) var(--ease-out);
+}
+
+.floating-pane-leave-active .floating-scrim {
+  transition-duration: calc(var(--motion-base) * 0.75);
+}
+
+.floating-pane-enter-from .floating-scrim,
+.floating-pane-leave-to .floating-scrim {
+  opacity: 0;
 }
 
 /* A slim band with nothing but the close control: the page inside carries its
@@ -243,7 +374,7 @@ onBeforeUnmount(() => {
   /* A floor, not a height: on the edit face the head also carries the primary
      write action, and a fixed 36px would clip it. */
   min-height: 40px;
-  padding: 4px 6px 4px 14px;
+  padding: 4px 10px 4px 14px;
   background: var(--frame);
   border-bottom: 1px solid var(--line-soft);
 }

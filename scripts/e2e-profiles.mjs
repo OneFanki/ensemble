@@ -175,14 +175,19 @@ async function openAccountForm(client) {
     for (let attempt = 0; attempt < 20 && !document.querySelector('[data-floating-pane]'); attempt += 1) {
       await wait(80);
     }
-    // The pane opens on its launch face, where the header carries the view switch
-    // and no write action at all: creating an account is a write, so it lives on
-    // the edit face. Switch there first, then take that face's primary action.
+    // The pane opens on its launch face, where the header carries only the face
+    // switch: creating an account is a write, so it lives on the edit face.
+    // Switch there, then open the create menu — one `+`, two branches.
     document.querySelector('[data-mode-edit]')?.click();
     await wait(350);
-    const newAccount =
-      document.querySelector('[data-new-account]') ??
-      document.querySelector('.page.identities .empty-actions button');
+    // The empty state spells both doors out; a populated list keeps them behind
+    // the `+`. Try the direct button first, then the menu.
+    let newAccount = document.querySelector('[data-new-account]');
+    if (!newAccount) {
+      document.querySelector('[data-create-entry]')?.click();
+      await wait(250);
+      newAccount = document.querySelector('[data-new-account]');
+    }
     newAccount?.click();
     await wait(600);
     const toggle = document.querySelector('[data-advanced-toggle]');

@@ -19,6 +19,8 @@ import {
 } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { onClickOutside } from "@vueuse/core";
+import { useAnchoredPanel } from "../composables/anchoredPanel";
 import { useGroupCollapse } from "../composables/useGroupCollapse";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -124,6 +126,46 @@ function toggleAll() {
 
 function startSelecting() {
   selecting.value = true;
+}
+
+/**
+ * 新建入口：一个 `+`，点开再选建什么。
+ *
+ * 原来有两个并列的写入口——标题栏里一个「新建账号」主按钮、旁边一个地球图标
+ * 建站点。两个按钮争同一个位置的主次，而它们其实是同一件事的两个分支：往这份
+ * 清单里加东西。合成一个 `+` 之后操作行只有一个焦点，标题栏也不再因为「编辑面
+ * 才有写操作」而在切换时改宽度。
+ *
+ * 面板里用文字行而不是图标：账号和站点是两个实体，地球图标既可能是「站点」也可能
+ * 被读成「打开网页」，此时文字比图形省一次辨认。
+ */
+const createOpen = ref(false);
+const createRoot = ref<HTMLElement | null>(null);
+const createPanel = ref<HTMLElement | null>(null);
+const createPanelStyle = ref<Record<string, string>>({});
+
+onClickOutside(createRoot, (event) => {
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-floating-panel]")) return;
+  createOpen.value = false;
+});
+
+useAnchoredPanel({
+  open: createOpen,
+  anchor: () => createRoot.value,
+  panel: createPanel,
+  style: createPanelStyle,
+  minWidth: 168,
+});
+
+function createAccount(): void {
+  createOpen.value = false;
+  emit("newIdentity");
+}
+
+function createSite(): void {
+  createOpen.value = false;
+  emit("newSite");
 }
 
 function endSelecting() {
@@ -589,8 +631,8 @@ defineExpose({ mode, setMode });
       acts on the list sits at its right end as icon buttons, so the row's height
       is one control, not two.
     -->
-    <div v-if="mode === 'edit' && store.identities.length" class="filter-bar">
-      <div class="tabs" role="tablist" :aria-label="$t('app.identities')">
+    <div v-if="mode === 'edit'" class="filter-bar">
+      <div v-if="store.identities.length" class="tabs" role="tablist" :aria-label="$t('app.identities')">
         <button
           type="button"
           role="tab"
@@ -622,7 +664,7 @@ defineExpose({ mode, setMode });
           {{ $t("app.filterExpired") }} <span class="num mono">{{ expiredCount }}</span>
         </button>
       </div>
-      <label class="search">
+      <label v-if="store.identities.length" class="search">
         <Search :size="12" />
         <input v-model="query" type="search" :placeholder="$t('app.search')" />
       </label>
@@ -630,8 +672,51 @@ defineExpose({ mode, setMode });
            they are icons at the row's end: a text button for each pushed the
            search field down to 130px in a 720px pane. -->
       <div class="filter-actions">
+        <!--
+          The create door: one `+`, and the choice of what to create behind it.
+
+          Two buttons used to sit in the pane's title bar for this — a primary
+          "new account" and a globe for a site. They were two branches of one
+          action competing for one slot, and having them in the head meant the
+          face switch shifted sideways whenever the edit face appeared.
+        -->
+        <span ref="createRoot" class="create-root">
+          <button
+            type="button"
+            class="bar-icon"
+            :class="{ on: createOpen }"
+            :aria-label="$t('app.createEntry')"
+            :title="$t('app.createEntry')"
+            :aria-expanded="createOpen"
+            aria-haspopup="menu"
+            data-create-entry
+            @click="createOpen = !createOpen"
+          >
+            <Plus :size="14" />
+          </button>
+          <Teleport to="body">
+            <div
+              v-if="createOpen"
+              ref="createPanel"
+              class="create-panel"
+              :style="createPanelStyle"
+              role="menu"
+              data-floating-panel
+              data-create-panel
+            >
+              <button type="button" role="menuitem" class="row" data-new-account @click.stop="createAccount">
+                <Users :size="12" class="row-icon" />
+                <span>{{ $t("app.newIdentity") }}</span>
+              </button>
+              <button type="button" role="menuitem" class="row" data-new-site @click.stop="createSite">
+                <Globe :size="12" class="row-icon" />
+                <span>{{ $t("app.newSite") }}</span>
+              </button>
+            </div>
+          </Teleport>
+        </span>
         <button
-          v-if="!selecting"
+          v-if="!selecting && store.identities.length"
           type="button"
           class="bar-icon"
           :aria-label="$t('app.batchSelect')"
@@ -647,6 +732,7 @@ defineExpose({ mode, setMode });
           @toggle="groupCollapse.toggleAll(groupKeys)"
         />
         <button
+          v-if="store.identities.length"
           type="button"
           class="bar-icon"
           :class="{ on: groupsPanelOpen }"
@@ -659,6 +745,7 @@ defineExpose({ mode, setMode });
           <Tags :size="13" />
         </button>
         <button
+          v-if="store.identities.length"
           type="button"
           class="bar-icon"
           :aria-label="$t('app.sessionHealth')"
@@ -871,10 +958,26 @@ defineExpose({ mode, setMode });
         :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
       >
         <template #icon><Users :size="22" /></template>
-        <AppButton variant="primary" @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ $t("app.newIdentity") }}
-        </AppButton>
+        <!--
+          Both doors, not just the account one.
+
+          The action row is hidden while the list is empty (a filter bar over
+          nothing is noise), and the create menu lives on that row — so on a
+          brand-new workspace the only way to add a site would be to add an
+          account first, which is backwards: an account belongs to a site. The
+          empty state therefore offers both, and this is the one place where
+          spelling them out beats a `+` menu.
+        -->
+        <div class="empty-actions">
+          <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
+            <Plus :size="13" />
+            {{ $t("app.newIdentity") }}
+          </AppButton>
+          <AppButton data-new-site @click="emit('newSite')">
+            <Globe :size="13" />
+            {{ $t("app.newSite") }}
+          </AppButton>
+        </div>
       </EmptyState>
     </div>
 
@@ -1207,6 +1310,70 @@ defineExpose({ mode, setMode });
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+}
+
+/* The create door's anchor. `inline-flex` so the button inside keeps its own box
+   instead of stretching to the row's height. */
+.create-root {
+  display: inline-flex;
+}
+
+/*
+ * The create menu: two rows, no icons column.
+ *
+ * Placed by `useAnchoredPanel` in viewport coordinates (it teleports to `<body>`),
+ * which is what lets it escape the pane's `overflow: hidden` — and the reason it
+ * is unaffected by the pane's `backdrop-filter` making that box a containing
+ * block for fixed descendants.
+ */
+.create-panel {
+  position: fixed;
+  pointer-events: auto;
+  z-index: 90;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  animation: create-panel-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
+}
+
+@keyframes create-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+.create-panel .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.create-panel .row:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.create-panel .row-icon {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+/* The empty state's pair of doors: primary create, secondary site. */
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* The filter row's icon buttons: same 26px target and same quiet colour as the

@@ -46,3 +46,66 @@ describe("the floating pane's head", () => {
     expect(PANE).toMatch(/<slot name="head"/);
   });
 });
+
+/**
+ * The head's controls must not move when the face changes.
+ *
+ * The write actions (new account / new site) used to live here and only appeared
+ * on the edit face. The face switch shares the same right-aligned row, so
+ * switching to edit shoved the switch left by the width of two buttons — the
+ * control under the user's pointer moved out from under it. They now live in the
+ * page's own action row, and the head carries the switch alone.
+ */
+const MANAGE = readFileSync(
+  join(process.cwd(), "src", "renderer", "src", "components", "ManageLayer.vue"),
+  "utf8",
+);
+
+describe("the pane head does not reflow between faces", () => {
+  it("keeps the write actions out of the head", () => {
+    // The head slot must not contain either creation door: they are conditional
+    // on the face, which is what made the row change width.
+    const headStart = MANAGE.indexOf('<template #head>');
+    expect(headStart, "the head slot must exist").toBeGreaterThan(-1);
+    const headEnd = MANAGE.indexOf("</template>", headStart);
+    const head = MANAGE.slice(headStart, headEnd);
+    expect(head).not.toMatch(/data-new-account/);
+    expect(head).not.toMatch(/data-new-site/);
+  });
+
+  it("keeps the face switch in the head, and it is the only control", () => {
+    const headStart = MANAGE.indexOf('<template #head>');
+    const headEnd = MANAGE.indexOf("</template>", headStart);
+    const head = MANAGE.slice(headStart, headEnd);
+    expect(head).toMatch(/data-mode-use/);
+    expect(head).toMatch(/data-mode-edit/);
+  });
+});
+
+/**
+ * The pane is glass, and it leaves as well as it arrives.
+ *
+ * Both were asked for together and both are easy to lose silently: a blur can be
+ * dropped without any visual error (the pane just becomes opaque again), and an
+ * enter-only `animation` looks correct on open while close snaps shut in one
+ * frame. Neither is caught by a screenshot of a fresh open.
+ */
+describe("the pane's surface and its exit", () => {
+  it("blurs the page behind it instead of painting an opaque sheet", () => {
+    expect(PANE).toMatch(/backdrop-filter:\s*blur\(/);
+    // The -webkit- spelling is still required: Electron's Chromium accepts both,
+    // but a stylesheet that only carries the unprefixed one is silently inert on
+    // some builds.
+    expect(PANE).toMatch(/-webkit-backdrop-filter:\s*blur\(/);
+    // The tint must stay translucent, or the blur is invisible work.
+    expect(PANE).toMatch(/background:\s*color-mix\(in srgb, var\(--content\) 90%, transparent\)/);
+  });
+
+  it("animates both directions, not just the entrance", () => {
+    // A `Transition` with a leave rule is what makes close animate; an
+    // `animation:` on the pane alone can never play backwards.
+    expect(PANE).toMatch(/<Transition name="floating-pane"/);
+    expect(PANE).toMatch(/\.floating-pane-leave-active\s*\{/);
+    expect(PANE).toMatch(/\.floating-pane-leave-to\s*\{/);
+  });
+});

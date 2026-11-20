@@ -2025,9 +2025,16 @@ try {
     // One switch for the page. It lives in the header row and changes its own
     // label, so its direction is checkable from the DOM.
     const all = () => document.querySelector('.identities [data-group-collapse-all]');
-    // The switch labels itself, so its direction is readable from the element
-    // itself rather than from whatever buttons happen to share its container.
-    const label = () => all()?.textContent.replace(/\\s+/g, ' ').trim() ?? "";
+    /*
+     * Read from aria-label, not textContent.
+     *
+     * The switch is icon-only now: the chevrons say which direction it will take
+     * and the label moved to the accessible name, where it costs no width in a
+     * row of 26px glyphs. The property — "the button names the action it will
+     * perform, and the name flips" — is unchanged, so the assertion moves with
+     * it rather than being weakened.
+     */
+    const label = () => all()?.getAttribute('aria-label')?.trim() ?? "";
     const beforeLabel = label();
     all()?.click();
     await new Promise((r) => setTimeout(r, 300));
@@ -2084,9 +2091,16 @@ try {
     const effective = () => dialog()?.querySelector('[data-submit-effective]')?.textContent.trim() ?? "";
     const trigger = () => dialog()?.querySelector('.select-trigger .select-value')?.textContent.trim() ?? "";
     const openForm = async () => {
-      // The site form is still the same dialog; its entrance moved to the
-      // accounts page's header when the sites page was folded into it.
-      document.querySelector('[data-new-site]')?.click();
+      // The site form is still the same dialog. Its entrance is now a branch of
+      // the accounts page's `+` menu, so open that first — the direct hook only
+      // exists inside the menu (or in the empty state's pair of doors).
+      let door = document.querySelector('[data-new-site]');
+      if (!door) {
+        document.querySelector('[data-create-entry]')?.click();
+        await new Promise((r) => setTimeout(r, 250));
+        door = document.querySelector('[data-new-site]');
+      }
+      door?.click();
       await new Promise((r) => setTimeout(r, 500));
       return dialog();
     };

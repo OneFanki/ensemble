@@ -577,6 +577,56 @@ function markAvatarBroken(instanceId: string): void {
 }
 
 /*
+ * 入口：和账号行同一套行高与左边距，靠字重和下边线区分层级。
+ *
+ * 它原来是个居中、`--fs-2xs` 字号的小按钮，并且和下面的账号行长得几乎一样
+ * —— 同一栏里两排灰底列表项，分不清哪个是「打开清单」、哪个是「切到这个账号」。
+ * 现在占满一行、左对齐，`padding` 与 `.rail-item` 完全一致（7/5，gap 6，27px），
+ * 所以两个入口和账号的头像在同一条竖线上；区别只体现在字号、字重，以及把
+ * 它和列表分开的那条下边线。悬停才给底色，常态是一行字——读起来是这一栏的
+ * 入口，而不是又一条账号。
+ */
+.entry-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 27px;
+  padding: 0 5px 0 7px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.entry-btn svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.entry-btn:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.entry-btn:hover svg {
+  color: var(--text-secondary);
+}
+
+/* While the pane it opens is up, the entry keeps a mark. A fill would read as
+   "this account is running" — the same language the rows below use — so the
+   open state is the icon's colour, not a background. */
+.entry-btn.active {
+  color: var(--text);
+}
+
+.entry-btn.active svg {
+  color: var(--accent);
+}
+
+/*
  * 关闭：悬停才出现，和浏览器标签上的叉一样安静。
  *
  * 绝对定位在行的右端，不参与布局：它只在悬停时出现，却一直占着 17px，等于
@@ -674,27 +724,5 @@ function markAvatarBroken(instanceId: string): void {
   font-size: var(--fs-2xs);
   color: var(--faint);
   flex: none;
-}
-
-.entry-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  border-radius: var(--radius);
-  color: var(--muted);
-  font-size: var(--fs-2xs);
-  white-space: nowrap;
-}
-
-.entry-btn:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-.entry-btn.active {
-  background: var(--selected-on-frame);
-  color: var(--text);
 }
 </style>

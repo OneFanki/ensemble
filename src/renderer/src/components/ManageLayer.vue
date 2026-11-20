@@ -9,17 +9,17 @@
  * 长在账号页里，站点的增删改也从那里发起。书签、消息、流程与站点分组是内容，
  * 住在设置页里；AI 记录的全量视图由地址栏的 AI 面板打开。
  *
- * 视图切换放在浮层的标题栏里，不在页面正文里：它选的是「浮层的哪一面」，那是
- * 关于浮层本身的事实。切到编辑面时标题栏右侧会多出「新建账号」等写操作——放在
- * 标题栏就不会把正文顶下去。
+ * 标题栏只放两样东西：标题，和「这一面是什么」的开关。写操作（新建账号、新建
+ * 站点）挪进了账号页自己的操作行——它们改的是那份清单，和筛选、批量选择是同一
+ * 类动作，跟清单待在一起比挂在标题栏上更说得通。更实际的理由是：它们只在编辑
+ * 面存在，放在标题栏里就会在切换时把右侧挤出一截，开关跟着位移。
  */
 import type { LoginCaptureNotice } from "@shared/types";
-import { Globe, LayoutGrid, Pencil, Plus } from "lucide-vue-next";
+import { LayoutGrid, Pencil } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import IdentitiesPage from "./IdentitiesPage.vue";
 import FloatingPane from "./ui/FloatingPane.vue";
-import AppButton from "./ui/AppButton.vue";
 
 /**
  * 能当浮层打开的目的地。
@@ -60,6 +60,16 @@ function setMode(next: "use" | "edit"): void {
 <template>
   <FloatingPane v-if="layer" :label="title" @close="emit('close')">
     <template #head>
+      <!--
+        The face switch is the head's only control, and it never moves.
+
+        It used to share the right side with the write actions, which only exist
+        on the edit face — so switching faces shoved the switch left by the width
+        of two buttons. A control that jumps when you press it is the one thing a
+        segmented switch cannot do: the pointer is resting on it and the eye is
+        following it. The write actions moved into the page's own action row,
+        which is where they belong anyway.
+      -->
       <div class="mode-switch" role="group" :aria-label="t('app.accountMode')">
         <button
           type="button"
@@ -84,25 +94,6 @@ function setMode(next: "use" | "edit"): void {
           <Pencil :size="13" />
         </button>
       </div>
-      <!-- The write actions ride in the same head as the face switch: on the edit
-           face they are the pane's primary action, and giving them their own row
-           under a 36px head left a near-empty band above the filters. -->
-      <template v-if="mode === 'edit'">
-        <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ t("app.newIdentity") }}
-        </AppButton>
-        <button
-          type="button"
-          class="head-icon"
-          :aria-label="t('app.newSite')"
-          :title="t('app.newSite')"
-          data-new-site
-          @click="emit('newSite')"
-        >
-          <Globe :size="13" />
-        </button>
-      </template>
     </template>
     <IdentitiesPage
       ref="page"
@@ -140,22 +131,6 @@ function setMode(next: "use" | "edit"): void {
 
 .mode.on {
   background: var(--surface-3);
-  color: var(--text);
-}
-
-/* The site door: same target size as the face switch, quieter than the primary
-   button beside it. */
-.head-icon {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  color: var(--faint);
-}
-
-.head-icon:hover {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 </style>

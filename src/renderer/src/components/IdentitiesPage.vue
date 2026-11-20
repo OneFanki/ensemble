@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Identity, RoleColor, Site, SiteGroup } from "@shared/types";
+import type { Identity, RoleColor, Site } from "@shared/types";
 import {
   Check,
   CheckSquare,
@@ -8,14 +8,15 @@ import {
   GripVertical,
   HeartPulse,
   Link2,
+  MoreHorizontal,
   Pencil,
   Play,
   Plus,
   RotateCcw,
   Search,
   Square,
-  Tags,
   Users,
+  X,
 } from "lucide-vue-next";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -27,7 +28,6 @@ import { useWorkspaceStore } from "../stores/workspace";
 import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
-import SiteGroupsEditor from "./SiteGroupsEditor.vue";
 import AppButton from "./ui/AppButton.vue";
 import EmptyState from "./ui/EmptyState.vue";
 import FormField from "./ui/FormField.vue";
@@ -76,6 +76,33 @@ const mode = ref<"use" | "edit">("use");
  */
 const selecting = ref(false);
 const selected = ref<Set<string>>(new Set());
+
+/**
+ * The selection bar's overflow menu.
+ *
+ * Re-linking and exporting are occasional actions on a selection; keeping them
+ * inline made the bar a row of five controls plus a sentence. The menu is
+ * anchored to the `⋯` and teleports to `<body>` for the same reason every other
+ * popover here does — the pane clips its own scroll area.
+ */
+const selectMenuOpen = ref(false);
+const selectMenuRoot = ref<HTMLElement | null>(null);
+const selectMenu = ref<HTMLElement | null>(null);
+const selectMenuStyle = ref<Record<string, string>>({});
+
+onClickOutside(selectMenuRoot, (event) => {
+  const target = event.target;
+  if (target instanceof Element && target.closest("[data-floating-panel]")) return;
+  selectMenuOpen.value = false;
+});
+
+useAnchoredPanel({
+  open: selectMenuOpen,
+  anchor: () => selectMenuRoot.value,
+  panel: selectMenu,
+  style: selectMenuStyle,
+  minWidth: 168,
+});
 
 const groupCollapse = useGroupCollapse("ensemble.groups.identities");
 
@@ -303,11 +330,6 @@ async function doExport(): Promise<void> {
   }
 }
 
-/** Site-group filter; `null` means every account. */
-const groupFilter = ref<string | null>(null);
-/** The inline group manager, closed until asked for. */
-const groupsPanelOpen = ref(false);
-
 /**
  * The search term, matched against accounts *and* their site.
  *
@@ -339,9 +361,6 @@ const visibleIdentities = computed(() => {
     const running = Boolean(store.instanceFor(identity.id));
     if (filter.value === "running" && !running) return false;
     if (filter.value === "expired" && identity.status !== "expired") return false;
-    if (groupFilter.value && !store.groupsForIdentity(identity).includes(groupFilter.value)) {
-      return false;
-    }
     if (!term) return true;
     return matchesTerm(identity, term);
   });
@@ -362,18 +381,13 @@ const groups = computed(() => {
     name: string;
     url: string;
     site?: Site;
-    siteGroups: SiteGroup[];
     people: Identity[];
     total: number;
   }> = [];
   for (const site of store.sites) {
     const people = visibleIdentities.value.filter((identity) => identity.siteId === site.id);
     const total = store.identities.filter((identity) => identity.siteId === site.id).length;
-    // A filter or a search that excludes every account also removes the section,
-    // but the group filter is about the site: a matching site keeps its place.
-    const matchesGroup =
-      !groupFilter.value || Boolean(site.tagIds?.includes(groupFilter.value));
-    if (people.length === 0 && (termActive.value || filter.value !== "all" || !matchesGroup)) {
+    if (people.length === 0 && (termActive.value || filter.value !== "all")) {
       continue;
     }
     result.push({
@@ -381,7 +395,6 @@ const groups = computed(() => {
       name: site.name,
       url: site.baseUrl,
       site,
-      siteGroups: store.siteGroups.filter((group) => site.tagIds?.includes(group.id)),
       people,
       total,
     });
@@ -394,7 +407,6 @@ const groups = computed(() => {
       siteId: "__orphan__",
       name: t("app.identityOrphanSite"),
       url: "",
-      siteGroups: [],
       people: orphans,
       total: orphans.length,
     });
@@ -406,9 +418,6 @@ const termActive = computed(() => query.value.trim().length > 0);
 
 const groupKeys = computed(() => groups.value.map((group) => group.siteId));
 const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
-
-/** Groups that hold at least one site, so the filter never lists dead ends. */
-const filterGroups = computed(() => store.siteGroups.filter((group) => store.sitesInGroup(group.id).length > 0));
 
 const runningCount = computed(
   () => store.identities.filter((identity) => store.instanceFor(identity.id)).length,
@@ -735,19 +744,6 @@ defineExpose({ mode, setMode });
           v-if="store.identities.length"
           type="button"
           class="bar-icon"
-          :class="{ on: groupsPanelOpen }"
-          :aria-label="$t('app.manageSiteGroups')"
-          :aria-expanded="groupsPanelOpen"
-          :title="$t('app.manageSiteGroups')"
-          data-manage-groups
-          @click="groupsPanelOpen = !groupsPanelOpen"
-        >
-          <Tags :size="13" />
-        </button>
-        <button
-          v-if="store.identities.length"
-          type="button"
-          class="bar-icon"
           :aria-label="$t('app.sessionHealth')"
           :title="$t('app.sessionHealth')"
           data-session-health
@@ -759,75 +755,29 @@ defineExpose({ mode, setMode });
     </div>
 
     <!--
-      The site-group filter, on its own line and only when there are groups to
-      choose between. One group is not a choice — "全部" and that group select the
-      same accounts — so the line only appears from two groups up.
-    -->
-    <div
-      v-if="mode === 'edit' && filterGroups.length > 1"
-      class="group-filters"
-      data-group-filters
-    >
-      <div class="chip-scroll">
-        <button
-          type="button"
-          class="group-chip"
-          :class="{ on: groupFilter === null }"
-          @click="groupFilter = null"
-        >
-          {{ $t("app.filterAll") }}
-        </button>
-        <button
-          v-for="group in filterGroups"
-          :key="group.id"
-          type="button"
-          class="group-chip"
-          :class="{ on: groupFilter === group.id }"
-          :style="{ '--tag': `var(--role-${group.color})` }"
-          :aria-pressed="groupFilter === group.id"
-          @click="groupFilter = groupFilter === group.id ? null : group.id"
-        >
-          <span class="chip-dot"></span>
-          {{ group.name }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Groups are managed where they are applied. The editor is the same
-         component the settings tab uses, so the two cannot diverge. -->
-    <div v-if="groupsPanelOpen" class="groups-panel" data-groups-panel>
-      <SiteGroupsEditor />
-    </div>
-
-    <!--
       Selection bar. It replaces the toolbar's action row rather than floating
       over the cards, so the count and the launch button stay in one place while
       the selection changes.
     -->
+    <!--
+      Selection bar: one line, one primary action, everything else behind `⋯`.
+
+      It used to carry five controls and a sentence — "全选 / 已选 3 个 / 按设置里
+      的默认布局平铺；已在运行的账号会被跳过，窗口不会重复打开。/ 关联到站点 /
+      导出账号 / 取消 / 启动所选（3）" — which read as a paragraph of buttons. The
+      count and the launch are what a selection is for; re-linking a whole batch
+      and exporting it are occasional, so they belong one level down. The sentence
+      is gone entirely: it explained a mechanism (skip running accounts) that the
+      result already shows.
+    -->
     <div v-if="selecting" class="select-bar">
-      <button type="button" class="link" @click="toggleAll">
-        {{ allSelected ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
-      </button>
       <span class="sel-count mono">
         {{ $t("app.batchSelected", { count: selected.size }) }}
       </span>
-      <span class="sel-note">{{ $t("app.batchLaunchNote") }}</span>
-      <!-- Re-linking belongs with the other bulk actions: fixing a lost site one
-           card at a time is the chore that leaves accounts unlinked. A button
-           rather than a dropdown — this opens a dialog where the site is chosen
-           and confirmed, so a stray click cannot move a whole batch. -->
-      <AppButton :disabled="selected.size === 0" data-batch-link-site @click="openLinkSite">
-        <Link2 :size="12" />
-        {{ $t("app.batchLinkSite") }}
+      <AppButton class="sel-all" @click="toggleAll">
+        {{ allSelected ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
       </AppButton>
-      <!-- Sharing accounts is a selection action too: pick the ones a colleague
-           needs, not the whole workspace. -->
-      <AppButton :disabled="selected.size === 0"
-        @click="openExport">
-        <Download :size="12" />
-        {{ $t("app.accountsExport") }}
-      </AppButton>
-      <AppButton @click="endSelecting">{{ $t("app.cancel") }}</AppButton>
+      <span class="sel-spacer"></span>
       <LaunchSplitButton
         variant="primary"
         :label="$t('app.batchLaunch', { count: notRunningSelected.length })"
@@ -836,6 +786,72 @@ defineExpose({ mode, setMode });
         @launch="launchSelected"
         @launch-external="launchSelectedExternal"
       />
+      <span ref="selectMenuRoot" class="sel-more">
+        <button
+          type="button"
+          class="bar-icon"
+          :class="{ on: selectMenuOpen }"
+          :aria-label="$t('app.batchMore')"
+          :title="$t('app.batchMore')"
+          :aria-expanded="selectMenuOpen"
+          aria-haspopup="menu"
+          data-batch-more
+          @click="selectMenuOpen = !selectMenuOpen"
+        >
+          <MoreHorizontal :size="14" />
+        </button>
+      </span>
+      <button
+        type="button"
+        class="bar-icon"
+        :aria-label="$t('app.cancel')"
+        :title="$t('app.cancel')"
+        data-batch-cancel
+        @click="endSelecting"
+      >
+        <X :size="14" />
+      </button>
+
+      <Teleport to="body">
+        <div
+          v-if="selectMenuOpen"
+          ref="selectMenu"
+          class="select-menu"
+          :style="selectMenuStyle"
+          role="menu"
+          data-floating-panel
+          data-batch-menu
+        >
+          <button
+            type="button"
+            role="menuitem"
+            class="row"
+            :disabled="selected.size === 0"
+            data-batch-link-site
+            @click.stop="
+              selectMenuOpen = false;
+              openLinkSite();
+            "
+          >
+            <Link2 :size="12" class="row-icon" />
+            <span>{{ $t("app.batchLinkSite") }}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="row"
+            :disabled="selected.size === 0"
+            data-batch-export
+            @click.stop="
+              selectMenuOpen = false;
+              openExport();
+            "
+          >
+            <Download :size="12" class="row-icon" />
+            <span>{{ $t("app.accountsExport") }}</span>
+          </button>
+        </div>
+      </Teleport>
     </div>
 
     <!-- Choosing the target site is a dialog, not a dropdown in the bar: the
@@ -1008,16 +1024,6 @@ defineExpose({ mode, setMode });
         >
           <template #meta>
             <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
-            <!-- The site's own groups, so "which filing is this in" is answered
-                 where the site is, not one dialog away. -->
-            <span
-              v-for="siteGroup in group.siteGroups"
-              :key="siteGroup.id"
-              class="group-badge"
-              :style="{ '--tag': `var(--role-${siteGroup.color})` }"
-            >
-              <span class="badge-dot"></span>{{ siteGroup.name }}
-            </span>
           </template>
           <template #actions>
             <template v-if="group.siteId !== '__orphan__'">
@@ -1449,39 +1455,106 @@ defineExpose({ mode, setMode });
   color: var(--faint);
 }
 
+/*
+ * One line, two ends.
+ *
+ * The count and "select all" state what the selection is; the launch, `⋯` and
+ * `✕` are what you can do about it. `flex-wrap: nowrap` because the bar's job is
+ * to be one band — when it wrapped, the primary button landed on a second line
+ * below its own menu trigger.
+ */
 .select-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin: -4px 0 12px;
-  padding: 8px 11px;
+  padding: 7px 9px 7px 11px;
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
   flex: 0 0 auto;
+  min-width: 0;
 }
 
-.select-bar .link {
-  font-size: 11.5px;
-  color: var(--accent-text);
-  text-decoration: underline;
-}
-
+/* The count is the bar's statement, so it reads at the row's own weight rather
+   than as a caption. */
 .sel-count {
-  font-size: 11px;
-  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
 }
 
-.sel-note {
-  font-size: 10.5px;
-  color: var(--faint);
+/* "Select all" is a quiet text action, not a second button competing with the
+   launch at the other end. */
+.select-bar .sel-all {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.select-bar .sel-all:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+/* Pushes the actions to the right end, so the bar has two groups rather than
+   five evenly spaced controls. */
+.sel-spacer {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.select-bar .btn:last-child {
-  margin-left: auto;
+.sel-more {
+  display: inline-flex;
+}
+
+/*
+ * The overflow menu. Rows carry their own icon and label, matching the create
+ * menu — the two are the same kind of surface and should not look like two
+ * different components.
+ */
+.select-menu {
+  position: fixed;
+  pointer-events: auto;
+  z-index: 90;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  animation: create-panel-in var(--motion-base) var(--ease-out);
+  transform-origin: top left;
+}
+
+.select-menu .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.select-menu .row:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.select-menu .row:disabled {
+  opacity: 0.45;
+}
+
+.select-menu .row-icon {
+  flex: 0 0 auto;
+  color: var(--faint);
 }
 
 .search:focus-within {
@@ -1597,28 +1670,6 @@ defineExpose({ mode, setMode });
 .group-icon:hover {
   color: var(--text);
   border-color: var(--line);
-}
-
-/* A site's memberships, drawn as small filled pills so several can sit on one
-   line beside the address without reading as buttons. */
-.group-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: var(--fs-2xs);
-  color: color-mix(in srgb, var(--tag) 78%, var(--text));
-  background: color-mix(in srgb, var(--tag) 10%, transparent);
-  white-space: nowrap;
-}
-
-.badge-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--tag);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1806,60 +1857,6 @@ defineExpose({ mode, setMode });
 
 .group-grip:active {
   cursor: grabbing;
-}
-
-/* One fixed line of chips that scrolls sideways. Wrapping made the bar grow with
-   every group, pushing the sections out of view once a workspace had a dozen of
-   them. */
-.group-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  /* Tight under the filter row — the two are one block of controls — and the
-     first group heading's own 22px is what separates them from the list. */
-  margin: 0 0 6px;
-  flex: 0 0 auto;
-}
-
-.chip-scroll {
-  display: flex;
-  gap: 5px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  min-width: 0;
-  flex: 1 1 auto;
-  padding: 1px 0 2px;
-  scrollbar-width: thin;
-}
-
-.group-chip {
-  --tag: var(--accent);
-  background: transparent;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  padding: 4px 9px;
-  font-size: 10.5px;
-  color: var(--faint);
-  white-space: nowrap;
-}
-
-.group-chip.on {
-  border-color: color-mix(in srgb, var(--tag) 52%, var(--line));
-  background: color-mix(in srgb, var(--tag) 10%, transparent);
-  color: color-mix(in srgb, var(--tag) 78%, var(--text));
-}
-
-.chip-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--tag);
-  opacity: 0.75;
 }
 
 .id-card {

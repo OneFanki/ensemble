@@ -58,12 +58,6 @@ export const siteDraftSchema = z.object({
   clearSitePassword: z.boolean().optional(),
 });
 
-export const siteGroupDraftSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().trim().min(1).max(40),
-  color: z.enum(["amber", "teal", "violet", "rose", "blue", "slate"]),
-});
-
 export const identityDraftSchema = z.object({
   id: z.string().optional(),
   siteId: z.string().min(1),

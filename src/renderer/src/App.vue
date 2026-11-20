@@ -480,7 +480,6 @@ function openEditSite(siteId?: string) {
     authTokenKey: env.authTokenKey ?? "",
     authTokenHeader: env.authTokenHeader ?? "",
     autoSubmit: env.autoSubmit,
-    tagIds: env.tagIds ? [...env.tagIds] : [],
   };
 }
 
@@ -690,7 +689,6 @@ async function createSiteFromCapture(
     // path went around the dialog and passed `""`, which failed validation and
     // made "save this login" the one save that never worked.
     autoSubmit: undefined,
-    tagIds: [],
   });
   if (!result) return undefined;
   const saved = result.sites.find(

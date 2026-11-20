@@ -71,20 +71,4 @@ describe("site ordering", async () => {
   it("refuses an id that is not there", () => {
     expect(() => service.moveSite("does-not-exist", 0)).toThrow();
   });
-
-  it("keeps group membership untouched", async () => {
-    const group = service.saveSiteGroup({ name: "后台系统", color: "teal" });
-    const tagged = await service.saveSite({
-      name: "甲",
-      baseUrl: "http://localhost:3000",
-      loginPath: "/login",
-      autoSubmit: false,
-      tagIds: [group.id],
-    });
-    await addSite("乙");
-    service.moveSite(tagged.id, 1);
-    expect(service.snapshot().sites.find((site) => site.id === tagged.id)?.tagIds).toEqual([
-      group.id,
-    ]);
-  });
 });

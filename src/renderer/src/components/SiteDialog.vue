@@ -6,7 +6,6 @@ import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
-import SiteGroupPicker from "./SiteGroupPicker.vue";
 import AppButton from "./ui/AppButton.vue";
 import Checkbox from "./ui/Checkbox.vue";
 import FormField from "./ui/FormField.vue";
@@ -31,7 +30,6 @@ const form = reactive<SiteDraft>({ ...props.draft });
 const { t } = useI18n();
 const store = useWorkspaceStore();
 const error = reactive<{ message: string | null }>({ message: null });
-const siteGroups = computed(() => store.siteGroups);
 
 /**
  * The password field is local state, not part of `form`.
@@ -184,10 +182,6 @@ function normalizePath(event: Event) {
     <div class="form">
       <FormField :label="$t('app.envNameLabel')">
         <TextField v-model="form.name" :placeholder="namePlaceholder" />
-      </FormField>
-
-      <FormField as="div" :label="$t('app.siteGroups')">
-        <SiteGroupPicker v-model="form.tagIds" :groups="siteGroups" />
       </FormField>
 
       <FormField :label="$t('app.envUrlLabel')">

@@ -32,12 +32,6 @@ const port = await freePort();
 const now = new Date().toISOString();
 const PAGE_URL = "http://127.0.0.1:3997";
 
-const siteGroups = ["甲", "乙", "丙"].map((name, index) => ({
-  id: `tag-${index}`,
-  name,
-  color: ["amber", "teal", "violet"][index],
-  createdAt: now,
-}));
 const sites = ["甲", "乙", "丙"].map((name, index) => ({
   id: `site-${index}`,
   name: `站点${name}`,
@@ -45,7 +39,6 @@ const sites = ["甲", "乙", "丙"].map((name, index) => ({
   loginPath: "/",
   authCheckPath: null,
   autoSubmit: false,
-  tagIds: [],
   createdAt: now,
   updatedAt: now,
 }));
@@ -76,7 +69,6 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    siteGroups,
     sites,
     identities: [],
     views: [],
@@ -166,26 +158,6 @@ try {
   }
   check("app window appeared", true);
   await wait(3000);
-
-  // --- Site groups ----------------------------------------------------------
-  //
-  // Site groups used to be called tags and lived behind the account rail's
-  // "more" pane; they are a settings section now, and still reorder by drag.
-  await go(client, "groups");
-  check(
-    "site groups page rendered",
-    await waitFor(client, `document.querySelectorAll('.site-groups .row').length === 3`),
-  );
-  const groupDrag = await dragRow(client, ".site-groups .row", 0, 2, { sourceSub: ".grip" });
-  const groupOrder = await client.evaluate(
-    `(async () => (await window.ensemble.getWorkspace()).siteGroups.map((g) => g.name))()`,
-  );
-  check("group row dragged from the grip", groupDrag?.ok === true, groupDrag);
-  check(
-    "site groups reorder through the store",
-    JSON.stringify(groupOrder) === JSON.stringify(["乙", "丙", "甲"]),
-    groupOrder,
-  );
 
   // --- Sites ---------------------------------------------------------------
   //

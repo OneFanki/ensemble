@@ -388,7 +388,7 @@ export const messages = {
       batchLinkSiteTitle: "关联到站点",
       batchLinkSiteDesc: "把选中的 {count} 个账号改挂到下面这个站点。密码和额外字段保持不动。",
       batchLinkSiteConfirm: "确认关联",
-      batchLaunchNote: "按设置里的默认布局平铺；已在运行的账号会被跳过，窗口不会重复打开。",
+      batchMore: "更多操作",
       batchAlreadyRunning: "已在运行，会被跳过",
       batchWillLaunch: "将按默认布局打开",
       accountsExport: "导出账号",
@@ -1555,8 +1555,7 @@ export const messages = {
       batchLinkSiteDesc:
         "Point the {count} selected accounts at the site below. Passwords and extra fields stay untouched.",
       batchLinkSiteConfirm: "Link accounts",
-      batchLaunchNote:
-        "Tiled with the default layout from Settings; accounts already running are skipped, so no window opens twice.",
+      batchMore: "More actions",
       batchAlreadyRunning: "Already running, will be skipped",
       batchWillLaunch: "Will open in the default layout",
       accountsExport: "Export accounts",

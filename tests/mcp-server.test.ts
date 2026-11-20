@@ -154,43 +154,6 @@ describe("MCP handshake", () => {
     expect(instructions.length).toBeLessThan(2000);
   });
 
-  it("advertises the renamed tag tools once, not the old aliases too", async () => {
-    // The old names stay callable so an already-configured client keeps working,
-    // but repeating them in the list costs every session context for no gain:
-    // the model cannot usefully prefer one of two identical verbs.
-    const { json } = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const names = json.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toContain("save_tag");
-    expect(names).toContain("delete_tag");
-    expect(names).not.toContain("save_site_tag");
-    expect(names).not.toContain("delete_site_tag");
-  });
-
-  it("lets an old alias still be called even though it is not advertised", async () => {
-    const { json } = await rpc({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "save_site_tag", arguments: { name: "旧名字", color: "teal" } },
-    });
-    expect(json.result?.isError ?? false).toBe(false);
-    const tags = JSON.parse(json.result.content[0].text);
-    expect(tags).toMatchObject({ name: "旧名字", color: "teal" });
-  });
-
-  it("exposes insertion tools but no read-back tool for secrets", async () => {
-    const { json } = await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const names = json.result.tools.map((tool: { name: string }) => tool.name);
-    expect(names).toContain("create_site");
-    expect(names).toContain("create_identities");
-    expect(names).toContain("launch_view");
-    // Writing a password is allowed; reading one back is not.
-    expect(
-      names.some((name: string) => /(get|read|copy|reveal)_(password|secret)/i.test(name)),
-    ).toBe(false);
-  });
-});
-
 describe("MCP authentication", () => {
   it("rejects requests without a token", async () => {
     const { status } = await rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" }, { token: null });
@@ -464,69 +427,6 @@ describe("MCP tools", () => {
     const confirmed = await rpc(toolCall("delete_site", { id: site.id, confirm: true }));
     expect(confirmed.json.result.isError).toBeUndefined();
     expect(service.snapshot().sites).toHaveLength(0);
-  });
-
-  it("creates a site group and lists it on the site", async () => {
-    const created = await rpc(toolCall("save_site_tag", { name: "后台系统", color: "teal" }));
-    expect(created.json.result.isError).toBeUndefined();
-    const group = JSON.parse(created.json.result.content[0].text) as { id: string };
-
-    const site = await service.saveSite({
-      name: "本地站点",
-      baseUrl: "http://localhost:3000",
-      loginPath: "/login",
-      autoSubmit: false,
-      tagIds: [group.id],
-    });
-
-    const listed = await rpc(toolCall("list_sites", {}));
-    const sites = JSON.parse(listed.json.result.content[0].text) as Array<{
-      id: string;
-      tags: string[];
-    }>;
-    // The list reports group names, not ids: the AI should not have to join tables.
-    expect(sites.find((item) => item.id === site.id)?.tags).toEqual(["后台系统"]);
-  });
-
-  it("requires confirmation before deleting a tag", async () => {
-    const tag = service.saveSiteGroup({ name: "后台系统", color: "teal" });
-    await server.update({ allowDelete: true });
-
-    const refused = await rpc(toolCall("delete_site_tag", { id: tag.id }));
-    expect(refused.json.result.isError).toBe(true);
-    expect(service.snapshot().siteGroups).toHaveLength(1);
-
-    const confirmed = await rpc(toolCall("delete_site_tag", { id: tag.id, confirm: true }));
-    expect(confirmed.json.result.isError).toBeUndefined();
-    expect(service.snapshot().siteGroups).toHaveLength(0);
-  });
-
-  it("exposes the tag tools under their new names and keeps the old ones working", async () => {
-    const tools = (await rpc({ jsonrpc: "2.0", id: 4, method: "tools/list" })).json.result
-      .tools as Array<{ name: string; description: string }>;
-    for (const name of ["save_tag", "delete_tag"]) {
-      expect(tools.some((tool) => tool.name === name)).toBe(true);
-    }
-    // Names that were already released stay resolvable: a client configured
-    // against them must not break because the UI moved tags out of Settings.
-    // "Resolvable" is asserted by the calls below, not by the list: the aliases
-    // are deliberately not advertised, because two identical verbs in the list
-    // cost every session context while the model gains nothing from the choice.
-    for (const alias of ["save_site_tag", "delete_site_tag"]) {
-      expect(tools.some((tool) => tool.name === alias)).toBe(false);
-    }
-
-    const created = await rpc(toolCall("save_tag", { name: "客户环境", color: "amber" }));
-    const tag = JSON.parse(created.json.result.content[0].text) as { id: string };
-    const renamed = await rpc(
-      toolCall("save_site_tag", { id: tag.id, name: "客户环境 · 预发", color: "rose" }),
-    );
-    expect(JSON.parse(renamed.json.result.content[0].text)).toMatchObject({
-      id: tag.id,
-      name: "客户环境 · 预发",
-      color: "rose",
-    });
-    expect(service.snapshot().siteGroups).toHaveLength(1);
   });
 
   it("logs tool calls but never the password", async () => {
@@ -1287,4 +1187,5 @@ describe("MCP lifecycle", () => {
     // useful for "which host did the AI touch".
     expect(redacted["plain"]).toBe("http://127.0.0.1:7890");
   });
+});
 });

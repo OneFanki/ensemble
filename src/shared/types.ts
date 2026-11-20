@@ -37,25 +37,6 @@ export interface LoginField {
 }
 
 /**
- * A named group of sites: "生产", "测试", "客户A".
- *
- * A grouping only. It decides how the account page's site sections are ordered
- * and coloured, and nothing about launching, filling or permissions. Deleting a
- * group unlinks its sites; the sites and their accounts stay.
- *
- * Accounts used to carry their own labels from the same namespace. They do not
- * any more: an account already belongs to exactly one site, and the site is the
- * group — a second label on the account described the same thing twice (see
- * `sanitizeWorkspace`, which ignores the old field).
- */
-export interface SiteGroup {
-  id: string;
-  name: string;
-  color: RoleColor;
-  createdAt: string;
-}
-
-/**
  * A plain bookmark: a name and an address, nothing else.
  *
  * Deliberately not a {@link Site}. A site is a login recipe — it knows a login
@@ -190,15 +171,6 @@ export interface Site {
    * shows the resolved value, so a stale `false` is one click from correction.
    */
   autoSubmit?: boolean;
-  /**
-   * Ids of the {@link SiteGroup}s this site is filed under.
-   *
-   * Kept under the old key name on purpose: it is a reference the UI reads and
-   * writes, and renaming it would turn every workspace file in the wild into a
-   * special case. Only the namespace it points at changed meaning — the ids
-   * resolve against `siteGroups`, not against a list that also served accounts.
-   */
-  tagIds?: string[];
   /**
    * Origin credentials were last used against.
    *
@@ -738,8 +710,6 @@ export interface CredentialPresence {
 
 export interface WorkspaceSnapshot {
   sites: Site[];
-  /** Site groups; the array order is the order of the groups on the account page. */
-  siteGroups: SiteGroup[];
   /** Plain bookmarks on the new-tab surface; no credentials, no site. */
   bookmarks: Bookmark[];
   /** Folders of the bookmark tree; bookmarks reference these by id. */
@@ -784,8 +754,6 @@ export interface SiteDraft {
   authTokenHeader?: string;
   /** Absent = follow the global default. */
   autoSubmit?: boolean;
-  /** Site group ids this site belongs to; see {@link Site.tagIds}. */
-  tagIds?: string[];
   /**
    * Set or replace the site's default password as part of saving.
    *
@@ -800,12 +768,6 @@ export interface SiteDraft {
   password?: string;
   /** Removes the site's default password while saving (no value round-trip). */
   clearSitePassword?: boolean;
-}
-
-export interface SiteGroupDraft {
-  id?: string;
-  name: string;
-  color: RoleColor;
 }
 
 /**

@@ -101,7 +101,6 @@ describe("automation scripts", () => {
     "e2e-overlay-freeze.mjs",
     "e2e-placement.mjs",
     "e2e-restore-surface.mjs",
-    "e2e-site-tags.mjs",
     "e2e-tab-reorder.mjs",
     "e2e-toast-geometry.mjs",
     "e2e-ui-regressions.mjs",

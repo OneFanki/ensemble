@@ -110,7 +110,6 @@ writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    tags: [],
     sites: [],
     identities: [],
     views: [],
@@ -222,15 +221,10 @@ try {
   await tool("list_flows", {}, (v) => Array.isArray(v?.flows) || Array.isArray(v));
   await tool("list_bookmarks", {}, (v) => typeof v === "object" || Array.isArray(v));
   await tool("list_layouts", {}, (v) => typeof v === "object" || Array.isArray(v));
-  await tool("list_site_tags", {}, (v) => typeof v === "object" || Array.isArray(v));
 
   // ---- settings ----
   await tool("update_settings", { theme: "light" }, (v) => v !== undefined);
   await tool("update_settings", { theme: "dark" }, (v) => v !== undefined);
-
-  // ---- tags ----
-  const tag = await tool("save_tag", { name: "冒烟标签", color: "teal" }, (v) => Boolean(v?.id));
-  const tagId = tag.value?.id;
 
   // ---- sites ----
   const site = await tool(

@@ -420,13 +420,6 @@ const DEMO = {
   zh: {
     site: "后台系统 · 本地",
     second: "后台系统 · 测试",
-    tag: "后台系统",
-    // Extra tags give the tag page something to show: one unused tag is the
-    // case the page is meant to surface.
-    extraTags: [
-      ["生产环境", "amber"],
-      ["只读账号", "violet"],
-    ],
     // Neutral names, like every other piece of demo data: a jar is named after
     // the kind of session it holds, never after a customer.
     defaultProfile: "默认档案",
@@ -460,11 +453,6 @@ const DEMO = {
   en: {
     site: "Back office — local",
     second: "Back office — staging",
-    tag: "Back office",
-    extraTags: [
-      ["Production", "amber"],
-      ["Read-only", "violet"],
-    ],
     defaultProfile: "Default profile",
     cleanProfile: "Clean session",
     people: [
@@ -874,9 +862,6 @@ async function seed(userData, locale, theme = "dark") {
     passwordMode: "inherit",
     status: "unknown",
     startPath: rolePaths[index],
-    // Spread the two extra tags across accounts so the filter strip and the tag
-    // page show real usage instead of a row of zeros.
-    tagIds: index === 1 ? [uuid(11)] : index === 2 ? [uuid(12)] : [],
     createdAt: now,
     updatedAt: now,
   }));
@@ -886,14 +871,6 @@ async function seed(userData, locale, theme = "dark") {
     JSON.stringify(
       {
         version: 2,
-        tags: [
-          { id: uuid(8), name: demo.tag, color: "blue" },
-          ...demo.extraTags.map(([name, color], index) => ({
-            id: uuid(11 + index),
-            name,
-            color,
-          })),
-        ],
         sites: [
           {
             id: siteId,
@@ -902,7 +879,6 @@ async function seed(userData, locale, theme = "dark") {
             loginPath: "/console",
             authCheckPath: "/api/me",
             autoSubmit: false,
-            tagIds: [uuid(8)],
             extraFields: [{ label: locale === "zh" ? "租户名" : "tenant", value: "acme" }],
             createdAt: now,
             updatedAt: now,
@@ -913,7 +889,6 @@ async function seed(userData, locale, theme = "dark") {
             baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
             loginPath: "/console",
             autoSubmit: false,
-            tagIds: [],
             createdAt: now,
             updatedAt: now,
           },

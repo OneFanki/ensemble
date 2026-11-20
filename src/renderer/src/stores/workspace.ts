@@ -36,8 +36,6 @@ import type {
   SettingsPatch,
   Site,
   SiteDraft,
-  SiteGroup,
-  SiteGroupDraft,
   View,
   ViewDraft,
   WorkspaceSnapshot,
@@ -349,8 +347,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   }
 
   const sites = computed<Site[]>(() => snapshot.value?.sites ?? []);
-  /** Site groups in stored order; the order is the order of the site sections. */
-  const siteGroups = computed<SiteGroup[]>(() => snapshot.value?.siteGroups ?? []);
   const identities = computed<Identity[]>(() => snapshot.value?.identities ?? []);
   const views = computed<View[]>(() => snapshot.value?.views ?? []);
   const flows = computed<Flow[]>(() => snapshot.value?.flows ?? []);
@@ -461,23 +457,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return counts;
   });
 
-  /**
-   * Group ids that apply to an identity: the ones on its site.
-   *
-   * An account has no groups of its own — the site it belongs to is the group.
-   * This answers for the account page's group header and its filter, which both
-   * speak in terms of "which section is this row under".
-   */
-  function groupsForIdentity(identity: Identity): string[] {
-    const site = sites.value.find((item) => item.id === identity.siteId);
-    return [...(site?.tagIds ?? [])];
-  }
-
-  /** The sites filed under one group, in stored order. */
-  function sitesInGroup(groupId: string): Site[] {
-    return sites.value.filter((site) => site.tagIds?.includes(groupId));
-  }
-
   function identityPasswordSet(identity: Identity): boolean {
     if (identity.passwordMode === "reference") {
       // A reference never owns a credential: it resolves through its source,
@@ -547,21 +526,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
   async function moveSite(id: string, toIndex: number) {
     return run("site", async () => {
       apply(await window.ensemble.moveSite(id, toIndex));
-    });
-  }
-
-  async function saveSiteGroup(draft: SiteGroupDraft) {
-    return run("site", () => window.ensemble.saveSiteGroup(toPlain(draft)));
-  }
-
-  async function deleteSiteGroup(id: string) {
-    return run("site", () => window.ensemble.deleteSiteGroup(id));
-  }
-
-  /** Drag-to-reorder for the group list; the array order is the site section order. */
-  async function moveSiteGroup(id: string, toIndex: number) {
-    return run("site", async () => {
-      apply(await window.ensemble.moveSiteGroup(id, toIndex));
     });
   }
 
@@ -1153,7 +1117,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     aiActions,
     lastAiTabId,
     sites,
-    siteGroups,
     identities,
     views,
     engines,
@@ -1166,8 +1129,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     recentSiteId,
     identitiesOf,
     identityCountBySite,
-    groupsForIdentity,
-    sitesInGroup,
     markSiteUsed,
     defaultEngine,
     layoutPresets,
@@ -1188,9 +1149,6 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     saveSite,
     deleteSite,
     moveSite,
-    saveSiteGroup,
-    deleteSiteGroup,
-    moveSiteGroup,
     saveIdentity,
     deleteIdentity,
     linkIdentitiesToSite,

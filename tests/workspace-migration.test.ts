@@ -195,6 +195,40 @@ describe("sanitizeWorkspace", () => {
     expect(result.layoutPresets[0]?.name).toBe("左大右小");
     expect(result.layoutPresets[0]?.slots[0]?.x).toBeLessThanOrEqual(0.4);
   });
+
+  /*
+   * Site groups were removed from the model, not merely hidden.
+   *
+   * A workspace file written by an older build still carries `siteGroups` and a
+   * `tagIds` on every site. Reading such a file must not fail, and the fields
+   * must not survive into the snapshot: the types no longer declare them, so a
+   * leftover key would be a field a later reader has to guess about.
+   *
+   * The two older spellings (`tags`, `siteTags`) go the same way — the sanitizer
+   * simply does not look for any of them.
+   */
+  it("drops the removed site-group fields instead of carrying them forward", () => {
+    const result = sanitizeWorkspace({
+      version: 2,
+      sites: [{ ...site, tagIds: ["group-1"] }],
+      siteGroups: [{ id: "group-1", name: "生产", color: "teal" }],
+      tags: [{ id: "group-2", name: "测试", color: "blue" }],
+      siteTags: [{ id: "group-3", name: "客户", color: "rose" }],
+      identities: [{ ...identity, tagIds: ["group-1"] }],
+      views: [{ id: "view-1", name: "视图", tagIds: ["group-1"] }],
+    } as never);
+
+    expect("siteGroups" in result).toBe(false);
+    expect(result.sites[0]).not.toHaveProperty("tagIds");
+    expect(result.identities[0]).not.toHaveProperty("tagIds");
+    // A minimal view is rejected by the sanitizer for lack of its required
+    // fields, so the assertion is over whatever views survived: none may carry
+    // the removed key.
+    for (const view of result.views) expect(view).not.toHaveProperty("tagIds");
+    // Nothing else about the objects is touched.
+    expect(result.sites[0]?.name).toBe(site.name);
+    expect(result.identities[0]?.username).toBe(identity.username);
+  });
 });
 
 describe("built-in presets", () => {

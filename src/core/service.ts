@@ -51,8 +51,6 @@ import type {
   SettingsPatch,
   Site,
   SiteDraft,
-  SiteGroup,
-  SiteGroupDraft,
   View,
   ViewCopyResult,
   ViewDraft,
@@ -319,7 +317,6 @@ export class WorkspaceService {
   snapshot(): WorkspaceSnapshot {
     return {
       sites: this.data.sites,
-      siteGroups: this.data.siteGroups,
       bookmarks: [...this.data.bookmarks].sort((a, b) => a.order - b.order),
       bookmarkFolders: [...this.data.bookmarkFolders].sort((a, b) => a.order - b.order),
       identities: this.data.identities,
@@ -387,7 +384,6 @@ export class WorkspaceService {
    */
   async saveSite(draft: SiteDraft): Promise<Site> {
     const now = new Date().toISOString();
-    const tagIds = this.resolveTagIds(draft.tagIds);
     const password = typeof draft.password === "string" ? draft.password : "";
     // Checked up front: writing the site and then failing on the vault would
     // leave the dialog reporting an error for a site that now exists.
@@ -406,7 +402,6 @@ export class WorkspaceService {
         authTokenKey: draft.authTokenKey,
         authTokenHeader: draft.authTokenHeader,
         autoSubmit: draft.autoSubmit,
-        tagIds,
         updatedAt: now,
       });
       site = existing;
@@ -421,7 +416,6 @@ export class WorkspaceService {
         authTokenKey: draft.authTokenKey,
         authTokenHeader: draft.authTokenHeader,
         autoSubmit: draft.autoSubmit,
-        tagIds,
         createdAt: now,
         updatedAt: now,
       };
@@ -434,84 +428,6 @@ export class WorkspaceService {
 
     this.persist();
     return site;
-  }
-
-  /**
-   * Keeps only group ids that exist. An unknown id is dropped rather than stored:
-   * a stale reference would make the site silently disappear from every group.
-   */
-  private resolveTagIds(tagIds: string[] | undefined): string[] | undefined {
-    if (!tagIds) return undefined;
-    const known = new Set(this.data.siteGroups.map((group) => group.id));
-    const kept = [...new Set(tagIds.filter((id) => known.has(id)))];
-    return kept.length > 0 ? kept : undefined;
-  }
-
-  /**
-   * Creates or renames a site group.
-   *
-   * A group is a name, a colour and a place in the list. It carries no
-   * behaviour: no launch setting, no permission, nothing an account inherits.
-   */
-  saveSiteGroup(draft: SiteGroupDraft): SiteGroup {
-    const name = draft.name.trim();
-    if (!name) throw new Error(t("error.groupName"));
-    const duplicate = this.data.siteGroups.find(
-      (group) => group.id !== draft.id && group.name.toLowerCase() === name.toLowerCase(),
-    );
-    if (duplicate) throw new Error(t("error.groupDuplicate"));
-    if (draft.id) {
-      const existing = this.data.siteGroups.find((group) => group.id === draft.id);
-      if (!existing) throw new Error(t("error.groupMissing"));
-      existing.name = name;
-      existing.color = draft.color;
-      this.persist();
-      return existing;
-    }
-    const group: SiteGroup = {
-      id: randomUUID(),
-      name,
-      color: draft.color,
-      createdAt: new Date().toISOString(),
-    };
-    this.data.siteGroups.push(group);
-    this.persist();
-    return group;
-  }
-
-  /**
-   * Removes a group and unfiles its sites.
-   *
-   * The sites and every account under them stay exactly where they were; they
-   * simply stop carrying this group in their header.
-   */
-  deleteSiteGroup(id: string): void {
-    this.data.siteGroups = this.data.siteGroups.filter((group) => group.id !== id);
-    const now = new Date().toISOString();
-    for (const site of this.data.sites) {
-      if (!site.tagIds?.includes(id)) continue;
-      const kept = site.tagIds.filter((tagId) => tagId !== id);
-      site.tagIds = kept.length > 0 ? kept : undefined;
-      site.updatedAt = now;
-    }
-    this.persist();
-  }
-
-  /**
-   * Moves a group within the list.
-   *
-   * The stored array order *is* the order the site sections appear in. Groups
-   * have no `order` field for the same reason views do not — the array is the
-   * order.
-   */
-  moveSiteGroup(id: string, toIndex: number): void {
-    const from = this.data.siteGroups.findIndex((group) => group.id === id);
-    if (from < 0) throw new Error(t("error.groupMissing"));
-    const [moved] = this.data.siteGroups.splice(from, 1);
-    if (!moved) return;
-    const target = Math.max(0, Math.min(this.data.siteGroups.length, Math.trunc(toIndex)));
-    this.data.siteGroups.splice(target, 0, moved);
-    this.persist();
   }
 
   deleteSite(id: string): void {

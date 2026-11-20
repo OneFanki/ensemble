@@ -23,7 +23,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
-  Tags,
   Upload,
 } from "lucide-vue-next";
 import { storeToRefs } from "pinia";
@@ -37,7 +36,6 @@ import AiPolicyEditor from "./AiPolicyEditor.vue";
 import BookmarksPage from "./BookmarksPage.vue";
 import FlowsPage from "./FlowsPage.vue";
 import MessagesPage from "./MessagesPage.vue";
-import SiteGroupsPage from "./SiteGroupsPage.vue";
 import AppButton from "./ui/AppButton.vue";
 import Checkbox from "./ui/Checkbox.vue";
 import HintIcon from "./ui/HintIcon.vue";
@@ -57,7 +55,7 @@ import TextField from "./ui/TextField.vue";
  * offering trips away from the thing being changed.
  *
  * Two groups, one rule between them: **偏好** is how the app behaves, **内容** is
- * the workspace's own lists (bookmarks, messages, flows, site groups). They were
+ * the workspace's own lists (bookmarks, messages, flows). They were
  * one flat column, and a list that mixes "dark theme" with "bookmarks" has no
  * order to read — the split is the answer to "where would I look for this".
  */
@@ -70,8 +68,7 @@ export type SettingsSection =
   | "about"
   | "bookmarks"
   | "messages"
-  | "flows"
-  | "groups";
+  | "flows";
 
 const preferenceTabs: Array<{ id: SettingsSection; labelKey: string; icon: Component }> = [
   { id: "general", labelKey: "app.settingsTabGeneral", icon: SlidersHorizontal },
@@ -98,7 +95,6 @@ const contentTabs: Array<{ id: SettingsSection; labelKey: string; icon: Componen
   { id: "bookmarks", labelKey: "app.bookmarks", icon: Bookmark },
   { id: "messages", labelKey: "app.messages", icon: Inbox },
   { id: "flows", labelKey: "app.flows", icon: ListChecks },
-  { id: "groups", labelKey: "app.siteGroups", icon: Tags },
 ];
 
 const activeTab = ref<SettingsSection>("general");
@@ -590,7 +586,6 @@ async function submitMaster() {
             <BookmarksPage v-if="activeTab === 'bookmarks'" />
             <MessagesPage v-else-if="activeTab === 'messages'" @save-capture="emit('saveCapture', $event)" />
             <FlowsPage v-else-if="activeTab === 'flows'" />
-            <SiteGroupsPage v-else-if="activeTab === 'groups'" />
           </template>
           <template v-else>
           <SettingGroup v-if="activeTab === 'engines'" :title="$t('app.engineList')">

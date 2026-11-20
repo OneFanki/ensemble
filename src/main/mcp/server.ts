@@ -39,7 +39,6 @@ import {
   layoutPresetDraftSchema,
   settingsPatchSchema,
   siteDraftSchema,
-  siteGroupDraftSchema,
   viewDraftSchema,
 } from "@shared/schemas";
 import type {
@@ -2573,118 +2572,10 @@ export class McpServer {
       },
       {
         name: "list_sites",
-        description: "列出所有站点（被测目标作用域），含各自的站点分组。",
+        description: "列出所有站点（被测目标作用域）。",
         kind: "read",
         inputSchema: object({}),
-        run: () => {
-          const snapshot = service.snapshot();
-          const groups = new Map(snapshot.siteGroups.map((group) => [group.id, group.name]));
-          return snapshot.sites.map((site) => ({
-            ...siteSummary(site),
-            tags: (site.tagIds ?? []).map((id) => groups.get(id) ?? id),
-          }));
-        },
-      },
-      {
-        name: "list_site_tags",
-        description: "列出站点分组。分组只用于归类展示，不影响任何业务规则。",
-        kind: "read",
-        inputSchema: object({}),
-        run: () => service.snapshot().siteGroups,
-      },
-      {
-        name: "save_tag",
-        description:
-          "创建或重命名站点分组。分组只作用于站点，用来在账号页把站点归到一起；不影响账号、流程或任何业务规则。",
-        kind: "write",
-        inputSchema: object(
-          {
-            id: string("分组 id；省略表示新建"),
-            name: string("分组名称"),
-            color: {
-              type: "string",
-              enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
-              description: "分组颜色",
-            },
-          },
-          ["name", "color"],
-        ),
-        run: (args) => {
-          const draft = siteGroupDraftSchema.parse({
-            ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
-            name: args["name"],
-            color: args["color"],
-          });
-          return service.saveSiteGroup(draft);
-        },
-      },
-      {
-        name: "delete_tag",
-        description:
-          "删除站点分组，并从所有站点上解除关联。站点与账号本身不受影响。破坏性操作，必须传 confirm: true。",
-        kind: "danger",
-        inputSchema: object({ id: string("分组 id"), confirm: { type: "boolean" } }, [
-          "id",
-          "confirm",
-        ]),
-        run: (args) => {
-          requireConfirm(args);
-          const id = String(args["id"] ?? "");
-          if (!service.snapshot().siteGroups.some((group) => group.id === id)) {
-            throw new Error(`站点分组不存在：${id}`);
-          }
-          service.deleteSiteGroup(id);
-          return { deleted: id };
-        },
-      },
-      // Old names, kept as aliases: they were already released, and a client
-      // configured against them should keep working after the rename. Hidden
-      // from tools/list for that same reason — still callable, but an alias the
-      // model has to choose between is pure context cost.
-      {
-        name: "save_site_tag",
-        description: "save_tag 的旧名称，行为相同。",
-        kind: "write",
-        hidden: true,
-        inputSchema: object(
-          {
-            id: string("分组 id；省略表示新建"),
-            name: string("分组名称"),
-            color: {
-              type: "string",
-              enum: ["amber", "teal", "violet", "rose", "blue", "slate"],
-              description: "分组颜色",
-            },
-          },
-          ["name", "color"],
-        ),
-        run: (args) =>
-          service.saveSiteGroup(
-            siteGroupDraftSchema.parse({
-              ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
-              name: args["name"],
-              color: args["color"],
-            }),
-          ),
-      },
-      {
-        name: "delete_site_tag",
-        description: "delete_tag 的旧名称，行为相同。破坏性操作，必须传 confirm: true。",
-        kind: "danger",
-        hidden: true,
-        inputSchema: object({ id: string("分组 id"), confirm: { type: "boolean" } }, [
-          "id",
-          "confirm",
-        ]),
-        run: (args) => {
-          requireConfirm(args);
-          const id = String(args["id"] ?? "");
-          if (!service.snapshot().siteGroups.some((group) => group.id === id)) {
-            throw new Error(`站点分组不存在：${id}`);
-          }
-          service.deleteSiteGroup(id);
-          return { deleted: id };
-        },
+        run: () => service.snapshot().sites.map(siteSummary),
       },
       {
         name: "export_accounts",
@@ -3065,11 +2956,6 @@ export class McpServer {
             authTokenHeader: string("令牌发送的请求头名，默认 token，可省略"),
             password: string("站点默认密码，写入加密凭据库后不回显"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
-            tagIds: {
-              type: "array",
-              description: "站点分组 id 列表，只用于归类展示",
-              items: { type: "string" },
-            },
           },
           ["name", "baseUrl"],
         ),
@@ -3093,7 +2979,6 @@ export class McpServer {
             ...(typeof args["authTokenHeader"] === "string" && args["authTokenHeader"].trim()
               ? { authTokenHeader: args["authTokenHeader"] }
               : {}),
-            ...(Array.isArray(args["tagIds"]) ? { tagIds: args["tagIds"] } : {}),
             ...(password ? { password } : {}),
           });
           return siteSummary(await service.saveSite(draft));
@@ -3102,7 +2987,7 @@ export class McpServer {
       {
         name: "update_site",
         description:
-          "修改站点。只传需要改的字段。tagIds 传数组即整体替换站点分组（空数组清空），不传保持不变。",
+          "修改站点。只传需要改的字段。",
         kind: "write",
         inputSchema: object(
           {
@@ -3115,11 +3000,6 @@ export class McpServer {
             authTokenKey: string("新令牌 localStorage 键名；传空串清除"),
             authTokenHeader: string("新令牌请求头名；传空串清除"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
-            tagIds: {
-              type: "array",
-              description: "站点分组 id 列表，只用于归类展示；整体替换，空数组清空",
-              items: { type: "string" },
-            },
           },
           ["id"],
         ),
@@ -3150,7 +3030,6 @@ export class McpServer {
                 : existing.authTokenHeader,
             autoSubmit:
               typeof args["autoSubmit"] === "boolean" ? args["autoSubmit"] : existing.autoSubmit,
-            tagIds: Array.isArray(args["tagIds"]) ? (args["tagIds"] as string[]) : existing.tagIds,
           };
           return siteSummary(await service.saveSite(siteDraftSchema.parse(draft)));
         },

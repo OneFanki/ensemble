@@ -60,21 +60,12 @@ function uuid(index) {
 const now = new Date().toISOString();
 const siteId = uuid(1);
 const secondSiteId = uuid(19);
-const colors = ["amber", "teal", "violet", "rose", "blue", "slate"];
-// Twenty-four tags guarantee the strip would have wrapped several times under
-// the old `flex-wrap: wrap` rule at any normal window width.
-const siteGroups = Array.from({ length: 24 }, (_, index) => ({
-  id: uuid(20 + index),
-  name: `分组${index + 1}`,
-  color: colors[index % colors.length],
-}));
 
 mkdirSync(join(userData, "profiles"), { recursive: true });
 writeFileSync(
   join(userData, "workspace.json"),
   JSON.stringify({
     version: 2,
-    siteGroups,
     sites: [
       {
         id: siteId,
@@ -83,10 +74,6 @@ writeFileSync(
         loginPath: "/login",
         authCheckPath: "/api/me",
         autoSubmit: false,
-        // One tag each, so the sites page renders two foldable groups. With
-        // every site untagged there was a single group and "collapse all" could
-        // not be exercised at all.
-        tagIds: [siteGroups[0].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -100,29 +87,10 @@ writeFileSync(
         baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
         loginPath: "/login",
         autoSubmit: false,
-        tagIds: [siteGroups[1].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
       },
-      // Filler sites, one per remaining group.
-      //
-      // The filter strip only shows groups that actually hold a site, so the
-      // overflow checks below need enough *populated* groups to overflow — 22
-      // empty groups would render nothing and "scrolls sideways" would pass on
-      // a strip with three chips in it. These carry no accounts: the assertions
-      // they feed are about the strip's layout, not about the accounts page.
-      ...siteGroups.slice(2).map((group, index) => ({
-        id: `filler-site-${index}`,
-        name: `填充站点${index + 1}`,
-        baseUrl: `http://127.0.0.1:${PAGE_PORT}`,
-        loginPath: "/login",
-        autoSubmit: false,
-        tagIds: [group.id],
-        extraFields: [],
-        createdAt: now,
-        updatedAt: now,
-      })),
     ],
     identities: [
       {
@@ -135,7 +103,6 @@ writeFileSync(
         passwordMode: "inherit",
         status: "unknown",
         startPath: "/",
-        tagIds: [],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -150,7 +117,6 @@ writeFileSync(
         passwordMode: "inherit",
         status: "unknown",
         startPath: "/",
-        tagIds: siteGroups.map((group) => group.id),
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -165,7 +131,6 @@ writeFileSync(
         passwordMode: "inherit",
         status: "unknown",
         startPath: "/",
-        tagIds: [siteGroups[0].id],
         extraFields: [],
         createdAt: now,
         updatedAt: now,
@@ -358,53 +323,9 @@ try {
     emptyStage,
   );
 
-  // --- Tag filter strip -----------------------------------------------------
-  await openConsolePage(client, "identities");
-  await waitFor(client, `Boolean(document.querySelector('.group-filters'))`);
-
-  const strip = await client.evaluate(`(() => {
-    const filters = document.querySelector('.group-filters');
-    const scroll = document.querySelector('.chip-scroll');
-    const chips = [...document.querySelectorAll('.group-chip')];
-    const bar = document.querySelector('.page.identities .filter-bar');
-    const tops = new Set(chips.map((chip) => Math.round(chip.getBoundingClientRect().top)));
-    return {
-      hasStrip: Boolean(filters),
-      chips: chips.length,
-      rows: tops.size,
-      stripHeight: filters ? Math.round(filters.getBoundingClientRect().height) : null,
-      filterBarHeight: bar ? Math.round(bar.getBoundingClientRect().height) : null,
-      scrollable: scroll ? scroll.scrollWidth > scroll.clientWidth : null,
-      overflowX: scroll ? getComputedStyle(scroll).overflowX : null,
-    };
-  })()`);
-  check("the group strip renders every group", strip?.chips === siteGroups.length + 1, strip);
-  check("the chips stay on one row however many groups exist", strip?.rows === 1, strip);
-  check("the strip is a fixed-height row", strip?.stripHeight !== null && strip.stripHeight <= 40, strip);
-  check(
-    "the excess chips scroll sideways instead of wrapping",
-    strip?.scrollable === true && strip?.overflowX === "auto",
-    strip,
-  );
-
-  const filtered = await client.evaluate(`(async () => {
-    const before = document.querySelectorAll('.id-card').length;
-    const chip = [...document.querySelectorAll('.group-chip')].find((el) => el.textContent.trim() === '分组1');
-    chip?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const after = document.querySelectorAll('.id-card').length;
-    const on = chip?.classList.contains('on');
-    return { before, after, on };
-  })()`);
-  // Three accounts exist; only the two on the tagged site carry 标签1, so the
-  // filter has to drop exactly the untagged one.
-  check(
-    "clicking a tag filters the accounts",
-    filtered?.before === 3 && filtered?.after === 2 && filtered?.on === true,
-    filtered,
-  );
-
   // --- Identity cards are dense, stable, and not clipped --------------------
+  await openConsolePage(client, "identities");
+  await waitFor(client, `document.querySelectorAll('.id-card').length > 0`);
   // Three contracts. Historic: as an auto-sized grid inside a scrolling column,
   // rows used to be squeezed to the leftover height and the card's own
   // `overflow: hidden` cut off its action row — content must still fit. New: the
@@ -450,92 +371,6 @@ try {
     cards.map((card) => card.height),
   );
 
-  await client.evaluate(`(() => {
-    const chip = [...document.querySelectorAll('.group-chip')].find((el) => el.textContent.trim() === '全部');
-    chip?.click();
-    return true;
-  })()`);
-  await wait(300);
-
-  // --- Site groups are a settings section now --------------------------------
-  //
-  // They used to be "tags" and lived behind the account rail's [管理] menu. What
-  // changed is the concept: it narrowed to "which section a site is filed
-  // under", so it belongs with the other configuration.
-  await openConsolePage(client, "groups");
-  await waitFor(client, `Boolean(document.querySelector('.site-groups'))`);
-  const groupsPage = await client.evaluate(`(() => {
-    const page = document.querySelector('.site-groups');
-    return {
-      present: Boolean(page),
-      heading: page?.querySelector('h1')?.textContent.trim() ?? '',
-      rows: page?.querySelectorAll('.list > .row, .rows > .row, .row').length ?? 0,
-      inSettings: Boolean(page?.closest('.page.settings, .settings')),
-    };
-  })()`);
-  check(
-    "site groups are a settings section",
-    groupsPage?.present === true && groupsPage?.inSettings === true,
-    groupsPage,
-  );
-  check(
-    "the site groups page lists every group",
-    groupsPage?.rows >= siteGroups.length,
-    { rows: groupsPage?.rows, expectedAtLeast: siteGroups.length },
-  );
-
-  // Creating happens in a dialog, and the dialog has a way out that is not
-  // "save" — the two failures the inline form used to have: it pushed the list
-  // down, and it had no single place to close from.
-  const groupDialog = await client.evaluate(`(async () => {
-    const api = window.ensemble;
-    const opener = document.querySelector('[data-group-new], [data-group-create]');
-    opener?.click();
-    await new Promise((r) => setTimeout(r, 400));
-    const input = document.querySelector('[data-group-name]');
-    const inDialog = Boolean(input?.closest('[role="dialog"]'));
-    if (input) {
-      input.value = '弹窗分组';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    document.querySelector('[data-group-color="rose"]')?.click();
-    document.querySelector('[data-group-save]')?.click();
-    await new Promise((r) => setTimeout(r, 800));
-    const after = await api.getWorkspace();
-    const saved = after.siteGroups.find((g) => g.name === '弹窗分组');
-    return {
-      opened: Boolean(input),
-      inDialog,
-      closed: document.querySelector('[data-group-name]') === null,
-      color: saved?.color ?? null,
-    };
-  })()`);
-  check(
-    "creating a site group happens in a dialog and saves the picked colour",
-    groupDialog?.opened === true &&
-      groupDialog?.inDialog === true &&
-      groupDialog?.closed === true &&
-      groupDialog?.color === "rose",
-    groupDialog,
-  );
-
-  await openConsolePage(client, "settings");
-  await waitFor(client, `Boolean(document.querySelector('.page.settings'))`);
-  const settingsTabs = await client.evaluate(`(() =>
-    [...document.querySelectorAll('.page.settings [role="tab"]')].map((el) =>
-      el.textContent.replace(/\s+/g, ' ').trim(),
-    )
-  )()`);
-  check(
-    "Settings carries the site groups section",
-    settingsTabs.some((label) => /分组|Groups/.test(label)),
-    settingsTabs,
-  );
-  check(
-    "Settings carries no sites or AI activity tab",
-    !settingsTabs.some((label) => /^(站点|Sites)$|AI 记录|AI activity/i.test(label)),
-    settingsTabs,
-  );
   await openConsolePage(client, "identities");
   await wait(400);
 
@@ -2277,13 +2112,16 @@ try {
     await new Promise((r) => setTimeout(r, 300));
     const selectedCount = document.querySelectorAll('.identities .id-card.picked').length;
 
-    // The link control is a button opening a dialog: a stray click must not be
-    // able to re-home a whole batch, so the site is chosen and confirmed.
+    // The link control lives behind the bar's overflow menu now — the bar keeps
+    // only the count, the launch and the dismissal. It still opens a dialog where
+    // the site is chosen and confirmed, so a stray click cannot re-home a batch.
     const beforeDialog = (await window.ensemble.getWorkspace()).identities
       .filter((item) => wanted.includes(item.name))
       .map((item) => ({ name: item.name, siteId: item.siteId }));
 
-    const linkButton = document.querySelector('.identities .select-bar [data-batch-link-site]');
+    document.querySelector('.identities .select-bar [data-batch-more]')?.click();
+    await new Promise((r) => setTimeout(r, 350));
+    const linkButton = document.querySelector('[data-batch-link-site]');
     const buttonFound = Boolean(linkButton);
     linkButton?.click();
     await new Promise((r) => setTimeout(r, 500));

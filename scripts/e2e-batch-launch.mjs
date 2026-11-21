@@ -279,10 +279,20 @@ try {
     document.querySelector('[data-rail-entry="identities"]')?.click();
     await new Promise((done) => setTimeout(done, 700));
     const tileFace = Boolean(document.querySelector('[data-tile-face]'));
-    const sites = [...document.querySelectorAll('.tile-group')].map((el) => ({
-      name: (el.querySelector('.tile-head-name')?.textContent || '').trim(),
-      tiles: [...el.querySelectorAll('[data-account-tile]')].map((t) => t.dataset.accountTile),
+    // The left column is the site list; the right column shows one site's tiles.
+    const sites = [...document.querySelectorAll('[data-split-nav] [data-site-row]')].map((el) => ({
+      id: el.dataset.siteRow,
+      name: (el.querySelector('.nav-name')?.textContent || '').trim(),
     }));
+    const tiles = [...document.querySelectorAll('[data-account-tile]')].map(
+      (t) => t.dataset.accountTile,
+    );
+    // Clicking a site in the left column switches the right column to it.
+    document.querySelector('[data-split-nav] [data-site-row="${site.id}"]')?.click();
+    await new Promise((done) => setTimeout(done, 300));
+    const tilesForSite = [...document.querySelectorAll('[data-account-tile]')].map(
+      (t) => t.dataset.accountTile,
+    );
     const flatRows = document.querySelectorAll('[data-launch-row]').length;
 
     const before = (await window.ensemble.getEmbeddedState()).tabs.length;
@@ -293,6 +303,8 @@ try {
     return {
       tileFace,
       sites,
+      tiles,
+      tilesForSite,
       flatRows,
       before,
       after: state.tabs.length,
@@ -303,12 +315,13 @@ try {
     };
   })()`);
   check(
-    "the launch face groups accounts under their site instead of one flat list",
+    "the launch face lists sites on the left and one site's accounts on the right",
     cascade?.tileFace === true &&
       Array.isArray(cascade?.sites) &&
       cascade.sites.length === 1 &&
-      cascade.sites[0].tiles.includes(alpha.id) &&
-      cascade.sites[0].tiles.includes(beta.id) &&
+      Array.isArray(cascade?.tilesForSite) &&
+      cascade.tilesForSite.includes(alpha.id) &&
+      cascade.tilesForSite.includes(beta.id) &&
       cascade.flatRows === 0,
     cascade,
   );
@@ -319,6 +332,82 @@ try {
       cascade.railShowsAccount === true,
     cascade,
   );
+
+  // --- The launch face's own pick mode. ---
+  //
+  // Two things a pick mode can get wrong without any error: it can push the grid
+  // down when the bar appears (the tiles then move out from under the pointer
+  // that was about to click one), and the bar can live inside the scroller (a
+  // long list carries "启动所选" out of the pane, so the mode cannot be finished
+  // without scrolling back). Both are geometry, so both are measured here.
+  const picking = await client.evaluate(`(async () => {
+    // Launching an account closes the pane (the page it just opened is what the
+    // user wants to see), so the tile face has to be brought back first.
+    if (!document.querySelector('[data-tile-face]')) {
+      document.querySelector('[data-rail-entry="identities"]')?.click();
+      await new Promise((done) => setTimeout(done, 700));
+    }
+    const gridTop = () => {
+      const tile = document.querySelector('[data-account-tile]');
+      return tile ? Math.round(tile.getBoundingClientRect().top) : -1;
+    };
+    const beforeTop = gridTop();
+    document.querySelector('[data-tile-pick]')?.click();
+    await new Promise((done) => setTimeout(done, 300));
+    const bar = document.querySelector('[data-pick-bar]');
+    const afterTop = gridTop();
+    const scroller = document.querySelector('[data-tile-scroll]');
+    const barInScroller = Boolean(bar && scroller && scroller.contains(bar));
+    const barTop = bar ? Math.round(bar.getBoundingClientRect().top) : -1;
+    if (scroller) scroller.scrollTop = 9999;
+    await new Promise((done) => setTimeout(done, 100));
+    const barTopAfterScroll = bar ? Math.round(bar.getBoundingClientRect().top) : -1;
+    if (scroller) scroller.scrollTop = 0;
+    return { beforeTop, afterTop, barInScroller, barTop, barTopAfterScroll };
+  })()`);
+  check(
+    "turning on pick mode does not move the grid",
+    picking?.beforeTop > 0 && picking.beforeTop === picking.afterTop,
+    picking,
+  );
+  check(
+    "the pick bar sits outside the scroller and stays put",
+    picking?.barInScroller === false && picking.barTop === picking.barTopAfterScroll,
+    picking,
+  );
+
+  const picked = await client.evaluate(`(async () => {
+    const before = (await window.ensemble.getEmbeddedState()).tabs.length;
+    for (const tile of document.querySelectorAll('[data-account-tile]')) tile.click();
+    await new Promise((done) => setTimeout(done, 300));
+    const count = document.querySelector('[data-pick-bar] .sel-count')?.textContent?.trim() ?? "";
+    document.querySelector('[data-launch-main="pick"]')?.click();
+    await new Promise((done) => setTimeout(done, 2600));
+    const state = await window.ensemble.getEmbeddedState();
+    return {
+      before,
+      count,
+      after: state.tabs.length,
+      ids: [...new Set(state.tabs.map((tab) => tab.identityId).filter(Boolean))].sort(),
+      pickBarGone: !document.querySelector('[data-pick-bar]'),
+    };
+  })()`);
+  check(
+    "picking every tile and launching opens all of them, then leaves the mode",
+    picked?.after === picked.before + 2 &&
+      Array.isArray(picked.ids) &&
+      picked.ids.length === 2 &&
+      picked.pickBarGone === true,
+    picked,
+  );
+  // Back to an empty stage: the batch checks below start from nothing.
+  await client.evaluate(`(async () => {
+    const state = await window.ensemble.getEmbeddedState();
+    for (const tab of state.tabs) {
+      if (tab.identityId) await window.ensemble.closeEmbeddedTab(tab.id);
+    }
+    await new Promise((done) => setTimeout(done, 800));
+  })()`);
   // Leave the column as it was: the batch checks below start from nothing.
   await client.evaluate(`(async () => {
     const state = await window.ensemble.getEmbeddedState();

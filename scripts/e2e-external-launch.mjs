@@ -80,8 +80,8 @@ writeFileSync(
     // The suite launches into a named profile over the API, so the row has to
     // exist in the seed: the loader only re-inserts the two built-ins.
     profiles: [
-      { id: "default", name: "默认档案", retention: "persist", builtin: true },
-      { id: "clean", name: "干净会话", retention: "ephemeral", builtin: true },
+      { id: "default", name: "默认身份", retention: "persist", builtin: true },
+      { id: "clean", name: "干净身份", retention: "ephemeral", builtin: true },
       { id: "work-check", name: "工作核对", retention: "persist" },
     ],
     defaultProfileId: "default",

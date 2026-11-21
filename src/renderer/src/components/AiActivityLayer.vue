@@ -14,12 +14,24 @@ import { useI18n } from "vue-i18n";
 import AiActivityPage from "./AiActivityPage.vue";
 import FloatingPane from "./ui/FloatingPane.vue";
 
+const props = defineProps<{
+  /**
+   * Site to open on, when the opener knows one.
+   *
+   * "查看全部" on the address-bar panel passes the origin that panel was showing:
+   * that panel always describes the page in front, so its "all of it" means all
+   * of *that* site's records. Any other entrance leaves this empty and the page
+   * lists everything.
+   */
+  origin?: string | null;
+}>();
+
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 </script>
 
 <template>
   <FloatingPane :label="t('app.aiActivityTitle')" @close="emit('close')">
-    <AiActivityPage />
+    <AiActivityPage :origin="props.origin ?? null" />
   </FloatingPane>
 </template>

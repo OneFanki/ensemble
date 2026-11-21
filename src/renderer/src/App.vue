@@ -59,6 +59,8 @@ const view = ref<View>("browser");
 const layer = ref<ManageLayerId | null>(null);
 /** The full AI activity log, as a layer of its own. */
 const aiLayerOpen = ref(false);
+/** Origin the AI log was opened for; empty means "every site". */
+const aiOrigin = ref<string | null>(null);
 /**
  * Whether the opening splash is still covering the shell.
  *
@@ -317,7 +319,10 @@ function switchView(next: View) {
  * The caller names a destination; without one it lands on settings, because the
  * rows that still name one are the ones a user clicked on purpose.
  */
-function openConsole(target: "identities" | "settings" | "messages" | "ai" = "settings") {
+function openConsole(
+  target: "identities" | "settings" | "messages" | "ai" = "settings",
+  origin?: string,
+) {
   if (target === "settings") {
     openSettings(settingsSection.value);
     return;
@@ -331,6 +336,16 @@ function openConsole(target: "identities" | "settings" | "messages" | "ai" = "se
     return;
   }
   if (target === "ai") {
+    /*
+     * `origin` narrows the log to one site.
+     *
+     * The panel's "查看全部" passes the origin it was showing, because that panel
+     * always talks about the page in front — a reader who was looking at one
+     * site's records and asked for the full list does not want a different
+     * site's history at the top of it. An entry that names no origin (the app
+     * menu's AI item) leaves the page unfiltered.
+     */
+    aiOrigin.value = origin ?? null;
     aiLayerOpen.value = true;
     layer.value = null;
     if (view.value !== "browser") view.value = "browser";
@@ -822,7 +837,7 @@ async function handleLocale(locale: LocaleSetting) {
     />
 
     <!-- The full AI activity log, opened from the AI panel in the address row. -->
-    <AiActivityLayer v-if="aiLayerOpen" @close="aiLayerOpen = false" />
+    <AiActivityLayer v-if="aiLayerOpen" :origin="aiOrigin" @close="aiLayerOpen = false" />
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in

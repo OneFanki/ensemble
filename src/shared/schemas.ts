@@ -51,7 +51,6 @@ export const siteDraftSchema = z.object({
   authTokenHeader: z.string().trim().min(1).max(60).optional(),
   defaultEngineId: z.string().optional(),
   autoSubmit: z.boolean().optional(),
-  tagIds: z.array(z.string().min(1).max(64)).max(20).optional(),
   // Capped so a paste of the wrong thing cannot be stored as a "password"; no
   // minimum, because a site may genuinely use a short one.
   password: z.string().max(512).optional(),

@@ -10,8 +10,8 @@
  * Same rows as the panel, from the same component: a page that drew its own
  * would be the second opinion about what a refused call looks like.
  */
-import { Sparkles } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { Sparkles, X } from "lucide-vue-next";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { groupAiActivity } from "@shared/ai-activity";
 import { EMBEDDED_DEFAULT_PROFILE_ID } from "@shared/embedded";
@@ -30,9 +30,42 @@ const workspace = useWorkspaceStore();
 const confirm = useConfirmStore();
 const { t } = useI18n();
 
+const props = defineProps<{
+  /**
+   * Site to show on arrival, from the panel's "查看全部".
+   *
+   * The panel lists only what happened on the page in front, so its jump to the
+   * full log means "that site's full log" — landing on the newest record of some
+   * other site answered a question the reader had not asked. Clearing the filter
+   * is one click, and clearing is what shows the whole workspace again.
+   */
+  origin?: string | null;
+}>();
+
+/** The site filter, seeded from the opener and clearable in place. */
+const originFilter = ref<string | null>(props.origin ?? null);
+/*
+ * Re-seed when the opener names a different site.
+ *
+ * This page is inside a layer that stays mounted while open, so a second
+ * "查看全部" from another site would otherwise land on the previous site's
+ * records.
+ */
+watch(
+  () => props.origin,
+  (next) => {
+    originFilter.value = next ?? null;
+  },
+);
+
 const collapsed = ref<Record<string, boolean>>({});
 const expanded = ref<Record<string, boolean>>({});
-const groups = computed<AiActivitySiteGroup[]>(() => groupAiActivity(workspace.aiActivity));
+const allGroups = computed<AiActivitySiteGroup[]>(() => groupAiActivity(workspace.aiActivity));
+const groups = computed<AiActivitySiteGroup[]>(() =>
+  originFilter.value
+    ? allGroups.value.filter((group) => group.origin === originFilter.value)
+    : allGroups.value,
+);
 
 const allCollapsed = computed(
   () => groups.value.length > 0 && groups.value.every((group) => collapsed.value[group.key]),
@@ -98,6 +131,25 @@ async function clearAll(): Promise<void> {
   <section class="page">
     <PageHeader :title="$t('app.aiActivityTitle')">
       <template #actions>
+        <!--
+          The site filter, drawn as a chip that removes itself.
+
+          Arriving filtered has to be visible, or "where are the other sites"
+          becomes a question with no answer on the page. The chip names the site
+          and clearing it is the one click that shows the whole workspace.
+        -->
+        <button
+          v-if="originFilter"
+          type="button"
+          class="origin-chip"
+          :aria-label="$t('app.aiActivityShowAll')"
+          :title="$t('app.aiActivityShowAll')"
+          data-ai-origin-filter
+          @click="originFilter = null"
+        >
+          <span class="origin-chip-name mono">{{ originFilter }}</span>
+          <X :size="11" />
+        </button>
         <GroupCollapseAll
           v-if="groups.length"
           :all-collapsed="allCollapsed"
@@ -175,6 +227,38 @@ async function clearAll(): Promise<void> {
 .group-origin {
   font-size: var(--fs-2xs);
   color: var(--faint);
+}
+
+/*
+ * A filter that says it is on.
+ *
+ * Arriving from the panel lands on one site, and a silent filter is the worst
+ * kind: the reader sees three rows and concludes the log is nearly empty. The
+ * chip is the receipt — this is the site, and the cross takes it off.
+ */
+.origin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.origin-chip:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.origin-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rows {

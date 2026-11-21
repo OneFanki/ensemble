@@ -111,9 +111,26 @@ const gateSentence = computed(() => {
   }
 });
 
-const recentGroups = computed<AiActivitySiteGroup[]>(() =>
-  groupAiActivity(workspace.aiActivity).slice(0, RECENT_SITES),
-);
+/**
+ * The records for the page in front, never the whole workspace.
+ *
+ * This panel hangs off the address bar, so the page it is talking about is the
+ * active tab. Listing every origin made the common case unreadable: a workspace
+ * with a dozen sites pushed the one actually being read below the fold, and two
+ * rows from a site the user was not looking at read as "the AI has been busy
+ * somewhere else". The full log is the console page's job, which is what
+ * "查看全部" leads to.
+ *
+ * A page with no gated origin (a blank tab, a site the gate never saw) shows no
+ * rows at all rather than falling back to everything — an empty list is the
+ * honest answer to "what happened on this page".
+ */
+const recentGroups = computed<AiActivitySiteGroup[]>(() => {
+  if (!props.origin) return [];
+  return groupAiActivity(workspace.aiActivity)
+    .filter((group) => group.origin === props.origin)
+    .slice(0, RECENT_SITES);
+});
 
 function siteNameOf(group: AiActivitySiteGroup): string {
   const site = group.siteId

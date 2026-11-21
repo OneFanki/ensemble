@@ -1,25 +1,52 @@
 #!/usr/bin/env node
 /**
- * The AI activity page: it has to scroll, and a script row has to open.
+ * The AI activity panel follows the tab, and the full log arrives filtered.
  *
- * The page used to be a plain flex child of `.page`, so everything below the
- * window was clipped with no scrollbar. Rows also stored only a one-line
- * summary, which made every `evaluate_browser_page` row indistinguishable. This
- * seeds a long log plus one detailed script and drives both.
+ * Three claims, each separately false-able:
+ *
+ * 1. The panel behind the address row lists the site of the page in front, not
+ *    the whole workspace. Seeded with two origins, so "shows one group" is a
+ *    real assertion rather than "the list happens to be short".
+ * 2. "查看全部" lands on the full log already narrowed to that site — the panel
+ *    showed a slice of it, so landing on some other site's newest record answers
+ *    a question nobody asked.
+ * 3. Clearing the site chip shows every site again.
+ *
+ * The page itself also has to scroll and its script row has to open. It used to
+ * be a plain flex child of `.page`, so everything below the window was clipped
+ * with no scrollbar, and rows stored only a one-line summary.
  */
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { waitForDebugPort } from "./lib/e2e-ports.mjs";
+import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { openNav } from "./lib/e2e-nav.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-ai-activity-"));
 const now = Date.now();
-const origin = "https://activity.test";
 const detailId = "activity-detail-1";
+/** The second origin: present in the log, never on screen. */
+const OTHER_ORIGIN = "https://elsewhere.test";
+
+/*
+ * A real page, so the panel has a real origin to follow.
+ *
+ * A seeded log alone cannot test "only the current site": with no page in front
+ * every origin is equally absent, and a panel that showed nothing would pass.
+ */
+const site = createServer((req, res) => {
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>活动记录</title></head>
+<body><h1>活动记录</h1></body></html>`);
+});
+const sitePort = await freePort();
+await new Promise((done) => site.listen(sitePort, "127.0.0.1", done));
+const origin = `http://127.0.0.1:${sitePort}`;
+const pageUrl = `${origin}/activity`;
 
 mkdirSync(join(userData, "profiles"), { recursive: true });
 writeFileSync(
@@ -75,6 +102,20 @@ const records = Array.from({ length: 34 }, (_, index) => {
     originAuthorized: true,
     count: 1,
   };
+});
+// One record from a site the browser is not showing. The panel must not draw it.
+records.push({
+  id: "activity-other",
+  at: new Date(now + 5_000).toISOString(),
+  tool: "evaluate_browser_page",
+  origin: OTHER_ORIGIN,
+  profileId: "default",
+  tabId: "tab-other",
+  tabTitle: "别处",
+  summary: "执行脚本：another site",
+  ok: true,
+  originAuthorized: true,
+  count: 1,
 });
 writeFileSync(join(userData, "ai-activity.json"), JSON.stringify({ records }));
 
@@ -132,16 +173,82 @@ try {
   check("app window appeared", true);
   await wait(2500);
 
-  // AI activity is no longer a destination: it is the panel behind the toolbar's
-  // AI button, and its "view all" link opens the full history in a layer. The
-  // records and their scroll container are the same components either way, so
-  // only the way in changed.
+  /*
+   * Open the page the log is about, and make it the tab in front.
+   *
+   * The panel reads the active tab's origin. Without a page there the panel has
+   * nothing to follow, and "shows only this site" degrades into "shows nothing",
+   * which is also what a broken filter looks like.
+   */
+  const opened = await client.evaluate(`(async () => {
+    const tab = await window.ensemble.openEmbeddedTab({ url: ${JSON.stringify(pageUrl)} });
+    const id = tab?.id ?? tab?.tab?.id ?? "";
+    if (id) await window.ensemble.activateEmbeddedTab(id);
+    return { id, url: tab?.url ?? tab?.tab?.url ?? "" };
+  })()`);
+  check("a page is open in front", Boolean(opened?.id), opened);
+  await wait(1200);
+
+  // The panel is behind the toolbar's AI button; its "view all" opens the whole
+  // log in a layer. Opening it first proves the panel is scoped to the page.
   await client.evaluate(`(async () => {
     document.querySelector('[data-ai-panel]')?.click();
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 600));
+  })()`);
+  const panelGroups = await client.evaluate(`(() => {
+    const names = [...document.querySelectorAll('[data-ai-group]')].map((el) => ({
+      key: el.getAttribute('data-ai-group'),
+      text: el.textContent?.trim() ?? "",
+    }));
+    return { names, hasOther: names.some((item) => item.key === 'origin:${OTHER_ORIGIN}') };
+  })()`);
+  check(
+    "the panel lists the open site's records and no other site's",
+    panelGroups?.names?.length === 1 &&
+      panelGroups.names[0].key === `origin:${origin}` &&
+      panelGroups.hasOther === false,
+    panelGroups,
+  );
+
+  await client.evaluate(`(async () => {
     document.querySelector('[data-ai-open-console]')?.click();
     await new Promise((r) => setTimeout(r, 900));
   })()`);
+  const filtered = await client.evaluate(`(() => {
+    const chip = document.querySelector('[data-ai-origin-filter]');
+    return {
+      chip: chip?.textContent?.trim() ?? "",
+      groups: [...document.querySelectorAll('[data-ai-activity-group]')].map((el) =>
+        el.getAttribute('data-ai-activity-group'),
+      ),
+    };
+  })()`);
+  check(
+    "查看全部 lands on this site's log, with the filter visible",
+    filtered?.chip?.includes(origin) &&
+      filtered.groups?.length === 1 &&
+      filtered.groups[0] === `origin:${origin}`,
+    filtered,
+  );
+
+  // Clearing the chip is the one click that shows the whole workspace.
+  await waitFor(client, `Boolean(document.querySelector('[data-ai-origin-filter]'))`);
+  await client.evaluate(`document.querySelector('[data-ai-origin-filter]')?.click()`);
+  const cleared = await waitFor(
+    client,
+    `document.querySelectorAll('[data-ai-activity-group]').length === 2`,
+  );
+  const clearedGroups = await client.evaluate(
+    `[...document.querySelectorAll('[data-ai-activity-group]')].map((el) => el.getAttribute('data-ai-activity-group'))`,
+  );
+  check(
+    "clearing the chip shows every site again",
+    cleared === true &&
+      clearedGroups.includes(`origin:${origin}`) &&
+      clearedGroups.includes(`origin:${OTHER_ORIGIN}`),
+    { groups: clearedGroups },
+  );
+
   const rendered = await waitFor(
     client,
     `document.querySelectorAll('[data-ai-record]').length >= 30`,
@@ -223,6 +330,7 @@ try {
 } finally {
   app.kill();
   await wait(1_200);
+  site.close();
   try {
     rmSync(userData, { recursive: true, force: true });
   } catch {

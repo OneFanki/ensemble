@@ -279,64 +279,103 @@ try {
 
   // --- Identities: the same table shape ------------------------------------
   await go(client, "identities");
+  // The pane opens on the first site that has accounts, so the right column is
+  // populated without any click — that is the arrival the old three-row check
+  // stood in for.
   check(
-    "the identities page rendered the seeded accounts",
-    await waitFor(client, `document.querySelectorAll('.identities .id-card').length === 3`),
+    "the accounts page arrives with a site selected",
+    await waitFor(client, `document.querySelectorAll('.identities .id-card').length > 0`),
   );
-  const identitiesTable = await client.evaluate(`(() => {
-    const heads = [...document.querySelectorAll('.identities .id-table-head')];
-    const rows = [...document.querySelectorAll('.identities .id-card')];
-    return {
-      heads: heads.length,
-      labels: heads[0]
-        ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
-        : [],
-      toggle: Boolean(document.querySelector('.identities [data-view-toggle]')),
-      modeClass:
-        document.querySelector('.identities .cards')?.className.match(/view-(list|table)/)?.[0] ?? null,
-      cells: rows.map((row) => row.children.length),
-      singleLine: rows.every((row) => {
-        const centers = [...row.children].map((cell) => {
-          const rect = cell.getBoundingClientRect();
-          return Math.round(rect.top + rect.height / 2);
-        });
-        return new Set(centers).size === 1;
-      }),
-      accountCell: Boolean(rows[0]?.querySelector('.card-top .avatar')),
-      actionsCell: Boolean(rows[0]?.querySelector('.card-actions')),
-      statusCell: Boolean(rows[0]?.querySelector('.state')),
-      editHook: Boolean(rows[0]?.querySelector('[data-edit-identity]')),
-      pickHooks: Boolean(document.querySelector('.identities [data-batch-select]')),
-    };
-  })()`);
+  /*
+   * The page is master-detail now: the left column lists sites, the right column
+   * shows one site's table. So the assertions are per site — open a site, read
+   * its table — and "every account is reachable" means walking the list rather
+   * than counting rows in one view.
+   */
+  const siteIds = await client.evaluate(
+    `[...document.querySelectorAll('.identities [data-split-nav] [data-site-row]')].map((el) => el.dataset.siteRow)`,
+  );
   check(
-    "the identities page draws one header row per group, with no view switch",
-    identitiesTable?.heads === 2 &&
-      JSON.stringify(identitiesTable?.labels) ===
+    "the accounts page lists both seeded sites in the left column",
+    Array.isArray(siteIds) && siteIds.length === 2,
+    { siteIds },
+  );
+
+  /** Selects one site and reads the table it puts in the right column. */
+  async function readSite(siteId) {
+    return client.evaluate(`(async () => {
+      document.querySelector('.identities [data-split-nav] [data-site-row="${siteId}"]')?.click();
+      await new Promise((done) => setTimeout(done, 300));
+      const heads = [...document.querySelectorAll('.identities .id-table-head')];
+      const rows = [...document.querySelectorAll('.identities .id-card')];
+      return {
+        siteId: "${siteId}",
+        active: document.querySelector('.identities [data-split-nav] .nav-row.active')?.dataset.siteRow ?? null,
+        heads: heads.length,
+        labels: heads[0]
+          ? [...heads[0].children].map((cell) => cell.textContent.trim()).filter(Boolean)
+          : [],
+        toggle: Boolean(document.querySelector('.identities [data-view-toggle]')),
+        modeClass:
+          document.querySelector('.identities .cards')?.className.match(/view-(list|table)/)?.[0] ?? null,
+        cells: rows.map((row) => row.children.length),
+        singleLine: rows.every((row) => {
+          const centers = [...row.children].map((cell) => {
+            const rect = cell.getBoundingClientRect();
+            return Math.round(rect.top + rect.height / 2);
+          });
+          return new Set(centers).size === 1;
+        }),
+        accountCell: Boolean(rows[0]?.querySelector('.card-top .avatar')),
+        actionsCell: Boolean(rows[0]?.querySelector('.card-actions')),
+        statusCell: Boolean(rows[0]?.querySelector('.state')),
+        editHook: Boolean(rows[0]?.querySelector('[data-edit-identity]')),
+        pickHooks: Boolean(document.querySelector('.identities [data-batch-select]')),
+      };
+    })()`);
+  }
+
+  const siteA = await readSite(siteIds[0]);
+  check(
+    "selecting a site puts exactly that site's table in the right column",
+    siteA?.active === siteIds[0] &&
+      siteA?.heads === 1 &&
+      siteA?.cells?.length === 2 &&
+      JSON.stringify(siteA?.labels) ===
         JSON.stringify(["账号", "角色与密码", "状态", "操作"]) &&
-      identitiesTable?.toggle === false &&
-      identitiesTable?.modeClass === null,
-    identitiesTable,
+      siteA?.toggle === false &&
+      siteA?.modeClass === null,
+    siteA,
   );
   check(
     "account rows are one horizontal line with the existing hooks",
-    Array.isArray(identitiesTable?.cells) &&
-      identitiesTable.cells.length === 3 &&
-      identitiesTable.cells.every((count) => count === 4) &&
-      identitiesTable.singleLine === true &&
-      identitiesTable.accountCell === true &&
-      identitiesTable.actionsCell === true &&
-      identitiesTable.statusCell === true &&
-      identitiesTable.editHook === true &&
-      identitiesTable.pickHooks === true,
-    identitiesTable,
+    Array.isArray(siteA?.cells) &&
+      siteA.cells.every((count) => count === 4) &&
+      siteA.singleLine === true &&
+      siteA.accountCell === true &&
+      siteA.actionsCell === true &&
+      siteA.statusCell === true &&
+      siteA.editHook === true &&
+      siteA.pickHooks === true,
+    siteA,
   );
+
+  const siteB = await readSite(siteIds[1]);
+  check(
+    "switching sites swaps the table for the other site's accounts",
+    siteB?.active === siteIds[1] && siteB?.cells?.length === 1 && siteB?.heads === 1,
+    siteB,
+  );
+
+  // Back to the site the alignment checks read.
+  await readSite(siteIds[0]);
+
   const identitiesAlignment = await client.evaluate(
     alignmentScript(".identities .id-card", ".identities .id-table-head"),
   );
   check(
     "account table rows share the header's columns and stay on one line",
-    identitiesAlignment?.rows === 3 &&
+    identitiesAlignment?.rows === 2 &&
       identitiesAlignment?.headers === 4 &&
       identitiesAlignment?.columns === 4 &&
       identitiesAlignment?.headerAligned === true &&
@@ -350,7 +389,7 @@ try {
   );
   check(
     "every account row's actions are icons of one size, ending on one right edge",
-    identitiesActions?.rows === 3 &&
+    identitiesActions?.rows === 2 &&
       Array.isArray(identitiesActions?.counts) &&
       identitiesActions.counts.every((count) => count === 4) &&
       identitiesActions.worded === 0 &&
@@ -360,9 +399,9 @@ try {
   );
 
   // --- Table caps and feet -------------------------------------------------
-  // A joined table has one cap (the header) and one foot per group. Rows keep
-  // only their side and bottom rules; a row that still rounds its own corners
-  // reads as a stack of cards with no gaps.
+  // A joined table has one cap (the header) and one foot (the last row's
+  // corners). Rows keep only their side and bottom rules; a row that still
+  // rounds its own corners reads as a stack of cards with no gaps.
   const tableShape = await client.evaluate(`(() => {
     const rows = [...document.querySelectorAll('.identities .id-card')];
     const heads = [...document.querySelectorAll('.identities .id-table-head')];
@@ -378,12 +417,13 @@ try {
     };
   })()`);
   check(
-    "the table is capped by its header and footed by each group's last row",
+    "the table is capped by its header and footed by its last row",
     tableShape?.headRadii?.length === 1 &&
       tableShape.headRadii[0] !== "0px" &&
       tableShape.rowRadii?.length === 1 &&
       tableShape.rowRadii[0] === "0px" &&
-      tableShape.lastRows === tableShape.groups &&
+      tableShape.lastRows === 1 &&
+      tableShape.groups === 1 &&
       tableShape.lastRowRadii.every((value) => value !== "0px"),
     tableShape,
   );
@@ -394,7 +434,7 @@ try {
   await client.evaluate(`document.querySelector('.identities [data-batch-select]')?.click()`);
   const picking = await waitFor(
     client,
-    `document.querySelectorAll('.identities .id-table-head.picking').length === 2`,
+    `document.querySelectorAll('.identities .id-table-head.picking').length === 1`,
   );
   const pickingAlignment = await client.evaluate(
     alignmentScript(".identities .id-card.picking", ".identities .id-table-head.picking"),
@@ -407,6 +447,28 @@ try {
       pickingAlignment?.headerAligned === true &&
       pickingAlignment?.uniform === true,
     pickingAlignment,
+  );
+
+  // --- The batch belongs to the open site, not the workspace ----------------
+  //
+  // Picking accounts and then switching sites would otherwise leave a bar
+  // counting accounts that are no longer on screen — and launching would open
+  // pages the user could not see checked.
+  await client.evaluate(`(async () => {
+    const tiles = [...document.querySelectorAll('.identities .id-card')];
+    for (const tile of tiles) tile.click();
+    await new Promise((done) => setTimeout(done, 250));
+    document.querySelector('.identities [data-split-nav] [data-site-row="${siteIds[1]}"]')?.click();
+    await new Promise((done) => setTimeout(done, 300));
+  })()`);
+  const afterSwitch = await client.evaluate(`(() => ({
+    selectBar: Boolean(document.querySelector('.identities .select-bar')),
+    selected: document.querySelector('.identities .select-bar .sel-count')?.textContent?.trim() ?? "",
+  }))()`);
+  check(
+    "changing sites drops the batch instead of carrying it across",
+    afterSwitch?.selectBar === false,
+    afterSwitch,
   );
 
   client.close();

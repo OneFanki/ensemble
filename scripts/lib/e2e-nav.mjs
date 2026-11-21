@@ -20,21 +20,17 @@
  */
 
 /**
- * Makes sure the account rail is showing.
+ * Makes sure the account bar is on screen.
  *
- * The rail is collapsed by default — a fresh window has no running accounts, and
- * the rail exists to switch between them — so its switch is the leftmost control
- * of the tab strip. Everything that reaches the accounts pane or reads a rail
- * entry has to open it first; doing that here keeps eight suites from each
- * repeating the click.
+ * The bar lives in the window's first row now, always mounted — there is no
+ * switch to collapse it. The wait stays because the bar is part of the first
+ * paint's markup but a suite can evaluate before Vue has mounted, and a missing
+ * `[data-account-rail]` then reads as "the suite's click landed nowhere".
  */
 const ensureRail = `
-  if (!document.querySelector('[data-account-rail]')) {
-    document.querySelector('[data-rail-toggle]')?.click();
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (document.querySelector('[data-account-rail]')) break;
-      await new Promise((done) => setTimeout(done, 50));
-    }
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (document.querySelector('[data-account-rail]')) break;
+    await new Promise((done) => setTimeout(done, 50));
   }
 `;
 
@@ -219,21 +215,17 @@ export function backToBrowser() {
 }
 
 /**
- * Opens the account rail if it is collapsed, as an expression to `evaluate`.
+ * Waits for the account bar, as an expression to `evaluate`.
  *
- * The rail is collapsed by default, so any suite that reads a chip, a freeze
- * badge or an AI dot has to open it first. `openNav` already does this on its way
- * to the accounts pane; suites that stay on the browser surface need it on its
- * own.
+ * The bar is part of the window's first row and cannot be collapsed, so this only
+ * waits for the mount. Suites that read a chip, a freeze badge or an AI dot call
+ * it before their first read; `openNav` already does the same on its way to the
+ * accounts pane.
  */
 export function openRail() {
   return `(async () => {
-    // Retried, not clicked once: the switch is in the first paint but its click
-    // handler is Vue's, so a click that lands before hydration reaches nothing —
-    // and the rail then stays absent for the whole suite.
     for (let attempt = 0; attempt < 40; attempt += 1) {
       if (document.querySelector('[data-account-rail]')) return true;
-      document.querySelector('[data-rail-toggle]')?.click();
       await new Promise((done) => setTimeout(done, 100));
     }
     return Boolean(document.querySelector('[data-account-rail]'));

@@ -231,9 +231,9 @@ try {
     return result;
   })()`);
   check(
-    "the layer starts at the account column and leaves the stage readable beside it",
-    Boolean(placed?.pane && placed?.railRight && placed?.stage) &&
-      placed.pane.x === placed.railRight &&
+    "the layer starts at the window's left edge and leaves the stage readable beside it",
+    Boolean(placed?.pane && placed?.stage) &&
+      placed.pane.x === 0 &&
       placed.pane.right < placed.stage.right &&
       placed.pane.right <= placed.windowWidth,
     placed,

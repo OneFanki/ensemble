@@ -1,28 +1,21 @@
 #!/usr/bin/env node
 /**
- * End-to-end check of the toolbar "+" and its chooser.
+ * End-to-end check of the doors that open a page, after the toolbar's "+" left.
  *
- * The "+" is two halves with two answers:
+ * The browser used to carry a split "+" in the toolbar: a blank page on one half,
+ * an account chooser on the other. Both are gone. A page now starts from the
+ * account bar in the window's first row — a session, a site, or an account — and
+ * the launch face of the accounts pane carries the account door.
  *
- *   - the main half is the blank answer: one click opens a blank page — the
- *     app's own new-tab surface, no site navigated, no account panel —
- *   - the arrow half opens the chooser, where an account (locked to a view's
- *     site when the container names one) or a site's own openings can be
- *     picked on purpose. Profiles are not a choice here any more: an account is
- *     whose page it is, and the default profile serves the account-less ones.
+ * What this suite pins is the part that was a real bug once and would be again:
  *
- * Before the split, the whole "+" was the chooser: clicking it for a blank page
- * landed on the accounts tab with the first site pre-picked, so "just open
- * something empty" started with a site the user never asked for. The suites
- * below pin the new contract: blank is blank, and the account question is only
- * asked where the user opened the chooser themselves.
- *
- * Two other surfaces that used to ask the same question — the view header's
- * "+" and the empty cell's picker — are retired with the grid (ADR 0012); the
- * account-driven batch start lives in the instance rail's [+ 启动] panel,
- * covered by the batch-launch suite. The chooser must sit in front of the page
- * it covers, and a row picked for an account must navigate to that account's
- * site rather than sit on about:blank under the account's name.
+ *   1. The toolbar no longer asks "whose page is this" a second time. A blank
+ *      page is the tab strip's own "+", and the chooser must not come back.
+ *   2. Launching a session opens a page in that session — a real page, not an
+ *      empty shell under the session's name.
+ *   3. Launching an account from the accounts pane navigates to the account's
+ *      site rather than sitting on about:blank under its name, and the pane then
+ *      gets out of the way: the point of a launch is the page it produces.
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -34,13 +27,12 @@ import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
-const DEBUG_PORT = "0";
-const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-chooser-"));
+const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-openers-"));
 
 const page = createServer((req, res) => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(
-    `<!doctype html><html><head><meta charset="utf-8"><title>选择窗站点</title></head>
+    `<!doctype html><html><head><meta charset="utf-8"><title>打开页面的门</title></head>
 <body><h1>登录页</h1></body></html>`,
   );
 });
@@ -79,7 +71,7 @@ writeFileSync(
     sites: [
       {
         id: siteId,
-        name: "选择窗站点",
+        name: "演示站点",
         baseUrl,
         loginPath: "/",
         autoSubmit: false,
@@ -113,7 +105,7 @@ const electronBinary =
     : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
 const app = spawn(
   electronBinary,
-  [".", `--user-data-dir=${userData}`, `--remote-debugging-port=0`],
+  [".", `--user-data-dir=${userData}`, "--remote-debugging-port=0"],
   { env: { ...process.env, ENSEMBLE_HEADLESS: "1" }, stdio: ["ignore", "pipe", "pipe"] },
 );
 let appLog = "";
@@ -146,192 +138,108 @@ try {
   check("app window appeared", true);
   await wait(3000);
 
-  // --- 3. The toolbar's main half is the blank answer ----------------------
-  const blankOpen = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    const before = await api.getEmbeddedState();
-    document.querySelector('.toolbar .split-main')?.click();
-    await new Promise((r) => setTimeout(r, 2200));
-    const state = await api.getEmbeddedState();
-    const added = state.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
-    const page = added[0] ?? null;
-    return {
-      panelOpen: Boolean(document.querySelector('.open-panel')),
-      added: added.length,
-      label: page?.label ?? null,
-      identityId: page?.identityId ?? null,
-      url: page?.url ?? null,
-      blankSurface: Boolean(document.querySelector('.blank-slot')),
-      addressBar: document.querySelector('.address-shell input')?.value ?? '',
-    };
-  `,
-  );
-  check(
-    "the toolbar's main half creates a page without opening the chooser",
-    blankOpen?.panelOpen === false && blankOpen?.added === 1,
-    blankOpen,
-  );
-  check(
-    "that page is a blank new-tab page: no account, no site navigated",
-    blankOpen?.label === "新标签页" &&
-      blankOpen?.url === "about:blank" &&
-      blankOpen?.identityId === null &&
-      blankOpen?.blankSurface === true,
-    blankOpen,
-  );
-  check(
-    "the address bar stays empty on the blank page",
-    blankOpen?.addressBar === "",
-    blankOpen,
-  );
-
-  // --- 4. The toolbar's arrow opens the chooser ---------------------------
+  // --- 1. No second "whose page is this" in the toolbar ---------------------
   const toolbar = await inApp(
     client,
     `
-    const api = window.ensemble;
-    const trigger = document.querySelector('.toolbar .split-arrow');
-    for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
-      trigger?.click();
-      await new Promise((r) => setTimeout(r, 900));
-    }
-    const panel = document.querySelector('.open-panel');
-    const modes = [...document.querySelectorAll('.open-menu .mode')].map((el) => ({
-      label: el.textContent?.trim() ?? '',
-      on: el.classList.contains('on'),
-    }));
-    const profileRows = document.querySelectorAll('.open-menu .profile-row').length;
-    const anonymous = [...document.querySelectorAll('.account-row.anonymous')].map((el) =>
-      el.querySelector('.acc-name')?.textContent?.trim() ?? '',
-    );
-    // The chooser covers the stage. With a native page that means freezing it
-    // into an image first; a guest stacks, so the proof is that it is not the
-    // topmost thing at the chooser's own centre.
-    const box = panel?.getBoundingClientRect();
-    const pageOnTop = box
-      ? document
-          .elementsFromPoint(
-            Math.round(box.left + box.width / 2),
-            Math.round(box.top + box.height / 2),
-          )
-          .some((el) => el.tagName.toLowerCase() === "webview")
-      : false;
-    const frozen = document.querySelectorAll('.stage .frozen').length;
-    const before = await api.getEmbeddedState();
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const before = await window.ensemble.getEmbeddedState();
+    // The strip's own "+" is the blank answer: another page in this instance.
+    document.querySelector('.strip-add')?.click();
+    await wait(1500);
+    const after = await window.ensemble.getEmbeddedState();
     return {
-      open: Boolean(panel),
-      modes,
-      profileRows,
-      anonymous,
-      pageOnTop,
-      frozen,
-      carrier: before.carrier ?? "native",
+      split: Boolean(document.querySelector('.toolbar .split')),
+      chooser: Boolean(document.querySelector('.open-menu, .open-panel')),
+      before: before.tabs.length,
+      after: after.tabs.length,
+      railNewSession: Boolean(document.querySelector('[data-rail-new-session]')),
     };
   `,
   );
   check(
-    "the toolbar arrow opens the chooser",
-    toolbar?.open === true,
+    "the toolbar carries no new-page chooser",
+    toolbar?.split === false && toolbar?.chooser === false,
     toolbar,
   );
   check(
-    "the chooser asks one question: no profile tab, no profile rows",
-    toolbar?.modes?.length === 0 && toolbar?.profileRows === 0,
+    "the strip's plus still adds a page without asking anything",
+    toolbar?.after === toolbar?.before + 1,
     toolbar,
   );
   check(
-    "the chooser is in front of the page",
-    toolbar?.carrier === "guest" ? toolbar?.pageOnTop === false : toolbar?.frozen > 0,
-    toolbar,
-  );
-  check(
-    "the account tab keeps the site's own two openings above its accounts",
-    toolbar?.anonymous?.length === 2,
+    "the account bar is where a new session starts",
+    toolbar?.railNewSession === true,
     toolbar,
   );
 
-  /*
-   * The two openings are one line each. They used to carry a second line of
-   * explanation, which cost every visit a sentence the reader learned on the
-   * first one; the text now lives on hover. Both halves are asserted, because
-   * deleting the line without wiring the tooltip would just lose the text.
-   */
-  const openings = await inApp(
+  // --- 2. A session launched from the pane's launch face opens its page -----
+  const session = await inApp(
     client,
     `
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    if (!document.querySelector('.open-menu')) {
-      document.querySelector('.toolbar .split-arrow')?.click();
-      await wait(900);
-    }
-    const rows = [...document.querySelectorAll('.open-menu .account-row.anonymous')];
-    const heights = rows.map((el) => Math.round(el.getBoundingClientRect().height));
-    const notes = document.querySelectorAll('.open-menu .account-row.anonymous .acc-note').length;
-    const daily = document.querySelector('[data-open-daily]');
-    daily?.dispatchEvent(new PointerEvent('pointerenter'));
-    await wait(700);
-    const tip = document.querySelector('.app-tooltip');
-    const tipText = tip?.textContent.trim() ?? '';
-    const tipVisible = tip?.classList.contains('visible') ?? false;
-    daily?.dispatchEvent(new PointerEvent('pointerleave'));
-    return { heights, notes, tipText, tipVisible };
-  `,
-  );
-  check(
-    "each opening is a single line",
-    openings?.notes === 0 &&
-      openings?.heights?.length === 2 &&
-      Math.max(...(openings?.heights ?? [0])) <= 40,
-    openings,
-  );
-  check(
-    "the explanation is available on hover instead",
-    openings?.tipVisible === true && Boolean(openings?.tipText),
-    openings,
-  );
-
-  // Picking an account from the chooser must navigate to that account's site,
-  // never sit on about:blank under the account's name.
-  const picked = await inApp(
-    client,
-    `
-    const api = window.ensemble;
-    await api.activateEmbeddedView(null);
-    const trigger = document.querySelector('.toolbar .split-arrow');
-    for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
-      trigger?.click();
-      await new Promise((r) => setTimeout(r, 900));
-    }
-    const siteRows = document.querySelectorAll('.site-row').length;
-    const before = await api.getEmbeddedState();
-    const rows = [...document.querySelectorAll('.account-row')];
-    const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
-    accounts[0]?.click();
-    await new Promise((r) => setTimeout(r, 2200));
-    const state = await api.getEmbeddedState();
-    const added = state.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
-    const page = added[0] ?? null;
+    // Through the accounts pane's launch face: the bar's door opens it.
+    document.querySelector('[data-rail-entry="identities"]')?.click();
+    await wait(900);
+    const nav = document.querySelector('[data-split-nav]');
+    const rows = [...(nav?.querySelectorAll('[data-launch-session]') ?? [])];
+    const before = await window.ensemble.getEmbeddedState();
+    rows[0]?.click();
+    await wait(2600);
+    const after = await window.ensemble.getEmbeddedState();
+    const added = after.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
     return {
-      siteRows,
-      identityId: page?.identityId ?? null,
-      url: page?.url ?? null,
-      activeViewId: state.activeViewId ?? null,
+      paneOpened: Boolean(nav),
+      sessions: rows.length,
+      added: added.length,
+      profileId: added[0]?.profileId ?? null,
+      paneClosed: !document.querySelector('[data-floating-pane]'),
     };
   `,
   );
   check(
-    "the chooser lists the workspace's sites",
-    picked?.siteRows > 0,
-    picked,
+    "the pane's launch face lists the sessions",
+    session?.paneOpened === true && session?.sessions > 0,
+    session,
   );
   check(
-    "an account picked there opens a loose page on the account's site",
-    picked?.identityId === ids.a &&
-      picked?.activeViewId === null &&
-      Boolean(picked?.url?.startsWith?.(baseUrl)),
-    picked,
+    "a session launched there opens a page in that session",
+    session?.added === 1 && typeof session?.profileId === "string" && session.profileId !== "",
+    session,
+  );
+  check(
+    "the pane leaves once the page exists",
+    session?.paneClosed === true,
+    session,
+  );
+
+  // --- 3. An account launched there lands on its site, not about:blank ------
+  const account = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('[data-rail-entry="identities"]')?.click();
+    await wait(900);
+    const before = await window.ensemble.getEmbeddedState();
+    const tile = document.querySelector('[data-account-tile="${ids.a}"]');
+    tile?.click();
+    await wait(2600);
+    const after = await window.ensemble.getEmbeddedState();
+    const added = after.tabs.filter((tab) => !before.tabs.some((old) => old.id === tab.id));
+    const found = added[0] ?? null;
+    return {
+      tileFound: Boolean(tile),
+      added: added.length,
+      identityId: found?.identityId ?? null,
+      url: found?.url ?? null,
+    };
+  `,
+  );
+  check("the launch face shows the site's accounts", account?.tileFound === true, account);
+  check(
+    "an account launched there opens on its own site",
+    account?.identityId === ids.a && Boolean(account?.url?.startsWith?.(baseUrl)),
+    account,
   );
 
   client.close();

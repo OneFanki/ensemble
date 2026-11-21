@@ -561,186 +561,106 @@ try {
     return true;
   })()`);
 
+  // The toolbar's controls still have to agree on one height, and the zoom
+  // stepper must stay out of the row (it lives in the app menu and the viewport
+  // menu; a second copy would push the row over at 960px).
   const sizing = await client.evaluate(`(() => {
-    const split = document.querySelector('.toolbar .split');
     const icons = [...document.querySelectorAll('.toolbar .icon')];
-    // The address field is two boxes now: the shell draws the border, the input
-    // is the text area inside it. The shell is the control, so it is what has to
-    // match the row — measuring the input made it one border short of every
-    // icon, which is a true measurement of the wrong element.
-    const input = document.querySelector('.toolbar .address input');
     const field = document.querySelector('.toolbar .address-shell');
     const stepper = document.querySelector('.toolbar .zoom-stepper');
     const rect = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
     return {
-      split: rect(split),
       icon: rect(icons[0]),
       input: rect(field),
-      inputText: rect(input),
-      splitMain: rect(split?.querySelector('.split-main')),
       stepper: rect(stepper),
-      // Every control in the row must agree on one height; two heights is what
-      // made the toolbar look assembled from different toolbars.
       controlLg: Math.round(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-lg'))),
       heights: [...new Set([
-        ...[...document.querySelectorAll('.toolbar .icon')].map(rect),
+        ...icons.map(rect),
         rect(field),
-        rect(stepper),
-        rect(split),
       ].filter((value) => value !== null))],
     };
   })()`);
-  check(
-    "the new-tab split button is at least as tall as the toolbar icons",
-    sizing?.split !== null && sizing?.icon !== null && sizing.split >= sizing.icon,
-    sizing,
-  );
-  check(
-    "the new-tab button is not visibly smaller than the address field",
-    sizing?.split !== null && sizing?.input !== null && sizing.split >= sizing.input - 2,
-    sizing,
-  );
   check(
     "every toolbar control shares one height",
     sizing?.heights?.length === 1 && sizing.heights[0] === sizing.controlLg,
     sizing,
   );
-  // The zoom stepper used to live in this row and took a tenth of it. It now
-  // sits in the app menu and the viewport menu; what this checks is that the
-  // toolbar is actually free of it (a second copy would push the row over at
-  // 960px) and that a gesture still reports its result.
   check(
     "the toolbar no longer carries a zoom stepper",
     sizing?.stepper === null,
     { stepper: sizing?.stepper },
   );
 
-  // --- The account chooser: toggling, switching, and the cover handshake ----
-  // Three things broke here once, all invisible without driving the panel: the
-  // trigger could not close it, clicking a site in the left column closed it
-  // instead of switching, and it painted before the native page was parked, so
-  // its left half was covered for about 100ms.
-  const menuOpen = await client.evaluate(`(async () => {
-    const trigger = document.querySelector('.toolbar .split-arrow');
-    // Retried: the click is dispatched while the toolbar may still be settling
-    // after the resize above, and a click that lands on a re-rendering button is
-    // swallowed. Retrying the open is not weakening the check — the assertions
-    // below still fail on a panel that paints before the stage is parked.
-    for (let attempt = 0; attempt < 3 && !document.querySelector('.open-panel'); attempt += 1) {
-      trigger?.click();
-      await new Promise((r) => setTimeout(r, 900));
-    }
-    const panel = document.querySelector('.open-panel');
-    const rows = [...document.querySelectorAll('.site-row')];
-    const panelBox = panel?.getBoundingClientRect();
+  // --- The new session door, in the account bar -----------------------------
+  // The toolbar's split "+" is gone: a session is not a page, and the door that
+  // creates one belongs beside the list of running sessions. What this pins is
+  // that the old chooser did not come back as a second answer to "whose page is
+  // this", and that the bar's own door opens the one form.
+  const door = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const trigger = document.querySelector('[data-rail-new-session]');
+    trigger?.click();
+    await wait(400);
+    const dialog = document.querySelector('[data-rail-session-name]');
     return {
-      open: Boolean(panel),
-      rows: rows.length,
-      // A lone tag name under the account list read as an empty section.
-      tagNote: Boolean(document.querySelector('.tag-note')),
-      active: rows.filter((el) => el.classList.contains('active')).length,
-      // The live page must be out of the way before the panel shows. With a
-      // native view the frozen frame is what proves it; a guest stacks, so the
-      // proof is that the panel is the element drawn at its own centre.
-      frozen: document.querySelectorAll('.stage .frozen').length,
-      onTop: panelBox
-        ? document
-            .elementsFromPoint(
-              Math.round(panelBox.left + panelBox.width / 2),
-              Math.round(panelBox.top + panelBox.height / 2),
-            )
-            .some((el) => el.closest('.open-panel'))
-        : false,
-      carrier: (await window.ensemble.getEmbeddedState()).carrier ?? "native",
+      chooser: Boolean(document.querySelector('.open-panel, .open-menu')),
+      split: Boolean(document.querySelector('.toolbar .split')),
+      dialog: Boolean(dialog),
+      nativeTitles: document.querySelectorAll('[data-account-rail] :is(button, [role="tab"])[title]').length,
     };
   })()`);
   check(
-    "the new-tab button opens the account chooser in front of the live page",
-    menuOpen?.open === true &&
-      (menuOpen?.carrier === "guest" ? menuOpen?.onTop === true : menuOpen?.frozen > 0),
-    menuOpen,
+    "the browser toolbar no longer carries the new-browser chooser",
+    door?.chooser === false && door?.split === false,
+    door,
   );
-  check(
-    "the chooser marks exactly one active site",
-    menuOpen?.active === 1,
-    { active: menuOpen?.active, rows: menuOpen?.rows },
-  );
-  check("the chooser shows no dangling tag row", menuOpen?.tagNote === false, menuOpen);
-
-  const menuShape = await client.evaluate(`(() => {
-    const rows = [...document.querySelectorAll('.account-row')];
-    const anonymous = rows.filter((el) => el.classList.contains('anonymous'));
-    const accounts = rows.filter((el) => !el.classList.contains('anonymous'));
-    const firstAccountIndex = rows.findIndex((el) => !el.classList.contains('anonymous'));
-    // The chooser asks one question — whose page this is. Profiles are not a
-    // mode here any more: the account list answers "which login", the site's
-    // two openings answer "no login in particular", and that is the whole menu.
-    const modes = [...document.querySelectorAll('.open-menu .mode')];
-    return {
-      accounts: accounts.length,
-      anonymous: anonymous.length,
-      names: anonymous.map((el) => el.querySelector('.acc-name')?.textContent?.trim() ?? ''),
-      modes: modes.length,
-      profilesHidden: document.querySelectorAll('.open-menu .profile-row').length,
-      // The site's own openings are fixed above the scrolling account list: a
-      // site with thirty accounts must not push "open daily" past the fold.
-      anonymousBeforeAccounts:
-        rows.map((el) => anonymous.includes(el)).lastIndexOf(true) < firstAccountIndex,
-    };
-  })()`);
-  check(
-    "the chooser lists the site's two openings and its accounts",
-    menuShape?.accounts > 0 && menuShape?.anonymous === 2,
-    menuShape,
-  );
-  check(
-    "the chooser has no profile mode and no profile rows",
-    menuShape?.modes === 0 && menuShape?.profilesHidden === 0,
-    menuShape,
-  );
-  check(
-    "the site's fixed openings come before its account list",
-    menuShape?.anonymousBeforeAccounts === true,
-    menuShape,
-  );
-
-  const menuClosed = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-arrow')?.click();
-    await new Promise((r) => setTimeout(r, 700));
-    return Boolean(document.querySelector('.open-panel'));
-  })()`);
-  check("a second click on the trigger closes the chooser", menuClosed === false, {
-    menuClosed,
-  });
-
-  const menuSwitch = await client.evaluate(`(async () => {
-    document.querySelector('.toolbar .split-arrow')?.click();
-    await new Promise((r) => setTimeout(r, 900));
-    const rows = [...document.querySelectorAll('.site-row')];
-    rows[1]?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const active = document.querySelector('.site-row.active .site-name');
-    const accounts = [...document.querySelectorAll('.account-row:not(.anonymous) .acc-name')].map(
-      (el) => el.textContent.trim(),
+  check("the account bar's plus opens the new-session form", door?.dialog === true, door);
+  const doorClosed = await client.evaluate(`(async () => {
+    document.querySelector('[role="dialog"] [aria-label]')?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const cancel = [...document.querySelectorAll('[role="dialog"] button')].find(
+      (el) => el.textContent?.trim() === '取消' || el.textContent?.trim() === 'Cancel',
     );
-    return {
-      stillOpen: Boolean(document.querySelector('.open-panel')),
-      active: active?.textContent.trim() ?? "",
-      accounts,
+    cancel?.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return Boolean(document.querySelector('[data-rail-session-name]'));
+  })()`);
+  check("the new-session form closes without creating anything", doorClosed === false, { doorClosed });
+
+  // Closing a running session is a right-click on its chip, the way a browser
+  // closes a tab: the chip carries no resting cross any more.
+  const chipMenu = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const chip = document.querySelector('[data-instance-chip]');
+    if (!chip) return { error: 'no chip' };
+    const cross = Boolean(chip.querySelector('[data-close-instance]'));
+    chip.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 160, clientY: 18 }));
+    await wait(300);
+    const menu = document.querySelector('[data-rail-menu]');
+    const box = menu?.getBoundingClientRect();
+    const item = menu?.querySelector('[data-rail-close]');
+    const out = {
+      cross,
+      open: Boolean(menu),
+      label: item?.textContent?.trim() ?? '',
+      inside:
+        box ? box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight : false,
     };
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await wait(250);
+    out.closed = !document.querySelector('[data-rail-menu]');
+    return out;
   })()`);
   check(
-    "clicking a site in the left column switches the account list without closing",
-    menuSwitch?.stillOpen === true && menuSwitch?.active !== "" && menuSwitch?.accounts?.length > 0,
-    menuSwitch,
+    "a session chip carries no resting close box",
+    chipMenu?.cross === false,
+    chipMenu,
   );
-
-  const menuEscaped = await client.evaluate(`(async () => {
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await new Promise((r) => setTimeout(r, 400));
-    return Boolean(document.querySelector('.open-panel'));
-  })()`);
-  check("Escape closes the site menu", menuEscaped === false, { menuEscaped });
+  check(
+    "right-clicking a session chip opens a menu that closes it",
+    chipMenu?.open === true && chipMenu?.label !== "" && chipMenu?.inside === true && chipMenu?.closed === true,
+    chipMenu,
+  );
 
   /*
    * The downloads panel is the same kind of overlay as the site menu: an HTML box
@@ -818,13 +738,13 @@ try {
     downloadsClosed,
   );
 
-  // --- The workbench column is retired; the account rail is the navigation --
+  // --- The workbench column is retired; the account bar is the navigation ----
   /*
    * The dock's resize handle, collapse animation and collapsed strip all
    * belonged to the navigation column, which the single-stage shell (ADR 0012)
    * removed. The equivalents that remain are asserted here: no column comes
-   * back, the stage fills the right column beside the account rail, and the
-   * account rail is the one instance switcher.
+   * back, the stage fills the window below the chrome, and the account bar is
+   * the one instance switcher.
    */
   const retired = await client.evaluate(`(async () => {
     await window.ensemble.getEmbeddedState();
@@ -880,9 +800,8 @@ try {
     retired,
   );
   check(
-    "the stage fills the right column, edge to edge on the window's right",
-    retired?.stageLeft === retired?.railRight &&
-      retired?.stageRight === retired?.windowWidth,
+    "the stage fills the window below the chrome, edge to edge",
+    retired?.stageLeft === 0 && retired?.stageRight === retired?.windowWidth,
     retired,
   );
   check(
@@ -1837,81 +1756,127 @@ try {
   // its accounts — but the header, the fold-all switch and the labels are the
   // same components, so the assertions moved with them.
   await openConsolePage(client, "identities");
-  await waitFor(client, `document.querySelectorAll('.identities .group-head').length >= 2`);
+  await waitFor(
+    client,
+    `document.querySelectorAll('.identities [data-split-nav] [data-site-row]').length >= 2`,
+  );
 
-  const sitesFold = await client.evaluate(`(async () => {
-    const heads = () => [...document.querySelectorAll('.identities .group-head')];
-    const cards = () => document.querySelectorAll('.identities .id-card').length;
-    const before = { heads: heads().length, cards: cards() };
-    // Collapse the first group through its header row, not the tiny arrow.
-    heads()[0]?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    const folded = {
-      cards: cards(),
-      expanded: heads()[0]?.getAttribute('aria-expanded'),
-      nameStillShown: Boolean(heads()[0]?.querySelector('.group-name')?.textContent.trim()),
-      secondStillOpen: heads()[1]?.getAttribute('aria-expanded'),
-    };
-    // The whole header stays: a folded section must still say what is folded.
-    heads()[0]?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    const reopened = { cards: cards(), expanded: heads()[0]?.getAttribute('aria-expanded') };
+  /*
+   * The accounts page is master-detail: the left column picks a site, the right
+   * column shows its accounts. These assertions replace the ones that used to
+   * check group folding — folding went away with the expanding list, and what
+   * took over its job is the site switch. The properties worth keeping are the
+   * same three: the list names every site, one site is current at a time, and
+   * choosing another actually changes what is drawn.
+   */
+  const siteSwitch = await client.evaluate(`(async () => {
+    const rows = () => [...document.querySelectorAll('.identities [data-split-nav] [data-site-row]')];
+    const cards = () => [...document.querySelectorAll('.identities .id-card')];
+    const names = () => rows().map((row) => row.querySelector('.nav-name')?.textContent.trim() ?? "");
+    const counts = () => rows().map((row) => row.querySelector('.nav-count')?.textContent.trim() ?? "");
+    const activeIndex = () =>
+      rows().findIndex((row) => row.classList.contains('active'));
 
-    // One switch for the page. It lives in the header row and changes its own
-    // label, so its direction is checkable from the DOM.
-    const all = () => document.querySelector('.identities [data-group-collapse-all]');
-    /*
-     * Read from aria-label, not textContent.
-     *
-     * The switch is icon-only now: the chevrons say which direction it will take
-     * and the label moved to the accessible name, where it costs no width in a
-     * row of 26px glyphs. The property — "the button names the action it will
-     * perform, and the name flips" — is unchanged, so the assertion moves with
-     * it rather than being weakened.
-     */
-    const label = () => all()?.getAttribute('aria-label')?.trim() ?? "";
-    const beforeLabel = label();
-    all()?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    const collapsedAll = {
-      cards: cards(),
-      anyOpen: heads().some((h) => h.getAttribute('aria-expanded') === 'true'),
-      labels: [label()],
+    const before = { rows: rows().length, cards: cards().length, active: activeIndex() };
+
+    // Every site is listed with its account count, and exactly one is current.
+    const listed = {
+      names: names(),
+      counts: counts(),
+      actives: rows().filter((row) => row.classList.contains('active')).length,
     };
-    // Same button, now the other direction.
-    all()?.click();
+
+    // Choosing the other site swaps the right column.
+    const other = before.active === 0 ? 1 : 0;
+    rows()[other]?.click();
     await new Promise((r) => setTimeout(r, 300));
-    const expandedAll = { cards: cards(), anyClosed: heads().some((h) => h.getAttribute('aria-expanded') === 'false') };
-    return { before, folded, reopened, beforeLabel: [beforeLabel], collapsedAll, expandedAll };
+    const switched = {
+      active: activeIndex(),
+      cards: cards().length,
+      // The detail heading names the site whose accounts are on screen.
+      detailName:
+        document.querySelector('.identities .detail-name')?.textContent?.trim() ?? "",
+    };
+
+    return { before, listed, switched, otherName: names()[other], other };
   })()`);
   check(
-    "a group header folds its cards and keeps saying what is folded",
-    sitesFold?.before.heads >= 2 &&
-      sitesFold?.before.cards > 0 &&
-      sitesFold?.folded.cards < sitesFold?.before.cards &&
-      sitesFold?.folded.expanded === "false" &&
-      sitesFold?.folded.nameStillShown === true &&
-      sitesFold?.folded.secondStillOpen === "true",
-    sitesFold,
+    "the left column lists every site with its account count",
+    siteSwitch?.before.rows >= 2 &&
+      siteSwitch?.listed.names.length === siteSwitch?.before.rows &&
+      siteSwitch.listed.names.every((name) => name.length > 0) &&
+      siteSwitch.listed.counts.every((count) => count.length > 0) &&
+      siteSwitch.listed.actives === 1,
+    siteSwitch,
   );
   check(
-    "clicking the header again reopens the group",
-    sitesFold?.reopened.cards === sitesFold?.before.cards &&
-      sitesFold?.reopened.expanded === "true",
-    sitesFold,
+    // Sites used to be ordered by a stored sequence that only dragging could
+    // change; they are sorted by name now, so the list is the same for everyone
+    // and a rename re-sorts it.
+    "the site list is in name order",
+    Array.isArray(siteSwitch?.listed.names) &&
+      siteSwitch.listed.names.length >= 2 &&
+      siteSwitch.listed.names.every(
+        (name, index) => index === 0 || siteSwitch.listed.names[index - 1].localeCompare(name, "zh") <= 0,
+      ),
+    siteSwitch?.listed.names,
   );
   check(
-    "one switch folds every group, and it turns into the opposite action",
-    sitesFold?.collapsedAll.cards === 0 &&
-      sitesFold?.collapsedAll.anyOpen === false &&
-      sitesFold?.collapsedAll.labels?.some((text) => text.includes("全部展开")) === true,
-    sitesFold,
+    "choosing another site swaps the accounts in the right column",
+    siteSwitch?.switched.active === siteSwitch?.other,
+    siteSwitch,
   );
   check(
-    "the same switch expands every group again",
-    sitesFold?.expandedAll.cards === sitesFold?.before.cards &&
-      sitesFold?.expandedAll.anyClosed === false,
-    sitesFold,
+    "the detail heading names the site whose accounts are shown",
+    siteSwitch?.switched.detailName === siteSwitch?.otherName,
+    siteSwitch,
+  );
+
+  /*
+   * --- The search narrows the site list, and finds sites ---------------------
+   *
+   * The field sits at the top of the left column, over the list it filters. Two
+   * things have to hold: a site's name finds that site, and an account's name
+   * finds the site the account belongs to — "where is review" is an account
+   * search whose answer is a site, and the list has to show it.
+   */
+  const searchable = await client.evaluate(`(async () => {
+    const input = () => document.querySelector('.identities .nav-search input');
+    const rows = () => [...document.querySelectorAll('.identities [data-split-nav] [data-site-row]')];
+    const type = async (text) => {
+      const el = input();
+      el.value = text;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 350));
+    };
+    const all = rows().length;
+
+    await type("第二个");
+    const bySite = { rows: rows().map((row) => row.dataset.siteRow), all };
+
+    await type("admin@");
+    const byAccount = { rows: rows().map((row) => row.dataset.siteRow), all };
+
+    await type("no-such-thing");
+    const none = rows().length;
+
+    await type("");
+    const restored = rows().length;
+    return { bySite, byAccount, none, restored, all };
+  })()`);
+  check(
+    "the search narrows the site list by site name",
+    searchable?.all >= 2 &&
+      searchable?.bySite.rows.length === 1 &&
+      searchable?.restored === searchable?.all,
+    searchable,
+  );
+  check(
+    "searching an account's name keeps the site it belongs to",
+    searchable?.byAccount.rows.length >= 1 &&
+      searchable.byAccount.rows.length <= searchable.all &&
+      searchable?.none === 0,
+    searchable,
   );
 
   // --- Auto-submit: global default, per-site override, resolved value ------
@@ -1997,19 +1962,33 @@ try {
     submitMode,
   );
 
-  // --- Accounts: folding, and turning a selection into a saved view ---------
+  // --- Accounts: turning a selection into a batch ---------------------------
   await openConsolePage(client, "identities");
-  await waitFor(client, `document.querySelectorAll('.identities .group-head').length >= 2`);
+  // Sites are listed by name, not creation order, so nothing here can assume
+  // which one comes first. Pick the site that has more than one account: the
+  // checks below need two rows on screen.
+  const firstSiteId = await client.evaluate(`(async () => {
+    const rows = [...document.querySelectorAll('.identities [data-split-nav] [data-site-row]')];
+    for (const row of rows) {
+      row.click();
+      await new Promise((r) => setTimeout(r, 250));
+      if (document.querySelectorAll('.identities .id-card').length >= 2) return row.dataset.siteRow;
+    }
+    return "";
+  })()`);
+  await client.evaluate(`(async () => {
+    const row = document.querySelector(
+      '.identities [data-split-nav] [data-site-row="' + ${JSON.stringify(firstSiteId)} + '"]',
+    );
+    if (row) row.click();
+    await new Promise((r) => setTimeout(r, 300));
+    return true;
+  })()`);
+  await waitFor(client, `document.querySelectorAll('.identities .id-card').length >= 2`);
 
   const accountsFold = await client.evaluate(`(async () => {
-    const heads = () => [...document.querySelectorAll('.identities .group-head')];
     const cards = () => document.querySelectorAll('.identities .id-card').length;
     const before = cards();
-    heads()[0]?.click();
-    await new Promise((r) => setTimeout(r, 250));
-    const folded = cards();
-    heads()[0]?.click();
-    await new Promise((r) => setTimeout(r, 250));
 
     // Selection → batch launch. The saved-view form is retired (P1-3), so the
     // selection bar is the only thing a picked group turns into. Start from a
@@ -2058,8 +2037,6 @@ try {
     await new Promise((r) => setTimeout(r, 400));
     return {
       before,
-      folded,
-      reopened: cards(),
       entering,
       selectedCount,
       dialogOpen: Boolean(dialog),
@@ -2068,13 +2045,6 @@ try {
       stillSelecting: Boolean(document.querySelector('.identities .select-bar')),
     };
   })()`);
-  check(
-    "an account group folds and reopens",
-    accountsFold?.folded > 0 &&
-      accountsFold?.folded < accountsFold?.before &&
-      accountsFold?.reopened === accountsFold?.before,
-    accountsFold,
-  );
   check(
     "picking accounts keeps the selection bar, with no view-form entry",
     accountsFold?.selectedCount === 2 &&
@@ -2095,16 +2065,27 @@ try {
   // card until you try to launch it. Select several, pick a site, all attached.
   const bulkLink = await client.evaluate(`(async () => {
     const snapBefore = await window.ensemble.getWorkspace();
-    const site = snapBefore.sites[0];
+    // The target has to be a site the picked accounts are *not* on; the pane is
+    // showing one site, so the other one is the target.
+    const activeRow = document.querySelector('.identities [data-split-nav] .nav-row.active');
+    const activeSiteId = activeRow?.dataset.siteRow ?? "";
+    const site = snapBefore.sites.find((item) => item.id !== activeSiteId);
     if (!site) return { error: "no site to link to" };
-    const victims = snapBefore.identities.slice(0, 2);
-    const wanted = victims.map((item) => item.name);
-
+    // Start from a clean slate: the block above leaves selection mode on with
+    // its own picks, and clicking those cards again would cancel them.
+    if (document.querySelector('.identities .select-bar')) {
+      document.querySelector('.identities [data-batch-cancel]')?.click();
+      await new Promise((r) => setTimeout(r, 300));
+    }
     document.querySelector('.identities [data-batch-select]')?.click();
     await new Promise((r) => setTimeout(r, 300));
     const cards = [...document.querySelectorAll('.identities .id-card')];
-    // Pick by name so the two cards really are the workspace's first two: the
-    // grid order follows the group order, not the workspace array.
+    // Only the accounts on screen: the pane shows one site, so the pickable set
+    // is that site's accounts. Picking by name was how this used to reach across
+    // groups, which no longer exist here.
+    const wanted = cards
+      .map((card) => card.querySelector('.name')?.textContent.trim() ?? "")
+      .filter(Boolean);
     const picks = cards.filter((card) =>
       wanted.includes(card.querySelector('.name')?.textContent.trim()),
     );
@@ -2120,7 +2101,7 @@ try {
       .map((item) => ({ name: item.name, siteId: item.siteId }));
 
     document.querySelector('.identities .select-bar [data-batch-more]')?.click();
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 500));
     const linkButton = document.querySelector('[data-batch-link-site]');
     const buttonFound = Boolean(linkButton);
     linkButton?.click();
@@ -2531,13 +2512,16 @@ try {
     });
     return { ok: true, siteId: site.id };
   })()`);
+  const wordySiteId = wordySeed?.siteId ?? "";
   await openConsolePage(client, "identities");
-  // Earlier checks fold and reopen groups; the wordy account has to be on
-  // screen for its chips to be measurable.
-  await client.evaluate(`(() => {
-    for (const head of document.querySelectorAll('.identities .group-head[aria-expanded="false"]')) {
-      head.click();
-    }
+  // The pane shows one site at a time, so the wordy account's site has to be
+  // selected before its chips are measurable.
+  await client.evaluate(`(async () => {
+    const row = document.querySelector(
+      '.identities [data-split-nav] [data-site-row="' + ${JSON.stringify(wordySiteId)} + '"]',
+    );
+    if (row) row.click();
+    await new Promise((r) => setTimeout(r, 300));
     return true;
   })()`);
   await wait(300);

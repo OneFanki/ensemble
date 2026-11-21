@@ -499,17 +499,25 @@ try {
     };
 
     // The dot explains itself with the drawn tooltip, not a native title.
-    const dot = document
-      .querySelector('[data-instance-chip="' + dailyInstance + '"]')
-      ?.querySelector('[data-ai-dot]');
-    dot?.dispatchEvent(new PointerEvent('pointerenter'));
+    //
+    // The label hangs off the whole chip, not off the badge: the badge is a 6px
+    // corner mark with pointer-events none, so a pointerenter dispatched at it
+    // would never reach a listener. The chip's label carries three things — the
+    // state sentence, a dot in the state's colour, and the whole account name.
+    const chip = document.querySelector('[data-instance-chip="' + dailyInstance + '"]');
+    const dot = chip?.querySelector('[data-ai-dot]');
+    chip?.dispatchEvent(new PointerEvent('pointerenter'));
     await wait(800);
     const tip = document.querySelector('.app-tooltip');
     const tipBox = tip?.getBoundingClientRect();
     const tipRead = {
-      nativeTitle: dot?.getAttribute('title') ?? null,
+      nativeTitle: chip?.getAttribute('title') ?? null,
       visible: tip?.classList.contains('visible') ?? false,
       tipText: tip?.textContent?.trim() ?? '',
+      // The label repeats the state as a leading dot in the same colour.
+      hasDot: Boolean(tip?.querySelector('.app-tooltip-dot')),
+      // The chip truncates a long name; the label is where the rest of it lives.
+      hasDetail: Boolean(tip?.querySelector('.app-tooltip-detail')),
       insideWindow: tipBox
         ? tipBox.left >= 0 &&
           tipBox.right <= window.innerWidth &&
@@ -518,9 +526,9 @@ try {
         : false,
       pointerEvents: tip ? getComputedStyle(tip).pointerEvents : null,
     };
-    dot?.dispatchEvent(new PointerEvent('pointerleave'));
+    chip?.dispatchEvent(new PointerEvent('pointerleave'));
     await wait(300);
-    return { before, tipRead, tipClosed: !document.querySelector('.app-tooltip.visible') };
+    return { before, tipRead, dotPointerEvents: dot ? getComputedStyle(dot).pointerEvents : null, tipClosed: !document.querySelector('.app-tooltip.visible') };
   })()`);
   check(
     "the chip of the instance the AI acted on carries a dot",
@@ -551,9 +559,18 @@ try {
     "the dot explains itself with a drawn tooltip, not a native title",
     dots?.tipRead?.nativeTitle === null &&
       dots?.tipRead?.visible === true &&
-      String(dots?.tipRead?.tipText).includes("AI 最后动作") &&
+      /AI (正在操作|最近操作)/.test(String(dots?.tipRead?.tipText)) &&
+      dots?.tipRead?.hasDot === true &&
+      dots?.tipRead?.hasDetail === true &&
       dots?.tipRead?.pointerEvents === "none",
     dots?.tipRead,
+  );
+  // The badge itself takes no pointer: a 6px corner mark cannot be hovered
+  // reliably, which is why the label hangs off the chip instead.
+  check(
+    "the status dot itself takes no pointer",
+    dots?.dotPointerEvents === "none",
+    { dotPointerEvents: dots?.dotPointerEvents },
   );
   // The rail sits on the window's top row, so the tooltip has the whole window
   // to open into; a hint clipped by the window edge is not a hint.

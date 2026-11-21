@@ -297,7 +297,7 @@ try {
     firstAwake,
   );
 
-  const marks = await client.evaluate(`(() => {
+  const marks = await client.evaluate(`(async () => {
     const tabs = [...document.querySelectorAll('.tabstrip .tab')];
     const find = (id) => tabs.find((tab) => tab.getAttribute('data-tab-id') === id) ?? null;
     const first = find(${JSON.stringify(firstId)});
@@ -306,20 +306,30 @@ try {
       const close = tab?.querySelector('.tab-close');
       return close ? Number(getComputedStyle(close).opacity) : null;
     };
-    return {
+    // The tab's label is the app's own hover layer now, not a native title: the
+    // native one could not carry the AI state dot and popped up underneath ours.
+    second?.dispatchEvent(new PointerEvent('pointerenter'));
+    await new Promise((r) => setTimeout(r, 700));
+    const tip = document.querySelector('.app-tooltip');
+    const out = {
       firstSleep: first?.getAttribute('data-sleep') ?? null,
       secondSleep: second?.getAttribute('data-sleep') ?? null,
       secondSnowflake: Boolean(second?.querySelector('.tab-sleep')),
-      secondTitle: second?.getAttribute('title') ?? '',
+      secondNativeTitle: second?.getAttribute('title') ?? null,
+      secondTip: tip?.classList.contains('visible') ? tip.textContent.trim() : '',
       closeFirst: closeOpacity(first),
       closeSecond: closeOpacity(second),
     };
+    second?.dispatchEvent(new PointerEvent('pointerleave'));
+    return out;
   })()`);
   check(
     "the sleeping tab shows a snowflake and says so",
     marks?.secondSleep === "sleeping" &&
       marks?.secondSnowflake === true &&
-      marks?.secondTitle?.includes("已休眠"),
+      // The state is in the drawn label, and the native title is gone.
+      marks?.secondNativeTitle === null &&
+      marks?.secondTip?.includes("已休眠"),
     marks,
   );
   check(

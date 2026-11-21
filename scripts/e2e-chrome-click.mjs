@@ -129,7 +129,9 @@ try {
       toolbarTop: Math.round(toolbarBox.top),
       toolbarBottom: Math.round(toolbarBox.bottom),
       railTop: Math.round(railBox.top),
+      railLeft: Math.round(railBox.left),
       railRight: Math.round(railBox.right),
+      railHeight: Math.round(railBox.height),
       stripTop: Math.round(stripBox.top),
       stripLeft: Math.round(stripBox.left),
       stripHeight: Math.round(stripBox.height),
@@ -140,17 +142,19 @@ try {
     };
   })()`);
   check(
-    "the address row is the window's second band",
-    geometry?.toolbarBottom > 0 && geometry?.railTop === geometry?.toolbarBottom,
+    "the address row is the band under the window's first row",
+    geometry?.toolbarBottom > 0 && geometry?.toolbarTop === geometry?.railTop + geometry?.railHeight,
     geometry,
   );
   check(
-    "the page strip is the window's first row, above the address row",
-    // The strip spans the window now, not just the right column: it is the row
-    // the caption buttons sit in, and the address row starts under it.
-    geometry?.stripTop === 0 &&
-      geometry?.stripLeft === 0 &&
-      geometry?.toolbarTop === geometry?.stripTop + geometry?.stripHeight,
+    "the account bar and the page strip share the window's first row",
+    // The bar starts at the left edge; the strip continues the same row, and the
+    // address row starts under it.
+    geometry?.railTop === 0 &&
+      geometry?.railLeft === 0 &&
+      geometry?.stripTop === geometry?.railTop &&
+      geometry?.stripLeft === geometry?.railRight &&
+      geometry?.toolbarTop === geometry?.railTop + geometry?.railHeight,
     geometry,
   );
   check(

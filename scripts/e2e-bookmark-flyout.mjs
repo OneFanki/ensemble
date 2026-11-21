@@ -252,26 +252,31 @@ try {
     { subAfterScroll, rootStillOpen },
   );
 
-  // --- 4. The retired column stays retired; the account rail owns the left ---
+  // --- 4. The retired column stays retired; the account bar owns the top row --
   const shell = await client.evaluate(`(() => {
     const rail = document.querySelector('[data-account-rail]')?.getBoundingClientRect();
+    const strip = document.querySelector('.tabstrip')?.getBoundingClientRect();
     return {
       dock: Boolean(document.querySelector('.dock')),
       layoutBtn: Boolean(document.querySelector('.layout-btn')),
       railLeft: rail ? Math.round(rail.left) : null,
       railTop: rail ? Math.round(rail.top) : null,
+      railRight: rail ? Math.round(rail.right) : null,
       railInsideWindow: rail ? rail.left >= 0 && rail.right <= window.innerWidth : false,
-      railBottom: rail ? Math.round(rail.bottom) : null,
+      stripLeft: strip ? Math.round(strip.left) : null,
+      stripTop: strip ? Math.round(strip.top) : null,
       viewportH: document.documentElement.clientHeight,
     };
   })()`);
   check(
-    "the dock stays retired and the account rail runs down the left edge",
+    "the dock stays retired and the account bar starts the window's first row",
     shell?.dock === false &&
       shell?.layoutBtn === false &&
       shell?.railLeft === 0 &&
-      shell?.railTop > 0 &&
-      shell?.railBottom === shell?.viewportH &&
+      shell?.railTop === 0 &&
+      // The strip continues the same row, immediately to the bar's right.
+      shell?.stripLeft === shell?.railRight &&
+      shell?.stripTop === shell?.railTop &&
       shell?.railInsideWindow === true,
     shell,
   );

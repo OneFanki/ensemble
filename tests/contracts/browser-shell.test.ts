@@ -73,12 +73,12 @@ describe("the active tab and the toolbar share one surface", () => {
   });
 
   it("sizes the top row and the address row from their own tokens", () => {
-    // The tab strip is the window's first row, so it takes the titlebar token —
-    // it is the row the caption buttons are drawn in. The address row sits
-    // beneath it and has its own height. Swapping these is what made the
-    // caption buttons hang half a band too high (and, before that, what made a
-    // second reservation push the app menu off the right edge).
-    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    // The top row (accounts + tabs) is the window's first row, so it takes the
+    // titlebar token — it is the row the caption buttons are drawn in. The
+    // address row sits beneath it and has its own height. Swapping these is what
+    // made the caption buttons hang half a band too high (and, before that, what
+    // made a second reservation push the app menu off the right edge).
+    expect(ruleBody(BROWSER, ".top-row")).toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(ruleBody(BROWSER, ".toolbar")).toMatch(/height:\s*var\(--address-row-height\)/);
     expect(ruleBody(BROWSER, ".toolbar")).not.toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(TOKENS).toMatch(/--titlebar-height:\s*\d+px/);
@@ -94,7 +94,7 @@ describe("the active tab and the toolbar share one surface", () => {
     // than the buttons hanging over it.
     //
     // 1. Main's constant, which positions the overlay.
-    // 2. The token the tab strip is sized from — the browser's first row.
+    // 2. The token the top row is sized from — the browser's first row.
     // 3. Settings' own band, so switching between the browser and settings does
     //    not move the window buttons.
     const declared = /--titlebar-height:\s*(\d+)px/.exec(TOKENS)?.[1];
@@ -102,7 +102,7 @@ describe("the active tab and the toolbar share one surface", () => {
     expect(declared).toBeDefined();
     expect(mirrored).toBe(declared);
 
-    expect(ruleBody(BROWSER, ".tabstrip")).toMatch(/height:\s*var\(--titlebar-height\)/);
+    expect(ruleBody(BROWSER, ".top-row")).toMatch(/height:\s*var\(--titlebar-height\)/);
     expect(ruleBody(SETTINGS, ".settings-head")).toMatch(/height:\s*var\(--titlebar-height\)/);
   });
 });
@@ -219,43 +219,43 @@ describe("a setting group's heading is separated from its rows", () => {
 });
 
 /**
- * The account column is the page area's left neighbour, not an overlay on it.
+ * The account bar is the top row's left half, not a column down the side.
  *
- * It is a column of running accounts: a fixed token width, its own vertical
- * scroller, and no horizontal overflow — the accounts page and the strip stay
- * to its right, and the stage's rectangle is what every page node is placed
- * from, so a column that grew into the stage would move nothing but the
- * pixels.
+ * It shares the window's first band with the tab strip: both answer "which of my
+ * contexts is this window". The bar sizes itself from its chips, stops at half
+ * the window, and scrolls sideways past that — a fixed-width column cost the page
+ * a permanent strip of pixels while still truncating names, and an unbounded bar
+ * would eat the tabs on the first wide workspace.
  */
-describe("the account column", () => {
-  it("is a token-width column, not a band", () => {
-    const rail = ruleBody(RAIL, ".account-rail");
-    expect(rail).toMatch(/flex:\s*0 0 var\(--account-rail-width\)/);
-    expect(rail).toMatch(/width:\s*var\(--account-rail-width\)/);
+describe("the account bar", () => {
+  it("is capped at half the window instead of a fixed width", () => {
+    const bar = ruleBody(RAIL, ".account-bar");
+    expect(bar).toMatch(/max-width:\s*50vw/);
+    // A fixed basis is what the column was; the bar must be allowed to be as
+    // narrow as its contents.
+    expect(bar).not.toMatch(/flex:\s*0 0 var\(--account-rail-width\)/);
   });
 
-  it("scrolls vertically in the list and never sideways", () => {
-    const list = ruleBody(RAIL, ".rail-list");
-    expect(list).toMatch(/overflow-y:\s*auto/);
-    expect(list).not.toMatch(/overflow-x:\s*auto/);
+  it("scrolls sideways in the list and never vertically", () => {
+    const list = ruleBody(RAIL, ".bar-list");
+    expect(list).toMatch(/overflow-x:\s*auto/);
+    expect(list).not.toMatch(/overflow-y:\s*auto/);
   });
 
-  it("keeps the accounts entry above the list, not below it", () => {
-    // It is the column's only high-frequency action — almost every launch goes
-    // through it — and at the foot it was the first thing pushed out of view once
-    // enough accounts were running. Markup order is the assertion: the entry's
-    // block comes before the list's.
-    const head = RAIL.indexOf('class="rail-head');
-    const list = RAIL.indexOf('class="rail-list');
-    expect(head).toBeGreaterThan(0);
-    expect(list).toBeGreaterThan(0);
-    expect(head).toBeLessThan(list);
+  it("puts the bar before the strip, in one row", () => {
+    // Markup order is the assertion: the accounts sit at the left end of the
+    // window's first row, the tabs to their right.
+    const bar = BROWSER.indexOf("<AccountRail");
+    const strip = BROWSER.indexOf('class="tabstrip"');
+    expect(bar).toBeGreaterThan(0);
+    expect(strip).toBeGreaterThan(0);
+    expect(bar).toBeLessThan(strip);
+    expect(ruleBody(BROWSER, ".top-row")).toMatch(/display:\s*flex/);
   });
 
   it("gives the status dots no layout space", () => {
-    // Both are corner badges now. Inline they were 7px flex items between the
-    // avatar and the name, which cost every name two characters of width — the
-    // narrow column then truncated names that had fitted before.
+    // Both are corner badges. Inline they were 7px flex items between the
+    // avatar and the name, which cost every name two characters of width.
     //
     // Read with a regex rather than `ruleBody`: these two rules carry comments,
     // and a naive brace scan stops at the first `}` inside one.
@@ -266,5 +266,34 @@ describe("the account column", () => {
       expect(body).toMatch(/position:\s*absolute/);
       expect(body).not.toMatch(/flex:\s*0 0/);
     }
+  });
+
+  it("closes a chip from its own menu, not an always-drawn cross", () => {
+    // A resting close box costs a chip a fixed slice of width for a rare action,
+    // and at chip width it became the easiest thing to hit by accident.
+    expect(RAIL).toMatch(/data-rail-menu/);
+    expect(RAIL).toMatch(/@contextmenu="openMenu\(item, \$event\)"/);
+    expect(RAIL).not.toMatch(/data-close-instance/);
+  });
+});
+
+/**
+ * A page tab's AI dot is per page and absent at rest.
+ *
+ * The account bar answers "is the AI on this account"; a tab has to answer "is it
+ * on this page". And a dot that is always drawn would be a second favicon to read
+ * on every tab to learn nothing.
+ */
+describe("a page tab's AI dot", () => {
+  it("is only rendered while there is something to say", () => {
+    expect(BROWSER).toMatch(/v-if="aiDotOf\(page\)"/);
+    expect(BROWSER).toMatch(/data-tab-ai-dot/);
+  });
+
+  it("explains itself through the app's own hover label", () => {
+    // The native `title` cannot carry the state dot and would have popped up
+    // underneath our own label after a second's delay.
+    expect(BROWSER).toMatch(/v-tooltip="tabLabelOf\(page\)"/);
+    expect(BROWSER).not.toMatch(/:title="pageTitle\(page\)"/);
   });
 });

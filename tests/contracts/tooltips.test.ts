@@ -72,21 +72,33 @@ describe("hover labels", () => {
     }
   });
 
-  it("gives every account-column control a label through the directive", () => {
-    // The column is the left of the page area: the single accounts entry and each
-    // item's hint, which is the account name — the fact a truncated label hides.
-    // No native `title` may creep back in: every hint here is the app's own drawn
-    // layer.
-    expect(rail).toContain('v-tooltip="t(\'app.railAccountsHint\')"');
-    expect(rail).toContain('v-tooltip="item.account"');
-    expect(rail).not.toMatch(/:title="t\('app\./);
-    expect(rail).not.toMatch(/\s:title="/);
+  it("gives every account-bar control a label through the directive", () => {
+    // The bar is the left of the window's first row: the accounts entry, the new
+    // session entry, and each chip's label — the state plus the whole account
+    // name, which is the fact a truncated chip hides. No native `title` may creep
+    // back in: every hint here is the app's own drawn layer.
+    //
+    // Scoped to the bar's own markup: the dialog below it passes a `title` prop
+    // to `Modal`, which is a dialog heading and not a hover label.
+    const bar = rail.slice(rail.indexOf("<template>"), rail.indexOf("<Modal"));
+    expect(bar).toContain('v-tooltip="t(\'app.railAccountsHint\')"');
+    expect(bar).toContain('v-tooltip="labelOf(item)"');
+    expect(bar).not.toMatch(/:title="t\('app\./);
+    expect(bar).not.toMatch(/\s:title="/);
   });
 
-  it("labels the AI state dot with the time of the last action", () => {
-    // A colour-coded dot with no text is unreadable to a screen reader and
-    // guesswork to everyone else; the hint names what the dot means.
-    expect(rail).toContain('v-tooltip="item.dotTip"');
+  it("carries the AI state's meaning and the full name in one label", () => {
+    /*
+     * A colour-coded dot with no text is unreadable to a screen reader and
+     * guesswork to everyone else, so the label names what the dot means. The dot
+     * itself is `pointer-events: none` — a 6px corner badge cannot be hovered
+     * reliably — which is why the label hangs off the whole chip rather than off
+     * the badge: `labelOf` composes the state sentence, the dot's colour and the
+     * untruncated account name into one layer.
+     */
+    expect(rail).toContain('v-tooltip="labelOf(item)"');
+    expect(rail).toMatch(/function labelOf\(item: RailItem\)/);
+    expect(rail).toMatch(/detail/);
   });
 
   it("labels the guide entry in the app menu", () => {

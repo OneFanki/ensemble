@@ -177,16 +177,17 @@ async function openAccountForm(client) {
     }
     // The pane opens on its launch face, where the header carries only the face
     // switch: creating an account is a write, so it lives on the edit face.
-    // Switch there, then open the create menu — one `+`, two branches.
+    // Switch there, then open the account form. On a populated workspace the
+    // door is the selected site's own `+` (that is the site the new account
+    // belongs to); the empty state spells both doors out instead.
     document.querySelector('[data-mode-edit]')?.click();
     await wait(350);
-    // The empty state spells both doors out; a populated list keeps them behind
-    // the `+`. Try the direct button first, then the menu.
-    let newAccount = document.querySelector('[data-new-account]');
+    let newAccount = document.querySelector('[data-add-identity]');
     if (!newAccount) {
       document.querySelector('[data-create-entry]')?.click();
       await wait(250);
-      newAccount = document.querySelector('[data-new-account]');
+      newAccount =
+        document.querySelector('[data-add-identity]') ?? document.querySelector('[data-new-account]');
     }
     newAccount?.click();
     await wait(600);
@@ -299,13 +300,13 @@ try {
       footerFound: footerText.length > 0,
       clearButtonThere: Boolean(clearButton),
       clearLabel: clearButton?.textContent?.trim() ?? null,
-      footerHasClear: footerText.includes('清除会话数据'),
+      footerHasClear: footerText.includes('清除登录数据'),
     };
   `,
   );
   check(
-    "a saved account's fold holds the clear-session action",
-    editFold?.clearButtonThere === true && editFold?.clearLabel === "清除会话数据",
+    "a saved account's fold holds the clear-login-data action",
+    editFold?.clearButtonThere === true && editFold?.clearLabel === "清除登录数据",
     editFold,
   );
   check(
@@ -334,32 +335,31 @@ try {
     await wait(700);
   `,
   );
+  // The new-browser chooser is gone with the toolbar's split button: sessions are
+  // created and launched from the account bar in the window's first row, and the
+  // account pane carries the launch face. What has to hold is that no second door
+  // came back — a surviving chooser would be a third place to answer "whose page
+  // is this".
   const chooser = await inApp(
     client,
     `
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    for (let attempt = 0; attempt < 4 && !document.querySelector('.open-menu'); attempt += 1) {
-      document.querySelector('.toolbar .split-arrow')?.click();
-      await wait(700);
-    }
     const state = await window.ensemble.getEmbeddedState();
     return {
-      open: Boolean(document.querySelector('.open-menu')),
-      profileTabs: document.querySelectorAll('.open-menu .mode[data-mode="profiles"]').length,
-      profileRows: document.querySelectorAll('.open-menu .profile-row').length,
-      accountOpenings: document.querySelectorAll('.open-menu [data-open-daily], .open-menu [data-open-clean]').length,
+      chooser: Boolean(document.querySelector('.open-menu')),
+      split: Boolean(document.querySelector('.toolbar .split')),
+      railNewSession: Boolean(document.querySelector('[data-rail-new-session]')),
       tabs: state.tabs.length,
     };
   `,
   );
   check(
-    "the new-browser chooser has no profile tab and no profile rows",
-    chooser?.open === true && chooser?.profileTabs === 0 && chooser?.profileRows === 0,
+    "the browser toolbar no longer carries a new-browser chooser",
+    chooser?.chooser === false && chooser?.split === false,
     chooser,
   );
   check(
-    "the chooser keeps the site-less openings (default profile, clean session)",
-    chooser?.accountOpenings === 2,
+    "the account bar is the door to a new session",
+    chooser?.railNewSession === true,
     chooser,
   );
 
@@ -386,6 +386,99 @@ try {
   );
   await inApp(client, `document.body.click(); await new Promise((r) => setTimeout(r, 300));`);
 
+  /*
+   * --- 2b. Identity management lives in the pane, not in Settings -----------
+   *
+   * The rows were briefly on a settings page of their own, which split "which
+   * jars do I have" away from the list that answers it. They are back in the
+   * pane's launch face: a 「全局」 group above the sites, with its own "+".
+   * Settings must not grow a second door to the same list.
+   */
+  const sessionsPage = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (!document.querySelector('[data-app-menu]')) return { opened: false };
+    if (!document.querySelector('[data-menu-item]')) {
+      document.querySelector('[data-app-menu]')?.click();
+      await wait(250);
+    }
+    document.querySelector('[data-menu-item="settings"]')?.click();
+    await wait(500);
+    return {
+      settingsHasSessions: document.querySelectorAll('.page.settings [data-section="sessions"]').length,
+    };
+  `,
+  );
+  check(
+    "settings no longer carries a separate identity-management page",
+    sessionsPage?.settingsHasSessions === 0,
+    sessionsPage,
+  );
+
+  // The launch face's left column is where identities are listed and created
+  // now: a 「全局」 group above the sites, with its own "+".
+  await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    document.querySelector('.page.settings .settings-head .back')?.click();
+    await wait(400);
+    document.querySelector('[data-rail-entry="identities"]')?.click();
+    await wait(700);
+  `,
+  );
+  const identityGroup = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const nav = document.querySelector('[data-split-nav]');
+    const groupHeads = [...(nav?.querySelectorAll('.nav-head') ?? [])].map((el) =>
+      el.textContent.trim(),
+    );
+    const globalRows = nav
+      ? [...nav.querySelectorAll('[data-launch-session]')].map((el) =>
+          el.querySelector('.nav-name')?.textContent.trim() ?? '',
+        )
+      : [];
+    document.querySelector('[data-new-identity]')?.click();
+    await wait(350);
+    const form = document.querySelector('[data-identity-name]');
+    const before = (await window.ensemble.getWorkspace()).settings.profiles.length;
+    const input = form;
+    if (input) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(input, '界面新建身份');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(120);
+      document.querySelector('[data-identity-create]')?.click();
+      await wait(900);
+    }
+    const after = (await window.ensemble.getWorkspace()).settings.profiles;
+    return {
+      groupHeads,
+      globalRows,
+      hasCreate: Boolean(form),
+      added: after.length - before,
+      names: after.map((item) => item.name),
+      dialogClosed: !document.querySelector('[data-identity-name]'),
+    };
+  `,
+  );
+  check(
+    "the launch face groups the global identities above the sites",
+    (identityGroup?.groupHeads ?? []).length >= 2 && identityGroup.globalRows.length >= 2,
+    identityGroup,
+  );
+  check(
+    "the global group creates a new identity from the pane",
+    identityGroup?.hasCreate === true &&
+      identityGroup.added === 1 &&
+      identityGroup.names.includes("界面新建身份") &&
+      identityGroup.dialogClosed === true,
+    identityGroup,
+  );
+
   // --- 3. Two profiles sign in, then the invitation appears ----------------
   const created = await inApp(
     client,
@@ -400,7 +493,7 @@ try {
   const alt = created?.find((item) => item.name === "对照档案");
   check(
     "two user profiles exist alongside the built-ins",
-    Boolean(work?.id) && Boolean(alt?.id) && created?.length === 4,
+    Boolean(work?.id) && Boolean(alt?.id) && created?.length === 5,
     created?.map((item) => item.name),
   );
 
@@ -470,7 +563,11 @@ try {
   );
   check(
     "settings shows the merge invitation naming both profiles",
-    invite?.invite === true && invite?.names === "工作档案、对照档案",
+    // The identity created in step 2b is a user row too, so the invitation has to
+    // name all three. Asserting the exact joined string would break on every
+    // rename; what matters is that the rows it will merge are the ones named.
+    invite?.invite === true &&
+      ["工作档案", "对照档案", "界面新建身份"].every((name) => invite?.names?.includes(name)),
     invite,
   );
   check(

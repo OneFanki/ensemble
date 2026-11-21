@@ -104,12 +104,12 @@ try {
   })()`);
   await wait(2200);
 
-  // --- 1. The address row, the column and the stage stack in three bands ------
+  // --- 1. The top row, the address row and the stage stack in three bands ----
   //
-  // The address row spans the window; under it the account column runs from its
-  // bottom edge to the window's own bottom, and the right column holds the page
-  // strip over the stage. These reads assert that stacking, which is what every
-  // page node's rectangle is computed from.
+  // The top row spans the window: the account bar at its left end and the page
+  // strip filling the rest. The address row spans the window under it, and the
+  // stage fills everything below. These reads assert that stacking, which is what
+  // every page node's rectangle is computed from.
   const layout = await client.evaluate(`(() => {
     const controls = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue('--window-controls-width') || '0',
@@ -127,6 +127,7 @@ try {
         bottom: Math.round(r.bottom),
       };
     };
+    const list = document.querySelector('[data-rail-list]');
     return {
       controlsWidth: controls,
       innerWidth: window.innerWidth,
@@ -134,11 +135,30 @@ try {
       browser: Boolean(document.querySelector('.browser')),
       sidebar: box('.sidebar'),
       dock: box('.dock'),
+      topRow: box('.top-row'),
       toolbar: box('.toolbar'),
       rail: box('[data-account-rail]'),
+      railList: box('[data-rail-list]'),
       tabstrip: box('.tabstrip'),
       pane: box('.pane'),
       stage: box('.stage'),
+      // A chip row that grows past half the window has to scroll, and the chips
+      // themselves must be sized by their contents rather than by a fixed token.
+      railScrolls: list ? list.scrollWidth > list.clientWidth + 1 : null,
+      chipWidths: [...document.querySelectorAll('[data-instance-chip]')].map((el) =>
+        Math.round(el.getBoundingClientRect().width),
+      ),
+      tabWidths: [...document.querySelectorAll('.tabstrip .tab')].map((el) =>
+        Math.round(el.getBoundingClientRect().width),
+      ),
+      tabRowScrolls: (() => {
+        const tabs = document.querySelector('.tabstrip .tabs');
+        return tabs ? tabs.scrollWidth > tabs.clientWidth + 1 : null;
+      })(),
+      hasColumnClose: Boolean(document.querySelector('[data-close-instance]')),
+      hasRailToggle: Boolean(document.querySelector('[data-rail-toggle]')),
+      hasNewSession: Boolean(document.querySelector('[data-rail-new-session]')),
+      hasSplitButton: Boolean(document.querySelector('.toolbar .split')),
     };
   })()`);
   check("the window reports how wide its caption buttons are", layout?.controlsWidth > 0, layout);
@@ -147,58 +167,73 @@ try {
     layout?.browser === true && layout?.sidebar === null && layout?.dock === null,
     layout,
   );
-  // The column starts exactly where the address row ends and reaches the bottom
-  // edge: a column that started a row lower would leave a strip of frame beside
-  // the address row, and one that stopped short would leave the stage without a
-  // left neighbour it is anchored to.
-  // The tab strip is the window's first row, the address row is beneath it, and
-  // the column begins where the address row ends. A strip that sat under the
-  // address row would read as a bookmark bar, which is exactly the confusion
-  // this order fixes.
+  // The account bar and the tab strip share the window's first row: the bar at
+  // the left edge, the strip starting where it ends.
   check(
-    "the page strip is the window's first row",
-    layout?.tabstrip ? layout.tabstrip.x === 0 && layout.tabstrip.y === 0 && layout.tabstrip.h > 0 : false,
+    "the account bar starts the window's first row",
+    layout?.topRow && layout?.rail
+      ? layout.topRow.x === 0 && layout.topRow.y === 0 && layout.rail.x === 0 && layout.rail.h > 0
+      : false,
     layout,
   );
   check(
-    "the address row sits under the strip and spans the window",
-    layout?.toolbar && layout?.tabstrip
-      ? layout.toolbar.y === layout.tabstrip.bottom &&
+    "the page strip continues the same row, to its right",
+    layout?.rail && layout?.tabstrip
+      ? layout.tabstrip.x === layout.rail.right &&
+        layout.tabstrip.y === layout.rail.y &&
+        layout.tabstrip.h === layout.rail.h
+      : false,
+    layout,
+  );
+  check(
+    "the address row sits under the top row and spans the window",
+    layout?.toolbar && layout?.topRow
+      ? layout.toolbar.y === layout.topRow.bottom &&
         layout.toolbar.x === 0 &&
         layout.toolbar.w === layout.innerWidth
       : false,
     layout,
   );
   check(
-    "the account column starts under the address row and reaches the bottom",
-    layout?.rail && layout?.toolbar
-      ? layout.rail.x === 0 &&
-        layout.rail.y === layout.toolbar.bottom &&
-        layout.rail.h > 0 &&
-        layout.rail.bottom === layout.innerHeight
-      : false,
-    layout,
-  );
-  // The page area is the right column: it begins where the account column ends
-  // and where the address row ends, and it reaches both far edges. The strip is
-  // no longer the top of this column — it spans the whole window above the
-  // address row — so the column's first row is the address row's bottom.
-  check(
-    "the page area starts where the column and the address row end",
-    layout?.rail && layout?.stage && layout?.toolbar
+    "the stage starts under the address row and reaches both far edges",
+    layout?.stage && layout?.toolbar
       ? layout.stage.y === layout.toolbar.bottom &&
-        layout.stage.x === layout.rail.right &&
-        layout.stage.h > 0
-      : false,
-    layout,
-  );
-  check(
-    "the stage fills the rest of the right column",
-    layout?.stage && layout?.rail
-      ? layout.stage.x === layout.rail.right &&
+        layout.stage.x === 0 &&
         layout.stage.right === layout.innerWidth &&
         layout.stage.bottom === layout.innerHeight
       : false,
+    layout,
+  );
+  check(
+    "the sidebar switch and the column's close boxes are gone",
+    layout?.hasRailToggle === false && layout?.hasColumnClose === false && layout?.hasSplitButton === false,
+    layout,
+  );
+  check(
+    "the account bar offers a new-session entry",
+    layout?.hasNewSession === true,
+    layout,
+  );
+  // The bar sizes itself from its chips, capped at half the window. A bar that
+  // ignored its contents would leave a hole in the top row; one without a cap
+  // would push the strip off the window on a wide workspace.
+  check(
+    "the account bar is sized by its contents and capped at half the window",
+    layout?.rail && layout?.railList
+      ? layout.rail.w <= layout.innerWidth / 2 + 1 &&
+        (layout.chipWidths.length === 0 ||
+          layout.railList.w >= Math.min(150, layout.chipWidths.reduce((a, b) => a + b, 0)))
+      : false,
+    layout,
+  );
+  check(
+    "the chip row scrolls sideways once it runs out of room",
+    typeof layout?.railScrolls === "boolean",
+    layout,
+  );
+  check(
+    "the tab row scrolls sideways rather than shrinking every title",
+    typeof layout?.tabRowScrolls === "boolean",
     layout,
   );
   check(
@@ -439,9 +474,11 @@ try {
 
   // --- 5. The on-stage item reads apart, in both themes ----------------------
   //
-  // What the account column puts side by side is the on-stage item against the
-  // idle ones, in dark and light both. A bare string difference would accept
-  // "both null", so the assertion also refuses transparent fills.
+  // What the account bar puts side by side is the on-stage chip against the idle
+  // ones, in dark and light both. A bare string difference would accept "both
+  // null", so the assertion also refuses transparent fills. The bar itself carries
+  // no fill of its own any more — it shares the top row's surface, so the row is
+  // what has to be painted.
   const themeFills = [];
   for (const theme of ["dark", "light"]) {
     // Set the renderer's own switch: the CSS under test is keyed on
@@ -458,14 +495,15 @@ try {
         return el ? getComputedStyle(el).backgroundColor : null;
       };
       return {
-        rail: fill('[data-account-rail]'),
+        topRow: fill('.top-row'),
+        bar: fill('[data-account-rail]'),
         onStage: fill('[data-instance-chip][data-on-stage="1"]'),
         idle: fill('[data-instance-chip][data-on-stage="0"]'),
         strip: fill('.tabstrip'),
       };
     })()`);
     const transparent = (c) => c === null || c === "rgba(0, 0, 0, 0)" || c === "transparent";
-    check(`${theme}: the account column renders with a surface of its own`, !transparent(probe?.rail), probe);
+    check(`${theme}: the top row renders with a surface of its own`, !transparent(probe?.topRow), probe);
     check(
       `${theme}: the on-stage chip reads apart from the idle one`,
       !transparent(probe?.onStage) && probe?.onStage !== probe?.idle,
@@ -475,8 +513,8 @@ try {
   }
   check(
     "the theme switch reaches the header rows",
-    themeFills[0]?.rail !== themeFills[1]?.rail || themeFills[0]?.strip !== themeFills[1]?.strip,
-    themeFills.map((t) => ({ theme: t.theme, rail: t.rail, strip: t.strip })),
+    themeFills[0]?.topRow !== themeFills[1]?.topRow || themeFills[0]?.strip !== themeFills[1]?.strip,
+    themeFills.map((t) => ({ theme: t.theme, topRow: t.topRow, strip: t.strip })),
   );
 
   // --- 6. Dragging a page tab shields the stage -----------------------------

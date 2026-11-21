@@ -6,6 +6,13 @@ import { describe, expect, it } from "vitest";
  * Every reorder crosses four layers, and forgetting one is silent: the list
  * still renders and the drag still highlights, only the drop does nothing.
  * These assertions name each layer so a missing wire fails here, not in the UI.
+ *
+ * Sites are no longer reorderable from the interface: they list in name order,
+ * which needs no stored sequence. The channel and the store method stay — the
+ * ordering capability is still a real one, and removing it would mean a data
+ * migration for a list nobody reorders by hand any more. What changed is that
+ * the account page must *not* grow a drag handle again without this file
+ * changing with it.
  */
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
@@ -46,27 +53,31 @@ describe("reorder wiring contract", () => {
     }
   });
 
-  it("wires the pages to the store instead of reordering locally", () => {
-    // Two reorderable lists are left: sites (the account page's edit face) and
-    // bookmark folders. Both reach the store rather than splicing their own copy.
+  it("wires bookmark folders to the store instead of reordering locally", () => {
+    // Bookmarks are the one list left with a drag handle, and it reaches the
+    // store rather than splicing its own copy.
     expect(read("src/renderer/src/components/BookmarksPage.vue")).toMatch(
       /workspace\.moveBookmarkFolder\(/,
     );
-    expect(read("src/renderer/src/components/IdentitiesPage.vue")).toMatch(/store\.moveSite\(/);
   });
 
-  it("keeps one reorder implementation per list, and the account page owns sites", () => {
-    // Sites: the account page's edit face is the only place a site row exists — a
-    // site is the heading of its accounts — so the grip there is the one and only
-    // site reorder. It reaches the store rather than splicing locally, which the
-    // assertion above locks.
-    //
-    // Site groups used to be a second list here. They are gone: a site's own name
-    // is the grouping, so there was nothing left to reorder above it.
+  it("lists sites by name, with no drag handle left behind", () => {
+    /*
+     * A site costs one row in the left column and users look for it by name, so
+     * name order is the order they expect. Dragging meant a stored sequence
+     * nobody could predict — two sites created minutes apart sat in creation
+     * order — and it also required a grip, drop targets and a "where did it go"
+     * after every drag.
+     *
+     * The guard is two-sided on purpose: the list must sort, and the old drag
+     * affordance must not creep back alongside it. A handle next to a sorted list
+     * is a control that does nothing.
+     */
     const accountPage = read("src/renderer/src/components/IdentitiesPage.vue");
-    expect(accountPage).toMatch(/store\.moveSite\(/);
-    // The grip lives only on the edit face: ordering is maintenance, and a tile
-    // that both launches and starts a drag does the wrong thing half the time.
-    expect(accountPage).toMatch(/class="group-grip"/);
+    expect(accountPage).toMatch(/\.sort\(\(a, b\) =>/);
+    expect(accountPage).toMatch(/localeCompare/);
+    expect(accountPage).not.toMatch(/class="group-grip"/);
+    expect(accountPage).not.toMatch(/onSiteDragStart/);
+    expect(accountPage).not.toMatch(/draggable="true"/);
   });
 });

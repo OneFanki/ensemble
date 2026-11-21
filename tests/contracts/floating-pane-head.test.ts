@@ -101,11 +101,49 @@ describe("the pane's surface and its exit", () => {
     expect(PANE).toMatch(/background:\s*color-mix\(in srgb, var\(--content\) 90%, transparent\)/);
   });
 
+  it("keeps the head on the pane's own surface", () => {
+    /*
+     * The head used to draw its own band — a raised fill and a hairline under
+     * it — which on a glass surface reads as a second window stacked on the
+     * first: two surfaces and two edges where the blur is meant to make one
+     * object. The title and the controls belong to the same sheet as the
+     * content.
+     */
+    const head = PANE.slice(PANE.indexOf(".pane-head {"), PANE.indexOf(".pane-title {"));
+    expect(head, "the head must not paint its own fill").not.toMatch(/background:\s*var\(--frame\)/);
+    expect(head, "the head must not draw a divider").not.toMatch(/border-bottom:\s*1px/);
+  });
+
   it("animates both directions, not just the entrance", () => {
     // A `Transition` with a leave rule is what makes close animate; an
     // `animation:` on the pane alone can never play backwards.
     expect(PANE).toMatch(/<Transition name="floating-pane"/);
     expect(PANE).toMatch(/\.floating-pane-leave-active\s*\{/);
     expect(PANE).toMatch(/\.floating-pane-leave-to\s*\{/);
+  });
+
+  it("stays mounted so the leave phase can run", () => {
+    /*
+     * A `Transition` can only animate an element that is still in the tree. If
+     * the parent closes with `v-if`, the whole component — Transition included —
+     * is gone in the same tick the close is requested, so the pane vanishes in
+     * one frame no matter what the CSS says. The pane therefore takes an `open`
+     * prop, and every caller must drive it that way.
+     *
+     * This was the actual bug behind "关闭的时候似乎还是没动画": the shell had
+     * `v-if` on the pane itself, so the leave rules existed and never played.
+     */
+    for (const file of ["ManageLayer.vue"]) {
+      const source = readFileSync(
+        join(process.cwd(), "src", "renderer", "src", "components", file),
+        "utf8",
+      );
+      expect(source, `${file} must not unmount the pane on close`).not.toMatch(
+        /<FloatingPane[^>]*\sv-if=/,
+      );
+      expect(source, `${file} must close through the open prop`).toMatch(
+        /<FloatingPane[^>]*:open=/,
+      );
+    }
   });
 });

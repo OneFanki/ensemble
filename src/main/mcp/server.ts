@@ -2171,10 +2171,10 @@ export class McpServer {
         const identity = this.options.service.findIdentity(facts.identityId);
         return identity ? `账号 · ${identity.name}` : "账号";
       }
-      if (facts.clean) return "干净会话";
+      if (facts.clean) return "干净身份";
       const snapshot = this.options.service.snapshot();
       const profile = (snapshot.settings.profiles ?? []).find((item) => item.id === facts.profileId);
-      return profile ? `会话 · ${profile.name}` : "默认档案";
+      return profile ? `身份 · ${profile.name}` : "默认身份";
     } catch {
       return "";
     }
@@ -2777,7 +2777,7 @@ export class McpServer {
       {
         name: "list_bookmarks",
         description:
-          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认档案里已有的登录。图标内容不回传，只有 hasFavicon 标记是否存在。",
+          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认身份里已有的登录。图标内容不回传，只有 hasFavicon 标记是否存在。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -3358,7 +3358,7 @@ export class McpServer {
       {
         name: "launch_clean_session",
         description:
-          "用外部浏览器打开一个干净会话窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
+          "用外部浏览器打开一个干净身份窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
         kind: "run",
         inputSchema: object({
           siteId: string("站点 id；省略则打开空白页"),
@@ -3508,7 +3508,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属账号、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净会话；其余页面属于默认档案或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
+          "列出内置浏览器当前打开的标签页（id、所属账号、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净身份；其余页面属于默认身份或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
         kind: "read",
         inputSchema: object({}),
         run: () => projectState(surface().state()),
@@ -3555,11 +3555,11 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传则是一次性干净会话，退出即消失，也不进用户的默认档案。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传则是一次性干净身份，退出即消失，也不进用户的默认身份。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
           url: string("要打开的地址；省略则打开空白页"),
-          identityId: string("账号 id；省略则使用一次性的干净会话"),
+          identityId: string("账号 id；省略则使用一次性的干净身份"),
           siteId: string("站点 id；仅用于界面分组显示"),
           label: string("标签页显示名；通常用账号名"),
         }),

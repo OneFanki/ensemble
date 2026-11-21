@@ -17,7 +17,7 @@ const input = (tool: string, origin = "https://a.test") => ({
   actionKey: "app.aiApprovalActionClickPage",
   origin,
   siteName: "A 站",
-  context: "默认档案",
+  context: "默认身份",
   tabTitle: "A 站首页",
 });
 

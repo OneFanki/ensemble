@@ -15,17 +15,23 @@ import { DEFAULT_SEARCH_ENGINE_ID } from "./search";
  * needs to re-insert these into a settings file that was written before profiles
  * existed — or that lost one to a hand edit. Deleting "default" would leave no
  * landing place for a bookmark, so it is not offered.
+ *
+ * They are called identities in the UI, and this name is what the stored row
+ * carries. A workspace that already holds an older string keeps it: renaming a
+ * user's own data to follow a vocabulary change is worse than the two words
+ * coexisting. The stored id is what identifies the row, and the built-in ids
+ * have their labels resolved from the message table whenever they are drawn.
  */
 export const BUILTIN_PROFILES: BrowserProfile[] = [
   {
     id: EMBEDDED_DEFAULT_PROFILE_ID,
-    name: "默认档案",
+    name: "默认身份",
     retention: "persist",
     builtin: true,
   },
   {
     id: EMBEDDED_CLEAN_PROFILE_ID,
-    name: "干净会话",
+    name: "干净身份",
     retention: "ephemeral",
     builtin: true,
   },

@@ -125,7 +125,7 @@ describe("mergeProfilesToDefault", () => {
     const service = await makeService();
     createProfile(service, "工作档案");
     service.mergeProfilesToDefault();
-    expect(() => service.mergeProfilesToDefault()).toThrow("没有可合并的档案");
+    expect(() => service.mergeProfilesToDefault()).toThrow("没有可合并的身份");
   });
 
   it("keeps a user-chosen default that the merge did not remove", async () => {

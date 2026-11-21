@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { Identity, RoleColor, Site } from "@shared/types";
+import type { BrowserProfile, Identity, RoleColor, Site } from "@shared/types";
 import {
   Check,
   CheckSquare,
   Download,
   Globe,
-  GripVertical,
   HeartPulse,
+  Layers,
   Link2,
   MoreHorizontal,
   Pencil,
@@ -14,7 +14,10 @@ import {
   Plus,
   RotateCcw,
   Search,
+  ShieldOff,
   Square,
+  Star,
+  Trash2,
   Users,
   X,
 } from "lucide-vue-next";
@@ -22,10 +25,9 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { onClickOutside } from "@vueuse/core";
 import { useAnchoredPanel } from "../composables/anchoredPanel";
-import { useGroupCollapse } from "../composables/useGroupCollapse";
+import { useConfirmStore } from "../stores/confirm";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
-import GroupCollapseAll from "./GroupCollapseAll.vue";
 import Modal from "./Modal.vue";
 import SelectField from "./SelectField.vue";
 import AppButton from "./ui/AppButton.vue";
@@ -34,7 +36,6 @@ import FormField from "./ui/FormField.vue";
 import IconButton from "./ui/IconButton.vue";
 import LaunchSplitButton from "./ui/LaunchSplitButton.vue";
 import TextField from "./ui/TextField.vue";
-import GroupHeader from "./ui/GroupHeader.vue";
 
 const emit = defineEmits<{
   newSite: [];
@@ -42,13 +43,142 @@ const emit = defineEmits<{
   newIdentity: [siteId?: string];
   editIdentity: [id: string];
   sessionHealth: [];
+  /** A page was opened: the pane's content is no longer what the user wants. */
+  launched: [];
 }>();
 
 const store = useWorkspaceStore();
 const embedded = useEmbeddedStore();
+const confirm = useConfirmStore();
 const { t } = useI18n();
-const filter = ref<"all" | "running" | "expired">("all");
 const query = ref("");
+
+/*
+ * Sessions: the jars pages can be opened in, above the accounts.
+ *
+ * A named profile is not a setting about the app, it is one of the places
+ * browsing happens — and this pane is where browsing starts. Managing them
+ * (rename, delete, make default) is a settings job, but *launching* one belongs
+ * here, next to the accounts, because "open the daily session" and "open this
+ * account" are the same sentence with a different subject.
+ *
+ * The clean session is listed last and is not renamed here: it is the one fixed
+ * throwaway, and a throwaway with a custom name invites people to keep it.
+ */
+const persistentProfiles = computed(() =>
+  (store.settings.profiles ?? []).filter((profile) => profile.retention !== "ephemeral"),
+);
+const cleanProfile = computed(() =>
+  (store.settings.profiles ?? []).find((profile) => profile.retention === "ephemeral"),
+);
+const defaultProfileId = computed(() => store.settings.defaultProfileId);
+
+/**
+ * A launch happened, so the pane has done its job.
+ *
+ * Opening the pane is a request for one of two things — pick an account, or pick
+ * an identity — and both end with a page on screen. Leaving the pane on top of it
+ * means every launch costs a second click to dismiss what the first click was
+ * for; the browser underneath is the answer.
+ */
+async function launchSession(profileId: string): Promise<void> {
+  await embedded.openProfileTab(profileId);
+  emit("launched");
+}
+
+/**
+ * Creating a global identity from the list it joins.
+ *
+ * A form, so it is a dialog: the name is the only field, and a dialog puts the
+ * focus in it and the verdict one click away. Created from this list rather than
+ * from a settings page, because "which jars do I have" and "one more" are the
+ * same question asked in the same place.
+ *
+ * The row is created and listed; it is not launched. Unlike the account bar's own
+ * "+" — where the chip only exists once a window is running, so creating one
+ * means opening it — an identity is a list entry that stays until deleted, and a
+ * stray blank page from a mis-click would be noise. The new row is right there to
+ * click.
+ */
+const identityCreateOpen = ref(false);
+const identityName = ref("");
+const identityError = ref("");
+/**
+ * Set while the dialog is renaming an existing row; `null` means it is creating
+ * one. Declared with the rest of the dialog state because `openCreateIdentity`
+ * has to clear it — a create opened after a rename would otherwise carry the old
+ * row along and overwrite it.
+ */
+const renameTarget = ref<BrowserProfile | null>(null);
+
+function openCreateIdentity(): void {
+  identityName.value = "";
+  identityError.value = "";
+  renameTarget.value = null;
+  identityCreateOpen.value = true;
+}
+
+function closeIdentityDialog(): void {
+  identityCreateOpen.value = false;
+  renameTarget.value = null;
+}
+
+async function submitIdentity(): Promise<void> {
+  const name = identityName.value.trim();
+  if (!name) {
+    identityError.value = t("app.sessionNeedsName");
+    return;
+  }
+  const saved = await store.createProfile(name);
+  // `run` in the store answers `undefined` after toasting the rejection, so the
+  // dialog only closes on a write that landed.
+  if (saved === undefined) return;
+  identityCreateOpen.value = false;
+  identityError.value = "";
+}
+
+/**
+ * Renaming a global identity.
+ *
+ * Same dialog as creating one, with the row's current name filled in — an
+ * identity has a name and nothing else, so the two are one form. Built-ins are
+ * not offered it: their ids are what old partitions are looked up by, and a
+ * renamed built-in would only make the label disagree with the data.
+ */
+function openRenameIdentity(profile: BrowserProfile): void {
+  identityName.value = profile.name;
+  identityError.value = "";
+  renameTarget.value = profile;
+  identityCreateOpen.value = true;
+}
+
+async function submitIdentityRename(): Promise<void> {
+  const target = renameTarget.value;
+  if (!target) return;
+  const name = identityName.value.trim();
+  if (!name) {
+    identityError.value = t("app.sessionNeedsName");
+    return;
+  }
+  const saved = await store.renameProfile(target.id, name);
+  if (saved === undefined) return;
+  identityCreateOpen.value = false;
+  renameTarget.value = null;
+  identityError.value = "";
+}
+
+/** Deleting one: the confirm names it, because the row is not in view any more. */
+async function removeIdentity(profile: BrowserProfile): Promise<void> {
+  const accepted = await confirm.ask({
+    title: t("app.sessionDeleteTitle"),
+    body: t("app.sessionDeleteBody", { name: profile.name }),
+    confirmLabel: t("app.delete"),
+    tone: "danger",
+  });
+  if (!accepted) return;
+  await store.deleteProfile(profile.id);
+}
+
 /**
  * Which of the page's two faces is showing.
  *
@@ -78,6 +208,87 @@ const selecting = ref(false);
 const selected = ref<Set<string>>(new Set());
 
 /**
+ * Bulk launch on the launch face, kept apart from the edit face's selection.
+ *
+ * The two mean different things: on the edit face a selection feeds re-linking,
+ * exporting and deletion, while on the launch face there is exactly one verb —
+ * open these. Sharing one set would make picking tiles for a launch clear a
+ * batch someone had lined up for export, and the faces are one switch apart.
+ *
+ * The bar replaces the search row in place rather than adding a row above the
+ * tiles: the whole point of this face is that a click opens an account, and
+ * sliding the grid down to announce a mode defeats it. Same height, same slot,
+ * and nothing below moves.
+ */
+const picking = ref(false);
+const picked = ref<Set<string>>(new Set());
+
+const pickedIdentities = computed(() =>
+  store.identities.filter((identity) => picked.value.has(identity.id)),
+);
+/** Only the ones not already running — the same rule the edit face's bar uses. */
+const pickedLaunchable = computed(() =>
+  pickedIdentities.value.filter((identity) => !store.instanceFor(identity.id)),
+);
+
+function startPicking(): void {
+  picking.value = true;
+}
+
+function endPicking(): void {
+  picking.value = false;
+  picked.value = new Set();
+}
+
+function togglePicked(identity: Identity): void {
+  const next = new Set(picked.value);
+  if (next.has(identity.id)) next.delete(identity.id);
+  else next.add(identity.id);
+  picked.value = next;
+}
+
+const allPicked = computed(
+  () =>
+    activeIdentities.value.length > 0 &&
+    activeIdentities.value.every((identity) => picked.value.has(identity.id)),
+);
+
+function togglePickAll(): void {
+  if (allPicked.value) {
+    picked.value = new Set();
+    return;
+  }
+  picked.value = new Set(activeIdentities.value.map((identity) => identity.id));
+}
+
+/** One click on a tile picks it while picking, and opens it otherwise. */
+function onTileClick(identity: Identity): void {
+  if (picking.value) {
+    togglePicked(identity);
+    return;
+  }
+  void launch(identity);
+}
+
+async function launchPicked(): Promise<void> {
+  const ids = pickedLaunchable.value.map((identity) => identity.id);
+  if (ids.length === 0) return;
+  // Same container as the edit face's batch: a launch of several accounts is
+  // about a layout, not about filling the tab strip.
+  await embedded.openIdentitiesInNewView(ids);
+  endPicking();
+  emit("launched");
+}
+
+async function launchPickedExternal(engineId: string): Promise<void> {
+  const ids = pickedLaunchable.value.map((identity) => identity.id);
+  if (ids.length === 0) return;
+  await store.launchIdentities(ids, engineId);
+  endPicking();
+  emit("launched");
+}
+
+/**
  * The selection bar's overflow menu.
  *
  * Re-linking and exporting are occasional actions on a selection; keeping them
@@ -104,7 +315,85 @@ useAnchoredPanel({
   minWidth: 168,
 });
 
-const groupCollapse = useGroupCollapse("ensemble.groups.identities");
+/*
+ * Which site the right-hand column is showing.
+ *
+ * The pane is a master-detail panel: the left column is the list of sites, the
+ * right column is the accounts of the one selected. That is the whole reason the
+ * pane can be narrow — a site's accounts occupy the right half instead of a
+ * second level of an expanding list, so adding a site never makes the list
+ * longer, it just adds one row.
+ *
+ * The selection is remembered for the session (`sessionStorage`), because
+ * closing the pane and reopening it to the same site is what actually happens:
+ * you come back to the same site all day. It is not persisted across restarts —
+ * a site that no longer exists would leave the pane on an empty right side.
+ */
+const STORAGE_KEY = "ensemble.identities.selectedSite";
+const selectedSiteId = ref<string>(readSelectedSite());
+
+function readSelectedSite(): string {
+  try {
+    return window.sessionStorage.getItem(STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The site in the right column: the remembered one while it still exists,
+ * otherwise the first site that has any accounts.
+ *
+ * Falling back to "the first site" rather than "nothing" matters on first open:
+ * a pane whose right half is empty until you click reads as broken, and the
+ * first site is the one the user would have clicked anyway.
+ */
+const activeSiteId = computed<string>(() => {
+  const groupsNow = groups.value;
+  if (groupsNow.length === 0) return "";
+  const remembered = groupsNow.find((group) => group.siteId === selectedSiteId.value);
+  if (remembered) return remembered.siteId;
+  const withPeople = groupsNow.find((group) => group.people.length > 0);
+  return (withPeople ?? groupsNow[0] ?? null)?.siteId ?? "";
+});
+
+const activeGroup = computed(
+  () => groups.value.find((group) => group.siteId === activeSiteId.value) ?? null,
+);
+
+/**
+ * The accounts the right column is actually showing.
+ *
+ * Selection and the pick bar both mean "these accounts", and with one site on
+ * screen that is the open site's accounts — not every account that matched the
+ * search. A batch that quietly included a folded site's accounts would launch
+ * pages the user could not see while picking them.
+ */
+const activeIdentities = computed(() => activeGroup.value?.people ?? []);
+
+function selectSite(siteId: string): void {
+  selectedSiteId.value = siteId;
+  try {
+    window.sessionStorage.setItem(STORAGE_KEY, siteId);
+  } catch {
+    // A blocked storage must not break navigation; the click still works.
+  }
+}
+
+/*
+ * Selecting a site clears the batch.
+ *
+ * The batch is "these accounts, from this site"; carrying ticks across a site
+ * change would leave the bar counting accounts the right column no longer shows,
+ * and launching would open pages the user can no longer see checked.
+ */
+function selectSiteAndReset(siteId: string): void {
+  if (siteId !== activeSiteId.value) {
+    endSelecting();
+    endPicking();
+  }
+  selectSite(siteId);
+}
 
 /**
  * Accounts "全选可见" reaches.
@@ -114,16 +403,14 @@ const groupCollapse = useGroupCollapse("ensemble.groups.identities");
  * what it picked. Accounts picked while their group was open stay picked — the
  * selection set is independent of what is drawn.
  */
-const selectableIdentities = computed(() =>
-  visibleIdentities.value.filter(
-    (identity) =>
-      !groupCollapse.isCollapsed(
-        store.sites.some((site) => site.id === identity.siteId)
-          ? (identity.siteId as string)
-          : "__orphan__",
-      ),
-  ),
-);
+/**
+ * Accounts "全选可见" reaches.
+ *
+ * Only the accounts drawn in the right column: the left column shows sites, so
+ * "everything visible" means the open site. Selecting a different site clears
+ * the set (see `selectSiteAndReset`), so the two can never disagree.
+ */
+const selectableIdentities = computed(() => activeIdentities.value);
 
 const allSelected = computed(
   () =>
@@ -207,6 +494,7 @@ async function launchSelected() {
   // container instead of scattering pages into the tab strip.
   await embedded.openIdentitiesInNewView(ids);
   endSelecting();
+  emit("launched");
 }
 
 /**
@@ -221,6 +509,7 @@ async function launchSelectedExternal(engineId: string) {
   if (ids.length === 0) return;
   await store.launchIdentities(ids, engineId);
   endSelecting();
+  emit("launched");
 }
 
 /**
@@ -357,13 +646,8 @@ const matchesTerm = (identity: Identity, term: string): boolean => {
 
 const visibleIdentities = computed(() => {
   const term = query.value.trim().toLowerCase();
-  return store.identities.filter((identity) => {
-    const running = Boolean(store.instanceFor(identity.id));
-    if (filter.value === "running" && !running) return false;
-    if (filter.value === "expired" && identity.status !== "expired") return false;
-    if (!term) return true;
-    return matchesTerm(identity, term);
-  });
+  if (!term) return store.identities;
+  return store.identities.filter((identity) => matchesTerm(identity, term));
 });
 
 /**
@@ -387,9 +671,10 @@ const groups = computed(() => {
   for (const site of store.sites) {
     const people = visibleIdentities.value.filter((identity) => identity.siteId === site.id);
     const total = store.identities.filter((identity) => identity.siteId === site.id).length;
-    if (people.length === 0 && (termActive.value || filter.value !== "all")) {
-      continue;
-    }
+    // While searching, a site with no matching account is not an answer to
+    // "where is this" — unless its name or address matched, which
+    // `listedGroups` decides from the outside.
+    if (people.length === 0 && termActive.value) continue;
     result.push({
       siteId: site.id,
       name: site.name,
@@ -411,20 +696,42 @@ const groups = computed(() => {
       total: orphans.length,
     });
   }
-  return result;
+  /*
+   * Name order, with the "no site" bucket last.
+   *
+   * Sorting here rather than in the stored array keeps the write path untouched
+   * and means a rename re-sorts the list immediately. The orphan bucket is not a
+   * site, so it goes after them rather than taking its turn alphabetically.
+   */
+  return result.sort((a, b) => {
+    if (a.siteId === "__orphan__") return 1;
+    if (b.siteId === "__orphan__") return -1;
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  });
 });
 
 const termActive = computed(() => query.value.trim().length > 0);
 
-const groupKeys = computed(() => groups.value.map((group) => group.siteId));
-const allCollapsed = computed(() => groupCollapse.allCollapsed(groupKeys.value));
+/**
+ * The sites the left column lists.
+ *
+ * A site survives the search if either it matches by name or address, or one of
+ * its accounts does. Both halves matter and they are the same question from
+ * different ends: "which site is the ops console" is a site search, and "where
+ * is review" is an account search whose answer is a site. Splitting them into
+ * two fields would make the user choose a kind of search before typing.
+ */
+const listedGroups = computed(() => {
+  const term = query.value.trim().toLowerCase();
+  if (!term) return groups.value;
+  return groups.value.filter(
+    (group) =>
+      group.name.toLowerCase().includes(term) ||
+      group.url.toLowerCase().includes(term) ||
+      group.people.length > 0,
+  );
+});
 
-const runningCount = computed(
-  () => store.identities.filter((identity) => store.instanceFor(identity.id)).length,
-);
-const expiredCount = computed(
-  () => store.identities.filter((identity) => identity.status === "expired").length,
-);
 
 const statusLabel = (identity: Identity): string => {
   if (store.instanceFor(identity.id)) return t("app.statusRunning");
@@ -487,6 +794,7 @@ function onCardClick(identity: Identity): void {
  */
 async function launchHere(identity: Identity): Promise<void> {
   await embedded.openIdentity(identity.id);
+  emit("launched");
 }
 
 /**
@@ -501,9 +809,11 @@ async function launchExternal(identity: Identity, engineId: string): Promise<voi
   const instance = store.instanceFor(identity.id);
   if (instance) {
     await store.focusInstance(instance.id);
+    emit("launched");
     return;
   }
   await store.launchIdentity(identity.id, undefined, engineId);
+  emit("launched");
 }
 
 async function relogin(identity: Identity) {
@@ -545,62 +855,28 @@ function extraFacts(identity: Identity): string[] {
   return facts;
 }
 
-/* ------------------------------------------------------------------ */
-/* Reordering, edit face only                                          */
-/* ------------------------------------------------------------------ */
-
 /*
- * Sites reorder by dragging a grip on their group heading.
+ * Sites are listed in name order, not by a stored order.
  *
- * The grip rather than the whole heading: the heading is also a fold target and
- * carries two buttons, and a heading-wide drag swallows the first click of
- * "collapse" every time. Only the edit face draws the grip, because ordering is
- * maintenance — on the tile face a tile that both launches and starts a drag is
- * a tile that does the wrong thing half the time.
+ * They used to reorder by dragging a grip, which meant the list remembered a
+ * sequence nobody could reason about: two sites created minutes apart sat in
+ * creation order, and finding one meant scanning. Alphabetical order is the same
+ * list for everyone, survives a rename, and needs no handle, no drop target and
+ * no "where did it go" after a drag. Sorting happens in `groups`, so the stored
+ * array order is left alone and nothing migrates.
  *
- * Accounts deliberately do not reorder. Their order inside a site is the stored
- * array order and there is no `moveIdentity` behind it; a handle that did nothing
- * would be worse than no handle.
+ * Accounts keep their stored order: they are a handful per site and their order
+ * is whatever the user created, which is the useful order.
  */
-
-const draggingSiteId = ref<string | null>(null);
-/** The heading the pointer is over, which draws the insertion line. */
-const dropSiteId = ref<string | null>(null);
-
-function onSiteDragStart(siteId: string, event: DragEvent): void {
-  draggingSiteId.value = siteId;
-  event.dataTransfer?.setData("text/plain", siteId);
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-}
-
-function onSiteDragOver(siteId: string, event: DragEvent): void {
-  if (!draggingSiteId.value || draggingSiteId.value === siteId) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-  dropSiteId.value = siteId;
-}
-
-function onSiteDragLeave(siteId: string): void {
-  if (dropSiteId.value === siteId) dropSiteId.value = null;
-}
-
-async function onSiteDrop(siteId: string): Promise<void> {
-  const movingId = draggingSiteId.value;
-  onSiteDragEnd();
-  if (!movingId || movingId === siteId) return;
-  const toIndex = store.sites.findIndex((site) => site.id === siteId);
-  if (toIndex >= 0) await store.moveSite(movingId, toIndex);
-}
-
-function onSiteDragEnd(): void {
-  draggingSiteId.value = null;
-  dropSiteId.value = null;
-}
 
 /** Switching to the tile face ends any selection: the bar belongs to edit. */
 function setMode(next: "use" | "edit"): void {
   mode.value = next;
-  if (next === "use") endSelecting();
+  // Each face's selection belongs to that face. Leaving one behind means coming
+  // back to ticks the user did not make in this visit — and the edit face's ticks
+  // arm actions (re-link, export) that a stray set would fire on.
+  endSelecting();
+  endPicking();
 }
 
 /*
@@ -630,228 +906,6 @@ defineExpose({ mode, setMode });
     -->
     <div v-if="store.credentials?.warning" class="vault-banner">
       {{ store.credentials.warning }}
-    </div>
-
-    <!--
-      One row of filtering. The face has three kinds of control — a status
-      filter, a search field, and two switches that act on the whole list — and
-      they used to occupy two rows because the group strip was a separate band
-      underneath. Everything that filters now shares this row; everything that
-      acts on the list sits at its right end as icon buttons, so the row's height
-      is one control, not two.
-    -->
-    <div v-if="mode === 'edit'" class="filter-bar">
-      <div v-if="store.identities.length" class="tabs" role="tablist" :aria-label="$t('app.identities')">
-        <button
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ active: filter === 'all' }"
-          :aria-selected="filter === 'all'"
-          @click="filter = 'all'"
-        >
-          {{ $t("app.filterAll") }} <span class="num mono">{{ store.identities.length }}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ active: filter === 'running' }"
-          :aria-selected="filter === 'running'"
-          @click="filter = 'running'"
-        >
-          {{ $t("app.filterRunning") }} <span class="num mono">{{ runningCount }}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="tab"
-          :class="{ active: filter === 'expired' }"
-          :aria-selected="filter === 'expired'"
-          @click="filter = 'expired'"
-        >
-          {{ $t("app.filterExpired") }} <span class="num mono">{{ expiredCount }}</span>
-        </button>
-      </div>
-      <label v-if="store.identities.length" class="search">
-        <Search :size="12" />
-        <input v-model="query" type="search" :placeholder="$t('app.search')" />
-      </label>
-      <!-- Bulk selection and the health sweep are actions over the whole list, so
-           they are icons at the row's end: a text button for each pushed the
-           search field down to 130px in a 720px pane. -->
-      <div class="filter-actions">
-        <!--
-          The create door: one `+`, and the choice of what to create behind it.
-
-          Two buttons used to sit in the pane's title bar for this — a primary
-          "new account" and a globe for a site. They were two branches of one
-          action competing for one slot, and having them in the head meant the
-          face switch shifted sideways whenever the edit face appeared.
-        -->
-        <span ref="createRoot" class="create-root">
-          <button
-            type="button"
-            class="bar-icon"
-            :class="{ on: createOpen }"
-            :aria-label="$t('app.createEntry')"
-            :title="$t('app.createEntry')"
-            :aria-expanded="createOpen"
-            aria-haspopup="menu"
-            data-create-entry
-            @click="createOpen = !createOpen"
-          >
-            <Plus :size="14" />
-          </button>
-          <Teleport to="body">
-            <div
-              v-if="createOpen"
-              ref="createPanel"
-              class="create-panel"
-              :style="createPanelStyle"
-              role="menu"
-              data-floating-panel
-              data-create-panel
-            >
-              <button type="button" role="menuitem" class="row" data-new-account @click.stop="createAccount">
-                <Users :size="12" class="row-icon" />
-                <span>{{ $t("app.newIdentity") }}</span>
-              </button>
-              <button type="button" role="menuitem" class="row" data-new-site @click.stop="createSite">
-                <Globe :size="12" class="row-icon" />
-                <span>{{ $t("app.newSite") }}</span>
-              </button>
-            </div>
-          </Teleport>
-        </span>
-        <button
-          v-if="!selecting && store.identities.length"
-          type="button"
-          class="bar-icon"
-          :aria-label="$t('app.batchSelect')"
-          :title="$t('app.batchSelectHint')"
-          data-batch-select
-          @click="startSelecting"
-        >
-          <CheckSquare :size="13" />
-        </button>
-        <GroupCollapseAll
-          v-if="!selecting && groups.length > 1"
-          :all-collapsed="allCollapsed"
-          @toggle="groupCollapse.toggleAll(groupKeys)"
-        />
-        <button
-          v-if="store.identities.length"
-          type="button"
-          class="bar-icon"
-          :aria-label="$t('app.sessionHealth')"
-          :title="$t('app.sessionHealth')"
-          data-session-health
-          @click="emit('sessionHealth')"
-        >
-          <HeartPulse :size="13" />
-        </button>
-      </div>
-    </div>
-
-    <!--
-      Selection bar. It replaces the toolbar's action row rather than floating
-      over the cards, so the count and the launch button stay in one place while
-      the selection changes.
-    -->
-    <!--
-      Selection bar: one line, one primary action, everything else behind `⋯`.
-
-      It used to carry five controls and a sentence — "全选 / 已选 3 个 / 按设置里
-      的默认布局平铺；已在运行的账号会被跳过，窗口不会重复打开。/ 关联到站点 /
-      导出账号 / 取消 / 启动所选（3）" — which read as a paragraph of buttons. The
-      count and the launch are what a selection is for; re-linking a whole batch
-      and exporting it are occasional, so they belong one level down. The sentence
-      is gone entirely: it explained a mechanism (skip running accounts) that the
-      result already shows.
-    -->
-    <div v-if="selecting" class="select-bar">
-      <span class="sel-count mono">
-        {{ $t("app.batchSelected", { count: selected.size }) }}
-      </span>
-      <AppButton class="sel-all" @click="toggleAll">
-        {{ allSelected ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
-      </AppButton>
-      <span class="sel-spacer"></span>
-      <LaunchSplitButton
-        variant="primary"
-        :label="$t('app.batchLaunch', { count: notRunningSelected.length })"
-        :disabled="!notRunningSelected.length || store.busy === 'launch'"
-        data-hook="batch"
-        @launch="launchSelected"
-        @launch-external="launchSelectedExternal"
-      />
-      <span ref="selectMenuRoot" class="sel-more">
-        <button
-          type="button"
-          class="bar-icon"
-          :class="{ on: selectMenuOpen }"
-          :aria-label="$t('app.batchMore')"
-          :title="$t('app.batchMore')"
-          :aria-expanded="selectMenuOpen"
-          aria-haspopup="menu"
-          data-batch-more
-          @click="selectMenuOpen = !selectMenuOpen"
-        >
-          <MoreHorizontal :size="14" />
-        </button>
-      </span>
-      <button
-        type="button"
-        class="bar-icon"
-        :aria-label="$t('app.cancel')"
-        :title="$t('app.cancel')"
-        data-batch-cancel
-        @click="endSelecting"
-      >
-        <X :size="14" />
-      </button>
-
-      <Teleport to="body">
-        <div
-          v-if="selectMenuOpen"
-          ref="selectMenu"
-          class="select-menu"
-          :style="selectMenuStyle"
-          role="menu"
-          data-floating-panel
-          data-batch-menu
-        >
-          <button
-            type="button"
-            role="menuitem"
-            class="row"
-            :disabled="selected.size === 0"
-            data-batch-link-site
-            @click.stop="
-              selectMenuOpen = false;
-              openLinkSite();
-            "
-          >
-            <Link2 :size="12" class="row-icon" />
-            <span>{{ $t("app.batchLinkSite") }}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="row"
-            :disabled="selected.size === 0"
-            data-batch-export
-            @click.stop="
-              selectMenuOpen = false;
-              openExport();
-            "
-          >
-            <Download :size="12" class="row-icon" />
-            <span>{{ $t("app.accountsExport") }}</span>
-          </button>
-        </div>
-      </Teleport>
     </div>
 
     <!-- Choosing the target site is a dialog, not a dropdown in the bar: the
@@ -914,330 +968,797 @@ defineExpose({ mode, setMode });
       </template>
     </Modal>
 
-    <!--
-      The tile face.
-      
-      One tile per account, grouped by site, and a click opens it. No pills, no
-      column headers, no per-row action cluster: three pieces of information
-      (name, who, whether it is running) and a target large enough to hit. This is
-      the shape that stops the pane reading like a web admin console — a table is
-      for reading rows field by field, which is the edit face's job.
-      
-      The site heading stays because a site is the only grouping an account has,
-      but it carries no controls here: the count is enough, and every button that
-      used to sit on it lives one switch away.
-    -->
-    <div v-if="mode === 'use'" class="tile-face" data-tile-face>
-      <div v-if="store.identities.length" class="tile-search">
-        <label class="search">
-          <Search :size="12" />
-          <input v-model="query" type="search" :placeholder="$t('app.search')" />
-        </label>
-      </div>
+    <!-- The global identities' "one more": a name, and it joins the list. -->
+    <Modal
+      :open="identityCreateOpen"
+      :title="renameTarget ? $t('app.sessionRename') : $t('app.identityNew')"
+      width="380px"
+      @close="closeIdentityDialog"
+    >
+      <form @submit.prevent="renameTarget ? submitIdentityRename() : submitIdentity()">
+        <FormField :label="$t('app.sessionNameLabel')">
+          <TextField
+            v-model="identityName"
+            type="text"
+            maxlength="60"
+            :placeholder="$t('app.sessionNamePlaceholder')"
+            data-identity-name
+          />
+        </FormField>
+        <p v-if="identityError" class="error" role="alert">{{ identityError }}</p>
+      </form>
+      <template #footer>
+        <span class="spacer"></span>
+        <AppButton @click="closeIdentityDialog">{{ $t("app.cancel") }}</AppButton>
+        <AppButton
+          variant="primary"
+          data-identity-create
+          @click="renameTarget ? submitIdentityRename() : submitIdentity()"
+        >
+          {{ renameTarget ? $t("app.save") : $t("app.sessionCreate") }}
+        </AppButton>
+      </template>
+    </Modal>
 
-      <div v-for="group in groups" :key="group.siteId" class="tile-group">
-        <div class="tile-head">
-          <span class="tile-head-name">{{ group.name }}</span>
-          <span class="tile-head-count mono">{{ group.people.length }}</span>
-        </div>
-        <div class="tiles">
+    <!--
+      The launch face: master and detail, side by side.
+
+      The left column is the list of places a page can start — global identities
+      first, then the sites — and the right column is the accounts of whichever
+      one is selected. This replaced a single scrolling list with every site
+      expanded:
+      with a dozen sites the pane was one long scroll where the site you wanted
+      was off screen, and every site's tiles competed with every other site's.
+
+      Master-detail is also what lets the pane be narrow. A site costs one row in
+      the left column no matter how many accounts it has, so the pane's width is
+      decided by the widest single list row plus the widest tile, not by the whole
+      workspace.
+    -->
+    <div v-if="mode === 'use'" class="split-face" data-tile-face>
+      <div class="split-nav" data-split-nav>
+        <!--
+          The search sits above the list it filters.
+
+          It used to live in the right column, over the accounts, which said by
+          position that it searches accounts — and the thing people actually
+          search for here is the site ("where is the ops console"). From the top
+          of the left column it reads as filtering the list below it, which is
+          both what it does and what makes a site search discoverable.
+        -->
+        <label class="nav-search">
+          <Search :size="12" />
+          <input v-model="query" type="search" :placeholder="$t('app.searchSitesOrAccounts')" />
+        </label>
+        <!--
+          Global identities, at the top of the left column.
+
+          They are the first level of the same question the sites answer: which
+          jar the page opens in. They belong to no site, so they sit above the
+          site list rather than inside it — and launching one opens a blank page
+          in that jar, because a page with no site has nowhere to navigate to.
+
+          The group's own "+" creates another one. Creating one used to live on a
+          settings page, which meant leaving the browser, making a row, and coming
+          back to find it; the list that answers "which jars do I have" is where
+          the question "one more" belongs.
+        -->
+        <div class="nav-head">
+          <span>{{ $t("app.identitiesGlobal") }}</span>
           <button
-            v-for="identity in group.people"
-            :key="identity.id"
             type="button"
-            class="tile"
-            :class="{ running: Boolean(store.instanceFor(identity.id)) }"
-            :style="{ '--role': roleVar(identity.color) }"
-            :data-account-tile="identity.id"
-            :title="`${identity.name} · ${identity.role}`"
-            @click="launch(identity)"
+            class="nav-add"
+            :aria-label="$t('app.identityNew')"
+            :title="$t('app.identityNew')"
+            data-new-identity
+            @click="openCreateIdentity"
           >
-            <span class="tile-avatar">{{ identity.name.slice(0, 1) }}</span>
-            <span class="tile-text">
-              <span class="tile-name">{{ identity.name }}</span>
-              <span class="tile-role">{{ identity.role }}</span>
-            </span>
-            <span
-              class="tile-dot"
-              :class="{
-                live: Boolean(store.instanceFor(identity.id)),
-                expired: identity.status === 'expired',
-              }"
-              :aria-label="statusLabel(identity)"
-            ></span>
+            <Plus :size="11" />
           </button>
         </div>
+        <button
+          v-for="profile in persistentProfiles"
+          :key="profile.id"
+          type="button"
+          class="nav-row"
+          :class="{ current: profile.id === defaultProfileId }"
+          :data-launch-session="profile.id"
+          :title="profile.name"
+          @click="launchSession(profile.id)"
+        >
+          <Layers :size="12" class="nav-icon" />
+          <span class="nav-name">{{ profile.name }}</span>
+        </button>
+        <button
+          v-if="cleanProfile"
+          type="button"
+          class="nav-row dashed"
+          :data-launch-session="cleanProfile.id"
+          :title="cleanProfile.name"
+          @click="launchSession(cleanProfile.id)"
+        >
+          <ShieldOff :size="12" class="nav-icon" />
+          <span class="nav-name">{{ cleanProfile.name }}</span>
+        </button>
+
+        <div class="nav-head nav-head-sites">
+          <span>{{ $t("app.sites") }}</span>
+          <!-- One `+` with two branches, the way the action row had it: an
+               account and a site are two answers to "add something", and a list
+               header with two buttons on it is a toolbar wearing a heading. -->
+          <span ref="createRoot" class="create-root">
+            <button
+              type="button"
+              class="nav-add"
+              :class="{ on: createOpen }"
+              :aria-label="$t('app.createEntry')"
+              :title="$t('app.createEntry')"
+              :aria-expanded="createOpen"
+              aria-haspopup="menu"
+              data-create-entry
+              @click.stop="createOpen = !createOpen"
+            >
+              <Plus :size="11" />
+            </button>
+            <Teleport to="body">
+              <div
+                v-if="createOpen"
+                ref="createPanel"
+                class="create-panel"
+                :style="createPanelStyle"
+                role="menu"
+                data-floating-panel
+                data-create-panel
+              >
+                <button type="button" role="menuitem" class="row" data-new-account @click.stop="createAccount">
+                  <Users :size="12" class="row-icon" />
+                  <span>{{ $t("app.newIdentity") }}</span>
+                </button>
+                <button type="button" role="menuitem" class="row" data-new-site @click.stop="createSite">
+                  <Globe :size="12" class="row-icon" />
+                  <span>{{ $t("app.newSite") }}</span>
+                </button>
+              </div>
+            </Teleport>
+          </span>
+        </div>
+        <button
+          v-for="group in listedGroups"
+          :key="group.siteId"
+          type="button"
+          class="nav-row site"
+          :class="{ active: group.siteId === activeSiteId }"
+          :data-site-row="group.siteId"
+          :title="group.name"
+          @click="selectSiteAndReset(group.siteId)"
+        >
+          <span class="nav-name">{{ group.name }}</span>
+          <span class="nav-count mono">{{ group.people.length }}</span>
+        </button>
+        <p v-if="!groups.length" class="nav-empty">{{ $t("app.noSitesYet") }}</p>
       </div>
 
-      <EmptyState
-        v-if="!visibleIdentities.length"
-        :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
-      >
-        <template #icon><Users :size="22" /></template>
+      <div class="split-body" data-split-body>
         <!--
-          Both doors, not just the account one.
+          One slot, two states: the site header, or the pick bar.
 
-          The action row is hidden while the list is empty (a filter bar over
-          nothing is noise), and the create menu lives on that row — so on a
-          brand-new workspace the only way to add a site would be to add an
-          account first, which is backwards: an account belongs to a site. The
-          empty state therefore offers both, and this is the one place where
-          spelling them out beats a `+` menu.
+          They are the same height and occupy the same row, so turning picking on
+          does not move the tiles: the next click is on a tile the eye is already
+          resting on. The header's site name is carried into the bar's absence
+          deliberately — while picking, "which site am I picking from" is still
+          worth knowing, and the left column's highlighted row answers it.
         -->
-        <div class="empty-actions">
-          <AppButton variant="primary" data-new-account @click="emit('newIdentity')">
-            <Plus :size="13" />
-            {{ $t("app.newIdentity") }}
-          </AppButton>
-          <AppButton data-new-site @click="emit('newSite')">
-            <Globe :size="13" />
-            {{ $t("app.newSite") }}
-          </AppButton>
+        <div v-if="activeGroup && !picking" class="detail-head">
+          <span class="detail-name">{{ activeGroup.name }}</span>
+          <span v-if="activeGroup.url" class="detail-url mono">{{ activeGroup.url }}</span>
+          <span class="sel-spacer"></span>
+          <button
+            v-if="activeGroup.people.length"
+            type="button"
+            class="bar-icon"
+            :aria-label="$t('app.batchSelect')"
+            :title="$t('app.batchSelectHint')"
+            data-tile-pick
+            @click="startPicking"
+          >
+            <CheckSquare :size="13" />
+          </button>
+          <template v-if="activeGroup.siteId !== '__orphan__'">
+            <button
+              type="button"
+              class="bar-icon"
+              :aria-label="$t('app.newIdentityHere')"
+              :title="$t('app.newIdentityHere')"
+              :data-add-identity="activeGroup.siteId"
+              @click="emit('newIdentity', activeGroup.siteId)"
+            >
+              <Plus :size="13" />
+            </button>
+            <button
+              type="button"
+              class="bar-icon"
+              :aria-label="$t('app.editThisSite')"
+              :title="$t('app.editThisSite')"
+              :data-edit-site="activeGroup.siteId"
+              @click="emit('editSite', activeGroup.siteId)"
+            >
+              <Pencil :size="12" />
+            </button>
+          </template>
         </div>
-      </EmptyState>
+
+        <div v-else-if="picking" class="pick-bar" data-pick-bar>
+          <span class="sel-count mono">{{ $t("app.batchSelected", { count: picked.size }) }}</span>
+          <button type="button" class="pick-all" @click="togglePickAll">
+            {{ allPicked ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
+          </button>
+          <span class="sel-spacer"></span>
+          <LaunchSplitButton
+            variant="primary"
+            :label="$t('app.batchLaunch', { count: pickedLaunchable.length })"
+            :disabled="!pickedLaunchable.length || store.busy === 'launch'"
+            data-hook="pick"
+            @launch="launchPicked"
+            @launch-external="launchPickedExternal"
+          />
+          <button
+            type="button"
+            class="bar-icon"
+            :aria-label="$t('app.cancel')"
+            :title="$t('app.cancel')"
+            data-pick-cancel
+            @click="endPicking"
+          >
+            <X :size="14" />
+          </button>
+        </div>
+
+        <div class="split-scroll" data-tile-scroll>
+          <div v-if="activeGroup && activeGroup.people.length" class="tiles">
+            <button
+              v-for="identity in activeGroup.people"
+              :key="identity.id"
+              type="button"
+              class="tile"
+              :class="{
+                running: Boolean(store.instanceFor(identity.id)),
+                picking: picking,
+                picked: picking && picked.has(identity.id),
+              }"
+              :style="{ '--role': roleVar(identity.color) }"
+              :data-account-tile="identity.id"
+              :aria-pressed="picking ? picked.has(identity.id) : undefined"
+              :title="`${identity.name} · ${identity.role}`"
+              @click="onTileClick(identity)"
+            >
+              <span class="tile-avatar">{{ identity.name.slice(0, 1) }}</span>
+              <span class="tile-text">
+                <span class="tile-name">{{ identity.name }}</span>
+                <span class="tile-role">{{ identity.role }}</span>
+              </span>
+              <!-- The pick mark is absolutely positioned, so turning picking on
+                   changes no tile's size: a grid that reflows the moment you
+                   enter the mode moves the target out from under the next click. -->
+              <span v-if="picking" class="tile-pick" aria-hidden="true">
+                <Check v-if="picked.has(identity.id)" :size="11" />
+              </span>
+              <span
+                class="tile-dot"
+                :class="{
+                  live: Boolean(store.instanceFor(identity.id)),
+                  expired: identity.status === 'expired',
+                }"
+                :aria-label="statusLabel(identity)"
+              ></span>
+            </button>
+          </div>
+
+          <EmptyState
+            v-if="!visibleIdentities.length"
+            :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
+          >
+            <template #icon><Users :size="22" /></template>
+            <!--
+              Both doors, not just the account one.
+
+              The action row is hidden while the list is empty (a filter bar over
+              nothing is noise), and the create menu lives on that row — so on a
+              brand-new workspace the only way to add a site would be to add an
+              account first, which is backwards: an account belongs to a site.
+              The empty state therefore offers both, and this is the one place
+              where spelling them out beats a `+` menu.
+            -->
+            <div class="empty-actions">
+              <AppButton variant="primary" data-new-account @click="emit('newIdentity', activeSiteId || undefined)">
+                <Plus :size="13" />
+                {{ $t("app.newIdentity") }}
+              </AppButton>
+              <AppButton data-new-site @click="emit('newSite')">
+                <Globe :size="13" />
+                {{ $t("app.newSite") }}
+              </AppButton>
+            </div>
+          </EmptyState>
+          <p
+            v-else-if="activeGroup && !activeGroup.people.length"
+            class="detail-empty"
+            data-detail-empty
+          >
+            {{ $t("app.noAccountsInSite") }}
+          </p>
+        </div>
+      </div>
     </div>
 
-    <!-- The edit face: rows with every field, actions, and the write entries. -->
-    <div v-else class="page-body">
-      <div class="cards">
-      <!-- Grouped by site; a view may span sites, so the account page no longer
-           hides everything outside one global "current site". -->
-      <template v-for="group in groups" :key="group.siteId">
-        <!-- The whole header folds the group: the arrow alone is a 16px target,
-             and this row is what the eye is on when it wants the section gone.
-             The address and the add button ride in slots because they belong to
-             this page, not to every grouped list. -->
-        <div
-          class="site-head-wrap"
-          :class="{ dragging: draggingSiteId === group.siteId, drop: dropSiteId === group.siteId }"
-          :data-site-row="group.siteId"
-          @dragover="onSiteDragOver(group.siteId, $event)"
-          @dragleave="onSiteDragLeave(group.siteId)"
-          @drop.prevent="onSiteDrop(group.siteId)"
-        >
-        <GroupHeader
-          :name="group.name"
-          :count="group.people.length"
-          :collapsed="groupCollapse.isCollapsed(group.siteId)"
-          :data-site-head="group.siteId"
-          @toggle="groupCollapse.toggle(group.siteId)"
-        >
-          <template #meta>
-            <span v-if="group.url" class="group-url mono">{{ group.url }}</span>
-          </template>
-          <template #actions>
-            <template v-if="group.siteId !== '__orphan__'">
-              <!-- The reorder handle. Sites are the only ordered list on this
-                   page, and until now theirs had no way in from the interface. -->
-              <span
-                class="group-grip"
-                draggable="true"
-                :title="$t('app.dragReorder')"
-                :aria-label="$t('app.dragReorder')"
-                :data-site-grip="group.siteId"
-                @dragstart.stop="onSiteDragStart(group.siteId, $event)"
-                @dragend="onSiteDragEnd"
-              >
-                <GripVertical :size="11" />
-              </span>
-              <button
-                type="button"
-                class="group-icon"
-                :title="$t('app.newIdentityHere')"
-                :data-add-identity="group.siteId"
-                @click.stop="emit('newIdentity', group.siteId)"
-              >
-                <Plus :size="11" />
-              </button>
-              <button
-                type="button"
-                class="group-icon"
-                :title="$t('app.editThisSite')"
-                :aria-label="$t('app.editThisSite')"
-                :data-edit-site="group.siteId"
-                @click.stop="emit('editSite', group.siteId)"
-              >
-                <Pencil :size="11" />
-              </button>
-            </template>
-          </template>
-        </GroupHeader>
+    <!--
+      The edit face: the same master-detail split, with the table on the right.
+
+      One site per visit is the right shape here too. Every write an account row
+      offers — stop, relaunch, check, edit — is about that account; a table of
+      every account in the workspace made the reader scroll past four sites to
+      reach the fifth, and made the column widths a compromise between all of
+      them.
+    -->
+    <div v-else class="split-face" data-tile-face>
+      <div class="split-nav" data-split-nav>
+        <label class="nav-search">
+          <Search :size="12" />
+          <input v-model="query" type="search" :placeholder="$t('app.searchSitesOrAccounts')" />
+        </label>
+        <!--
+          The edit face's global group: the same list as the launch face, with the
+          writes that belong to it — rename, make default, delete, one more.
+
+          These lived on a settings page of their own. A settings page is where you
+          go to change how the app behaves; an identity is a thing you browse as,
+          so its row belongs beside the sites it opens and the accounts it opens
+          them as.
+        -->
+        <div class="nav-head">
+          <span>{{ $t("app.identitiesGlobal") }}</span>
+          <button
+            type="button"
+            class="nav-add"
+            :aria-label="$t('app.identityNew')"
+            :title="$t('app.identityNew')"
+            data-new-identity
+            @click="openCreateIdentity"
+          >
+            <Plus :size="11" />
+          </button>
         </div>
-        <template v-if="!groupCollapse.isCollapsed(group.siteId)">
-          <!-- One header per group: the columns are per group because a group is
-               the local table. A single header above the page would sit apart
-               from every group but the first. -->
-          <div
-            class="id-table-head"
-            :class="{ picking: selecting }"
-            aria-hidden="true"
-          >
-            <span v-if="selecting"></span>
-            <span>{{ $t("app.columnAccount") }}</span>
-            <span>{{ $t("app.columnRolePassword") }}</span>
-            <span>{{ $t("app.status") }}</span>
-            <span class="table-head-actions">{{ $t("app.columnActions") }}</span>
-          </div>
-          <!--
-            A `div` with a button role, not a `<button>`.
-
-            The row now carries a real launch control, and a `<button>` cannot
-            contain one — the parser would close the row at the inner button's
-            tag and the actions would fall outside it. The role and the key
-            handlers keep everything a button gave us: a tab stop, Enter and
-            Space activating the row itself, and `aria-pressed` in selection
-            mode.
-          -->
-          <div
-            v-for="(identity, index) in group.people"
-            :key="identity.id"
-            class="id-card"
-            :class="{
-              running: Boolean(store.instanceFor(identity.id)),
-              picking: selecting,
-              picked: selected.has(identity.id),
-              last: index === group.people.length - 1,
-            }"
-            :style="{ '--role': roleVar(identity.color) }"
-            role="button"
-            tabindex="0"
-            :aria-pressed="selecting ? selected.has(identity.id) : undefined"
-            @click="onCardClick(identity)"
-            @keydown.enter.prevent="onCardClick(identity)"
-            @keydown.space.prevent="onCardClick(identity)"
-          >
-            <!-- Selection mode hides the per-row actions: in that mode the row is a
-                 checkbox, and stop/relaunch/edit would fire from a mis-aimed click. -->
-            <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
-              <Check v-if="selected.has(identity.id)" :size="11" />
-            </span>
-            <div class="card-top">
-              <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
-              <span class="who">
-                <span class="name">{{ identity.name }}</span>
-                <span class="acct mono">{{ identity.username }}</span>
-              </span>
-            </div>
-
-            <!--
-              Two facts always, the rest counted.
-              
-              Every account answers "which role" and "is a password stored" —
-              those are what a list of accounts is compared on, so they always
-              get a chip. Everything else (a non-default browser, extra login
-              fields) folds into one "+N" chip whose tooltip names them. Showing
-              them inline made a four-chip row either wrap — which made its whole
-              table row taller — or truncate every label into "未…" and "Micr…".
-              Neither is worth a fact the user did not come to this page for.
-            -->
-            <div class="meta-row">
-              <span class="tag tag-role" :title="identity.role">{{ identity.role }}</span>
-              <span class="tag plain" :class="{ missing: !store.identityPasswordSet(identity) }">
-                {{ passwordLabel(identity) }}
-              </span>
-              <span
-                v-if="extraFacts(identity).length"
-                class="tag plain more"
-                :title="extraFacts(identity).join(' · ')"
-                :aria-label="extraFacts(identity).join(' · ')"
-              >
-                +{{ extraFacts(identity).length }}
-              </span>
-            </div>
-
-            <span
-              class="state mono"
-              :class="{
-                live: Boolean(store.instanceFor(identity.id)),
-                warn: identity.status === 'expired',
-              }"
-              :title="statusLabel(identity)"
+        <div
+          v-for="profile in persistentProfiles"
+          :key="profile.id"
+          class="nav-row identity-row"
+          :class="{ current: profile.id === defaultProfileId }"
+          :data-identity-row="profile.id"
+        >
+          <Layers :size="12" class="nav-icon" />
+          <span class="nav-name">{{ profile.name }}</span>
+          <span
+            v-if="profile.id === defaultProfileId"
+            class="identity-badge"
+          >{{ $t("app.sessionDefaultBadge") }}</span>
+          <span class="identity-actions">
+            <button
+              v-if="profile.id !== defaultProfileId"
+              type="button"
+              class="row-action"
+              :aria-label="$t('app.sessionSetDefault')"
+              :title="$t('app.sessionSetDefault')"
+              :data-identity-default="profile.id"
+              @click.stop="store.setDefaultProfile(profile.id)"
             >
-              <span class="dot"></span>{{ statusLabel(identity) }}
-            </span>
+              <Star :size="11" />
+            </button>
+            <button
+              v-if="!profile.builtin"
+              type="button"
+              class="row-action"
+              :aria-label="$t('app.sessionRename')"
+              :title="$t('app.sessionRename')"
+              :data-identity-rename="profile.id"
+              @click.stop="openRenameIdentity(profile)"
+            >
+              <Pencil :size="11" />
+            </button>
+            <button
+              v-if="!profile.builtin"
+              type="button"
+              class="row-action danger"
+              :aria-label="$t('app.sessionDeleteTitle')"
+              :title="$t('app.sessionDeleteTitle')"
+              :data-identity-delete="profile.id"
+              @click.stop="removeIdentity(profile)"
+            >
+              <Trash2 :size="11" />
+            </button>
+          </span>
+        </div>
+        <div v-if="cleanProfile" class="nav-row identity-row dashed" :data-identity-row="cleanProfile.id">
+          <ShieldOff :size="12" class="nav-icon" />
+          <span class="nav-name">{{ cleanProfile.name }}</span>
+        </div>
 
-            <!--
-              The row's actions, in two groups.
+        <div class="nav-head nav-head-sites">
+          <span>{{ $t("app.sites") }}</span>
+          <!-- One `+` with two branches, the way the action row had it: an
+               account and a site are two answers to "add something", and a list
+               header with two buttons on it is a toolbar wearing a heading. -->
+          <span ref="createRoot" class="create-root">
+            <button
+              type="button"
+              class="nav-add"
+              :class="{ on: createOpen }"
+              :aria-label="$t('app.createEntry')"
+              :title="$t('app.createEntry')"
+              :aria-expanded="createOpen"
+              aria-haspopup="menu"
+              data-create-entry
+              @click.stop="createOpen = !createOpen"
+            >
+              <Plus :size="11" />
+            </button>
+            <Teleport to="body">
+              <div
+                v-if="createOpen"
+                ref="createPanel"
+                class="create-panel"
+                :style="createPanelStyle"
+                role="menu"
+                data-floating-panel
+                data-create-panel
+              >
+                <button type="button" role="menuitem" class="row" data-new-account @click.stop="createAccount">
+                  <Users :size="12" class="row-icon" />
+                  <span>{{ $t("app.newIdentity") }}</span>
+                </button>
+                <button type="button" role="menuitem" class="row" data-new-site @click.stop="createSite">
+                  <Globe :size="12" class="row-icon" />
+                  <span>{{ $t("app.newSite") }}</span>
+                </button>
+              </div>
+            </Teleport>
+          </span>
+        </div>
+        <button
+          v-for="group in listedGroups"
+          :key="group.siteId"
+          type="button"
+          class="nav-row site"
+          :class="{ active: group.siteId === activeSiteId }"
+          :data-site-row="group.siteId"
+          :title="group.name"
+          @click="selectSiteAndReset(group.siteId)"
+        >
+          <span class="nav-name">{{ group.name }}</span>
+          <span class="nav-count mono">{{ group.people.length }}</span>
+        </button>
+        <p v-if="!groups.length" class="nav-empty">{{ $t("app.noSitesYet") }}</p>
+      </div>
 
-              One row, five actions, one visual form: all of them are icon buttons
-              with a tooltip. Mixed text and glyphs in the same cluster read as
-              debris — three words at one weight beside a lone pencil — and a
-              text action is also twice as wide as it needs to be for a verb the
-              user learns once. Icons also let every row's actions end at the same
-              right edge, which is what makes the column scannable.
-            -->
-            <div v-if="!selecting" class="card-actions">
-              <span class="card-session">
-                <template v-if="store.instanceFor(identity.id)">
-                  <IconButton
-                    :ariaLabel="$t('app.switchTo')"
-                    @click.stop="launch(identity)"
-                  >
-                    <Play :size="12" />
-                  </IconButton>
-                  <IconButton
-                    :ariaLabel="$t('app.stop')"
-                    @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)"
-                  >
-                    <Square :size="11" />
-                  </IconButton>
-                </template>
-                <!-- The plain click is the built-in surface; the arrow lists every
-                     browser the app found, so the fidelity check is a decision made
-                     here instead of a mode flipped in the app menu. -->
-                <LaunchSplitButton
-                  v-else
-                  compact
-                  :aria-label="$t('app.launch')"
-                  :data-hook="`launch-${identity.id}`"
-                  @launch="launch(identity)"
-                  @launch-external="launchExternal(identity, $event)"
-                />
-                <IconButton
-                  :ariaLabel="$t('app.relaunch')"
-                  @click.stop="relogin(identity)"
-                >
-                  <RotateCcw :size="12" />
-                </IconButton>
-                <IconButton
-                  :ariaLabel="$t('app.checkAuth')"
-                  @click.stop="checkAuth(identity)"
-                >
-                  <HeartPulse :size="12" />
-                </IconButton>
-              </span>
-              <span class="card-manage">
-                <IconButton
-                  :ariaLabel="$t('app.edit')"
-                  :data-edit-identity="identity.id"
-                  @click.stop="emit('editIdentity', identity.id)"
-                >
-                  <Pencil :size="12" />
-                </IconButton>
-              </span>
+      <div class="split-body" data-split-body>
+        <div v-if="selecting" class="select-bar">
+          <span class="sel-count mono">
+            {{ $t("app.batchSelected", { count: selected.size }) }}
+          </span>
+          <AppButton class="sel-all" @click="toggleAll">
+            {{ allSelected ? $t("app.batchClearAll") : $t("app.batchSelectAll") }}
+          </AppButton>
+          <span class="sel-spacer"></span>
+          <LaunchSplitButton
+            variant="primary"
+            :label="$t('app.batchLaunch', { count: notRunningSelected.length })"
+            :disabled="!notRunningSelected.length || store.busy === 'launch'"
+            data-hook="batch"
+            @launch="launchSelected"
+            @launch-external="launchSelectedExternal"
+          />
+          <span ref="selectMenuRoot" class="sel-more">
+            <button
+              type="button"
+              class="bar-icon"
+              :class="{ on: selectMenuOpen }"
+              :aria-label="$t('app.batchMore')"
+              :title="$t('app.batchMore')"
+              :aria-expanded="selectMenuOpen"
+              aria-haspopup="menu"
+              data-batch-more
+              @click.stop="selectMenuOpen = !selectMenuOpen"
+            >
+              <MoreHorizontal :size="14" />
+            </button>
+          </span>
+          <button
+            type="button"
+            class="bar-icon"
+            :aria-label="$t('app.cancel')"
+            :title="$t('app.cancel')"
+            data-batch-cancel
+            @click="endSelecting"
+          >
+            <X :size="14" />
+          </button>
+
+          <!-- Re-linking and exporting are occasional actions on a selection;
+               behind `⋯` they stop reading as peers of "launch". Teleported to
+               the body because the pane clips its own scroll area. -->
+          <Teleport to="body">
+            <div
+              v-if="selectMenuOpen"
+              ref="selectMenu"
+              class="select-menu"
+              :style="selectMenuStyle"
+              role="menu"
+              data-floating-panel
+              data-batch-menu
+            >
+              <button
+                type="button"
+                role="menuitem"
+                class="row"
+                :disabled="selected.size === 0"
+                data-batch-link-site
+                @click.stop="
+                  selectMenuOpen = false;
+                  openLinkSite();
+                "
+              >
+                <Link2 :size="12" class="row-icon" />
+                <span>{{ $t("app.batchLinkSite") }}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="row"
+                :disabled="selected.size === 0"
+                data-batch-export
+                @click.stop="
+                  selectMenuOpen = false;
+                  openExport();
+                "
+              >
+                <Download :size="12" class="row-icon" />
+                <span>{{ $t("app.accountsExport") }}</span>
+              </button>
             </div>
-            <div v-else class="card-pick-note mono">
-              {{
-                store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
-              }}
-            </div>
+          </Teleport>
+        </div>
+
+        <!-- The site's own header: name, address, and everything that acts on it.
+             It gives up its row while selecting — the bar carries the count and
+             the actions, and the left column still marks which site is open. -->
+        <div v-if="activeGroup && !selecting" class="detail-head">
+          <span class="detail-name">{{ activeGroup.name }}</span>
+          <span v-if="activeGroup.url" class="detail-url mono">{{ activeGroup.url }}</span>
+          <span class="sel-spacer"></span>
+          <!-- The two list-wide actions live here, beside the site they act on:
+               the batch door and the health sweep. They used to have a 30px
+               row of their own, which was one icon and a lot of empty width. -->
+          <button
+            v-if="selectableIdentities.length"
+            type="button"
+            class="bar-icon"
+            :aria-label="$t('app.batchSelect')"
+            :title="$t('app.batchSelectHint')"
+            data-batch-select
+            @click="startSelecting"
+          >
+            <CheckSquare :size="13" />
+          </button>
+          <button
+            type="button"
+            class="bar-icon"
+            :aria-label="$t('app.sessionHealth')"
+            :title="$t('app.sessionHealth')"
+            data-session-health
+            @click="emit('sessionHealth')"
+          >
+            <HeartPulse :size="13" />
+          </button>
+          <template v-if="activeGroup.siteId !== '__orphan__'">
+            <button
+              type="button"
+              class="bar-icon"
+              :aria-label="$t('app.newIdentityHere')"
+              :title="$t('app.newIdentityHere')"
+              :data-add-identity="activeGroup.siteId"
+              @click="emit('newIdentity', activeGroup.siteId)"
+            >
+              <Plus :size="13" />
+            </button>
+            <button
+              type="button"
+              class="bar-icon"
+              :aria-label="$t('app.editThisSite')"
+              :title="$t('app.editThisSite')"
+              :data-edit-site="activeGroup.siteId"
+              @click="emit('editSite', activeGroup.siteId)"
+            >
+              <Pencil :size="12" />
+            </button>
+          </template>
+        </div>
+        <div class="split-scroll" data-tile-scroll>
+          <div class="cards">
+            <template v-if="activeGroup">
+              <div
+                class="id-table-head"
+                :class="{ picking: selecting }"
+                aria-hidden="true"
+              >
+                <span v-if="selecting"></span>
+                <span>{{ $t("app.columnAccount") }}</span>
+                <span>{{ $t("app.columnRolePassword") }}</span>
+                <span>{{ $t("app.status") }}</span>
+                <span class="table-head-actions">{{ $t("app.columnActions") }}</span>
+              </div>
+              <!--
+                A `div` with a button role, not a `<button>`.
+
+                The row now carries a real launch control, and a `<button>` cannot
+                contain one — the parser would close the row at the inner button's
+                tag and the actions would fall outside it. The role and the key
+                handlers keep everything a button gave us: a tab stop, Enter and
+                Space activating the row itself, and `aria-pressed` in selection
+                mode.
+              -->
+              <div
+                v-for="(identity, index) in activeGroup.people"
+                :key="identity.id"
+                class="id-card"
+                :class="{
+                  running: Boolean(store.instanceFor(identity.id)),
+                  picking: selecting,
+                  picked: selected.has(identity.id),
+                  last: index === activeGroup.people.length - 1,
+                }"
+                :style="{ '--role': roleVar(identity.color) }"
+                role="button"
+                tabindex="0"
+                :aria-pressed="selecting ? selected.has(identity.id) : undefined"
+                @click="onCardClick(identity)"
+                @keydown.enter.prevent="onCardClick(identity)"
+                @keydown.space.prevent="onCardClick(identity)"
+              >
+                <!-- Selection mode hides the per-row actions: in that mode the row
+                     is a checkbox, and stop/relaunch/edit would fire from a
+                     mis-aimed click. -->
+                <span v-if="selecting" class="pick-mark" :class="{ on: selected.has(identity.id) }">
+                  <Check v-if="selected.has(identity.id)" :size="11" />
+                </span>
+                <div class="card-top">
+                  <span class="avatar">{{ identity.name.slice(0, 1) }}</span>
+                  <span class="who">
+                    <span class="name">{{ identity.name }}</span>
+                    <span class="acct mono">{{ identity.username }}</span>
+                  </span>
+                </div>
+
+                <!--
+                  Two facts always, the rest counted.
+
+                  Every account answers "which role" and "is a password stored" —
+                  those are what a list of accounts is compared on, so they always
+                  get a chip. Everything else (a non-default browser, extra login
+                  fields) folds into one "+N" chip whose tooltip names them.
+                -->
+                <div class="meta-row">
+                  <span class="tag tag-role" :title="identity.role">{{ identity.role }}</span>
+                  <span class="tag plain" :class="{ missing: !store.identityPasswordSet(identity) }">
+                    {{ passwordLabel(identity) }}
+                  </span>
+                  <span
+                    v-if="extraFacts(identity).length"
+                    class="tag plain more"
+                    :title="extraFacts(identity).join(' · ')"
+                    :aria-label="extraFacts(identity).join(' · ')"
+                  >
+                    +{{ extraFacts(identity).length }}
+                  </span>
+                </div>
+
+                <span
+                  class="state mono"
+                  :class="{
+                    live: Boolean(store.instanceFor(identity.id)),
+                    warn: identity.status === 'expired',
+                  }"
+                  :title="statusLabel(identity)"
+                >
+                  <span class="dot"></span>{{ statusLabel(identity) }}
+                </span>
+
+                <!--
+                  The row's actions, in two groups.
+
+                  One row, five actions, one visual form: all of them are icon
+                  buttons with a tooltip. Mixed text and glyphs in the same cluster
+                  read as debris, and a text action is also twice as wide as it
+                  needs to be for a verb the user learns once. Icons also let every
+                  row's actions end at the same right edge.
+                -->
+                <div v-if="!selecting" class="card-actions">
+                  <span class="card-session">
+                    <template v-if="store.instanceFor(identity.id)">
+                      <IconButton
+                        :ariaLabel="$t('app.switchTo')"
+                        @click.stop="launch(identity)"
+                      >
+                        <Play :size="12" />
+                      </IconButton>
+                      <IconButton
+                        :ariaLabel="$t('app.stop')"
+                        @click.stop="store.stopInstance(store.instanceFor(identity.id)!.id)"
+                      >
+                        <Square :size="11" />
+                      </IconButton>
+                    </template>
+                    <!-- The plain click is the built-in surface; the arrow lists
+                         every browser the app found, so the fidelity check is a
+                         decision made here instead of a mode flipped in a menu. -->
+                    <LaunchSplitButton
+                      v-else
+                      compact
+                      :aria-label="$t('app.launch')"
+                      :data-hook="`launch-${identity.id}`"
+                      @launch="launch(identity)"
+                      @launch-external="launchExternal(identity, $event)"
+                    />
+                    <IconButton
+                      :ariaLabel="$t('app.relaunch')"
+                      @click.stop="relogin(identity)"
+                    >
+                      <RotateCcw :size="12" />
+                    </IconButton>
+                    <IconButton
+                      :ariaLabel="$t('app.checkAuth')"
+                      @click.stop="checkAuth(identity)"
+                    >
+                      <HeartPulse :size="12" />
+                    </IconButton>
+                  </span>
+                  <span class="card-manage">
+                    <IconButton
+                      :ariaLabel="$t('app.edit')"
+                      :data-edit-identity="identity.id"
+                      @click.stop="emit('editIdentity', identity.id)"
+                    >
+                      <Pencil :size="12" />
+                    </IconButton>
+                  </span>
+                </div>
+                <div v-else class="card-pick-note mono">
+                  {{
+                    store.instanceFor(identity.id) ? $t("app.batchAlreadyRunning") : $t("app.batchWillLaunch")
+                  }}
+                </div>
+              </div>
+            </template>
+
+            <EmptyState
+              v-if="!visibleIdentities.length"
+              :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
+            >
+              <template #icon><Users :size="22" /></template>
+              <!-- Always the account door. A site with no accounts still needs a
+                   way to get its first one, and the account form starts on the
+                   site that was most recently used. -->
+              <AppButton variant="primary" @click="emit('newIdentity', activeSiteId || undefined)">
+                <Plus :size="13" />
+                {{ $t("app.newIdentity") }}
+              </AppButton>
+            </EmptyState>
+            <p
+              v-else-if="activeGroup && !activeGroup.people.length"
+              class="detail-empty"
+              data-detail-empty
+            >
+              {{ $t("app.noAccountsInSite") }}
+            </p>
           </div>
-        </template>
-      </template>
-
-      <EmptyState
-        v-if="!visibleIdentities.length"
-        :text="store.identities.length ? $t('app.noMatchingIdentities') : $t('app.empty')"
-      >
-        <template #icon><Users :size="22" /></template>
-        <!-- Always the account door. A site with no accounts still needs a way
-             to get its first one, and the account form starts on the site that
-             was most recently used. -->
-        <AppButton variant="primary" @click="emit('newIdentity')">
-          <Plus :size="13" />
-          {{ $t("app.newIdentity") }}
-        </AppButton>
-      </EmptyState>
+        </div>
       </div>
     </div>
   </section>
@@ -1463,16 +1984,23 @@ defineExpose({ mode, setMode });
  * to be one band — when it wrapped, the primary button landed on a second line
  * below its own menu trigger.
  */
+/*
+ * The selection bar is a row, not a card.
+ *
+ * It used to carry a border, a fill and rounded corners, which made a mode
+ * announcement read as a panel inserted into the page — and the launch face's
+ * pick bar never had that dressing, although the two rows do the same job on two
+ * faces. What separates it from the list is the count and the accent-coloured
+ * launch button, not a box drawn around them. It is also the same 30px as the
+ * search row it replaces, so the grid does not move when the mode turns on.
+ */
 .select-bar {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
-  margin: -4px 0 12px;
-  padding: 7px 9px 7px 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg-elevated));
+  height: 30px;
+  padding: 0;
   flex: 0 0 auto;
   min-width: 0;
 }
@@ -1576,9 +2104,9 @@ defineExpose({ mode, setMode });
      long role label cannot widen the role column of only its own row. */
   /* The actions column held five controls, three of them text links, which is why
      it needed 190px. They are icon buttons now, so the column only has to fit
-     five 26px targets and their gaps — the width freed up goes to the columns a
+     the icon targets and their gaps — the width freed up goes to the columns a
      reader actually scans. */
-  --id-cols: minmax(0, 1.1fr) minmax(0, 0.8fr) 92px 168px;
+  --id-cols: minmax(0, 1.15fr) minmax(0, 1.1fr) 58px 146px;
   display: flex;
   flex-direction: column;
   /* Grow to the body's height so a short list still starts at the top and the
@@ -1615,6 +2143,23 @@ defineExpose({ mode, setMode });
      gaps were close enough that a table's foot and the next heading read as one
      run. */
   margin-top: 28px;
+}
+
+/*
+ * Collapsed groups sit closer together.
+ *
+ * The 28px above is spacing between a heading and *the table it owns* — it has
+ * to be big enough to say "a new section starts". With every group folded there
+ * are no tables, only headings, and the same gap turns a table of contents into
+ * a column of lines scattered down the page. A folded group is one 24px row, so
+ * the gap between two of them only has to separate them.
+ */
+.cards > .site-head-wrap.collapsed {
+  margin-top: 10px;
+}
+
+.cards > .site-head-wrap.collapsed:first-child {
+  margin-top: 0;
 }
 
 .cards > .site-head-wrap:first-child {
@@ -1711,41 +2256,325 @@ defineExpose({ mode, setMode });
   color: var(--text);
 }
 
-.tile-face {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+/*
+ * Master and detail, side by side.
+ *
+ * The left column is a list of places a page can start; the right column is what
+ * one of them contains. This is what keeps the pane narrow and the list short:
+ * a site costs one row in the left column however many accounts it has, so adding
+ * the twentieth site adds a row instead of pushing everything down.
+ *
+ * Both columns scroll independently. The left one grows with the workspace's site
+ * count (unbounded), the right one with one site's account count (small), and a
+ * single shared scroller would tie the two together — scrolling a long site would
+ * move the list out of view while the reader is still choosing.
+ */
+.split-face {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
   margin-top: 14px;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  padding-bottom: 4px;
+  overflow: hidden;
 }
 
-.tile-search .search {
-  margin-left: 0;
-  width: 100%;
+.split-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 8px;
+  border-right: 1px solid var(--line-soft);
+}
+
+/*
+ * The search field, at the top of the left column.
+ *
+ * Full width of the column and shaped like a field, not like a toolbar control:
+ * it filters the list underneath it, and the field's own width is the claim
+ * "type here to narrow what is below".
+ */
+.nav-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 7px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--faint);
   flex: 0 0 auto;
 }
 
-.tile-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.nav-search:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-soft));
 }
 
-.tile-head {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  font-size: 10px;
-  letter-spacing: 0.04em;
+.nav-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-2xs);
+  outline: none;
+}
+
+.nav-search input::placeholder {
   color: var(--faint);
 }
 
-.tile-head-count {
+.nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 6px 4px;
   font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  flex: 0 0 auto;
+}
+
+.nav-head-sites {
+  margin-top: 10px;
+}
+
+.nav-add {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+}
+
+.nav-add:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+/* One row per place. The left column is a table of contents, so its rows are
+   text with a count — a tile in the narrow column would be a card with nothing
+   in it. */
+.nav-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  text-align: left;
+  flex: 0 0 auto;
+}
+
+.nav-row:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+}
+
+.nav-row.active {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* The default session is marked on its icon, not by a filled row: the row is a
+   place you open, and a filled row reads as "you are here". */
+.nav-row.current .nav-icon {
+  color: var(--accent);
+}
+
+.nav-row.dashed {
+  border: 1px dashed var(--line-soft);
   color: var(--muted);
+}
+
+.nav-icon {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.nav-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+/*
+ * A global identity's row: name, an optional 「默认」 badge, and its writes.
+ *
+ * The actions stay hidden until the row is hovered or focused. They are the
+ * low-frequency half of the row — an identity is clicked to open it far more
+ * often than it is renamed — and three resting icons in a 200px column would
+ * leave the name four characters.
+ */
+.identity-row {
+  position: relative;
+}
+
+.identity-badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  line-height: 15px;
+}
+
+.identity-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.identity-row:hover .identity-actions,
+.identity-row:focus-within .identity-actions {
+  opacity: 1;
+}
+
+.row-action {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--faint);
+}
+
+.row-action:hover {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.row-action.danger:hover {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+
+.nav-empty {
+  margin: 0;
+  padding: 4px 6px;
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+}
+
+.split-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding-left: 12px;
+  padding-top: 2px;
+}
+
+/*
+ * The only scroller in the right column.
+ *
+ * The control row above is a sibling, so a long account list never carries
+ * "启动所选" out of the pane: the bar is the one control the pick mode exists for.
+ */
+.split-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+
+/* The selected site's own header. Its name and address are the context for
+   everything below, and its write actions live here rather than in the left
+   column: the left column only navigates. */
+/* The same height as the pick bar it is swapped for: this row and the bar share
+   one slot, and any difference shows up as the tiles jumping when the mode
+   turns on. */
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.detail-name {
+  font-size: var(--fs-base);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-url {
+  font-size: var(--fs-2xs);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.detail-empty {
+  margin: 0;
+  padding: 10px 2px;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+
+
+/*
+ * The pick bar, in the right column's control slot.
+ *
+ * It is not an extra band above the grid: the bar replaces the search row, so
+ * turning the mode on moves nothing below it.
+ */
+.pick-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  /* Height, not min-height, and the same 30px as the search row it replaces. */
+  height: 30px;
+}
+
+.pick-bar .sel-count {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Same quiet text action as the edit face's "select all". */
+.pick-bar .pick-all {
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pick-bar .pick-all:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
 }
 
 .tiles {
@@ -1760,6 +2589,7 @@ defineExpose({ mode, setMode });
 }
 
 .tile {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -1772,6 +2602,51 @@ defineExpose({ mode, setMode });
   transition:
     border-color var(--motion-fast) var(--ease-out),
     background var(--motion-fast) var(--ease-out);
+}
+
+/* Picking turns the tile's verb from "open" into "pick", so the hover border
+   stops promising a launch. */
+.tile.picking:hover {
+  border-color: var(--line);
+}
+
+.tile.picked {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+
+/*
+ * The pick checkbox: a circle in the tile's top-left corner, over the avatar.
+ *
+ * Absolute rather than a flex child — a fourth column would widen every tile and
+ * narrow the name beside it, and the name is what the user is reading when they
+ * decide which accounts to pick. It also has to stay in place whether or not it
+ * is ticked, or the row would shuffle when the first selection is made.
+ */
+.tile-pick {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--action-foreground);
+  pointer-events: none;
+}
+
+.tile.picked .tile-pick {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* A picked tile dims its avatar slightly: the checkbox carries the state, and a
+   second full-strength colour on top would read as a different kind of tile. */
+.tile.picked .tile-avatar {
+  opacity: 0.55;
 }
 
 .tile:hover {
@@ -1835,29 +2710,6 @@ defineExpose({ mode, setMode });
 /* ------------------------------------------------------------------ */
 /* Site reordering (edit face)                                         */
 /* ------------------------------------------------------------------ */
-
-.site-head-wrap.dragging {
-  opacity: 0.5;
-}
-
-/* Insertion line: the heading below the pointer receives the dragged site. */
-.site-head-wrap.drop {
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.group-grip {
-  display: inline-grid;
-  place-items: center;
-  width: 16px;
-  height: 18px;
-  flex: 0 0 16px;
-  color: var(--faint);
-  cursor: grab;
-}
-
-.group-grip:active {
-  cursor: grabbing;
-}
 
 .id-card {
   --role: var(--role-slate);

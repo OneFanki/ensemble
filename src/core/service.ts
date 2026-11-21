@@ -1925,7 +1925,7 @@ export class WorkspaceService {
    */
   createProfile(name: string): AppSettings {
     const trimmed = name.trim();
-    if (!trimmed) throw new Error("档案名称不能为空");
+    if (!trimmed) throw new Error("身份名称不能为空");
     const profile: BrowserProfile = {
       id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       name: trimmed,
@@ -1940,17 +1940,17 @@ export class WorkspaceService {
   /**
    * Renames a profile.
    *
-   * The built-ins are refused: "默认档案" is the name every other piece of the
-   * interface refers to that jar by, and a renamed built-in would leave the
-   * chooser's own wording disagreeing with the list. The clean session is not a
-   * profile anyone manages either — it is the fixed throwaway.
+   * The built-ins are refused: the default session is the name every other piece
+   * of the interface refers to that jar by, and a renamed built-in would leave
+   * the chooser's own wording disagreeing with the list. The clean session is not
+   * a profile anyone manages either — it is the fixed throwaway.
    */
   renameProfile(id: string, name: string): AppSettings {
     const trimmed = name.trim();
-    if (!trimmed) throw new Error("档案名称不能为空");
+    if (!trimmed) throw new Error("身份名称不能为空");
     const target = this.settings.profiles.find((profile) => profile.id === id);
-    if (!target) throw new Error("档案不存在");
-    if (target.builtin) throw new Error("内置档案不能改名");
+    if (!target) throw new Error("会话不存在");
+    if (target.builtin) throw new Error("内置身份不能改名");
     this.settings = {
       ...this.settings,
       profiles: this.settings.profiles.map((profile) =>
@@ -1976,8 +1976,8 @@ export class WorkspaceService {
    */
   deleteProfile(id: string): AppSettings {
     const target = this.settings.profiles.find((profile) => profile.id === id);
-    if (!target) throw new Error("档案不存在");
-    if (target.builtin) throw new Error("内置档案不能删除");
+    if (!target) throw new Error("会话不存在");
+    if (target.builtin) throw new Error("内置身份不能删除");
     const profiles = this.settings.profiles.filter((profile) => profile.id !== id);
     const defaultProfileId =
       this.settings.defaultProfileId === id
@@ -1997,7 +1997,7 @@ export class WorkspaceService {
       this.settings.profiles.find((profile) => profile.id === this.settings.defaultProfileId) ??
       this.settings.profiles[0] ?? {
         id: EMBEDDED_DEFAULT_PROFILE_ID,
-        name: "默认档案",
+        name: "默认身份",
         retention: "persist",
       }
     );
@@ -2012,8 +2012,8 @@ export class WorkspaceService {
    */
   setDefaultProfile(id: string): AppSettings {
     const target = this.settings.profiles.find((profile) => profile.id === id);
-    if (!target) throw new Error("档案不存在");
-    if (target.retention === "ephemeral") throw new Error("干净会话不能设为默认档案");
+    if (!target) throw new Error("会话不存在");
+    if (target.retention === "ephemeral") throw new Error("干净身份不能设为默认身份");
     if (this.settings.defaultProfileId === id) return this.settingsSnapshot();
     this.settings = { ...this.settings, defaultProfileId: id };
     this.settingsStore.write(this.settings);
@@ -2065,7 +2065,7 @@ export class WorkspaceService {
    */
   mergeProfilesToDefault(): AppSettings {
     const merged = this.mergeableProfiles();
-    if (merged.length === 0) throw new Error("没有可合并的档案");
+    if (merged.length === 0) throw new Error("没有可合并的身份");
     const mergedIds = new Set(merged.map((profile) => profile.id));
     const profiles = this.settings.profiles.filter((profile) => !mergedIds.has(profile.id));
     const defaultProfileId = mergedIds.has(this.settings.defaultProfileId)
@@ -2836,7 +2836,7 @@ export class WorkspaceService {
   ): Promise<LaunchResult> {
     await this.maintenanceDone;
     const profile = this.settings.profiles.find((item) => item.id === profileId);
-    if (!profile) throw new Error("档案不存在");
+    if (!profile) throw new Error("会话不存在");
     const engine = this.resolveEngine(undefined, options?.engineId);
     const ephemeral = profile.retention === "ephemeral";
 

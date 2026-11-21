@@ -422,8 +422,8 @@ const DEMO = {
     second: "后台系统 · 测试",
     // Neutral names, like every other piece of demo data: a jar is named after
     // the kind of session it holds, never after a customer.
-    defaultProfile: "默认档案",
-    cleanProfile: "干净会话",
+    defaultProfile: "默认身份",
+    cleanProfile: "干净身份",
     people: [
       ["管理员 · 主账号", "admin@example.test", "管理员", "amber"],
       ["成员 · 子账号", "member@example.test", "成员", "teal"],
@@ -509,6 +509,14 @@ const SHOTS = [
   { name: "sites-en", locale: "en", view: "sites" },
   { name: "identities", locale: "zh", view: "identities" },
   { name: "identities-en", locale: "en", view: "identities" },
+  {
+    // The launch face as it is actually used: sessions at the top, sites folded.
+    // The edit shot above shows an open table; this one shows the other half of
+    // the pane — the shape that let the pane get narrower.
+    name: "accounts-launch",
+    locale: "zh",
+    view: "accounts-use",
+  },
   { name: "settings", locale: "zh", view: "settings-general" },
   { name: "settings-en", locale: "en", view: "settings-general" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },

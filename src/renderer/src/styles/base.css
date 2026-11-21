@@ -204,6 +204,10 @@ a {
      260px while the visible label ran across the dock. Labels are short; the
      ones that are not (the zoom hint is a whole sentence) wrap. */
   max-width: 260px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
   padding: 5px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -220,6 +224,27 @@ a {
   transition:
     opacity var(--motion-fast) var(--ease-out),
     visibility var(--motion-fast);
+}
+
+/* The dot leads the sentence it explains, on the text's own baseline rather than
+   the box centre: at 6px it is a punctuation mark, not an icon. */
+.app-tooltip-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  /* Nudged up to sit on the first line's optical centre. */
+  transform: translateY(-1px);
+  align-self: center;
+}
+
+/* The untruncated name, wrapped to its own line under the state sentence: two
+   facts, and the state is the one being asked about. */
+.app-tooltip-detail {
+  flex: 0 0 100%;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
 }
 
 .app-tooltip.visible {

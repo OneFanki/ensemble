@@ -200,12 +200,12 @@ onBeforeUnmount(() => {
 /*
  * The scrim covers the whole window, not just the page area.
  *
- * Clicking anywhere outside the pane closes it — including the account column
- * and the address row. Those two used to be left clear so a click there could
- * switch accounts or type an address while the pane stayed open. In practice the
- * pane is 60% of the window and the user's aim when dismissing is "not on the
- * pane", not "on the page area specifically"; leaving two live strips around it
- * made dismissal fail exactly where the pointer was most likely to land.
+ * Clicking anywhere outside the pane closes it — including the account bar and
+ * the address row. Those used to be left clear so a click there could switch
+ * accounts or type an address while the pane stayed open. In practice the pane is
+ * 60% of the window and the user's aim when dismissing is "not on the pane", not
+ * "on the page area specifically"; leaving live strips around it made dismissal
+ * fail exactly where the pointer was most likely to land.
  *
  * It has to be a real element rather than a document listener: a `<webview>`
  * guest takes the pointer for itself, so a document-level listener would never
@@ -219,26 +219,27 @@ onBeforeUnmount(() => {
 
 /*
  * The pane: 60% of the window, capped so a 4K window does not produce a
- * kilometre-wide list. It starts where the account column ends and where the
- * address row finishes, so both stay reachable, and it ends at the window's
- * bottom edge — the page area, exactly.
- */
-/*
- * The pane: 60% of the window, capped so a 4K window does not produce a
- * kilometre-wide list. It starts where the page area starts — which is the
- * account column's width when the column is showing and the window's left edge
- * when it is collapsed, hence the variable rather than the token directly — and
- * ends at the window's bottom edge.
+ * kilometre-wide list. It starts at the window's left edge — the account column
+ * is gone, so the page area is the whole width — and ends at the bottom edge.
  */
 .floating-pane {
   position: absolute;
   top: calc(var(--titlebar-height) + var(--address-row-height));
   bottom: 0;
-  left: var(--pane-left, 0);
+  left: 0;
   display: flex;
   flex-direction: column;
-  width: min(720px, 60vw);
-  max-width: calc(100vw - var(--pane-left, 0px));
+  /*
+   * Narrower than it was (720px), but not by as much as the first attempt.
+   *
+   * The pane's contents became collapsible: sites are folded rows and an account
+   * is a tile inside one, so a folded list no longer needs a wide surface. The
+   * edit face still draws a four-column table while a site is open, though, and
+   * at 560px the role and password chips truncated to one character each —
+   * folded lists read fine narrow, an open table does not.
+   */
+  width: min(760px, 62vw);
+  max-width: 100vw;
   /*
    * The edge is drawn, not implied by a shadow.
    *
@@ -364,19 +365,25 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 
-/* A slim band with nothing but the close control: the page inside carries its
-   own title, and a second heading above it would say the same word twice. */
+/*
+ * The head sits in the pane, not on top of it.
+ *
+ * It used to draw its own band: a raised fill and a hairline under it. On a
+ * glass surface that reads as a second window stacked on the first — two
+ * surfaces and two edges, when the whole point of the blur is that the pane is
+ * one object lying over the page. The title and the controls now simply sit at
+ * the top of the same surface.
+ */
 .pane-head {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  /* A floor, not a height: on the edit face the head also carries the primary
-     write action, and a fixed 36px would clip it. */
+  /* A floor, not a height: the head's controls can grow taller than the title. */
   min-height: 40px;
-  padding: 4px 10px 4px 14px;
-  background: var(--frame);
-  border-bottom: 1px solid var(--line-soft);
+  padding: 4px 10px 0 14px;
+  background: none;
+  border-bottom: 0;
 }
 
 .pane-title {

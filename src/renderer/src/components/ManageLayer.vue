@@ -16,7 +16,7 @@
  */
 import type { LoginCaptureNotice } from "@shared/types";
 import { LayoutGrid, Pencil } from "lucide-vue-next";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import IdentitiesPage from "./IdentitiesPage.vue";
 import FloatingPane from "./ui/FloatingPane.vue";
@@ -55,10 +55,35 @@ const mode = computed(() => page.value?.mode ?? "use");
 function setMode(next: "use" | "edit"): void {
   page.value?.setMode(next);
 }
+
+/*
+ * Every opening starts on the launch face.
+ *
+ * The pane is mounted for the window's lifetime now, so its page keeps whatever
+ * face it was last left on — and a pane that reopens in edit mode is the wrong
+ * default: opening it is almost always "which account do I open now". Resetting
+ * on open (not on close) also means the face does not visibly flip while the
+ * leave animation is still playing.
+ */
+watch(
+  () => props.layer,
+  (layer) => {
+    if (layer) page.value?.setMode("use");
+  },
+);
 </script>
 
 <template>
-  <FloatingPane v-if="layer" :label="title" @close="emit('close')">
+  <!--
+    Mounted for the window's lifetime, closed through the `open` prop.
+
+    It used to be `v-if="layer"` here, which unmounted the whole component the
+    instant the pane closed — so the pane's own `<Transition>` never reached its
+    leave phase and the panel vanished in one frame. A `Transition` can only
+    animate an element that is still mounted, so the closing state has to reach
+    the shell before the component goes away.
+  -->
+  <FloatingPane :open="Boolean(layer)" :label="title" @close="emit('close')">
     <template #head>
       <!--
         The face switch is the head's only control, and it never moves.
@@ -81,6 +106,7 @@ function setMode(next: "use" | "edit"): void {
           @click="setMode('use')"
         >
           <LayoutGrid :size="13" />
+          <span>{{ t("app.accountModeUse") }}</span>
         </button>
         <button
           type="button"
@@ -92,6 +118,7 @@ function setMode(next: "use" | "edit"): void {
           @click="setMode('edit')"
         >
           <Pencil :size="13" />
+          <span>{{ t("app.accountModeEdit") }}</span>
         </button>
       </div>
     </template>
@@ -102,11 +129,20 @@ function setMode(next: "use" | "edit"): void {
       @new-identity="emit('newIdentity', $event)"
       @edit-identity="emit('editIdentity', $event)"
       @session-health="emit('sessionHealth')"
+      @launched="emit('close')"
     />
   </FloatingPane>
 </template>
 
 <style scoped>
+/*
+ * The face switch names its two faces.
+ *
+ * It was two icon-only buttons. A grid glyph and a pencil are guesses — the
+ * pencil could be "edit this account" as easily as "edit this list", and the
+ * grid could be "show a grid" — so the control explained itself only on hover.
+ * The head has room for two short words; the icons stay as the leading marks.
+ */
 .mode-switch {
   display: inline-flex;
   gap: 2px;
@@ -117,12 +153,15 @@ function setMode(next: "use" | "edit"): void {
 }
 
 .mode {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
   border-radius: var(--radius-sm);
-  color: var(--faint);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
 }
 
 .mode:hover {
@@ -132,5 +171,10 @@ function setMode(next: "use" | "edit"): void {
 .mode.on {
   background: var(--surface-3);
   color: var(--text);
+}
+
+/* The mark takes the weight of the state; the word stays a word. */
+.mode.on svg {
+  color: var(--accent);
 }
 </style>

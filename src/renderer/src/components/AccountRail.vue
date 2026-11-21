@@ -1,27 +1,37 @@
 <script setup lang="ts">
 /**
- * 左栏：运行中的账号，竖向一列。
+ * 账号条：窗口首行左半，横向一排条目。
  *
- * 每个条目是一个浏览器实例（不是页面）：站点图标、账号名、AI 三态点、冻结标识
- * 与它自己的关闭按钮。点一下把该实例的当前页放上舞台；其余实例继续在后台运行
- * ——登录态保持、AI 可继续驱动，只是不占像素（ADR 0012 的单舞台模型）。
+ * 每个条目是一个浏览器实例（不是页面）：站点图标、账号名、AI 三态点、冻结标识。
+ * 点一下把该实例的当前页放上舞台；其余实例继续在后台运行——登录态保持、AI 可
+ * 继续驱动，只是不占像素（ADR 0012 的单舞台模型）。
  *
- * 逻辑是从旧的 `InstanceRail` 搬来的，不是重写：AI 三态点、冻结三态映射、
- * 「5 秒时钟」与账号名解析都维持原来的实现，选择器（`data-ai-dot` /
- * `data-freeze` / `data-instance-chip`）也保留，e2e 仍在用。
+ * 它原来是左栏里的一列。换成横向条以后，每一段可用宽度都给了名字：列里只能
+ * 显示十个字，条里能显示一整条名字，且不占页面像素。
  *
- * 它不是旧实例行的竖向翻版，去掉的东西见文件末尾的说明。
+ * 它同时是新建会话的入口：会话原来只能在设置页创建，于是「再开一个身份」要先
+ * 离开浏览器、建完再回来找。这一栏本来就是「哪些会话在跑」的清单，加号放在
+ * 它的头部才是同一件事。
+ *
+ * AI 三态点、冻结三态映射与账号名解析是从旧的 `InstanceRail` 搬来的，选择器
+ * （`data-ai-dot` / `data-freeze` / `data-instance-chip`）保留，e2e 仍在用。
  */
 
-import { aiDotState, lastActionAtByTab } from "@shared/ai-dot";
+import { lastActionAtByTab } from "@shared/ai-dot";
 import type { EmbeddedTab } from "@shared/embedded";
 import { type InstanceFreezeState, instanceFreezeState } from "@shared/instance-freeze";
 import type { Identity, RoleColor } from "@shared/types";
-import { ExternalLink, PictureInPicture2, UsersRound, X } from "lucide-vue-next";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ExternalLink, PictureInPicture2, Plus, UsersRound, X } from "lucide-vue-next";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useAiDotTip } from "../composables/aiDotTip";
+import { useNowMs } from "../composables/useNowMs";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
+import Modal from "./Modal.vue";
+import AppButton from "./ui/AppButton.vue";
+import FormField from "./ui/FormField.vue";
+import TextField from "./ui/TextField.vue";
 
 /**
  * 左栏能打开的管理浮层。
@@ -68,8 +78,14 @@ interface RailItem {
   onStage: boolean;
   /** AI 状态：呼吸 / 常亮 / 无标。 */
   dot: "active" | "recent" | "idle";
-  /** 状态点的悬停说明；没有点时为 undefined。 */
-  dotTip?: string;
+  /**
+   * 状态点的悬停说明；没有点时为 undefined。
+   *
+   * 不是一句话，而是一层小结构：先一颗同色点说明说的是哪个标记，再一句
+   * 状态。完整账号名不在这里，由 `labelOf` 拼上去——它回答的是另一个问题
+   * （「这一行是谁」），没有点时也照样要给。
+   */
+  aiTip?: { text: string; color: string };
   /** 实例全部页面的冻结状态；映射在 `shared/instance-freeze`。 */
   freeze: InstanceFreezeState;
   /** 冻结标识的悬停说明；没有标识时为 undefined。 */
@@ -86,10 +102,29 @@ function activePageOf(root: EmbeddedTab): EmbeddedTab {
   return pages.find((page) => page.active) ?? root;
 }
 
+/**
+ * What a chip is called.
+ *
+ * Three cases, in order of specificity: it is an account, it is a throwaway, or
+ * it is one of the named identities. The identity branch has to read the page's
+ * own `profileId` rather than assume the default — a page opened in a
+ * user-created identity was labelled "默认身份" here, which is not a cosmetic
+ * slip: the chip's whole job is telling the user which jar a window belongs to,
+ * and the one they created is exactly the one they cannot infer.
+ */
 function accountOf(root: EmbeddedTab): string {
   const identity = workspace.identities.find((item) => item.id === root.identityId);
   if (identity) return identity.name;
-  return root.clean ? t("app.cleanSession") : t("app.dailyProfile");
+  if (root.clean) return t("app.cleanSession");
+  const profiles = workspace.settings.profiles ?? [];
+  const profile =
+    profiles.find((item) => item.id === root.profileId) ??
+    profiles.find((item) => item.id === workspace.settings.defaultProfileId);
+  // The built-in row's stored name is data, not copy: an install that predates a
+  // vocabulary change still holds the old string, so the built-ins are labelled
+  // from the message table and only user rows use their own name.
+  if (!profile || profile.builtin) return t("app.dailyProfile");
+  return profile.name;
 }
 
 /**
@@ -100,16 +135,8 @@ function accountOf(root: EmbeddedTab): string {
 const aiLastActionByTab = computed(() => lastActionAtByTab(workspace.aiActivity));
 
 /** 驱动 active→recent 的降级，不必等一次状态推送。 */
-const now = ref(Date.now());
-let clockTimer: ReturnType<typeof setInterval> | undefined;
-onMounted(() => {
-  clockTimer = setInterval(() => {
-    now.value = Date.now();
-  }, 5_000);
-});
-onBeforeUnmount(() => {
-  if (clockTimer) clearInterval(clockTimer);
-});
+const now = useNowMs();
+const aiTip = useAiDotTip();
 
 function lastActionOf(root: EmbeddedTab): number | undefined {
   let latest: number | undefined;
@@ -120,22 +147,13 @@ function lastActionOf(root: EmbeddedTab): number | undefined {
   return latest;
 }
 
-function dotOf(root: EmbeddedTab): { dot: "active" | "recent" | "idle"; tip?: string } {
-  const at = lastActionOf(root);
-  const state = aiDotState(at, now.value);
-  if (state === "idle" || at === undefined) return { dot: "idle" };
-  const date = new Date(at);
-  if (Number.isNaN(date.getTime())) return { dot: state };
-  const sameDay = new Date().toDateString() === date.toDateString();
-  const time = sameDay
-    ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleString(undefined, {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-  return { dot: state, tip: t("app.aiDotLastAction", { time }) };
+function dotOf(root: EmbeddedTab): {
+  dot: "active" | "recent" | "idle";
+  aiTip?: { text: string; color: string };
+} {
+  const tip = aiTip.tipOf(lastActionOf(root), now.value);
+  if (!tip) return { dot: "idle" };
+  return { dot: tip.state, aiTip: { text: tip.text, color: tip.color } };
 }
 
 /** 一个实例的冻结标识：按它全部页面映射，并给出悬停说明。 */
@@ -178,7 +196,7 @@ const embeddedItems = computed<RailItem[]>(() => {
       ...(page.favicon ? { favicon: page.favicon } : {}),
       onStage: embedded.isOnStage(page),
       dot: resolved.dot,
-      ...(resolved.tip ? { dotTip: resolved.tip } : {}),
+      ...(resolved.aiTip ? { aiTip: resolved.aiTip } : {}),
       freeze: frozen.freeze,
       ...(frozen.tip ? { freezeTip: frozen.tip } : {}),
       ...(pages.length > 0 && pages.every((item) => item.popout) ? { poppedOut: true } : {}),
@@ -205,6 +223,30 @@ const externalItems = computed<RailItem[]>(() =>
 
 const items = computed<RailItem[]>(() => [...embeddedItems.value, ...externalItems.value]);
 
+/**
+ * 一行的悬停说明。
+ *
+ * 三种内容合成一层：有 AI 状态点时先给同色点、再给状态句，然后是完整账号名；
+ * 冻结标识的说明排在最后。合在一层而不是各挂各的，是因为两个角标都
+ * `pointer-events: none`——它们的「悬停」其实就是行的悬停，分成几个 tooltip 只
+ * 会让它们互相覆盖。
+ *
+ * 名字放在状态句下面而不是并进句子里：栏很窄，名字会被截断，而 tooltip 是它
+ * 唯一完整出现的地方；但状态才是这一行此刻要说明的东西，所以它在前面。
+ */
+function labelOf(item: RailItem): { text: string; dot?: string; detail?: string[] } {
+  const detail: string[] = [];
+  if (item.aiTip) detail.push(item.account);
+  if (item.freezeTip) detail.push(item.freezeTip);
+  if (!item.aiTip) return { text: item.account, ...(detail.length ? { detail } : {}) };
+  return {
+    text: item.aiTip.text,
+    dot: item.aiTip.color,
+    ...(detail.length ? { detail } : {}),
+  };
+}
+
+
 /** 站点图标加载失败的条目，退回文字头像。 */
 const failedAvatars = ref<Set<string>>(new Set());
 
@@ -221,8 +263,6 @@ const failedAvatars = ref<Set<string>>(new Set());
  *    舞台里，点击的唯一意义就是抬起那个窗口。
  */
 function activate(item: RailItem, event: MouseEvent): void {
-  // 关闭按钮自己 stop 了事件；这里再挡一次，避免拖拽起点的按下被当成点击。
-  if ((event.target as HTMLElement | null)?.closest(".item-close")) return;
   if (props.activeLayer) emit("closeLayer");
   if (item.external) {
     void workspace.focusInstance(item.instanceId);
@@ -232,10 +272,111 @@ function activate(item: RailItem, event: MouseEvent): void {
   void embedded.activate(item.pageId);
 }
 
+/**
+ * 一个条目的右键菜单。
+ *
+ * 关闭原来是一颗常驻在行末的小叉。在竖向列表里它还站得住——行很宽、叉在右端
+ * 一格；换成顶栏的横向条目后，一颗叉要吃掉 16px，而条目本身只有一条名字那么
+ * 宽，「关掉它」把一个只有一行的条变成两段信息，还很容易误点。
+ *
+ * 关一个会话本来也不是随手动作，所以它挪到右键菜单：浏览器里关标签、关窗口都
+ * 在菜单里，这里沿用同一套。菜单项按条目类型分——内置实例是「关闭」，系统浏览
+ * 器实例是「停止」。
+ */
+const menu = ref<{ item: RailItem; x: number; y: number } | null>(null);
+
+function openMenu(item: RailItem, event: MouseEvent): void {
+  event.preventDefault();
+  event.stopPropagation();
+  // 菜单贴着指针；靠近窗口右下角时向内翻，免得菜单跑到窗外。
+  const width = 132;
+  const height = 34;
+  menu.value = {
+    item,
+    x: Math.min(event.clientX, window.innerWidth - width - 8),
+    y: Math.min(event.clientY, window.innerHeight - height - 8),
+  };
+}
+
+/** 菜单开着时，任何一次别处的按下、Esc 或滚动都收起它。 */
+function onMenuDismiss(event: Event): void {
+  const target = event.target as Node | null;
+  if (target && (target as HTMLElement).closest?.("[data-rail-menu]")) return;
+  menu.value = null;
+}
+
+watch(menu, (open) => {
+  if (open) {
+    document.addEventListener("pointerdown", onMenuDismiss, true);
+    document.addEventListener("keydown", onMenuKeydown);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+  } else {
+    document.removeEventListener("pointerdown", onMenuDismiss, true);
+    document.removeEventListener("keydown", onMenuKeydown);
+    window.removeEventListener("resize", closeMenu);
+    window.removeEventListener("scroll", closeMenu, true);
+  }
+});
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") closeMenu();
+}
+
+function closeMenu(): void {
+  menu.value = null;
+}
+
+onBeforeUnmount(closeMenu);
+
+async function closeFromMenu(): Promise<void> {
+  const target = menu.value?.item;
+  menu.value = null;
+  if (target) await closeItem(target);
+}
+
 /** 三个入口：已经开着的那一层再点一次 = 收起。 */
 function toggleLayer(layer: AccountRailLayer): void {
   if (props.activeLayer === layer) emit("closeLayer");
   else emit("openLayer", layer);
+}
+
+/**
+ * 在这一栏里新建一个会话。
+ *
+ * 会话原本只能在设置页里创建，于是「想再开一个干净身份看看」这条路上，用户
+ * 得离开浏览器去管理页，建完再回来，再在这一栏里找它。这一栏本来就是「哪些
+ * 会话在跑」的清单，新建入口放在它的头部，是同一件事的加号。
+ *
+ * 建成即启动：用户来这里是为了那个会话产生的页面，不是为了在磁盘上多一条
+ * 记录。名字留空则以「会话 N」补位，仍走 store 的校验。
+ */
+const creating = ref(false);
+const createName = ref("");
+const createError = ref("");
+
+function openCreate(): void {
+  createName.value = "";
+  createError.value = "";
+  creating.value = true;
+}
+
+async function submitCreate(): Promise<void> {
+  const name = createName.value.trim();
+  if (!name) {
+    createError.value = t("app.sessionNeedsName");
+    return;
+  }
+  // The id comes from the diff, not from the name: two sessions may legitimately
+  // share a name, and `find` by name would then launch the wrong one.
+  const before = new Set((workspace.settings.profiles ?? []).map((profile) => profile.id));
+  const saved = await workspace.createProfile(name);
+  // `run` in the store answers `undefined` after toasting the rejection, so a
+  // dialog that closes here only ever closes on a write that landed.
+  if (saved === undefined) return;
+  const created = saved.profiles.find((profile) => !before.has(profile.id));
+  creating.value = false;
+  if (created) await embedded.openProfileTab(created.id);
 }
 
 /** 关掉一个内置实例的全部页面 / 停掉一个外部实例。 */
@@ -257,9 +398,11 @@ async function closeItem(item: RailItem): Promise<void> {
 function avatarInitialOf(root: EmbeddedTab): string {
   const identity = workspace.identities.find((item) => item.id === root.identityId);
   if (!identity) {
-    return root.clean
-      ? t("app.cleanSession").slice(0, 1)
-      : t("app.dailyProfile").slice(0, 1);
+    // The letter follows the same rule as the name: a user-created identity shows
+    // its own first character, the two built-ins show theirs from the message
+    // table. One source for both, or a chip could say 工 in an avatar above a name
+    // that reads 默认身份.
+    return accountOf(root).slice(0, 1);
   }
   const site = workspace.sites.find((item) => item.id === identity.siteId);
   return (site?.name ?? t("app.identityOrphanSite")).slice(0, 1);
@@ -272,23 +415,37 @@ function markAvatarBroken(instanceId: string): void {
 </script>
 
 <template>
-  <aside
-    class="account-rail drag-region"
+  <!--
+    The account bar: the top row's left half.
+
+    It used to be a 116px column down the window's left side. The column cost the
+    page a permanent strip of pixels and still could not show a name longer than
+    about ten characters, while the top row — which had nothing in it but tabs —
+    was the one band every browser spends on identity anyway. So the accounts
+    live where the tabs used to start: a row of chips, as wide as their contents,
+    capped at half the window and scrolling sideways past that.
+
+    The chips are still the tablist of running accounts, because that is what
+    they are.
+  -->
+  <header
+    class="account-bar drag-region"
     :data-platform="platform"
     data-account-rail
     :aria-label="t('app.railLabel')"
   >
     <!--
-      管理入口在顶部，不在底部。
+      Two controls at the left end, and they are not chips.
 
-      它是这一栏里唯一的高频动作：每开一个账号几乎都要经过它，而底部那一行在
-      账号多的时候正好被列表压在下面。「多账号」而不是「账号」：这里管的是多个
-      账号的清单，叫「账号」会读成「我自己登录的那个账号」。单条账号仍然叫账号。
+      「多账号」 is the door to the pane that manages the whole list; the "+" is
+      the door to a new session. They sit before the chips so the bar reads
+      left-to-right as "the list, add to it, and here is what is running" — and so
+      they never scroll away with a long list.
     -->
-    <div class="rail-head no-drag">
+    <div class="bar-doors no-drag">
       <button
         type="button"
-        class="entry-btn"
+        class="bar-door"
         :class="{ active: activeLayer === 'identities' }"
         :aria-label="t('app.railAccounts')"
         :aria-pressed="activeLayer === 'identities'"
@@ -296,12 +453,22 @@ function markAvatarBroken(instanceId: string): void {
         data-rail-entry="identities"
         @click="toggleLayer('identities')"
       >
-        <UsersRound :size="13" />
-        <span>{{ t("app.railAccounts") }}</span>
+        <UsersRound :size="14" />
       </button>
+      <button
+        type="button"
+        class="bar-door"
+        :aria-label="t('app.sessionCreateHere')"
+        v-tooltip="t('app.sessionCreateHere')"
+        data-rail-new-session
+        @click="openCreate"
+      >
+        <Plus :size="14" />
+      </button>
+      <span class="bar-sep" aria-hidden="true"></span>
     </div>
 
-    <div class="rail-list no-drag" role="tablist" :aria-label="t('app.railLabel')">
+    <div class="bar-list no-drag" role="tablist" :aria-label="t('app.railLabel')" data-rail-list>
       <button
         v-for="item in items"
         :key="item.id"
@@ -313,8 +480,9 @@ function markAvatarBroken(instanceId: string): void {
         :data-account-item="item.instanceId"
         :data-instance-chip="item.instanceId"
         :data-on-stage="item.onStage ? '1' : '0'"
-        v-tooltip="item.account"
+        v-tooltip="labelOf(item)"
         @click="activate(item, $event)"
+        @contextmenu="openMenu(item, $event)"
       >
         <!-- 头像就是站点：有图标用图标，没有就用站点名首字；默认会话固定「默」。 -->
         <span
@@ -351,93 +519,216 @@ function markAvatarBroken(instanceId: string): void {
         <!--
           状态挂在头像的角上，不占行宽。
 
-          这两个点原来各占 7px 的横向空间，加在头像与名字之间，一行里挤了三个
-          元素；而它们说的是「这个头像代表的东西现在什么状态」，本来就是头像的一
-          部分。作为角标挂上去之后，行宽只由名字决定，栏可以更窄。
+          它们本身 pointer-events: none：角标只有 6px，要求用户把指针停在一个角
+          上才能知道它什么意思，等于没解释。悬停说明因此挂在整条上，由 labelOf
+          把状态句、完整账号名和冻结说明合成一层。
         -->
         <span
           v-if="!item.external && item.dot !== 'idle'"
           class="ai-dot"
           :class="item.dot"
           :data-ai-dot="item.dot"
-          v-tooltip="item.dotTip"
         ></span>
         <span
           v-if="!item.external && item.freeze !== 'awake'"
           class="freeze-dot"
           :class="item.freeze"
           :data-freeze="item.freeze"
-          v-tooltip="item.freezeTip"
         ></span>
-        <span
-          class="item-close"
-          role="button"
-          tabindex="0"
-          :aria-label="t('app.stop')"
-          :data-close-instance="item.instanceId"
-          @click.stop="closeItem(item)"
-          @keydown.enter.stop="closeItem(item)"
-          @keydown.space.prevent.stop="closeItem(item)"
-        >
-          <X :size="11" />
-        </span>
       </button>
     </div>
-  </aside>
+
+    <!--
+      The chip's own menu: right-click, the way every browser closes a tab.
+
+      A close control that is always drawn costs the chip a fixed slice of width
+      for a rare, irreversible action — and at chip width it also became the
+      easiest thing to hit by accident. The menu also gives the action a name,
+      which an 11px cross never did.
+    -->
+    <Teleport to="body">
+      <div
+        v-if="menu"
+        class="rail-menu"
+        role="menu"
+        data-rail-menu
+        :style="{ left: `${menu.x}px`, top: `${menu.y}px` }"
+        @pointerdown.stop
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="rail-menu-item"
+          :data-rail-close="menu.item.instanceId"
+          @click="closeFromMenu"
+        >
+          <X :size="12" />
+          <span>{{ menu.item.external ? t("app.stop") : t("app.closeSession") }}</span>
+        </button>
+      </div>
+    </Teleport>
+  </header>
+
+  <!--
+    Creating a session from the bar.
+
+    It is a form, so it is a dialog (the app's rule for every write): the name is
+    the only field, and a dialog puts the focus in it and the verdict one click
+    away instead of opening a second surface inside a row of chips.
+
+    The page opens as soon as the name is accepted — creating a session from this
+    bar means "I want to browse as someone else", and leaving the user with a new
+    chip and no window would be answering a question they did not ask.
+  -->
+  <Modal
+    v-if="creating"
+    :open="true"
+    :title="t('app.sessionCreateHere')"
+    width="380px"
+    @close="creating = false"
+  >
+    <form class="create-form" @submit.prevent="submitCreate">
+      <FormField :label="t('app.sessionNameLabel')">
+        <TextField
+          v-model="createName"
+          type="text"
+          maxlength="60"
+          :placeholder="t('app.sessionNamePlaceholder')"
+          data-rail-session-name
+        />
+      </FormField>
+      <p v-if="createError" class="create-error" role="alert">{{ createError }}</p>
+    </form>
+    <template #footer>
+      <span class="spacer"></span>
+      <AppButton @click="creating = false">{{ t("app.cancel") }}</AppButton>
+      <AppButton variant="primary" data-rail-session-create @click="submitCreate">
+        {{ t("app.sessionCreate") }}
+      </AppButton>
+    </template>
+  </Modal>
 </template>
 
 <style scoped>
 /*
- * 左栏：一条竖向的框架色列，从地址栏下面开始，到窗口底部结束。
+ * 账号条：窗口首行左半，横向一排条目。
  *
- * 空白处是拖拽区（浮层打开时由 `data-floating` 收回，见 base.css），
+ * 它原来是左栏里的一列，从地址栏下面一直排到窗口底部。那列长期占着页面一条
+ * 像素，却仍然只能显示十个字左右的名字；而首行当时除标签外什么都没有——浏览器
+ * 里这一带本来就是花在「我是谁」上的。
+ *
+ * 宽度由内容决定，上限是窗口的一半：一屏宽度里，页面与账号条谁更重要会随窗口
+ * 变化，而「一半」是两者都不至于被挤没的地方。超过上限横向滚动，而不是压扁条目
+ * ——压扁会让每个名字都变成两三个字加省略号，等于全都读不出来。
+ *
+ * 空白处是拖拽区（浮层打开时由 `data-floating` 收回，见 base.css）；
  * 条目与按钮都是 `no-drag`。
  */
-.account-rail {
-  flex: 0 0 var(--account-rail-width);
-  width: var(--account-rail-width);
-  min-height: 0;
+.account-bar {
   display: flex;
-  flex-direction: column;
-  background: var(--frame);
-  border-right: 1px solid var(--line-soft);
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  /* Half the window, whatever the contents want. A bar sized purely by its
+     contents would eat the tab strip on the first wide workspace. */
+  max-width: 50vw;
+  height: 100%;
+  padding: 0 2px 0 4px;
 }
 
-/* 列表是唯一滚动区：账号多了往下滚，底部入口永远在。 */
-.rail-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+/* 两个入口：图标按钮，和条目同高，靠一条竖线与条目分开。 */
+.bar-doors {
   display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 4px 0 6px;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.bar-door {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  background: transparent;
+}
+
+.bar-door:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+/* 面板开着时入口留一个标记：填色会读成「这个账号在跑」，而 Open 态说的是
+   这颗按钮开的东西正开着。 */
+.bar-door.active {
+  color: var(--accent);
+}
+
+.bar-door.active:hover {
+  color: var(--accent);
+}
+
+.bar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 5px 0 3px;
+  background: var(--line);
+  flex: 0 0 1px;
 }
 
 /*
- * 一个条目：站点头像 + 账号名 + 状态点 + 关闭。
+ * 条目区：唯一可以横向滚动的部分。
  *
- * 整行贴着栏边，只靠内边距分出空白：这不是卡片，是这一列的列表行，
- * 一屏要塞下尽可能多的账号。选中仍然用填充表达，铺到底、不留边。
+ * `overflow-x: auto` 而不是 `hidden`：条目多到超过半屏时，用户要能自己找到后面
+ * 的账号。滚动条按需出现（`scrollbar-width: thin`），常态不占高度。
+ */
+.bar-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.bar-list::-webkit-scrollbar {
+  height: 3px;
+}
+
+.bar-list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 2px;
+}
+
+/*
+ * 一个条目：站点头像 + 账号名 + 状态角标。
+ *
+ * 宽度由内容撑开（`flex: 0 0 auto`），上限 220px：名字长了会截断而不是把整条
+ * 挤成一条缝，短名字也不会留一块空白。高度与首行同高，选中用填充表达。
  */
 .rail-item {
   position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 27px;
-  padding: 0 5px 0 7px;
-  border-radius: 0;
+  height: 24px;
+  padding: 0 8px 0 5px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: var(--fs-sm);
   text-align: left;
   flex: 0 0 auto;
   min-width: 0;
+  max-width: 220px;
 }
 
 .rail-item:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 
@@ -449,12 +740,12 @@ function markAvatarBroken(instanceId: string): void {
 /*
  * 头像就是站点：有 favicon 用 favicon，没有就用站点名首字。
  *
- * 固定方块，两种来源共用一个盒子，图标晚到时行不会跳。
+ * 固定方块，两种来源共用一个盒子，图标晚到时条目不会跳。
  */
 .avatar {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
   display: grid;
   place-items: center;
   border-radius: 4px;
@@ -488,7 +779,7 @@ function markAvatarBroken(instanceId: string): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
 /* 拆窗标记：说明这一条的像素在另一个窗口里，点击是提窗。 */
@@ -501,21 +792,21 @@ function markAvatarBroken(instanceId: string): void {
  * AI 状态点，挂成头像的角标。呼吸 = 正在操作；常亮 = 30 分钟内动过；无标 = 其它。
  * 状态同时写在 data-ai-dot 上，测试不必等动画。
  *
- * Positioned against the row, not the avatar, because the avatar is a 20px square
- * with `overflow: hidden` for the favicon — a badge inside it would be clipped.
- * The row is `position: relative`, and the offsets below are the avatar's own box
- * (7px padding + 20px) so the dot lands on its bottom-right corner. It takes no
- * layout space, which is the point: the name gets the whole remaining width.
+ * Positioned against the item, not the avatar, because the avatar is an 18px
+ * square with `overflow: hidden` for the favicon — a badge inside it would be
+ * clipped. The item is `position: relative`, and the offsets below are the
+ * avatar's own box (5px padding + 18px) so the dot lands on its bottom-right
+ * corner.
  */
 .ai-dot {
   position: absolute;
-  left: 21px;
-  bottom: 5px;
+  left: 17px;
+  bottom: 2px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  /* A ring in the rail's own colour, so the dot reads as sitting on the avatar
+  /* A ring in the bar's own colour, so the dot reads as sitting on the avatar
      rather than as a hole punched in it. */
   box-shadow: 0 0 0 1.5px var(--frame);
   pointer-events: none;
@@ -551,8 +842,8 @@ function markAvatarBroken(instanceId: string): void {
  */
 .freeze-dot {
   position: absolute;
-  right: 4px;
-  bottom: 5px;
+  right: 3px;
+  bottom: 2px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -569,160 +860,68 @@ function markAvatarBroken(instanceId: string): void {
   );
 }
 
-/* 顶部：管理入口。列表从这里往下铺，入口不会随账号变多被挤走。 */
-.rail-head {
-  flex: 0 0 auto;
-  padding: 5px 5px 4px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
 /*
- * 入口：和账号行同一套行高与左边距，靠字重和下边线区分层级。
+ * 条目的右键菜单。
  *
- * 它原来是个居中、`--fs-2xs` 字号的小按钮，并且和下面的账号行长得几乎一样
- * —— 同一栏里两排灰底列表项，分不清哪个是「打开清单」、哪个是「切到这个账号」。
- * 现在占满一行、左对齐，`padding` 与 `.rail-item` 完全一致（7/5，gap 6，27px），
- * 所以两个入口和账号的头像在同一条竖线上；区别只体现在字号、字重，以及把
- * 它和列表分开的那条下边线。悬停才给底色，常态是一行字——读起来是这一栏的
- * 入口，而不是又一条账号。
+ * Teleported to `<body>` so it is not clipped by the bar's own scroll container —
+ * a menu opened on a chip near the right edge would otherwise be cut off at the
+ * list's boundary.
  */
-.entry-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  height: 27px;
-  padding: 0 5px 0 7px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  white-space: nowrap;
-  text-align: left;
+.rail-menu {
+  position: fixed;
+  z-index: var(--z-inline-menu);
+  min-width: 132px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  animation: rail-menu-in var(--motion-fast) var(--ease-out);
 }
 
-.entry-btn svg {
-  flex: 0 0 auto;
-  color: var(--faint);
-}
-
-.entry-btn:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-.entry-btn:hover svg {
-  color: var(--text-secondary);
-}
-
-/* While the pane it opens is up, the entry keeps a mark. A fill would read as
-   "this account is running" — the same language the rows below use — so the
-   open state is the icon's colour, not a background. */
-.entry-btn.active {
-  color: var(--text);
-}
-
-.entry-btn.active svg {
-  color: var(--accent);
-}
-
-/*
- * 关闭：悬停才出现，和浏览器标签上的叉一样安静。
- *
- * 绝对定位在行的右端，不参与布局：它只在悬停时出现，却一直占着 17px，等于
- * 每个账号名平时都短了两个字——窄栏里这就是「管理员 · 主…」和完整名字的差别。
- * 现在名字铺到行尾，叉在悬停时盖在上面。
- */
-.item-close {
-  position: absolute;
-  right: 3px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 3px;
-  color: var(--faint);
-  background: var(--frame);
-  opacity: 0;
-  cursor: pointer;
-}
-
-.rail-item:hover .item-close,
-.item-close:focus-visible {
-  opacity: 1;
-}
-
-.item-close:hover {
-  background: color-mix(in srgb, var(--red) 20%, transparent);
-  color: var(--red);
-}
-
-/*
- * 面板向上展开：按钮在最下面，往下开会被窗口边缘裁掉。
- */
-@keyframes rail-panel-in {
+@keyframes rail-menu-in {
   from {
     opacity: 0;
-    transform: translateY(var(--motion-shift)) scale(var(--motion-pop-scale));
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
 }
 
-/* 头部：第二级带返回上一级的出口，搜索框两级共用。 */
-.launch-row {
+.rail-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 30px;
+  height: 26px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-  cursor: pointer;
-  min-width: 0;
   text-align: left;
 }
 
-.launch-row:hover {
-  background: var(--surface-3);
+.rail-menu-item:hover {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--text);
 }
 
-.launch-row:disabled,
-.launch-row.running {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.launch-row.running:hover {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-/* 站点行用图标，账号行用角色色块：两级一眼分得开，不会和名字首字重复。 */
-.row-icon {
+.rail-menu-item svg {
   color: var(--faint);
-  flex: 0 0 12px;
+  flex: 0 0 auto;
 }
 
-.row-color {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex: 0 0 8px;
+.rail-menu-item:hover svg {
+  color: var(--red);
 }
 
-.row-chev {
-  color: var(--faint);
-  flex: 0 0 11px;
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
 }
 
-.row-state {
-  margin-left: auto;
-  font-size: var(--fs-2xs);
-  color: var(--faint);
-  flex: none;
+.create-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--red);
 }
 </style>

@@ -25,6 +25,26 @@ type Placement = "bottom" | "top";
 export interface TooltipOptions {
   text: string;
   placement?: Placement;
+  /**
+   * A leading status dot, painted in this colour.
+   *
+   * Some labels exist to explain a mark rather than a control: the AI state dot
+   * on an avatar says "something about this row" and the sentence on hover says
+   * what. Repeating the dot inside the label is what ties the two together —
+   * without it the reader has to guess which of the row's marks is being
+   * explained.
+   */
+  dot?: string;
+  /**
+   * Quieter lines under the main sentence: the untruncated name behind the
+   * label, and any second mark the row is carrying.
+   *
+   * Rows truncate names to fit a narrow column, and the label is where the rest
+   * of the name can live without costing the column any width. More than one
+   * line is normal: a row can be "AI acted here" and "two of three pages asleep"
+   * at the same time, and both are about the row's own corner marks.
+   */
+  detail?: string | string[];
 }
 
 /** Long enough that sweeping the toolbar does not flash a trail of labels. */
@@ -104,7 +124,7 @@ function show(element: HTMLElement, options: TooltipOptions): void {
     return;
   }
   const node = ensureHost();
-  node.textContent = options.text;
+  render(node, options);
   active = element;
   place(element, options.placement);
   // A frame between writing the text and revealing it lets the browser lay the
@@ -190,6 +210,36 @@ export const vTooltip: Directive<HTMLElement, string | TooltipOptions> = {
 function normalize(value: string | TooltipOptions | undefined): TooltipOptions {
   if (typeof value === "string") return { text: value };
   return value ?? { text: "" };
+}
+
+/**
+ * Writes a label into the shared host.
+ *
+ * Built as a tree rather than as `textContent`, because two of the labels are
+ * not one string: the dot has to carry the colour of the state it stands for,
+ * and the detail line has to be quieter than the line it explains. `textContent`
+ * is still the right model for the plain case — it never parses markup, so a
+ * page title containing `<` cannot become an element.
+ */
+function render(node: HTMLElement, options: TooltipOptions): void {
+  node.replaceChildren();
+  if (options.dot) {
+    const dot = document.createElement("span");
+    dot.className = "app-tooltip-dot";
+    dot.style.background = options.dot;
+    node.append(dot);
+  }
+  const text = document.createElement("span");
+  text.textContent = options.text;
+  node.append(text);
+  const details = options.detail === undefined ? [] : Array.isArray(options.detail) ? options.detail : [options.detail];
+  for (const line of details) {
+    if (!line) continue;
+    const detail = document.createElement("span");
+    detail.className = "app-tooltip-detail";
+    detail.textContent = line;
+    node.append(detail);
+  }
 }
 
 /**

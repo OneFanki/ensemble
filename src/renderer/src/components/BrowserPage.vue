@@ -9,6 +9,7 @@ import {
   VIEWPORT_PRESETS,
 } from "@shared/embedded";
 import { resolveBrowserInput } from "@shared/search";
+import { lastActionAtByTab } from "@shared/ai-dot";
 import type {
   AppMessageView,
   Bookmark,
@@ -26,6 +27,8 @@ import {
   Bug,
   Check,
   CheckCheck,
+  ChevronDown,
+  ChevronUp,
   Copy,
   CornerDownLeft,
   Download,
@@ -61,7 +64,9 @@ import {
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFloatingLayer } from "../composables/floatingLayer";
+import { useAiDotTip } from "../composables/aiDotTip";
 import { useMessageRows } from "../composables/messageRows";
+import { useNowMs } from "../composables/useNowMs";
 import { useStageGeometry } from "../composables/stageGeometry";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useNavigationStore } from "../stores/navigation";
@@ -73,7 +78,6 @@ import AccountRail, { type AccountRailLayer } from "./AccountRail.vue";
 import PageSizeFrame from "./PageSizeFrame.vue";
 import MessageDetailLayer from "./MessageDetailLayer.vue";
 import NewTabPage from "./NewTabPage.vue";
-import OpenSiteButton from "./OpenSiteButton.vue";
 import PerformancePanel from "./PerformancePanel.vue";
 import TabIcon from "./TabIcon.vue";
 import AppButton from "./ui/AppButton.vue";
@@ -92,8 +96,14 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** Open a shell-owned page or layer; omitted means "settings". */
-  openConsole: [view?: "identities" | "settings" | "messages" | "ai"];
+  /**
+   * Open a shell-owned page or layer; omitted means "settings".
+   *
+   * The second argument is the origin to scope the AI log to — the panel's
+   * "查看全部" means "this site's whole log", so the page has to be told which
+   * site the reader was looking at.
+   */
+  openConsole: [view?: "identities" | "settings" | "messages" | "ai", origin?: string];
   /** The account column asked for a management layer, or for it to close. */
   "update:layer": [layer: AccountRailLayer | null];
   /** The app menu's guide entry; the shell owns the dialog. */
@@ -126,57 +136,6 @@ const address = ref("");
 const findText = ref("");
 const findResult = ref<{ matches: number; activeMatch: number } | null>(null);
 const findOpen = ref(false);
-
-/**
- * Whether the account rail is showing.
- *
- * Collapsed by default: the rail answers "which of my accounts is running", and a
- * fresh window has none — the tab strip and the page are the whole browser, and
- * the rail is something you open when you have accounts to switch between. The
- * toggle is the leftmost control of the tab strip, where every browser puts its
- * sidebar switch.
- *
- * Remembered across restarts: a user who works with the rail open should not have
- * to open it on every launch.
- */
-const railOpen = ref(readRailOpen());
-
-function readRailOpen(): boolean {
-  try {
-    return window.localStorage.getItem("ensemble.rail.open") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function toggleRail(): void {
-  railOpen.value = !railOpen.value;
-  try {
-    window.localStorage.setItem("ensemble.rail.open", railOpen.value ? "1" : "0");
-  } catch {
-    // A full quota must not break the toggle; the layout still changes, it just
-    // forgets after a restart.
-  }
-}
-
-/**
- * Tells the floating pane where the page area starts.
- *
- * The pane is teleported to `<body>`, so it cannot see whether the rail is
- * mounted — it only knows the width token, which is a lie while the rail is
- * collapsed. Publishing an offset keeps the two in step without the pane
- * reaching back into the browser's state.
- */
-watch(
-  railOpen,
-  (open) => {
-    document.documentElement.style.setProperty(
-      "--pane-left",
-      open ? "var(--account-rail-width)" : "0px",
-    );
-  },
-  { immediate: true },
-);
 
 const platform = computed(() => workspace.snapshot?.platform ?? "win32");
 /** The AI endpoint's live state, shown beside the app menu's AI entry. */
@@ -303,11 +262,42 @@ function sleepStateOf(page: EmbeddedTab): "sleeping" | "never" | undefined {
   return page.sleepPolicy === "never" ? "never" : undefined;
 }
 
-/** The tab's native tooltip: URL first, then why the icon looks different. */
-function pageTitle(page: EmbeddedTab): string {
+/**
+ * The AI state a tab is drawing, if any.
+ *
+ * Per page, not per account: the rail answers "is the AI on this account", and a
+ * tab has to answer "is it on *this page*" — an account can have three pages open
+ * and only one of them being driven. The log records a tab id, so the two views
+ * come from the same fact rather than from a second counter.
+ *
+ * No dot while idle, deliberately: a resting tab should be exactly what it was
+ * before this feature existed. A permanently-present grey dot would be a second
+ * favicon to read on every tab, every day, to learn nothing.
+ */
+const aiLastActionByTab = computed(() => lastActionAtByTab(workspace.aiActivity));
+const now = useNowMs();
+const aiTip = useAiDotTip();
+
+function aiDotOf(page: EmbeddedTab): { state: "active" | "recent"; text: string; color: string } | null {
+  const tip = aiTip.tipOf(aiLastActionByTab.value.get(page.id), now.value);
+  return tip ? { state: tip.state, text: tip.text, color: tip.color } : null;
+}
+
+/**
+ * A tab's hover label: the AI state when there is one, and the page's title.
+ *
+ * It replaces the native `title` rather than joining it, because the native one
+ * cannot carry the dot and would have popped up underneath our own label after a
+ * second's delay. The URL is the part of the old label that has nowhere else to
+ * live — the address bar only shows the page in front.
+ */
+function tabLabelOf(page: EmbeddedTab): { text: string; dot?: string; detail: string[] } {
+  const dot = aiDotOf(page);
+  const detail = [store.titleOf(page), page.url];
   const state = sleepStateOf(page);
-  if (!state) return page.url;
-  return `${page.url}\n${state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep")}`;
+  if (state) detail.push(state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep"));
+  if (!dot) return { text: store.titleOf(page), detail };
+  return { text: dot.text, dot: dot.color, detail };
 }
 
 /** Clicking a strip tab puts that page on the stage. */
@@ -499,14 +489,16 @@ function toggleAiPanel(): void {
 }
 
 /**
- * Leaves the panel for the full activity log.
+ * Leaves the panel for the full activity log, scoped to the page in front.
  *
  * Through the shell's `openConsole`: this component does not own the layer, and
- * calling a store directly would bypass the shell's bookkeeping.
+ * calling a store directly would bypass the shell's bookkeeping. The origin
+ * rides along because the panel only ever showed this site's records — its
+ * "查看全部" is this site's whole log, not the workspace's.
  */
 function openAiConsole(): void {
   aiPanelOpen.value = false;
-  emit("openConsole", "ai");
+  emit("openConsole", "ai", aiPanelOrigin.value);
 }
 
 /** The panel's gear: the same door the old app-menu row was. */
@@ -1400,41 +1392,6 @@ async function fillLogin(tabId: string): Promise<void> {
 }
 
 /**
- * Site bookmarks next to the address bar.
- *
- * These are sites, not history entries: "open this system" and "open it as this
- * account" are the two things this app exists for, and both are one click away
- * from the tab bar instead of a trip to the sites page.
- *
- * The plain open lands in the daily profile, so a site the user is signed in to
- * just opens. "Clean" is the explicit exception and uses the throwaway
- * partition, which is why it is its own row in the menu rather than a modifier.
- */
-function siteLoginUrl(siteId: string): string | undefined {
-  const site = workspace.sites.find((item) => item.id === siteId);
-  if (!site) return undefined;
-  try {
-    return new URL(site.loginPath || "/", site.baseUrl).toString();
-  } catch {
-    return undefined;
-  }
-}
-
-async function openSiteBookmark(siteId: string): Promise<void> {
-  const url = siteLoginUrl(siteId);
-  if (!url) return;
-  workspace.markSiteUsed(siteId);
-  await store.openTabWith(url);
-}
-
-async function openSiteClean(siteId: string): Promise<void> {
-  const url = siteLoginUrl(siteId);
-  if (!url) return;
-  workspace.markSiteUsed(siteId);
-  await store.openTabWith(url, { clean: true });
-}
-
-/**
  * A bookmark tile on the new-tab surface.
  *
  * The tile replaces the blank page the user is looking at, which is what the
@@ -1449,19 +1406,6 @@ async function openBookmark(bookmark: Bookmark): Promise<void> {
     return;
   }
   await window.ensemble.navigateEmbeddedTab(tab.id, bookmark.url);
-}
-
-/**
- * The browser page's own chooser: "open this, as whom?".
- *
- * Every answer means "add the page where the user is looking". With a view on
- * stage that is one of its cells; picking an account used to open a loose page
- * in the flat strip instead, which for a grid of accounts is the one place the
- * user is not looking. Without a view the flat strip is the stage, so a loose
- * page is the same answer.
- */
-async function openIdentityBookmark(identityId: string): Promise<void> {
-  await store.openIdentity(identityId);
 }
 
 function fillMessage(reason?: string): string {
@@ -1503,772 +1447,765 @@ function fillMessage(reason?: string): string {
       rectangle is what every page node, resize handle and DevTools split is
       computed from.
     -->
-    <div class="tabstrip" :data-platform="platform">
-      <!-- The sidebar switch, at the strip's left end where every browser puts
-           it. It belongs to the strip rather than to the rail because a
-           collapsed rail has no surface of its own to carry the control. -->
-      <button
-        type="button"
-        class="rail-toggle"
-        :class="{ on: railOpen }"
-        :aria-label="railOpen ? t('app.railHide') : t('app.railShow')"
-        :aria-pressed="railOpen"
-        :title="railOpen ? t('app.railHide') : t('app.railShow')"
-        data-rail-toggle
-        @click="toggleRail"
-      >
-        <PanelLeft :size="14" />
-      </button>
-      <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
-        <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
-          <button
-            v-for="page in windowPages"
-            :key="page.id"
-            type="button"
-            role="tab"
-            class="tab"
-            :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
-            :aria-selected="page.id === windowActivePageId"
-            :data-tab-id="page.id"
-            :data-sleep="sleepStateOf(page)"
-            :title="pageTitle(page)"
-            draggable="true"
-            @click="activateWindowPage(page.id)"
-            @mousedown="onWindowPageMouseDown"
-            @auxclick="onWindowPageAuxClick(page, $event)"
-            @dragstart="onWindowPageDragStart(page, $event)"
-            @dragend="onWindowPageDragEnd"
-            @dragover="onStripTabDragOver(page, $event)"
-            @dragleave="onStripTabDragLeave(page)"
-            @drop="onStripTabDrop(page, $event)"
-            @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
-          >
-            <!-- One icon slot, three states: loading, asleep, or the site. The
-                 spinner used to replace the close button, which left a loading
-                 tab with no way to close it and moved the close when it
-                 finished. -->
-            <span class="tab-fav">
-              <span
-                v-if="page.loading"
-                class="tab-loading"
-                :aria-label="t('app.browserLoading')"
-              ></span>
-              <Snowflake
-                v-else-if="page.sleeping"
-                :size="12"
-                class="tab-sleep"
-                :aria-label="t('app.tabSleeping')"
-              />
-              <TabIcon v-else :src="page.favicon" :size="13" />
-            </span>
-            <span class="tab-label">{{ store.titleOf(page) }}</span>
-            <Pin
-              v-if="!page.sleeping && page.sleepPolicy === 'never'"
-              :size="10"
-              class="tab-keep"
-              :aria-label="t('app.tabNeverSleep')"
-            />
-            <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
-                 图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
-            <span
-              v-if="page.everAudible"
-              class="tab-audio"
-              :class="{ muted: page.muted }"
-              role="button"
-              tabindex="0"
-              :data-audio="page.muted ? 'muted' : 'audible'"
-              :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-              v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
-              @click.stop="void store.setMuted(page.id, !page.muted)"
-              @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
-              @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
-            >
-              <VolumeX v-if="page.muted" :size="11" />
-              <Volume2 v-else :size="11" />
-            </span>
-            <!-- Always rendered. A close affordance that exists only on the
-                 current tab turns "close these four" into four hover round
-                 trips; the resting state is quiet enough not to compete. -->
-            <span
-              class="tab-close"
-              role="button"
-              tabindex="0"
-              :aria-label="t('app.browserCloseTab')"
-              :data-close-tab="page.id"
-              @click.stop="store.closeTab(page.id)"
-              @keydown.enter.stop="store.closeTab(page.id)"
-              @keydown.space.prevent.stop="store.closeTab(page.id)"
-            >
-              <X :size="10" />
-            </span>
-          </button>
-        </TransitionGroup>
-      </div>
-      <button
-        type="button"
-        class="strip-add"
-        :aria-label="t('app.browserNewTabHere')"
-        v-tooltip="t('app.browserNewTabHere')"
-        @click="addWindowPage"
-      >
-        <Plus :size="14" />
-      </button>
-      <div class="strip-drag drag-region"></div>
-    </div>
-
-    <div class="toolbar" :data-platform="platform">
-      <button
-        type="button"
-        class="icon"
-        :disabled="!activeTab?.canGoBack"
-        v-tooltip="t('app.browserBack')"
-        :aria-label="t('app.browserBack')"
-        @click="goBack"
-      >
-        <ArrowLeft :size="15" />
-      </button>
-      <button
-        type="button"
-        class="icon"
-        :disabled="!activeTab?.canGoForward"
-        v-tooltip="t('app.browserForward')"
-        :aria-label="t('app.browserForward')"
-        @click="goForward"
-      >
-        <ArrowRight :size="15" />
-      </button>
-      <button
-        type="button"
-        class="icon"
-        v-tooltip="t('app.browserReload')"
-        :aria-label="t('app.browserReload')"
-        :aria-haspopup="'menu'"
-        data-reload-button
-        @click="reload"
-        @contextmenu.prevent.stop="openReloadMenu"
-      >
-        <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
-      </button>
-
-      <!--
-        The omnibox is an `InputShell`, the same control the new-tab page uses.
-        The shell owns the border, the fill and the one-shot focus sweep; this
-        input is only the text area inside it, which is what keeps the two search
-        boxes from growing separate focus treatments — they had one, and the
-        address bar's ended up a dirty olive line on the light theme.
-
-        `.address` is a plain positioning box, not a form: the list of site
-        suggestions hangs off it (absolute, full width of the field) and a form
-        cannot wrap the shell without nesting two of them.
-      -->
-      <div class="address">
-        <InputShell as="form" size="toolbar" class="address-shell" @submit.prevent="navigate">
-          <input
-            v-model="address"
-            type="text"
-            spellcheck="false"
-            :placeholder="t('app.browserAddress')"
-            @focus="suggestionsOpen = true"
-            @input="suggestionsOpen = true"
-            @blur="suggestionsOpen = false"
-            @keydown.esc="suggestionsOpen = false"
-          />
-          <!-- An explicit go button: Enter is invisible to a mouse user. It only
-               appears once there is something to go to, so the field is quiet at
-               rest instead of carrying a permanently greyed-out arrow. -->
-          <button
-            v-if="address.trim()"
-            type="submit"
-            class="go"
-            :aria-label="t('app.browserGo')"
-            v-tooltip="t('app.browserGo')"
-          >
-            <CornerDownLeft :size="13" />
-          </button>
-        </InputShell>
-
-        <!-- Sites are the bookmarks: typing a name resolves to its login URL. -->
-        <div v-if="suggestionsOpen && siteSuggestions.length" class="site-suggestions">
-          <button
-            v-for="item in siteSuggestions"
-            :key="item.site.id"
-            type="button"
-            class="suggestion"
-            @mousedown.prevent="pickSuggestion(item.url)"
-          >
-            <span class="sugg-name">{{ item.site.name }}</span>
-            <span class="sugg-url mono">{{ item.url }}</span>
-          </button>
-        </div>
-      </div>
-
-      <button
-        v-if="activeTab && !isBlankTab(activeTab)"
-        type="button"
-        class="icon star"
-        :class="{ marked: Boolean(bookmarkedEntry) }"
-        v-tooltip="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
-        :aria-label="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAdd')"
-        :aria-pressed="Boolean(bookmarkedEntry)"
-        @click="toggleBookmark"
-      >
-        <Star :size="15" :fill="bookmarkedEntry ? 'currentColor' : 'none'" />
-      </button>
-      <button
-        v-if="activeTab?.identityId"
-        type="button"
-        class="icon"
-        v-tooltip="t('app.browserFillHint')"
-        :aria-label="t('app.browserFill')"
-        @click="fillLogin(activeTab.id)"
-      >
-        <KeyRound :size="15" />
-      </button>
-      <!--
-        AI: one entry for the whole feature.
-        
-        It replaced two controls — a shield that only said whether this page was
-        allowed, and a row in the app menu that said whether the endpoint was
-        listening. Neither answered the question on its own ("is the assistant
-        connected, and what may it do here"), and the shield had its own copy of
-        the permission rules that could drift from the server's. The panel behind
-        this button shows both, plus the newest activity.
-      -->
-      <div class="ai-anchor">
-        <button
-          type="button"
-          class="icon ai-entry"
-          :class="{ active: aiPanelOpen, live: aiRunning }"
-          :aria-label="t('app.mcpAiAccess')"
-          :aria-expanded="aiPanelOpen"
-          v-tooltip="t('app.mcpAiAccess')"
-          data-ai-panel
-          @click="toggleAiPanel"
-        >
-          <Sparkles :size="15" />
-          <!-- A dot, not a colour change: "connected" has to read at a glance
-               without the icon looking like a toggle that was switched on. -->
-          <span v-if="aiRunning" class="ai-live-dot"></span>
-        </button>
-        <AiPanel
-          v-if="aiPanelOpen"
-          :open="aiPanelOpen"
-          :origin="aiPanelOrigin"
-          @close="aiPanelOpen = false"
-          @open-console="openAiConsole"
-          @open-settings="openAiSettings"
-        />
-      </div>
-      <button
-        type="button"
-        class="icon"
-        :class="{ active: findOpen }"
-        v-tooltip="t('app.browserFind')"
-        data-find-toggle
-        @click="findOpen ? closeFindBar() : openFindBar()"
-      >
-        <Search :size="15" />
-      </button>
-      <!--
-        Downloads: a panel rather than a page, because the useful actions are
-        "open it" and "show me where it went" — both of which should not cost a
-        navigation away from the page the user is working on.
-      -->
-      <div ref="downloadsAnchor" class="downloads-anchor">
-        <button
-          type="button"
-          class="icon"
-          :class="{ active: downloadsOpen }"
-          v-tooltip="t('app.downloads')"
-          :aria-label="t('app.downloads')"
-          :aria-expanded="downloadsOpen"
-          @click="downloadsOpen = !downloadsOpen"
-        >
-          <Download :size="15" />
-          <span v-if="activeDownloads" class="download-badge">{{ activeDownloads }}</span>
-        </button>
-        <div v-if="downloadsOpen" class="downloads-panel">
-          <div class="downloads-head">
-            <span>{{ t("app.downloads") }}</span>
-            <button
-              v-if="hasFinishedDownloads"
-              type="button"
-              class="downloads-clear"
-              @click="actOnDownload('clear')"
-            >
-              {{ t("app.downloadsClear") }}
-            </button>
-          </div>
-          <div v-if="!downloadEntries.length" class="downloads-empty">
-            {{ t("app.downloadsEmpty") }}
-          </div>
-          <div
-            v-for="entry in downloadEntries"
-            :key="entry.id"
-            class="download-row"
-            :class="entry.state"
-          >
-            <div class="download-main">
-              <button
-                type="button"
-                class="download-name"
-                :disabled="entry.state !== 'completed'"
-                :title="entry.savePath || entry.filename"
-                @click="actOnDownload('open', entry.id)"
-              >
-                {{ entry.filename }}
-              </button>
-              <span class="download-sub">{{ downloadStatus(entry) }}</span>
-              <div v-if="entry.state === 'progressing'" class="download-bar">
-                <span :style="{ width: `${downloadPercent(entry)}%` }" />
-              </div>
-            </div>
-            <div class="download-actions">
-              <button
-                v-if="entry.state === 'progressing'"
-                type="button"
-                class="download-mini"
-                v-tooltip="t('app.downloadCancel')"
-                @click="actOnDownload('cancel', entry.id)"
-              >
-                <X :size="13" />
-              </button>
-              <template v-else>
-                <button
-                  type="button"
-                  class="download-mini"
-                  v-tooltip="t('app.downloadReveal')"
-                  @click="actOnDownload('reveal', entry.id)"
-                >
-                  <FolderOpen :size="13" />
-                </button>
-                <button
-                  type="button"
-                  class="download-mini"
-                  v-tooltip="t('app.downloadRemove')"
-                  @click="actOnDownload('remove', entry.id)"
-                >
-                  <Trash2 :size="13" />
-                </button>
-              </template>
-            </div>
-          </div>
-        </div>
-      </div>
-      <!--
-        Workspace-wide resolution. It sits in the toolbar because it is a
-        setting, not a page action: the same size applies to every page until
-        one is given its own. Its menu says so in a line and points at the
-        per-page path (right-click the tab), because the two controls otherwise
-        look like the same feature in two places.
-      -->
-      <div class="global-viewport">
-        <button
-          type="button"
-          class="icon viewport-btn"
-          :class="{ changed: Boolean(globalViewport) }"
-          v-tooltip="t('app.viewportDefaultHint')"
-          :aria-label="t('app.viewportDefaultLabel')"
-          :aria-expanded="globalViewportOpen"
-          @click="toggleGlobalViewport"
-        >
-          <Monitor :size="15" />
-          <span v-if="globalViewport" class="viewport-tag mono">
-            {{ globalViewport.width }}×{{ globalViewport.height }}
-          </span>
-        </button>
-        <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
-          <!--
-            Zoom, inside the size menu.
-
-            Both change what the page looks like without changing its window:
-            "make it a phone" and "make everything 25% bigger" are two answers
-            to the same wish, and keeping them apart meant a permanent 110px
-            stepper in the toolbar for a number that is 100% on almost every
-            page. The stepper keeps the − value + shape so anyone who used the
-            toolbar one recognises it.
-          -->
-          <div v-if="activeTab" class="zoom-field">
-            <span class="zoom-label">{{ t("app.zoomTitle") }}</span>
-            <div
-              class="zoom-stepper"
-              :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
-            >
-              <button
-                type="button"
-                class="zoom-step"
-                :aria-label="t('app.browserZoomOut')"
-                v-tooltip="t('app.browserZoomOut')"
-                @click="zoom('out')"
-              >
-                <Minus :size="11" />
-              </button>
-              <button
-                type="button"
-                class="zoom-value mono"
-                v-tooltip="t('app.browserZoomReset')"
-                data-zoom-value
-                @click="zoom('reset')"
-              >
-                {{ activeTab.zoom }}%
-              </button>
-              <button
-                type="button"
-                class="zoom-step"
-                :aria-label="t('app.browserZoomIn')"
-                v-tooltip="t('app.browserZoomIn')"
-                @click="zoom('in')"
-              >
-                <Plus :size="11" />
-              </button>
-            </div>
-          </div>
-          <p class="global-viewport-note">{{ t("app.viewportDefaultHint") }}</p>
-          <button
-            type="button"
-            role="menuitem"
-            class="tab-menu-item"
-            :class="{ checked: !globalViewport }"
-            @click="applyGlobalViewport(null)"
-          >
-            {{ t("app.viewportGlobalOff") }}
-          </button>
-          <button
-            v-for="preset in VIEWPORT_PRESETS"
-            :key="preset.name"
-            type="button"
-            role="menuitem"
-            class="tab-menu-item mono"
-            :class="{
-              checked:
-                globalViewport?.width === preset.width && globalViewport?.height === preset.height,
-            }"
-            @click="applyGlobalViewport({ width: preset.width, height: preset.height })"
-          >
-            {{ preset.name }}
-          </button>
-        </div>
-      </div>
-      <!--
-        Zoom is not a toolbar control any more.
-
-        It was, and it earned its place by being discoverable — but it is also
-        the one control most people drive from the keyboard or the wheel, and a
-        permanent 110px stepper is a lot of toolbar for a number that is 100% on
-        almost every page. It now lives in two places that both carry the same
-        − value + shape: the viewport menu (where sizes already are) and the app
-        menu. Keyboard and wheel gestures still work and raise a transient
-        overlay with the new percentage, like every browser.
-      -->
-      <OpenSiteButton
-        @open-profile="store.openProfileTab($event)"
-        @open-daily="openSiteBookmark"
-        @open-clean="openSiteClean"
-        @open-identity="openIdentityBookmark"
-      />
-      <!--
-        The app menu, at the toolbar's right end where every application puts it.
-
-        It used to be a bare gear, which said "settings" and nothing else: every
-        other infrequent action had no home, and — the part that mattered — there
-        was nowhere to put a second door into the sidebar. Frequent controls stay
-        in the toolbar; this menu is the once-in-a-while list.
-      -->
-      <!--
-        The bell opens the newest messages in place.
-
-        It used to be a door to the message centre, which cost a navigation for
-        a glance at one line — and the way back was not obvious, because the
-        management page replaces the entire pane. The popover lists the newest
-        few with the same rows and the same actions as the page, and its foot is
-        the door for when the history itself is what you came for.
-
-        A dot says "there is news" without changing the button's box — a count
-        inside it widened the button and pushed the bell and the menu button out
-        of line with every other icon by a pixel, and "9+" is not a number anyone
-        reads before clicking anyway.
-      -->
-      <div ref="bellAnchor" class="bell-anchor">
-        <button
-          type="button"
-          class="icon messages-bell"
-          :class="{ unread: workspace.unreadMessages > 0, active: bellOpen }"
-          :aria-label="
-            workspace.unreadMessages > 0
-              ? t('app.messagesUnread', { count: workspace.unreadMessages })
-              : t('app.messages')
-          "
-          :aria-expanded="bellOpen"
-          v-tooltip="
-            workspace.unreadMessages > 0
-              ? t('app.messagesUnread', { count: workspace.unreadMessages })
-              : t('app.messages')
-          "
-          data-messages-bell
-          @click="toggleBell"
-        >
-          <Bell :size="15" />
-          <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
-        </button>
-
-        <div v-if="bellOpen" class="bell-panel" role="dialog" :aria-label="t('app.messages')" data-bell-panel>
-          <div class="bell-head">
-            <span>{{ t("app.messages") }}</span>
-            <span class="bell-head-actions">
-              <span v-if="workspace.unreadMessages > 0" class="bell-head-count mono">
-                {{ workspace.unreadMessages }}
-              </span>
-              <!--
-                Marking everything read belongs here, not only on the message
-                page. The popover is where the list is actually skimmed, and
-                before this the only way to clear the badge was to open the full
-                page — a trip out of the browser for something the popover had
-                already shown you.
-              -->
-              <button
-                v-if="bellRows.length"
-                type="button"
-                class="bell-mark-all"
-                :disabled="workspace.unreadMessages === 0"
-                :aria-label="t('app.messagesReadAll')"
-                v-tooltip="t('app.messagesReadAll')"
-                data-bell-mark-all
-                @click="workspace.markAllMessagesRead()"
-              >
-                <CheckCheck :size="13" />
-              </button>
-            </span>
-          </div>
-
-          <p v-if="!bellRows.length" class="bell-empty">{{ t("app.messagesEmpty") }}</p>
-
-          <ul v-else class="bell-rows">
-            <li
-              v-for="message in bellRows"
-              :key="message.id"
-              class="bell-row"
-              :class="[message.tone, { unread: !message.read, stale: message.stale, open: bellDetailId === message.id }]"
-              :data-message-kind="message.kind"
-            >
-              <!--
-                Clicking a row opens its detail as a second layer, not as an
-                expansion inside this one.
-
-                Expanding pushed every row below it down, so the list the user
-                was choosing from re-ordered itself under the pointer — and the
-                row they had just read moved away from where they left it. A
-                peek must not rearrange the list it peeks at.
-
-                A row with nothing underneath (no action and not stale) is not a
-                control at all, rather than a disabled button: the shared rule
-                for disabled controls dims the whole row to 45%, which reads as
-                "unavailable" instead of "there is nothing more to see".
-              -->
-              <component
-                :is="message.action || message.stale ? 'button' : 'div'"
-                :type="message.action || message.stale ? 'button' : undefined"
-                class="bell-row-main"
-                :class="{ static: !message.action && !message.stale }"
-                :aria-expanded="message.action || message.stale ? bellDetailId === message.id : undefined"
-                :data-bell-row="message.id"
-                @click="openBellDetail(message, $event)"
-              >
-                <span class="bell-dot-mark" aria-hidden="true"></span>
-                <component :is="messageRows.iconOf(message)" :size="13" class="bell-kind" />
-                <span class="bell-copy">
-                  <span class="bell-title">{{ messageRows.titleOf(message) }}</span>
-                  <span
-                    v-if="message.detail"
-                    class="bell-detail mono"
-                    :title="message.detail"
-                  >{{ message.detail }}</span>
-                </span>
-                <span class="bell-when mono">{{ messageRows.whenOf(message) }}</span>
-              </component>
-              <!--
-                A sibling of `.bell-row-main`, never a child: that element is a
-                button, and a button inside a button is invalid markup with an
-                unreliable hit target. The `li` is the flex container, so this
-                widens into the row on hover instead of covering the timestamp.
-              -->
-              <button
-                v-if="!message.read"
-                type="button"
-                class="bell-row-mark"
-                :aria-label="t('app.messagesMarkRead')"
-                v-tooltip="t('app.messagesMarkRead')"
-                :data-bell-mark-read="message.id"
-                @click.stop="workspace.markMessageRead(message.id)"
-              >
-                <Check :size="12" />
-              </button>
-            </li>
-          </ul>
-
-          <button type="button" class="bell-foot" data-bell-open-centre @click="openMessageCentre">
-            {{ t("app.messagesOpenCentre") }}
-          </button>
-        </div>
-
-        <!--
-          The row's detail, beside the popover rather than inside it: opening it
-          below the row would push the rest of the list down and move the row the
-          user was reading.
-        -->
-        <MessageDetailLayer
-          :message="bellDetail"
-          :anchor="bellDetailAnchor"
-          placement="left"
-          :width="320"
-          @close="closeBellDetail"
-          @act="actFromBell"
-          @remove="removeFromBell"
-        />
-      </div>
-      <div class="app-menu-anchor">
-        <button
-          type="button"
-          class="icon app-menu-btn"
-          :class="{ active: appMenuOpen }"
-          :aria-label="t('app.appMenu')"
-          :aria-expanded="appMenuOpen"
-          v-tooltip="t('app.appMenu')"
-          data-app-menu
-          @click="toggleAppMenu"
-        >
-          <MoreHorizontal :size="16" />
-        </button>
-        <div v-if="appMenuOpen" class="app-menu" role="menu">
-          <!-- The built-in throwaway. Where launches go is decided at each
-               launch point now, so this menu carries only the session action. -->
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="clean-session"
-            @click="openCleanFromMenu"
-          >
-            <ShieldOff :size="14" />
-            <span>{{ t("app.cleanSession") }}</span>
-          </button>
-          <div class="app-menu-rule" role="separator"></div>
-          <!--
-            Developer tools and AI access: both are "tools for this browser",
-            not something a page visit is about. They used to sit in the toolbar
-            and spent most of their life unused — the DevTools toggle in
-            particular was a permanent bug icon on every screen.
-          -->
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            class="app-menu-item"
-            data-menu-item="devtools"
-            :disabled="!activeTab || isBlankTab(activeTab)"
-            :aria-checked="Boolean(activeTab?.devtoolsOpen)"
-            @click="toggleDevtoolsFromMenu"
-          >
-            <Bug :size="14" />
-            <span>{{ t("app.browserDevTools") }}</span>
-            <Check v-if="activeTab?.devtoolsOpen" :size="13" class="app-menu-check" />
-          </button>
-          <!--
-            Zoom, also reachable from the menu.
-
-            Two doors on purpose: the viewport menu is where you go to change
-            how the page looks, and this menu is where you go when you remember
-            "there was a zoom control somewhere". Both are the same stepper, so
-            the value and the reset gesture are identical wherever you land.
-          -->
-          <div v-if="activeTab" class="app-menu-zoom" data-menu-item="zoom">
-            <span class="app-menu-zoom-label">
-              <ZoomIn :size="14" />
-              <span>{{ t("app.zoomTitle") }}</span>
-            </span>
-            <div
-              class="zoom-stepper"
-              :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
-            >
-              <button
-                type="button"
-                class="zoom-step"
-                :aria-label="t('app.browserZoomOut')"
-                v-tooltip="t('app.browserZoomOut')"
-                @click="zoom('out')"
-              >
-                <Minus :size="11" />
-              </button>
-              <button
-                type="button"
-                class="zoom-value mono"
-                v-tooltip="t('app.browserZoomReset')"
-                data-zoom-value
-                @click="zoom('reset')"
-              >
-                {{ activeTab.zoom }}%
-              </button>
-              <button
-                type="button"
-                class="zoom-step"
-                :aria-label="t('app.browserZoomIn')"
-                v-tooltip="t('app.browserZoomIn')"
-                @click="zoom('in')"
-              >
-                <Plus :size="11" />
-              </button>
-            </div>
-          </div>
-          <div class="app-menu-rule" role="separator"></div>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="settings"
-            @click="openPageFromMenu('settings')"
-          >
-            <Settings :size="14" />
-            <span>{{ t("app.settings") }}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            data-menu-item="guide"
-            @click="openGuideFromMenu"
-          >
-            <BookOpenText :size="14" />
-            <span>{{ t("app.guideOpen") }}</span>
-          </button>
-          <div class="app-menu-rule" role="separator"></div>
-          <button type="button" role="menuitem" class="app-menu-item" @click="checkForUpdates">
-            <RefreshCw :size="14" />
-            <span>{{ t("app.checkUpdate") }}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            class="app-menu-item"
-            @click="openPageFromMenu('settings')"
-          >
-            <Info :size="14" />
-            <span>{{ t("app.about") }}</span>
-          </button>
-          <div class="app-menu-rule" role="separator"></div>
-          <button type="button" role="menuitem" class="app-menu-item danger" @click="quitApp">
-            <Power :size="14" />
-            <span>{{ t("app.quitApp") }}</span>
-          </button>
-        </div>
-      </div>
-    </div>
-    <div class="work-area">
+    <div class="top-row" :data-platform="platform">
       <AccountRail
-        v-if="railOpen"
         :active-layer="layer"
         @open-layer="emit('update:layer', $event)"
         @close-layer="emit('update:layer', null)"
       />
-      <div class="content-col">
-      <div ref="stage" class="stage">
+      <div class="tabstrip" :data-platform="platform">
+        <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
+          <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
+            <button
+              v-for="page in windowPages"
+              :key="page.id"
+              type="button"
+              role="tab"
+              class="tab"
+              :class="{ active: page.id === windowActivePageId, ...stripDropClass(page) }"
+              :aria-selected="page.id === windowActivePageId"
+              :data-tab-id="page.id"
+              :data-sleep="sleepStateOf(page)"
+              draggable="true"
+              v-tooltip="tabLabelOf(page)"
+              @click="activateWindowPage(page.id)"
+              @mousedown="onWindowPageMouseDown"
+              @auxclick="onWindowPageAuxClick(page, $event)"
+              @dragstart="onWindowPageDragStart(page, $event)"
+              @dragend="onWindowPageDragEnd"
+              @dragover="onStripTabDragOver(page, $event)"
+              @dragleave="onStripTabDragLeave(page)"
+              @drop="onStripTabDrop(page, $event)"
+              @contextmenu.prevent.stop="openWindowPageMenu(page, $event)"
+            >
+              <!-- One icon slot, three states: loading, asleep, or the site. The
+                   spinner used to replace the close button, which left a loading
+                   tab with no way to close it and moved the close when it
+                   finished. -->
+              <span class="tab-fav">
+                <span
+                  v-if="page.loading"
+                  class="tab-loading"
+                  :aria-label="t('app.browserLoading')"
+                ></span>
+                <Snowflake
+                  v-else-if="page.sleeping"
+                  :size="12"
+                  class="tab-sleep"
+                  :aria-label="t('app.tabSleeping')"
+                />
+                <TabIcon v-else :src="page.favicon" :size="13" />
+              </span>
+              <span class="tab-label">{{ store.titleOf(page) }}</span>
+              <Pin
+                v-if="!page.sleeping && page.sleepPolicy === 'never'"
+                :size="10"
+                class="tab-keep"
+                :aria-label="t('app.tabNeverSleep')"
+              />
+              <!-- 只有出过声的页面才有声音状态可言：从未出声的页面不显示任何
+                   图标，出过声的按当前是否静音显示，静音页保留控件以便解除。 -->
+              <span
+                v-if="page.everAudible"
+                class="tab-audio"
+                :class="{ muted: page.muted }"
+                role="button"
+                tabindex="0"
+                :data-audio="page.muted ? 'muted' : 'audible'"
+                :aria-label="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+                v-tooltip="page.muted ? t('app.tabUnmute') : t('app.tabMute')"
+                @click.stop="void store.setMuted(page.id, !page.muted)"
+                @keydown.enter.stop="void store.setMuted(page.id, !page.muted)"
+                @keydown.space.prevent.stop="void store.setMuted(page.id, !page.muted)"
+              >
+                <VolumeX v-if="page.muted" :size="11" />
+                <Volume2 v-else :size="11" />
+              </span>
+              <!--
+                The AI state, on the tab it belongs to.
+
+                Per page, not per account: an account can have three pages open and
+                only one of them being driven, and this dot answers "is it on *this*
+                page". No dot at rest — a permanently-present grey one would be a
+                second favicon to read on every tab, every day, to learn nothing.
+              -->
+              <span
+                v-if="aiDotOf(page)"
+                class="tab-ai-dot"
+                :class="aiDotOf(page)!.state"
+                :data-tab-ai-dot="aiDotOf(page)!.state"
+              ></span>
+              <!-- Always rendered. A close affordance that exists only on the
+                   current tab turns "close these four" into four hover round
+                   trips; the resting state is quiet enough not to compete. -->
+              <span
+                class="tab-close"
+                role="button"
+                tabindex="0"
+                :aria-label="t('app.browserCloseTab')"
+                :data-close-tab="page.id"
+                @click.stop="store.closeTab(page.id)"
+                @keydown.enter.stop="store.closeTab(page.id)"
+                @keydown.space.prevent.stop="store.closeTab(page.id)"
+              >
+                <X :size="10" />
+              </span>
+            </button>
+          </TransitionGroup>
+        </div>
+        <button
+          type="button"
+          class="strip-add"
+          :aria-label="t('app.browserNewTabHere')"
+          v-tooltip="t('app.browserNewTabHere')"
+          @click="addWindowPage"
+        >
+          <Plus :size="14" />
+        </button>
+        <div class="strip-drag drag-region"></div>
+      </div>
+    </div>
+
+    <div class="content-col">
+        <div class="toolbar" :data-platform="platform">
+          <button
+            type="button"
+            class="icon"
+            :disabled="!activeTab?.canGoBack"
+            v-tooltip="t('app.browserBack')"
+            :aria-label="t('app.browserBack')"
+            @click="goBack"
+          >
+            <ArrowLeft :size="15" />
+          </button>
+          <button
+            type="button"
+            class="icon"
+            :disabled="!activeTab?.canGoForward"
+            v-tooltip="t('app.browserForward')"
+            :aria-label="t('app.browserForward')"
+            @click="goForward"
+          >
+            <ArrowRight :size="15" />
+          </button>
+          <button
+            type="button"
+            class="icon"
+            v-tooltip="t('app.browserReload')"
+            :aria-label="t('app.browserReload')"
+            :aria-haspopup="'menu'"
+            data-reload-button
+            @click="reload"
+            @contextmenu.prevent.stop="openReloadMenu"
+          >
+            <RotateCw :size="15" :class="{ spin: activeTab?.loading }" />
+          </button>
+
+          <!--
+            The omnibox is an `InputShell`, the same control the new-tab page uses.
+            The shell owns the border, the fill and the one-shot focus sweep; this
+            input is only the text area inside it, which is what keeps the two search
+            boxes from growing separate focus treatments — they had one, and the
+            address bar's ended up a dirty olive line on the light theme.
+
+            `.address` is a plain positioning box, not a form: the list of site
+            suggestions hangs off it (absolute, full width of the field) and a form
+            cannot wrap the shell without nesting two of them.
+          -->
+          <div class="address">
+            <InputShell as="form" size="toolbar" class="address-shell" @submit.prevent="navigate">
+              <input
+                v-model="address"
+                type="text"
+                spellcheck="false"
+                :placeholder="t('app.browserAddress')"
+                @focus="suggestionsOpen = true"
+                @input="suggestionsOpen = true"
+                @blur="suggestionsOpen = false"
+                @keydown.esc="suggestionsOpen = false"
+              />
+              <!-- An explicit go button: Enter is invisible to a mouse user. It only
+                   appears once there is something to go to, so the field is quiet at
+                   rest instead of carrying a permanently greyed-out arrow. -->
+              <button
+                v-if="address.trim()"
+                type="submit"
+                class="go"
+                :aria-label="t('app.browserGo')"
+                v-tooltip="t('app.browserGo')"
+              >
+                <CornerDownLeft :size="13" />
+              </button>
+            </InputShell>
+
+            <!-- Sites are the bookmarks: typing a name resolves to its login URL. -->
+            <div v-if="suggestionsOpen && siteSuggestions.length" class="site-suggestions">
+              <button
+                v-for="item in siteSuggestions"
+                :key="item.site.id"
+                type="button"
+                class="suggestion"
+                @mousedown.prevent="pickSuggestion(item.url)"
+              >
+                <span class="sugg-name">{{ item.site.name }}</span>
+                <span class="sugg-url mono">{{ item.url }}</span>
+              </button>
+            </div>
+          </div>
+
+          <button
+            v-if="activeTab && !isBlankTab(activeTab)"
+            type="button"
+            class="icon star"
+            :class="{ marked: Boolean(bookmarkedEntry) }"
+            v-tooltip="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAddHint')"
+            :aria-label="bookmarkedEntry ? t('app.bookmarkRemove') : t('app.bookmarkAdd')"
+            :aria-pressed="Boolean(bookmarkedEntry)"
+            @click="toggleBookmark"
+          >
+            <Star :size="15" :fill="bookmarkedEntry ? 'currentColor' : 'none'" />
+          </button>
+          <button
+            v-if="activeTab?.identityId"
+            type="button"
+            class="icon"
+            v-tooltip="t('app.browserFillHint')"
+            :aria-label="t('app.browserFill')"
+            @click="fillLogin(activeTab.id)"
+          >
+            <KeyRound :size="15" />
+          </button>
+          <!--
+            AI: one entry for the whole feature.
+        
+            It replaced two controls — a shield that only said whether this page was
+            allowed, and a row in the app menu that said whether the endpoint was
+            listening. Neither answered the question on its own ("is the assistant
+            connected, and what may it do here"), and the shield had its own copy of
+            the permission rules that could drift from the server's. The panel behind
+            this button shows both, plus the newest activity.
+          -->
+          <div class="ai-anchor">
+            <button
+              type="button"
+              class="icon ai-entry"
+              :class="{ active: aiPanelOpen, live: aiRunning }"
+              :aria-label="t('app.mcpAiAccess')"
+              :aria-expanded="aiPanelOpen"
+              v-tooltip="t('app.mcpAiAccess')"
+              data-ai-panel
+              @click="toggleAiPanel"
+            >
+              <Sparkles :size="15" />
+              <!-- A dot, not a colour change: "connected" has to read at a glance
+                   without the icon looking like a toggle that was switched on. -->
+              <span v-if="aiRunning" class="ai-live-dot"></span>
+            </button>
+            <AiPanel
+              v-if="aiPanelOpen"
+              :open="aiPanelOpen"
+              :origin="aiPanelOrigin"
+              @close="aiPanelOpen = false"
+              @open-console="openAiConsole"
+              @open-settings="openAiSettings"
+            />
+          </div>
+          <button
+            type="button"
+            class="icon"
+            :class="{ active: findOpen }"
+            v-tooltip="t('app.browserFind')"
+            data-find-toggle
+            @click="findOpen ? closeFindBar() : openFindBar()"
+          >
+            <Search :size="15" />
+          </button>
+          <!--
+            Downloads: a panel rather than a page, because the useful actions are
+            "open it" and "show me where it went" — both of which should not cost a
+            navigation away from the page the user is working on.
+          -->
+          <div ref="downloadsAnchor" class="downloads-anchor">
+            <button
+              type="button"
+              class="icon"
+              :class="{ active: downloadsOpen }"
+              v-tooltip="t('app.downloads')"
+              :aria-label="t('app.downloads')"
+              :aria-expanded="downloadsOpen"
+              @click="downloadsOpen = !downloadsOpen"
+            >
+              <Download :size="15" />
+              <span v-if="activeDownloads" class="download-badge">{{ activeDownloads }}</span>
+            </button>
+            <div v-if="downloadsOpen" class="downloads-panel">
+              <div class="downloads-head">
+                <span>{{ t("app.downloads") }}</span>
+                <button
+                  v-if="hasFinishedDownloads"
+                  type="button"
+                  class="downloads-clear"
+                  @click="actOnDownload('clear')"
+                >
+                  {{ t("app.downloadsClear") }}
+                </button>
+              </div>
+              <div v-if="!downloadEntries.length" class="downloads-empty">
+                {{ t("app.downloadsEmpty") }}
+              </div>
+              <div
+                v-for="entry in downloadEntries"
+                :key="entry.id"
+                class="download-row"
+                :class="entry.state"
+              >
+                <div class="download-main">
+                  <button
+                    type="button"
+                    class="download-name"
+                    :disabled="entry.state !== 'completed'"
+                    :title="entry.savePath || entry.filename"
+                    @click="actOnDownload('open', entry.id)"
+                  >
+                    {{ entry.filename }}
+                  </button>
+                  <span class="download-sub">{{ downloadStatus(entry) }}</span>
+                  <div v-if="entry.state === 'progressing'" class="download-bar">
+                    <span :style="{ width: `${downloadPercent(entry)}%` }" />
+                  </div>
+                </div>
+                <div class="download-actions">
+                  <button
+                    v-if="entry.state === 'progressing'"
+                    type="button"
+                    class="download-mini"
+                    v-tooltip="t('app.downloadCancel')"
+                    @click="actOnDownload('cancel', entry.id)"
+                  >
+                    <X :size="13" />
+                  </button>
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="download-mini"
+                      v-tooltip="t('app.downloadReveal')"
+                      @click="actOnDownload('reveal', entry.id)"
+                    >
+                      <FolderOpen :size="13" />
+                    </button>
+                    <button
+                      type="button"
+                      class="download-mini"
+                      v-tooltip="t('app.downloadRemove')"
+                      @click="actOnDownload('remove', entry.id)"
+                    >
+                      <Trash2 :size="13" />
+                    </button>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!--
+            Workspace-wide resolution. It sits in the toolbar because it is a
+            setting, not a page action: the same size applies to every page until
+            one is given its own. Its menu says so in a line and points at the
+            per-page path (right-click the tab), because the two controls otherwise
+            look like the same feature in two places.
+          -->
+          <div class="global-viewport">
+            <button
+              type="button"
+              class="icon viewport-btn"
+              :class="{ changed: Boolean(globalViewport) }"
+              v-tooltip="t('app.viewportDefaultHint')"
+              :aria-label="t('app.viewportDefaultLabel')"
+              :aria-expanded="globalViewportOpen"
+              @click="toggleGlobalViewport"
+            >
+              <Monitor :size="15" />
+              <span v-if="globalViewport" class="viewport-tag mono">
+                {{ globalViewport.width }}×{{ globalViewport.height }}
+              </span>
+            </button>
+            <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
+              <!--
+                Zoom, inside the size menu.
+
+                Both change what the page looks like without changing its window:
+                "make it a phone" and "make everything 25% bigger" are two answers
+                to the same wish, and keeping them apart meant a permanent 110px
+                stepper in the toolbar for a number that is 100% on almost every
+                page. The stepper keeps the − value + shape so anyone who used the
+                toolbar one recognises it.
+              -->
+              <div v-if="activeTab" class="zoom-field">
+                <span class="zoom-label">{{ t("app.zoomTitle") }}</span>
+                <div
+                  class="zoom-stepper"
+                  :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
+                >
+                  <button
+                    type="button"
+                    class="zoom-step"
+                    :aria-label="t('app.browserZoomOut')"
+                    v-tooltip="t('app.browserZoomOut')"
+                    @click="zoom('out')"
+                  >
+                    <Minus :size="11" />
+                  </button>
+                  <button
+                    type="button"
+                    class="zoom-value mono"
+                    v-tooltip="t('app.browserZoomReset')"
+                    data-zoom-value
+                    @click="zoom('reset')"
+                  >
+                    {{ activeTab.zoom }}%
+                  </button>
+                  <button
+                    type="button"
+                    class="zoom-step"
+                    :aria-label="t('app.browserZoomIn')"
+                    v-tooltip="t('app.browserZoomIn')"
+                    @click="zoom('in')"
+                  >
+                    <Plus :size="11" />
+                  </button>
+                </div>
+              </div>
+              <p class="global-viewport-note">{{ t("app.viewportDefaultHint") }}</p>
+              <button
+                type="button"
+                role="menuitem"
+                class="tab-menu-item"
+                :class="{ checked: !globalViewport }"
+                @click="applyGlobalViewport(null)"
+              >
+                {{ t("app.viewportGlobalOff") }}
+              </button>
+              <button
+                v-for="preset in VIEWPORT_PRESETS"
+                :key="preset.name"
+                type="button"
+                role="menuitem"
+                class="tab-menu-item mono"
+                :class="{
+                  checked:
+                    globalViewport?.width === preset.width && globalViewport?.height === preset.height,
+                }"
+                @click="applyGlobalViewport({ width: preset.width, height: preset.height })"
+              >
+                {{ preset.name }}
+              </button>
+            </div>
+          </div>
+          <!--
+            Zoom is not a toolbar control any more.
+
+            It was, and it earned its place by being discoverable — but it is also
+            the one control most people drive from the keyboard or the wheel, and a
+            permanent 110px stepper is a lot of toolbar for a number that is 100% on
+            almost every page. It now lives in two places that both carry the same
+            − value + shape: the viewport menu (where sizes already are) and the app
+            menu. Keyboard and wheel gestures still work and raise a transient
+            overlay with the new percentage, like every browser.
+          -->
+          <!--
+            The app menu, at the toolbar's right end where every application puts it.
+
+            It used to be a bare gear, which said "settings" and nothing else: every
+            other infrequent action had no home, and — the part that mattered — there
+            was nowhere to put a second door into the sidebar. Frequent controls stay
+            in the toolbar; this menu is the once-in-a-while list.
+          -->
+          <!--
+            The bell opens the newest messages in place.
+
+            It used to be a door to the message centre, which cost a navigation for
+            a glance at one line — and the way back was not obvious, because the
+            management page replaces the entire pane. The popover lists the newest
+            few with the same rows and the same actions as the page, and its foot is
+            the door for when the history itself is what you came for.
+
+            A dot says "there is news" without changing the button's box — a count
+            inside it widened the button and pushed the bell and the menu button out
+            of line with every other icon by a pixel, and "9+" is not a number anyone
+            reads before clicking anyway.
+          -->
+          <div ref="bellAnchor" class="bell-anchor">
+            <button
+              type="button"
+              class="icon messages-bell"
+              :class="{ unread: workspace.unreadMessages > 0, active: bellOpen }"
+              :aria-label="
+                workspace.unreadMessages > 0
+                  ? t('app.messagesUnread', { count: workspace.unreadMessages })
+                  : t('app.messages')
+              "
+              :aria-expanded="bellOpen"
+              v-tooltip="
+                workspace.unreadMessages > 0
+                  ? t('app.messagesUnread', { count: workspace.unreadMessages })
+                  : t('app.messages')
+              "
+              data-messages-bell
+              @click="toggleBell"
+            >
+              <Bell :size="15" />
+              <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
+            </button>
+
+            <div v-if="bellOpen" class="bell-panel" role="dialog" :aria-label="t('app.messages')" data-bell-panel>
+              <div class="bell-head">
+                <span>{{ t("app.messages") }}</span>
+                <span class="bell-head-actions">
+                  <span v-if="workspace.unreadMessages > 0" class="bell-head-count mono">
+                    {{ workspace.unreadMessages }}
+                  </span>
+                  <!--
+                    Marking everything read belongs here, not only on the message
+                    page. The popover is where the list is actually skimmed, and
+                    before this the only way to clear the badge was to open the full
+                    page — a trip out of the browser for something the popover had
+                    already shown you.
+                  -->
+                  <button
+                    v-if="bellRows.length"
+                    type="button"
+                    class="bell-mark-all"
+                    :disabled="workspace.unreadMessages === 0"
+                    :aria-label="t('app.messagesReadAll')"
+                    v-tooltip="t('app.messagesReadAll')"
+                    data-bell-mark-all
+                    @click="workspace.markAllMessagesRead()"
+                  >
+                    <CheckCheck :size="13" />
+                  </button>
+                </span>
+              </div>
+
+              <p v-if="!bellRows.length" class="bell-empty">{{ t("app.messagesEmpty") }}</p>
+
+              <ul v-else class="bell-rows">
+                <li
+                  v-for="message in bellRows"
+                  :key="message.id"
+                  class="bell-row"
+                  :class="[message.tone, { unread: !message.read, stale: message.stale, open: bellDetailId === message.id }]"
+                  :data-message-kind="message.kind"
+                >
+                  <!--
+                    Clicking a row opens its detail as a second layer, not as an
+                    expansion inside this one.
+
+                    Expanding pushed every row below it down, so the list the user
+                    was choosing from re-ordered itself under the pointer — and the
+                    row they had just read moved away from where they left it. A
+                    peek must not rearrange the list it peeks at.
+
+                    A row with nothing underneath (no action and not stale) is not a
+                    control at all, rather than a disabled button: the shared rule
+                    for disabled controls dims the whole row to 45%, which reads as
+                    "unavailable" instead of "there is nothing more to see".
+                  -->
+                  <component
+                    :is="message.action || message.stale ? 'button' : 'div'"
+                    :type="message.action || message.stale ? 'button' : undefined"
+                    class="bell-row-main"
+                    :class="{ static: !message.action && !message.stale }"
+                    :aria-expanded="message.action || message.stale ? bellDetailId === message.id : undefined"
+                    :data-bell-row="message.id"
+                    @click="openBellDetail(message, $event)"
+                  >
+                    <span class="bell-dot-mark" aria-hidden="true"></span>
+                    <component :is="messageRows.iconOf(message)" :size="13" class="bell-kind" />
+                    <span class="bell-copy">
+                      <span class="bell-title">{{ messageRows.titleOf(message) }}</span>
+                      <span
+                        v-if="message.detail"
+                        class="bell-detail mono"
+                        :title="message.detail"
+                      >{{ message.detail }}</span>
+                    </span>
+                    <span class="bell-when mono">{{ messageRows.whenOf(message) }}</span>
+                  </component>
+                  <!--
+                    A sibling of `.bell-row-main`, never a child: that element is a
+                    button, and a button inside a button is invalid markup with an
+                    unreliable hit target. The `li` is the flex container, so this
+                    widens into the row on hover instead of covering the timestamp.
+                  -->
+                  <button
+                    v-if="!message.read"
+                    type="button"
+                    class="bell-row-mark"
+                    :aria-label="t('app.messagesMarkRead')"
+                    v-tooltip="t('app.messagesMarkRead')"
+                    :data-bell-mark-read="message.id"
+                    @click.stop="workspace.markMessageRead(message.id)"
+                  >
+                    <Check :size="12" />
+                  </button>
+                </li>
+              </ul>
+
+              <button type="button" class="bell-foot" data-bell-open-centre @click="openMessageCentre">
+                {{ t("app.messagesOpenCentre") }}
+              </button>
+            </div>
+
+            <!--
+              The row's detail, beside the popover rather than inside it: opening it
+              below the row would push the rest of the list down and move the row the
+              user was reading.
+            -->
+            <MessageDetailLayer
+              :message="bellDetail"
+              :anchor="bellDetailAnchor"
+              placement="left"
+              :width="320"
+              @close="closeBellDetail"
+              @act="actFromBell"
+              @remove="removeFromBell"
+            />
+          </div>
+          <div class="app-menu-anchor">
+            <button
+              type="button"
+              class="icon app-menu-btn"
+              :class="{ active: appMenuOpen }"
+              :aria-label="t('app.appMenu')"
+              :aria-expanded="appMenuOpen"
+              v-tooltip="t('app.appMenu')"
+              data-app-menu
+              @click="toggleAppMenu"
+            >
+              <MoreHorizontal :size="16" />
+            </button>
+            <div v-if="appMenuOpen" class="app-menu" role="menu">
+              <!-- The built-in throwaway. Where launches go is decided at each
+                   launch point now, so this menu carries only the session action. -->
+              <button
+                type="button"
+                role="menuitem"
+                class="app-menu-item"
+                data-menu-item="clean-session"
+                @click="openCleanFromMenu"
+              >
+                <ShieldOff :size="14" />
+                <span>{{ t("app.cleanSession") }}</span>
+              </button>
+              <div class="app-menu-rule" role="separator"></div>
+              <!--
+                Developer tools and AI access: both are "tools for this browser",
+                not something a page visit is about. They used to sit in the toolbar
+                and spent most of their life unused — the DevTools toggle in
+                particular was a permanent bug icon on every screen.
+              -->
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                class="app-menu-item"
+                data-menu-item="devtools"
+                :disabled="!activeTab || isBlankTab(activeTab)"
+                :aria-checked="Boolean(activeTab?.devtoolsOpen)"
+                @click="toggleDevtoolsFromMenu"
+              >
+                <Bug :size="14" />
+                <span>{{ t("app.browserDevTools") }}</span>
+                <Check v-if="activeTab?.devtoolsOpen" :size="13" class="app-menu-check" />
+              </button>
+              <!--
+                Zoom, also reachable from the menu.
+
+                Two doors on purpose: the viewport menu is where you go to change
+                how the page looks, and this menu is where you go when you remember
+                "there was a zoom control somewhere". Both are the same stepper, so
+                the value and the reset gesture are identical wherever you land.
+              -->
+              <div v-if="activeTab" class="app-menu-zoom" data-menu-item="zoom">
+                <span class="app-menu-zoom-label">
+                  <ZoomIn :size="14" />
+                  <span>{{ t("app.zoomTitle") }}</span>
+                </span>
+                <div
+                  class="zoom-stepper"
+                  :class="{ changed: activeTab.zoom !== workspace.settings.browserZoom }"
+                >
+                  <button
+                    type="button"
+                    class="zoom-step"
+                    :aria-label="t('app.browserZoomOut')"
+                    v-tooltip="t('app.browserZoomOut')"
+                    @click="zoom('out')"
+                  >
+                    <Minus :size="11" />
+                  </button>
+                  <button
+                    type="button"
+                    class="zoom-value mono"
+                    v-tooltip="t('app.browserZoomReset')"
+                    data-zoom-value
+                    @click="zoom('reset')"
+                  >
+                    {{ activeTab.zoom }}%
+                  </button>
+                  <button
+                    type="button"
+                    class="zoom-step"
+                    :aria-label="t('app.browserZoomIn')"
+                    v-tooltip="t('app.browserZoomIn')"
+                    @click="zoom('in')"
+                  >
+                    <Plus :size="11" />
+                  </button>
+                </div>
+              </div>
+              <div class="app-menu-rule" role="separator"></div>
+              <button
+                type="button"
+                role="menuitem"
+                class="app-menu-item"
+                data-menu-item="settings"
+                @click="openPageFromMenu('settings')"
+              >
+                <Settings :size="14" />
+                <span>{{ t("app.settings") }}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="app-menu-item"
+                data-menu-item="guide"
+                @click="openGuideFromMenu"
+              >
+                <BookOpenText :size="14" />
+                <span>{{ t("app.guideOpen") }}</span>
+              </button>
+              <div class="app-menu-rule" role="separator"></div>
+              <button type="button" role="menuitem" class="app-menu-item" @click="checkForUpdates">
+                <RefreshCw :size="14" />
+                <span>{{ t("app.checkUpdate") }}</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class="app-menu-item"
+                @click="openPageFromMenu('settings')"
+              >
+                <Info :size="14" />
+                <span>{{ t("app.about") }}</span>
+              </button>
+              <div class="app-menu-rule" role="separator"></div>
+              <button type="button" role="menuitem" class="app-menu-item danger" @click="quitApp">
+                <Power :size="14" />
+                <span>{{ t("app.quitApp") }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div ref="stage" class="stage">
         <!--
           The zoom readout, for a gesture the chrome never sees.
 
@@ -2479,7 +2416,6 @@ function fillMessage(reason?: string): string {
             {{ t("app.browserNewTab") }}
           </AppButton>
         </div>
-    </div>
       </div>
     </div>
 
@@ -2637,16 +2573,27 @@ function fillMessage(reason?: string): string {
   flex: 1 1 auto;
 }
 
-/* The row under the tab strip: column + page area, no gap between them. */
-.work-area {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
+/*
+ * The window's first row: accounts on the left, pages on the right.
+ *
+ * It used to be the tab strip alone, with the accounts in a column down the side.
+ * Both are "which of my contexts is this window" — the account a page belongs to
+ * and the page itself — so they share the band every browser spends on identity,
+ * and the page area gets the whole width below it.
+ *
+ * The account bar is capped at half the row (see its own rule). The strip takes
+ * whatever is left and scrolls; neither can squeeze the other to nothing.
+ */
+.top-row {
+  flex: 0 0 auto;
   display: flex;
   align-items: stretch;
+  min-width: 0;
+  height: var(--titlebar-height);
+  background: var(--frame);
 }
 
-/* The right column: the address row above the stage. */
+/* The page area: the address row above the stage. */
 .content-col {
   flex: 1 1 auto;
   min-width: 0;
@@ -2669,12 +2616,13 @@ function fillMessage(reason?: string): string {
  * address row's share became a dead gap on its right.
  * ------------------------------------------------------------------------ */
 .tabstrip {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: var(--titlebar-height);
-  padding-left: 4px;
+  min-width: 0;
+  height: 100%;
+  padding-left: 6px;
   background: var(--frame);
 }
 
@@ -2699,9 +2647,19 @@ function fillMessage(reason?: string): string {
   align-items: flex-end;
   gap: 1px;
   min-width: 0;
-  overflow: hidden;
+  /* Sideways, not hidden. Hiding was how the strip used to "fit": once the row was
+     full, every tab shrank together until the titles were three characters and
+     the ones past the edge were unreachable. A scrolling row keeps every title
+     whole and lets the user walk to the rest. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   flex: 0 1 auto;
   height: 100%;
+}
+
+.tabs::-webkit-scrollbar {
+  height: 0;
 }
 
 /*
@@ -2731,7 +2689,9 @@ function fillMessage(reason?: string): string {
   border-radius: 7px 7px 0 0;
   min-width: 46px;
   max-width: 184px;
-  flex: 0 1 auto;
+  /* Their own width, capped above, and never squeezed: the row scrolls when the
+     tabs do not fit, so a long title must not borrow width from its neighbours. */
+  flex: 0 0 auto;
   font-size: var(--fs-base);
   color: var(--text-secondary);
   white-space: nowrap;
@@ -2849,6 +2809,48 @@ function fillMessage(reason?: string): string {
   flex: 1 1 auto;
 }
 
+/*
+ * The AI state dot, on the tab it belongs to.
+ *
+ * Same 6px circle and same two states as the account bar's, on the tab's leading
+ * edge instead of the avatar — the tab has no avatar, and the dot is being read
+ * while scanning titles, so it sits where the scan starts.
+ *
+ * It takes layout space (a 6px column, no absolute positioning): a badge on a
+ * tab's corner has nowhere to go that does not cover the favicon or the close.
+ * The cost is six pixels on a tab that is being driven, which is exactly the tab
+ * that has earned them.
+ */
+.tab-ai-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 6px;
+  pointer-events: none;
+}
+
+.tab-ai-dot.active {
+  animation: ai-breathe 1.6s ease-in-out infinite;
+}
+
+.tab-ai-dot.recent {
+  animation: none;
+  opacity: 0.9;
+}
+
+@keyframes ai-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 /* Only present when the page is audible or muted, so it costs no width on a
    silent tab. The muted glyph stays after the sound stops: that is the only
    place to click to bring it back. */
@@ -2943,34 +2945,6 @@ function fillMessage(reason?: string): string {
   color: var(--muted);
   flex: 0 0 26px;
   margin: 0 2px;
-}
-
-/*
- * The account-rail switch, at the strip's left end.
- *
- * Same size and hover as the new-tab button at the other end of the tab row, so
- * the strip's two ends read as one band of controls; the `on` state is the
- * accented fill the app uses for "this panel is showing".
- */
-.rail-toggle {
-  align-self: center;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius);
-  color: var(--muted);
-  flex: 0 0 26px;
-  margin: 0 2px 0 0;
-}
-
-.rail-toggle:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text);
-}
-
-.rail-toggle.on {
-  color: var(--accent-text);
 }
 
 .strip-add:hover {

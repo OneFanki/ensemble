@@ -17,6 +17,7 @@
  * `allowpopups` cannot be applied afterwards.
  */
 import {
+  aiFramesRect,
   ghostPresentationRect,
   guestNodeRect,
   needsCompositorFrames,
@@ -43,13 +44,21 @@ interface Mounted {
   /** Main has been told this node has a real box (reported once). */
   laidOut: boolean;
   /**
-   * Whether the node is currently in the AI-frames ghost state.
+   * Whether the node is currently in the AI-frames state.
    *
    * Entering that state needs a one-shot opacity nudge to unlock the guest's
    * rAF scheduler (see the layout note); leaving it re-arms the nudge, so a
    * page that froze and woke again gets a fresh one.
    */
   framesGhosted: boolean;
+  /**
+   * Whether that nudge is still being held. While it is, `layout()` keeps the
+   * node at the nudge opacity instead of writing its usual value, so the
+   * change reaches the compositor before it is taken back.
+   */
+  nudging: boolean;
+  /** Identifies the current nudge; a stale callback must not end a newer one. */
+  nudgeToken: number;
 }
 
 const embedded = useEmbeddedStore();
@@ -188,20 +197,26 @@ function layout(): void {
      * brand-new tab, a park that was zeroed — falls back to the stage size.
      *
      * AI 正在操作的页面（`sleepExempt === "ai-active"`，命令在飞或宽限期内）
-     * 走同一条 ghost 摆位：它不在台上时节点停在窗外，合成器不为窗外节点出帧，
-     * 页内 rAF 被压到约 1fps——AI 的滚轮投递、动画后读取都依赖合成帧，必须
-     * 满帧。两种来由共用一个几何函数（ghostPresentationRect），宽限一过判定
-     * 自动翻 false，节点回到窗外，省资源行为不受影响。
+     * 不在台上时节点平时停在窗外，合成器不为窗外节点出帧，页内 rAF 被压到
+     * 约 1fps——AI 的滚轮投递、动画后读取都依赖合成帧，必须满帧。它对位置的
+     * 要求与呈现不同：呈现要能截图，整页得在窗口内；出帧只要节点与窗口相交。
+     * 所以它不走舞台，而是贴窗口左缘只露出一条（`aiFramesRect`），不与台上
+     * 页重叠。宽限一过判定自动翻 false，节点回到窗外，省资源行为不受影响。
      */
     const ghost = (presenting || placement.needsFrames) && !placement.onStage;
     const ownBox = placement.rect.width > 0 && placement.rect.height > 0;
-    const rect = ghost
-      ? ghostPresentationRect({
-          stage,
-          own: ownBox ? placement.rect : null,
-          window: { width: window.innerWidth, height: window.innerHeight },
-        })
-      : placement.rect;
+    const rect = !ghost
+      ? placement.rect
+      : presenting
+        ? ghostPresentationRect({
+            stage,
+            own: ownBox ? placement.rect : null,
+            window: { width: window.innerWidth, height: window.innerHeight },
+          })
+        : aiFramesRect({
+            own: ownBox ? placement.rect : null,
+            window: { width: window.innerWidth, height: window.innerHeight },
+          });
     const onStage = placement.onStage;
     const style = mounted.node.style;
     // `flex`, never `block`. Electron's `<webview>` ships as `display: flex`
@@ -217,31 +232,52 @@ function layout(): void {
     style.width = `${rect.width}px`;
     style.height = `${rect.height}px`;
     style.visibility = "visible";
-    style.opacity = onStage ? "1" : "0";
     // A transparent page must not take clicks meant for the one in front, and
     // no page may take the pointer during an app gesture.
     style.pointerEvents = onStage && !shielded ? "auto" : "none";
-    // Above the other nodes while presenting: a page that is being read must not
-    // be painted underneath a sibling that is parked at the same spot.
-    style.zIndex = presenting ? "3" : "1";
+    // Above the other nodes while presenting or on stage: a page that is being
+    // read, or the one the user is looking at, must never be painted underneath
+    // a parked sibling.
+    style.zIndex = presenting || onStage ? "3" : "1";
     /*
-     * 摆进窗口只是让合成器「肯为这个节点 raster」；唤醒后的 guest 还有一层
-     * rAF 调度的残留节流（冻结→唤醒，或从窗外摆回窗口之后，页内 rAF 仍停在
-     * 约 1fps），要一次真实的渲染输出变化才肯恢复。实测 45.2.1：z-index 或
-     * present 这类不改变输出的刺激无效，透明度 0 → 0.01 → 0 有效，且解锁后
-     * 静置十几秒也不回落。抖完停在 0，与 ghost 的不可见语义一致，人眼无痕迹。
-     * 状态离开再进入（宽限过期后又一次 AI 活动）会重新抖一次。
-     */
-    const framesGhost = ghost && placement.needsFrames;
+      贴回窗口只是让合成器「肯为这个节点 raster」；唤醒后的 guest 还有一层 rAF
+      调度的残留节流（冻结→唤醒，或从窗外摆回窗口之后，页内 rAF 仍停在约
+      1fps），要一次真实的渲染输出变化才肯恢复。实测（Electron 45，无头）：
+      节点已在窗口内但不抖，rAF 间隔中位 1001ms；抖一下，中位 18ms。透明度
+      0 → 0.01 → 0 就是这次输出变化；z-index 或 present 这类不改变输出的刺激
+      无效。解锁后静置十几秒也不回落，抖完停在 0，与不可见语义一致。
+
+      只给贴边的出帧页抖，不给呈现页抖：呈现页整页摆在舞台上，跟着抖就会
+      以 1% 压在台上页上面；它要的是截图，不是帧率，摆进窗口已经够了。
+
+      抖动要跨过一次合成提交才作数，所以由两帧 rAF 收尾，而不是让下一次
+      layout 直接写回 0——命令的 present 与唤醒后的状态广播都会紧接着触发
+      layout，那样抖动只维持到下一次布局（实测 8–34ms），可能赶在提交之前就被
+      抹掉，恢复满帧全靠时序运气。也不用固定延时：那会让这条边以 1% 闪上
+      十几帧。状态离开再进入（冻结唤醒之后）会重新抖一次，令牌保证旧回调
+      不会结束新的一次。
+    */
+    const framesGhost = ghost && placement.needsFrames && !presenting;
     if (framesGhost && !mounted.framesGhosted) {
       mounted.framesGhosted = true;
-      style.opacity = "0.01";
-      setTimeout(() => {
-        // 期间 layout 若改了透明度（页面上了台、宽限结束），不要覆盖。
-        if (style.opacity === "0.01") style.opacity = "0";
-      }, 300);
+      mounted.nudging = true;
+      const token = (mounted.nudgeToken += 1);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!mounted.nudging || mounted.nudgeToken !== token) return;
+          mounted.nudging = false;
+          // 期间页面上了台：透明度已是 1，不要动。
+          if (style.opacity === "0.01") style.opacity = "0";
+        });
+      });
     }
-    if (!framesGhost) mounted.framesGhosted = false;
+    if (!framesGhost) {
+      mounted.framesGhosted = false;
+      mounted.nudging = false;
+    }
+    // 最后写透明度：由上面算完的抖动状态派生。离开出帧态的同一次布局里就
+    // 归零，不会把 1% 留到下一次布局。
+    style.opacity = onStage ? "1" : mounted.nudging ? "0.01" : "0";
     // A node that has never had a real box reports a 0×0 viewport, and every
     // visibility check inside the page then answers false. Main has to know the
     // difference between "mounted" and "ready to be read".
@@ -341,6 +377,8 @@ function mountNode(payload: {
     presenting: 0,
     laidOut: false,
     framesGhosted: false,
+    nudging: false,
+    nudgeToken: 0,
   });
   container.value?.appendChild(node);
   layout();

@@ -498,26 +498,33 @@ export function guestNodeRect(input: {
 }
 
 /**
- * 是否该页因 AI 正在操作而必须继续出帧。
+ * 是否该页需要持续出帧。
  *
  * 合成器不为完全在窗口外的节点出帧（rAF 被压到约 1fps），而停放页的节点恰好
- * 就在窗外。AI 命令在飞或宽限期内（`sleepExempt === "ai-active"`）的页面必须
- * 满帧运行——滚轮投递、动画后截图、时序断言都依赖合成帧——所以渲染层用这个
- * 判定决定是否把节点摆回窗口内。豁免期结束（宽限过期、sweep 冻结）后判定
- * 自动变回 false，节点回到窗外，省资源行为不受影响。
+ * 就在窗外。以下两种豁免理由下的页面必须满帧运行——滚轮投递、动画后截图、
+ * 时序断言都依赖合成帧——所以渲染层用这个判定决定是否把节点贴回窗口边缘：
+ *
+ * - `ai-active`：AI 命令在飞或宽限期内；
+ * - `loading`：主进程把它排在 `ai-active` 之前作为豁免理由，所以正被 AI 操作
+ *   的页面在登录跳转期间会在两个理由之间来回切换。只认 `ai-active` 的话，
+ *   节点每次切换都被搬回窗外再搬回来，每搬一次都要重新解锁帧调度（实测一次
+ *   批量启动里抖了 92 次）。
+ *
+ * 豁免期结束（宽限过期、加载完成后的 sweep 冻结）后判定自动变回 false，
+ * 节点回到窗外，省资源行为不受影响。
  */
 export function needsCompositorFrames(tab: Pick<EmbeddedTab, "sleepExempt"> | undefined): boolean {
-  return tab?.sleepExempt === "ai-active";
+  return tab?.sleepExempt === "ai-active" || tab?.sleepExempt === "loading";
 }
 
 /**
- * 一个「只要帧、不要可见性」的页面节点该摆在哪里。
+ * 一个「为了被读取而临时呈现」的页面节点该摆在哪里。
  *
- * 从 GuestPool 的 ghost 摆位原样提取：舞台有效时摆在舞台原点（自身有盒子就
- * 保留自身尺寸，否则用舞台尺寸）；舞台未上报时退到窗口原点。两种落点都在
- * 窗口视口内，合成器因此持续为该节点 raster——这正是 ghost 的目的，也是
- * AI 活跃页借用的同一条路。摆放几何必须两态出自同一个函数，避免「读页
- * 摆位」与「AI 摆位」各自演化后互相对不上。
+ * 舞台有效时摆在舞台原点（自身有盒子就保留自身尺寸，否则用舞台尺寸）；舞台
+ * 未上报时退到窗口原点。整页落在窗口视口内，合成器因此持续为该节点 raster，
+ * `Page.captureScreenshot` 才有内容可截——这是读页与截图专用的路径。只要帧、
+ * 不需要被看见的页面走 {@link aiFramesRect}，两者不共用几何：呈现必须整页
+ * 在窗口内，出帧只需与窗口相交，硬凑成一个函数就得二选一。
  */
 export function ghostPresentationRect(input: {
   stage: StageRect | null;
@@ -537,6 +544,39 @@ export function ghostPresentationRect(input: {
     width: own ? own.width : Math.max(1, win.width),
     height: own ? own.height : Math.max(1, win.height),
   };
+}
+
+/**
+ * AI 出帧态下页面节点露在窗口内的宽度（CSS 像素）。
+ *
+ * 合成器只要求节点与窗口相交就肯为它出帧，相交多少无关。取 2 而不是 1 是给
+ * 高缩放留余量；它仍小于 e2e 探针判定「两页重叠」的 4px 门槛。
+ */
+export const AI_FRAMES_VISIBLE_PX = 2;
+
+/**
+ * 一个「只要帧、不要被看见」的页面节点该摆在哪里。
+ *
+ * 合成器不为完全在窗口外的节点出帧（页内 rAF 被压到约 1fps），而停放页的节点
+ * 恰好停在窗外。AI 命令在飞或宽限期内（`sleepExempt === "ai-active"`）的页面
+ * 必须满帧——滚轮投递、动画后的读取都依赖合成帧——所以这时把节点贴到窗口
+ * 左缘，只露出 {@link AI_FRAMES_VISIBLE_PX}。实测（Electron 45，无头）：露出
+ * 1px 时页内 rAF 即恢复满帧（相邻间隔中位 18ms），完全在窗外时约 1fps。
+ *
+ * 不像呈现（{@link ghostPresentationRect}）那样摆到舞台上：那样它与台上页
+ * 同矩形。批量启动时登录监听用的命令会让好几个离台成员页同时进入这个状态，
+ * 解锁帧调度用的透明度抖动就以 1% 的不透明度盖在用户正在看的那一页上。贴边
+ * 之后这条抖动只发生在窗口最左的一条上，不与任何台上页重叠。
+ */
+export function aiFramesRect(input: {
+  /** 页面自身的盒子；没有（尚未摆放过）传 null，退到窗口尺寸。 */
+  own: StageRect | null;
+  window: { width: number; height: number };
+}): StageRect {
+  const { own, window: win } = input;
+  const width = own && own.width > 0 ? own.width : Math.max(1, Math.round(win.width));
+  const height = own && own.height > 0 ? own.height : Math.max(1, Math.round(win.height));
+  return { x: AI_FRAMES_VISIBLE_PX - width, y: 0, width, height };
 }
 
 /**

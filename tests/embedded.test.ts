@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_FRAMES_VISIBLE_PX,
   EMBEDDED_DAILY_PARTITION,
   EMBEDDED_SLOT_HEADER,
   FAVICON_MAX_BYTES,
   ZOOM_STEPS,
+  aiFramesRect,
   clampZoom,
   desktopUserAgent,
   embeddedCleanPartition,
@@ -396,15 +398,21 @@ describe("AI 活跃页的出帧摆位", () => {
   /*
    * 缺陷背景：停放页的节点停在窗外，合成器不为窗外节点出帧，页内 rAF 被压到
    * 约 1fps；AI 命令依赖合成帧（滚轮投递、动画后读取），在命令在飞与宽限期
-   * 内必须满帧。这里钉住两层契约：哪个豁免理由算「必须出帧」，以及出帧摆位
-   * 是否真的落在窗口视口内。
+   * 内必须满帧。这里钉住三层契约：哪个豁免理由算「必须出帧」、出帧摆位是否
+   * 真的与窗口相交、以及它不压在任何台上页上面。
    */
   const stage = { x: 52, y: 113, width: 900, height: 600 };
   const win = { width: 1280, height: 800 };
   const bounds = { x: 10, y: 26, width: 880, height: 574 };
 
-  it("只有 ai-active 豁免要求持续出帧", () => {
+  it("ai-active 与 loading 豁免要求持续出帧", () => {
     expect(needsCompositorFrames({ sleepExempt: "ai-active" })).toBe(true);
+    /*
+      加载中也算：主进程把「正在加载」排在「AI 活跃」之前作为豁免理由，登录
+      监听期间的页面会在两者之间来回切换。只认 ai-active 的话，节点每次切换
+      都被搬回窗外再搬回来，每搬一次都要重新解锁帧调度。
+    */
+    expect(needsCompositorFrames({ sleepExempt: "loading" })).toBe(true);
     // 其他豁免不改变窗外摆位：台上页本来就在窗口内，有声页与策略豁免页维持
     // 现状（省资源行为不动），无豁免与已冻结页照常停放。
     expect(needsCompositorFrames({ sleepExempt: "on-stage-visible" })).toBe(false);
@@ -414,9 +422,9 @@ describe("AI 活跃页的出帧摆位", () => {
     expect(needsCompositorFrames(undefined)).toBe(false);
   });
 
-  it("AI 活跃页的 ghost 摆位落在舞台原点且保留自身尺寸", () => {
+  it("呈现页的 ghost 摆位落在舞台原点且保留自身尺寸", () => {
     const rect = ghostPresentationRect({ stage, own: bounds, window: win });
-    // 左上角在舞台内：节点与可见区域相交，合成器因此持续 raster。
+    // 左上角在舞台内：整页在窗口内，截图才有内容。
     expect(rect.x).toBeGreaterThanOrEqual(stage.x);
     expect(rect.y).toBeGreaterThanOrEqual(stage.y);
     expect(rect.x).toBeLessThan(stage.x + stage.width);
@@ -425,7 +433,7 @@ describe("AI 活跃页的出帧摆位", () => {
     expect(rect.height).toBe(bounds.height);
   });
 
-  it("没有自身盒子的 AI 活跃页退到舞台尺寸，而不是 0×0", () => {
+  it("没有自身盒子的呈现页退到舞台尺寸，而不是 0×0", () => {
     const rect = ghostPresentationRect({ stage, own: null, window: win });
     expect(rect.x).toBe(stage.x);
     expect(rect.y).toBe(stage.y);
@@ -433,7 +441,7 @@ describe("AI 活跃页的出帧摆位", () => {
     expect(rect.height).toBe(stage.height);
   });
 
-  it("舞台未上报（控制台盖住浏览器）时退到窗口原点，仍在视口内", () => {
+  it("舞台未上报（控制台盖住浏览器）时呈现页退到窗口原点，仍在视口内", () => {
     const rect = ghostPresentationRect({ stage: null, own: bounds, window: win });
     expect(rect.x).toBe(0);
     expect(rect.y).toBe(0);
@@ -444,21 +452,36 @@ describe("AI 活跃页的出帧摆位", () => {
     expect(bare.height).toBe(win.height);
   });
 
-  it("AI 活跃页的最终落点与窗口相交——这是合成器肯出帧的前提", () => {
-    // 按组件的实际取用方式组合两个函数：needsFrames 决定走 ghost 摆位还是
-    // 窗外停放。变异任何一环（豁免判定、ghost 几何）都会让这条变红。
-    const tab = { sleepExempt: "ai-active" as const };
-    const rect = needsCompositorFrames(tab)
-      ? ghostPresentationRect({ stage, own: bounds, window: win })
-      : guestNodeRect({ stage, bounds, onStage: false, window: win });
-    const intersectsWindow =
-      rect.x + rect.width > 0 &&
-      rect.y + rect.height > 0 &&
-      rect.x < win.width &&
-      rect.y < win.height;
-    expect(intersectsWindow).toBe(true);
-    // 反向对照：非 AI 活跃页维持窗外停放（沿用既有契约）。
-    const parked = guestNodeRect({ stage, bounds, onStage: false, window: win });
+  it("出帧页贴在窗口左缘，只露出一条，不压在舞台上", () => {
+    const rect = aiFramesRect({ own: bounds, window: win });
+    // 与窗口相交是合成器肯出帧的前提；露出的一条不超过 e2e 探针判定
+    // 「两页重叠」的 4px 门槛。
+    expect(rect.x + rect.width).toBe(AI_FRAMES_VISIBLE_PX);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(4);
+    expect(rect.y).toBe(0);
+    // 尺寸不变：页内视口与 AI 的坐标不因摆位而变。
+    expect(rect.width).toBe(bounds.width);
+    expect(rect.height).toBe(bounds.height);
+  });
+
+  it("没有自身盒子的出帧页退到窗口尺寸，同样只露出一条", () => {
+    const rect = aiFramesRect({ own: null, window: win });
+    expect(rect.width).toBe(win.width);
+    expect(rect.height).toBe(win.height);
+    expect(rect.x + rect.width).toBe(AI_FRAMES_VISIBLE_PX);
+  });
+
+  it("按组件的取用方式组合：豁免判定决定贴边出帧还是窗外停放", () => {
+    // 变异任何一环（豁免判定、贴边几何）都会让这条变红。
+    const place = (tab: { sleepExempt?: string }) =>
+      needsCompositorFrames(tab)
+        ? aiFramesRect({ own: bounds, window: win })
+        : guestNodeRect({ stage, bounds, onStage: false, window: win });
+    const awake = place({ sleepExempt: "ai-active" });
+    expect(awake.x + awake.width).toBeGreaterThan(0);
+    expect(awake.x + awake.width).toBeLessThanOrEqual(4);
+    // 反向对照：无豁免页维持窗外停放（沿用既有契约）。
+    const parked = place({});
     expect(parked.x + parked.width).toBeLessThanOrEqual(0);
   });
 });

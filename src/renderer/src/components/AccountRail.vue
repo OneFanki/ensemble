@@ -670,6 +670,17 @@ function markAvatarBroken(instanceId: string): void {
   border-right: 1px solid var(--line);
 }
 
+/*
+ * macOS 的红绿灯悬浮在首行左端：主进程把它们画在 (14, 14)
+ * （`src/main/index.ts` 的 `trafficLightPosition`），三颗标准按钮每颗 12px 宽、
+ * 相邻间隙 8px，整组右缘在 x = 14 + 3×12 + 2×8 = 66。首行最左元素是账号条，
+ * 留白加在它身上：82px = 红绿灯右缘 66px + 16px 间隙，与地址行（第二行）的
+ * macOS 缩进同值，两行左缘对齐。
+ */
+.account-bar[data-platform="darwin"] {
+  padding-left: 82px;
+}
+
 /* 两个入口：图标按钮，和条目同高，靠一条竖线与条目分开。 */
 .bar-doors {
   display: flex;

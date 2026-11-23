@@ -2721,10 +2721,6 @@ function fillMessage(reason?: string): string {
   padding-right: calc(var(--window-controls-width, 138px) + 6px);
 }
 
-.tabstrip[data-platform="darwin"] {
-  padding-left: 82px;
-}
-
 /*
  * The tab row hugs its tabs and grows only as far as they need, so the "+"
  * sits immediately after the last tab the way every browser draws it. It was
@@ -3254,8 +3250,9 @@ function fillMessage(reason?: string): string {
  * the tab strip above it. Leaving the reserve here too would push the app menu
  * a hundred pixels off the right edge for no reason.
  *
- * macOS keeps the traffic lights on the left, on the first row; the address row
- * still indents past them because they hang over the band it occupies.
+ * macOS draws the traffic lights over the first row's left end; the account
+ * bar, the first element of that row, indents past them, and this row aligns
+ * its left edge with the account bar, so it carries the same indent.
  */
 .toolbar[data-platform="darwin"] {
   padding-left: 82px;

@@ -1459,8 +1459,9 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   做了什么」不需要再按时间窗去 Join；同一事件也推给渲染层，实例行的 AI 三态点据此点亮
   （正在操作呼吸、30 分钟内动过常亮），明细在 AI 记录页。
 - 浏览器工具与账号工具同权：`run` 档同时覆盖「启动窗口」和「操作内置页面」，因为两者
-  都是对现场的改动而不是对数据的改动。`open_browser_tab` 带 `identityId` 时与手动入口
-  一样走 `scheduleEmbeddedFill`，AI 不必额外记得调 `fill_browser_login`。
+  都是对现场的改动而不是对数据的改动。`open_browser_tab` 解析到账号时（显式传入
+  `identityId`，或按地址归属 / `siteId` 自动归类到已录入账号）与手动入口一样走
+  `scheduleEmbeddedFill`，AI 不必额外记得调 `fill_browser_login`。
 - **档案页面的操作范围可配**（`shared/ai-policy.ts`）：档案页面是真实登录态，所以 AI 在
   那里默认只能读——读页面、截图、切标签、等待都放行，点击 / 输入 / 填表 / 填登录 /
   执行表达式 / 跑流程一律拦在 `tool.run` 之前。账号页与干净会话不受限制，那本来就是给
@@ -1493,8 +1494,17 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   同源链接、或工作区里已有的站点 / 书签地址。这条防的是提示注入——页面正文里的文字不能被
   AI 当成下一步要去的地方。导航本身不受档位限制：移动页面不等于往用户账号里打字，
   「到了之后能不能操作」才是 `aiWriteDenial` 的问题。
-- **AI 自己开的无身份标签是干净会话**：`open_browser_tab` 不带 `identityId` 时显式传
-  `clean: true`。否则 AI 能自己造一个落在默认档案里的标签，等于绕过上面那道闸门。
+- **AI 开页先复用已录入账号，归不了类才是干净会话**：`open_browser_tab` 不带
+  `identityId` 时按地址归属解析——地址与已录入站点同源就用该站点的第一个账号（解析在
+  `core/util/identity-resolution.ts`，同源判断共用 `sameOrigin`），其次按显式 `siteId`；
+  返回值带 `identityName` / `resolvedBy` 说明归类结果。都匹配不到的打开落一次性干净
+  会话（桥接层显式传 `clean: true`）：让 AI 自己造一个落在默认档案里的标签，等于绕过
+  上面那道闸门。
+- **`launch_*` 与 `open_browser_*` 默认都开在内置浏览器**：外部系统浏览器只在调用方显式
+  传 `external: true` 时才开，用途是给人看或做保真校验。两套工具名字不同但默认表面相同，
+  指令文本（`SERVER_INSTRUCTIONS`）与每个工具的描述都必须把「默认内置 / `external` 例外」
+  两半说全——只说一半，模型就会把 `launch_*` 当成另一条驱动路径，把本该在内置表面里完成
+  的校验开进系统浏览器。由 `tests/contracts/ai-guidance.test.ts` 守护。
 - 生命周期：与主进程同生共死。`stop()` 先 `closeAllConnections()` 再 `close()`，
   保证客户端保持长连接时也能立即释放端口。
 

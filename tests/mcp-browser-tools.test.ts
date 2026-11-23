@@ -60,6 +60,7 @@ function fakeSurface(): EmbeddedSurface {
         url: input.url ?? "about:blank",
         title: "",
         ...(input.identityId ? { identityId: input.identityId } : {}),
+        ...(input.siteId ? { siteId: input.siteId } : {}),
         // Mirrors the real bridge: an identity-less tab opened by the AI is a
         // clean session, never a page in the user's daily profile.
         ...(input.identityId ? {} : { clean: true }),
@@ -472,6 +473,61 @@ describe("browser tool calls", () => {
     expect(payload.identityId).toBe(identity.id);
     // The tool fills in the identity's own label rather than making the AI repeat it.
     expect(payload.label).toBe("管理员 · 主账号");
+  });
+
+  it("没有 identityId 时按地址归属复用已录入站点的第一个账号", async () => {
+    await startServer(fakeSurface());
+    const site = await service.saveSite({
+      name: "本地开发环境",
+      baseUrl: "http://127.0.0.1:9527",
+      loginPath: "/login",
+    });
+    const first = await service.saveIdentity({
+      siteId: site.id,
+      name: "管理员 · 主账号",
+      username: "admin",
+      role: "管理员",
+      color: "amber",
+      passwordMode: "custom",
+    });
+    await service.saveIdentity({
+      siteId: site.id,
+      name: "运营 · 副账号",
+      username: "ops",
+      role: "运营",
+      color: "teal",
+      passwordMode: "custom",
+    });
+    const { json } = await rpc(
+      toolCall("open_browser_tab", { url: "http://127.0.0.1:9527/dashboard" }),
+    );
+    const payload = toolPayload(json) as {
+      identityId?: string;
+      identityName?: string;
+      resolvedBy?: string;
+    };
+    // 打开的是已录入站点，复用该站点的第一个账号：登录态与手动打开一致。
+    expect(payload.identityId).toBe(first.id);
+    expect(payload.identityName).toBe("管理员 · 主账号");
+    expect(payload.resolvedBy).toBe("explicit-url-match");
+    const created = calls.find((call) => call.method === "createTab");
+    expect(created?.args[0]).toMatchObject({
+      identityId: first.id,
+      siteId: site.id,
+      label: "管理员 · 主账号",
+      color: "amber",
+    });
+  });
+
+  it("地址与 siteId 都匹配不到时维持一次性干净会话", async () => {
+    await startServer(fakeSurface());
+    const { json } = await rpc(
+      toolCall("open_browser_tab", { url: "https://elsewhere.example.test/page" }),
+    );
+    const payload = toolPayload(json) as { identityId?: string; clean?: boolean; resolvedBy?: string };
+    expect(payload.identityId).toBeUndefined();
+    expect(payload.clean).toBe(true);
+    expect(payload.resolvedBy).toBeUndefined();
   });
 
   it("rejects an unknown identity instead of opening an unowned tab", async () => {

@@ -480,6 +480,240 @@ describe("MCP tools", () => {
   });
 });
 
+describe("launch 工具默认走内置表面", () => {
+  /**
+   * 内置表面的最小替身：只记录 openView / createTab，其余成员给可编译的空实现。
+   * createTab 沿用真实桥的关键约定：带 identityId 落账号分区，不带则是一次性
+   * 干净会话（clean: true）。
+   */
+  function launchProbeSurface() {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    let seq = 0;
+    const surface: EmbeddedSurface = {
+      state: () => ({ tabs: [], views: [] }),
+      createTab: async (input) => {
+        calls.push({ method: "createTab", args: [input] });
+        seq += 1;
+        return {
+          id: `tab-${seq}`,
+          label: input.label ?? "新标签页",
+          url: input.url ?? "about:blank",
+          title: "",
+          ...(input.identityId ? { identityId: input.identityId } : {}),
+          ...(input.identityId ? {} : { clean: true }),
+        };
+      },
+      openView: async (viewId, options) => {
+        calls.push({ method: "openView", args: [viewId, options] });
+        return {
+          tabs: [],
+          views: [
+            { id: `container-${viewId}`, name: "视图", layoutId: "2x2", viewDefinitionId: viewId },
+          ],
+        };
+      },
+      navigate: async () => ({}),
+      back: () => undefined,
+      forward: () => undefined,
+      reload: () => undefined,
+      closeTab: () => undefined,
+      activate: () => undefined,
+      snapshotDom: async () => ({}),
+      click: async () => ({}),
+      hover: async () => ({}),
+      scroll: async () => ({}),
+      pressKeys: async () => ({}),
+      dialogStatus: () => ({ dialog: null }),
+      handleDialog: async () => ({}),
+      setFiles: async () => ({}),
+      drag: async () => ({}),
+      setChecked: async () => ({}),
+      elementInfo: async () => ({}),
+      findElements: async () => ({}),
+      attributes: async () => ({}),
+      type: async () => ({}),
+      fillForm: async () => ({}),
+      runFlow: async (_tabId, steps) => ({
+        ok: true,
+        steps: steps.map((step, index) => ({ index, action: step.action, ok: true })),
+      }),
+      evaluate: async () => ({}),
+      screenshot: async () => ({ path: "", bytes: 0 }),
+      visibility: async () => ({}),
+      wait: async () => ({ ok: true, waitedMs: 0 }),
+      setLayout: () => undefined,
+      setViewport: () => undefined,
+      pinTab: () => undefined,
+      moveTab: () => undefined,
+      fillLogin: async () => ({}),
+      defaultTabId: () => "",
+      defaultViewId: () => undefined,
+      layoutTargetView: () => undefined,
+      surfaceName: () => "embedded",
+    };
+    return { surface, calls };
+  }
+
+  /**
+   * 把 service 的三个外部启动替换成记录桩：外部路径只断言「调了谁、传了什么」，
+   * 不在测试进程里真的拉起系统浏览器。
+   */
+  function stubExternalLaunches() {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const bag = service as unknown as Record<
+      string,
+      (...args: unknown[]) => Promise<unknown>
+    >;
+    bag.launchView = async (...args) => {
+      calls.push({ method: "launchView", args });
+      return { instance: { id: "inst-view", label: "视图实例" }, identities: [] };
+    };
+    bag.launchIdentity = async (...args) => {
+      calls.push({ method: "launchIdentity", args });
+      return { instance: { id: "inst-identity", label: "账号实例" } };
+    };
+    bag.launchCleanSession = async (...args) => {
+      calls.push({ method: "launchCleanSession", args });
+      return { instance: { id: "inst-clean", label: "干净会话" } };
+    };
+    return calls;
+  }
+
+  /**
+   * 经 service 直接建站点、账号、视图，返回各 id；loginPath / startPath 用于
+   * 断言内置起始地址。不走 HTTP：重启后的端点会复用同一路径，造数请求留在
+   * 连接池里的旧连接会被 stop() 销毁，下一次请求就会撞上 ECONNRESET。
+   */
+  async function seedWorkspace() {
+    const site = await service.saveSite({
+      name: "启动站点",
+      baseUrl: "http://localhost:3000",
+      loginPath: "/login",
+      autoSubmit: false,
+    });
+    const identity = await service.saveIdentity({
+      siteId: site.id,
+      name: "示例账号",
+      username: "user-a",
+      role: "member",
+      color: "teal",
+      passwordMode: "inherit",
+      startPath: "/dashboard",
+    });
+    const view = await service.saveView({
+      siteId: site.id,
+      name: "示例视图",
+      identityIds: [identity.id],
+      layoutId: "2x2",
+      slotAssignments: {},
+      paths: {},
+    });
+    return { siteId: site.id, identityId: identity.id, viewId: view.id };
+  }
+
+  it("声明 external 开关但不出现在必填参数里", async () => {
+    const tools = (
+      await rpc({ jsonrpc: "2.0", id: 3, method: "tools/list" })
+    ).json.result.tools as Array<{
+      name: string;
+      inputSchema: { properties: Record<string, { type: string }>; required?: string[] };
+    }>;
+    for (const name of ["launch_view", "launch_identity", "launch_clean_session"]) {
+      const tool = tools.find((item) => item.name === name);
+      expect(tool?.inputSchema.properties.external?.type).toBe("boolean");
+      expect(tool?.inputSchema.required ?? []).not.toContain("external");
+    }
+  });
+
+  it("不传 external 时走内置表面，不触发外部浏览器启动", async () => {
+    const ids = await seedWorkspace();
+    const probe = launchProbeSurface();
+    const externalCalls = stubExternalLaunches();
+    await restartServer({ embedded: probe.surface });
+
+    const viewPayload = toolPayload(
+      (await rpc(toolCall("launch_view", { viewId: ids.viewId }))).json,
+    ) as { views: Array<{ viewDefinitionId?: string }> };
+    expect(viewPayload.views[0]?.viewDefinitionId).toBe(ids.viewId);
+
+    const identityPayload = toolPayload(
+      (await rpc(toolCall("launch_identity", { identityId: ids.identityId }))).json,
+    ) as { identityId?: string; url?: string; clean?: boolean };
+    expect(identityPayload.identityId).toBe(ids.identityId);
+    // 起始地址按账号自己的 startPath 推导，与界面上点账号卡片落点一致。
+    expect(identityPayload.url).toBe("http://localhost:3000/dashboard");
+    expect(identityPayload.clean).toBeUndefined();
+
+    const cleanPayload = toolPayload(
+      (await rpc(toolCall("launch_clean_session", { siteId: ids.siteId }))).json,
+    ) as { url?: string; clean?: boolean; identityId?: string };
+    expect(cleanPayload.url).toBe("http://localhost:3000/login");
+    expect(cleanPayload.clean).toBe(true);
+    expect(cleanPayload.identityId).toBeUndefined();
+
+    // 三个工具恰好各产生一次内置调用：一次 openView、两次 createTab。
+    expect(probe.calls).toEqual([
+      { method: "openView", args: [ids.viewId, { muted: true }] },
+      {
+        method: "createTab",
+        args: [
+          {
+            url: "http://localhost:3000/dashboard",
+            identityId: ids.identityId,
+            siteId: ids.siteId,
+            label: "示例账号",
+            color: "teal",
+            muted: true,
+          },
+        ],
+      },
+      {
+        method: "createTab",
+        args: [{ url: "http://localhost:3000/login", siteId: ids.siteId, muted: true }],
+      },
+    ]);
+    expect(externalCalls).toEqual([]);
+  });
+
+  it("external: true 时走外部浏览器启动，不碰内置表面", async () => {
+    const ids = await seedWorkspace();
+    const probe = launchProbeSurface();
+    const externalCalls = stubExternalLaunches();
+    await restartServer({ embedded: probe.surface });
+
+    const viewPayload = toolPayload(
+      (await rpc(toolCall("launch_view", { viewId: ids.viewId, external: true }))).json,
+    ) as { instances: unknown[] };
+    expect(viewPayload.instances).toEqual([]);
+
+    const identityPayload = toolPayload(
+      (await rpc(
+        toolCall("launch_identity", {
+          identityId: ids.identityId,
+          external: true,
+          engineId: "edge-stable",
+        }),
+      )).json,
+    ) as { instanceId?: string };
+    expect(identityPayload.instanceId).toBe("inst-identity");
+
+    const cleanPayload = toolPayload(
+      (await rpc(toolCall("launch_clean_session", { siteId: ids.siteId, external: true }))).json,
+    ) as { instanceId?: string };
+    expect(cleanPayload.instanceId).toBe("inst-clean");
+
+    expect(externalCalls.map((call) => call.method)).toEqual([
+      "launchView",
+      "launchIdentity",
+      "launchCleanSession",
+    ]);
+    expect(externalCalls[0]?.args).toEqual([ids.viewId, undefined]);
+    expect(externalCalls[1]?.args).toEqual([ids.identityId, undefined, "edge-stable"]);
+    expect(externalCalls[2]?.args).toEqual([ids.siteId, undefined]);
+    expect(probe.calls).toEqual([]);
+  });
+});
+
 describe("MCP 返回体瘦身", () => {
   /**
    * AI 的上下文是稀缺资源：一个 base64 图标几千 token，一段脚本可以返回一兆

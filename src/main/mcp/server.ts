@@ -6,6 +6,11 @@ import { ZodError } from "zod";
 import type { ElementTarget, WaitResult } from "@core/cdp/inspect";
 import type { WorkspaceService } from "@core/service";
 import { JsonStore } from "@core/storage/json-store";
+import { joinUrl, sameOrigin } from "@core/util/url";
+import {
+  resolveIdentityForUrl,
+  type ResolveIdentityForUrlResult,
+} from "@core/util/identity-resolution";
 import {
   AI_DAILY_MODES,
   aiNavigationAllowed,
@@ -90,8 +95,9 @@ const BIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400, 4_800];
  *
  * Deliberately short. It is prepended to every session's context, so every
  * sentence must earn its place: the workflow (workspace → site → identity →
- * view), the one rule that is easy to get wrong (inputs on a daily-profile page
- * need the origin allowed first), and where to look when unsure.
+ * view), the two rules a model gets wrong when left to guess (which browser
+ * surface does the work, and how a signed-in page is opened without hand
+ * filling a login form), and where to look when unsure.
  */
 const SERVER_INSTRUCTIONS = [
   "Ensemble (同台) is a local multi-identity browser workbench for testing permission systems.",
@@ -99,9 +105,17 @@ const SERVER_INSTRUCTIONS = [
   "views (a set of identities laid out in a grid), reusable flows, and an embedded browser that",
   "an AI can drive. Nothing leaves this machine.",
   "",
-  "Typical order: create_site → create_identity (or create_identities) → open_browser_view or",
-  "launch_view. Use the embedded browser when you need to drive pages; use launch_view when a",
-  "window should be opened for a person to look at.",
+  "Typical order: create_site → create_identity (or create_identities) → open_browser_tab or",
+  "open_browser_view. All page driving (read, click, fill, screenshot, measure) happens in the",
+  "embedded browser with the open_browser_* tools. The launch_* tools also open the embedded",
+  "browser by default; pass external: true only to confirm the same page in the user's real",
+  "browser for a person to look at.",
+  "",
+  "Signing in: never hand-fill a login form when the account may already be stored here.",
+  "open_browser_tab resolves the account by itself: identityId if given, otherwise the first",
+  "stored account of the site matching the URL's origin (then siteId), and only a throw-away",
+  "clean session when nothing matches; its return value names the account it used. To see which",
+  "accounts a URL maps to before opening it, call resolve_browser_target.",
   "",
   "Browser rules worth knowing up front:",
   "- Pages opened in the daily profile are read-only for AI input until the user allows that",
@@ -1211,6 +1225,12 @@ const FLOW_FIELD_PREVIEW_CHARS = 200;
 const FLOW_STEPS_MAX = 60;
 /** list_flows 返回的流程条数上限；超出截断并标注 truncated。 */
 const FLOWS_LIST_MAX = 50;
+/**
+ * get_workspace_summary 里每个站点携带的账号条数上限；超出截断并标注
+ * identitiesTruncated。摘要是会话开头最常被拉取的返回体，一个站点几十个
+ * 账号时全量携带会把每次概览都变成一次大响应；需要全量再调 list_identities。
+ */
+const WORKSPACE_SUMMARY_IDENTITY_MAX = 20;
 
 /** 截断一段可能很长的步骤文本，并注明省略了多少。 */
 function clipFlowText(value: string): string {
@@ -2446,6 +2466,26 @@ export class McpServer {
       return view;
     };
 
+    // launch_* 默认落内置表面，与 browserTools 的浏览器工具共用同一条访问路径。
+    const surface = () => this.embeddedSurface();
+
+    /**
+     * 账号在内置表面的起始地址：账号自己的起始路径优先，退回站点登录路径。
+     * 与主进程内置浏览器打开账号页的推导保持一致，保证 launch_identity 与
+     * 界面上点账号卡片落在同一个页面。
+     */
+    const embeddedIdentityStartUrl = (identity: Identity): string | undefined => {
+      const site = identity.siteId
+        ? service.snapshot().sites.find((item) => item.id === identity.siteId)
+        : undefined;
+      if (!site) return undefined;
+      try {
+        return joinUrl(site.baseUrl, identity.startPath || site.loginPath || "/");
+      } catch {
+        return undefined;
+      }
+    };
+
     const requireConfirm = (args: Record<string, unknown>, field = "confirm"): void => {
       if (args[field] !== true) {
         throw new Error(`这是破坏性操作，必须显式传 ${field}: true 才会执行。请先与用户确认。`);
@@ -2480,20 +2520,31 @@ export class McpServer {
     return [
       {
         name: "get_workspace_summary",
-        description: "查看当前 Ensemble 工作区概览：站点、账号、视图、运行中浏览器的数量与名称。",
+        description:
+          "查看当前 Ensemble 工作区概览：站点（含各站点已录入的账号列表）、视图、运行中浏览器的数量与名称。账号信息不含密码；单个站点超过 20 个账号时只带前 20 个并标 identitiesTruncated。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
           return {
-            sites: snapshot.sites.map((site) => ({
-              id: site.id,
-              name: site.name,
-              baseUrl: site.baseUrl,
-              identityCount: snapshot.identities.filter((identity) => identity.siteId === site.id)
-                .length,
-              viewCount: snapshot.views.filter((view) => view.siteId === site.id).length,
-            })),
+            sites: snapshot.sites.map((site) => {
+              const members = snapshot.identities.filter((identity) => identity.siteId === site.id);
+              return {
+                id: site.id,
+                name: site.name,
+                baseUrl: site.baseUrl,
+                identityCount: members.length,
+                identities: members.slice(0, WORKSPACE_SUMMARY_IDENTITY_MAX).map((identity) => ({
+                  id: identity.id,
+                  name: identity.name,
+                  username: identity.username,
+                })),
+                ...(members.length > WORKSPACE_SUMMARY_IDENTITY_MAX
+                  ? { identitiesTruncated: true }
+                  : {}),
+                viewCount: snapshot.views.filter((view) => view.siteId === site.id).length,
+              };
+            }),
             running: snapshot.instances.map((instance) => ({
               id: instance.id,
               label: instance.label,
@@ -2658,6 +2709,68 @@ export class McpServer {
             .snapshot()
             .identities.filter((identity) => !siteId || identity.siteId === siteId)
             .map(identitySummary);
+        },
+      },
+      {
+        name: "resolve_browser_target",
+        description:
+          "给定目标地址，回答「该用哪个身份打开」：返回匹配的站点、该站点已录入的账号与建议的 identityId。知道 URL 但不确定用谁时先调它，再把 identityId 交给 open_browser_tab；账号需要已登录时不要手填登录表单。",
+        kind: "read",
+        inputSchema: object(
+          {
+            url: string("目标地址"),
+            identityId: string("已确定要用的账号 id；会校验它是否属于匹配的站点"),
+          },
+          ["url"],
+        ),
+        run: (args) => {
+          const rawUrl = String(args["url"] ?? "");
+          const requestedId =
+            typeof args["identityId"] === "string" && args["identityId"]
+              ? args["identityId"]
+              : undefined;
+          const snapshot = service.snapshot();
+          // Origin 级匹配：字符串前缀会把 http://a.test.evil.com 误当成 a.test 的页面。
+          const site = snapshot.sites.find((item) => sameOrigin(item.baseUrl, rawUrl));
+          const identities = site
+            ? snapshot.identities.filter((item) => item.siteId === site.id)
+            : [];
+          const requested = requestedId
+            ? snapshot.identities.find((item) => item.id === requestedId)
+            : undefined;
+          if (requestedId && !requested) throw new Error(`账号不存在：${requestedId}`);
+          // 指定了账号且确属该站点时回显它；否则建议该站点的第一个账号。
+          const recommendedIdentityId =
+            requested && site && requested.siteId === site.id
+              ? requested.id
+              : identities[0]?.id;
+          const warning =
+            requested && (!site || requested.siteId !== site.id)
+              ? `账号 ${requested.name} 不属于${site ? `站点 ${site.name}` : "任何已录入站点"}，请确认后再用它打开。`
+              : undefined;
+          let nextStep: string;
+          if (!site) {
+            nextStep =
+              "没有匹配的站点：可直接用 open_browser_tab 打开（一次性干净会话）；若该地址需要登录且要保存，先用 create_site 录入站点再建账号。";
+          } else if (identities.length === 0) {
+            nextStep = `站点 ${site.name} 还没有录入账号：先用 create_identity（siteId: "${site.id}"）创建，或直接用 open_browser_tab 打开干净会话。`;
+          } else {
+            nextStep = `用 open_browser_tab 打开该地址并传 identityId: "${recommendedIdentityId}"。`;
+          }
+          return {
+            matched: Boolean(site),
+            ...(site ? { site: { id: site.id, name: site.name, baseUrl: site.baseUrl } } : {}),
+            identities: identities.map((item) => ({
+              id: item.id,
+              name: item.name,
+              username: item.username,
+              role: item.role,
+              ...(item.startPath ? { startPath: item.startPath } : {}),
+            })),
+            ...(recommendedIdentityId ? { recommendedIdentityId } : {}),
+            nextStep,
+            ...(warning ? { warning } : {}),
+          };
         },
       },
       {
@@ -3319,14 +3432,23 @@ export class McpServer {
       {
         name: "launch_view",
         description:
-          "启动视图：用外部浏览器按布局打开成员窗口并自动填充（每个成员一个独立窗口）。这是保真校验路径；同屏对比请用 open_browser_view 走内置浏览器。",
+          "启动保存好的视图（一组账号 + 布局）。默认在内置浏览器打开：每个成员一个标签页，按视图布局摆好格位，登录态保留并自动填充，重复调用复用已打开的标签页；返回打开后的标签页与视图布局。external: true 时改用外部系统浏览器：每个成员一个独立窗口并自动填充，用于确认在真实浏览器环境里表现一致；此时返回实例列表。",
         kind: "run",
         inputSchema: object(
-          { viewId: string("视图 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
+          {
+            viewId: string("视图 id"),
+            external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
+            engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
+          },
           ["viewId"],
         ),
         run: async (args) => {
           const view = findView(args["viewId"]);
+          if (args["external"] !== true) {
+            // 默认路径：与 open_browser_view 同一条内置入口，成员页创建期预静音。
+            const opened = await surface().openView(view.id, { muted: true });
+            return projectState(opened);
+          }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
           const result = await service.launchView(view.id, engineId);
@@ -3341,14 +3463,33 @@ export class McpServer {
       {
         name: "launch_identity",
         description:
-          "用外部浏览器单独启动一个账号（保真校验路径）。同屏对比请用 open_browser_tab 走内置浏览器。",
+          "单独启动一个账号。默认在内置浏览器打开该账号的起始页：使用该账号独立的会话分区，登录态持久保存且与其他账号隔离，并自动填充登录；返回新标签页。external: true 时改用外部系统浏览器开独立窗口并自动填充，用于确认在真实浏览器环境里表现一致；此时返回实例信息。",
         kind: "run",
         inputSchema: object(
-          { identityId: string("账号 id"), engineId: string("浏览器引擎 id；省略则用默认浏览器") },
+          {
+            identityId: string("账号 id"),
+            external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
+            engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
+          },
           ["identityId"],
         ),
         run: async (args) => {
           const identity = findIdentity(args["identityId"]);
+          if (args["external"] !== true) {
+            // 默认路径：显式传 identityId 开内置标签页；宿主会落账号分区并安排
+            // 自动填充。没有可用起始地址时省略 url，页面停在空白页但分区仍正确。
+            const startUrl = embeddedIdentityStartUrl(identity);
+            const created = await surface().createTab({
+              ...(startUrl ? { url: startUrl } : {}),
+              identityId: identity.id,
+              siteId: identity.siteId,
+              label: identity.name,
+              ...(identity.color ? { color: identity.color } : {}),
+              // AI 开的页面创建期预静音，与其他浏览器工具一致。
+              muted: true,
+            });
+            return projectTab(created);
+          }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
           const result = await service.launchIdentity(identity.id, undefined, engineId);
@@ -3358,15 +3499,28 @@ export class McpServer {
       {
         name: "launch_clean_session",
         description:
-          "用外部浏览器打开一个干净身份窗口：不登录、关闭即删除。传 siteId 时打开该站点登录页；不传则打开不属于任何站点的空白页。",
+          "打开一个一次性干净会话：不登录、关闭即删除，不进任何已保存账号。默认在内置浏览器打开；传 siteId 时打开该站点登录页，否则打开空白页。external: true 时改用外部系统浏览器开独立窗口。",
         kind: "run",
         inputSchema: object({
           siteId: string("站点 id；省略则打开空白页"),
-          engineId: string("浏览器引擎 id；省略则用默认浏览器"),
+          external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
+          engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
         }),
         run: async (args) => {
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
+          if (args["external"] !== true) {
+            // 默认路径：不带 identityId 的 AI 页面在内置表面固定是一次性干净
+            // 会话（宿主实现保证），页面地址与外部路径同一推导（站点登录页）。
+            const site = siteId ? findSite(siteId) : undefined;
+            const startUrl = site ? joinUrl(site.baseUrl, site.loginPath || "/") : undefined;
+            const created = await surface().createTab({
+              ...(startUrl ? { url: startUrl } : {}),
+              ...(site ? { siteId: site.id } : {}),
+              muted: true,
+            });
+            return projectTab(created);
+          }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
           const result = await service.launchCleanSession(siteId, engineId);
@@ -3479,6 +3633,22 @@ export class McpServer {
   }
 
   /**
+   * The embedded surface, or a readable refusal when the host has none.
+   *
+   * Launch tools open the embedded surface by default, so they go through the
+   * same accessor as the browser tools: a host without an in-app browser (a
+   * plain Node build) must answer with a clear error instead of crashing on an
+   * undefined method lookup.
+   */
+  private embeddedSurface(): EmbeddedSurface {
+    const embedded = this.options.embedded;
+    if (!embedded) {
+      throw new Error("内置浏览器不可用：这个桌面端没有提供页面表面。");
+    }
+    return embedded;
+  }
+
+  /**
    * Tools that drive the in-app browser surface.
    *
    * These are what let an AI run a real flow without opening a system window:
@@ -3492,13 +3662,7 @@ export class McpServer {
     // `compose_view` writes a view definition, so it needs the workspace as
     // well as the surface; the other browser tools reach it through `surface()`.
     const service = this.options.service;
-    const surface = () => {
-      const embedded = this.options.embedded;
-      if (!embedded) {
-        throw new Error("内置浏览器不可用：这个桌面端没有提供页面表面。");
-      }
-      return embedded;
-    };
+    const surface = () => this.embeddedSurface();
     const tabId = (args: Record<string, unknown>): string =>
       surface().defaultTabId(
         typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : undefined,
@@ -3537,7 +3701,7 @@ export class McpServer {
       {
         name: "open_browser_view",
         description:
-          "把保存好的视图（一组账号 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，用 launch_view，或让用户自己切过去。",
+          "把保存好的视图（一组账号 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，让用户自己切过去，或用 launch_view 传 external: true 开系统窗口。",
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: async (args) => {
@@ -3555,12 +3719,16 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传则是一次性干净身份，退出即消失，也不进用户的默认身份。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。会话归属按顺序解析：传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传 identityId 时按地址归属选择已录入账号——地址与某个已录入站点同源就用该站点的第一个账号，其次传了 siteId 就用该站点下第一个账号；两者都匹配不到才是一次性干净身份：未登录、不进用户的默认身份、退出即消失。解析结果通过返回值里的 identityId / identityName / resolvedBy 给出；要复用已录入的登录态就传 identityId（账号 id 可用 list_identities 查），干净会话里没有登录态。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
-          url: string("要打开的地址；省略则打开空白页"),
-          identityId: string("账号 id；省略则使用一次性的干净身份"),
-          siteId: string("站点 id；仅用于界面分组显示"),
+          url: string(
+            "要打开的地址；省略则打开空白页。地址与已录入站点同源时自动使用该站点的账号会话",
+          ),
+          identityId: string(
+            "账号 id；省略时按地址归属、再按 siteId 选择已录入账号，都匹配不到才用一次性干净身份",
+          ),
+          siteId: string("站点 id；地址匹配不到站点时用它选择该站点的第一个账号，也用于界面分组显示"),
           label: string("标签页显示名；通常用账号名"),
         }),
         run: async (args) => {
@@ -3570,24 +3738,56 @@ export class McpServer {
             typeof args["identityId"] === "string" && args["identityId"]
               ? args["identityId"]
               : undefined;
+          const explicitSiteId =
+            typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
+          const snapshot = this.options.service.snapshot();
           const identity = identityId
-            ? this.options.service.snapshot().identities.find((item) => item.id === identityId)
+            ? snapshot.identities.find((item) => item.id === identityId)
             : undefined;
           if (identityId && !identity) throw new Error(`账号不存在：${identityId}`);
-          const siteId = (typeof args["siteId"] === "string" && args["siteId"]) || identity?.siteId;
-          const label = typeof args["label"] === "string" ? args["label"] : identity?.name;
-          return projectTab(
+          // 显式 identityId 的路径不做任何代选；只在调用方没有指定账号时，
+          // 才按地址归属把这次打开归到已录入的站点账号上——与手动打开账号
+          // 是同一套归类，解析到账号后桥接层会照常排自动填充。
+          const resolved: ResolveIdentityForUrlResult | undefined = identityId
+            ? undefined
+            : resolveIdentityForUrl({
+                // about:blank 没有可归属的来源，直接按未给地址解析。
+                url: rawUrl === "about:blank" ? undefined : rawUrl,
+                siteId: explicitSiteId,
+                sites: snapshot.sites,
+                identities: snapshot.identities,
+              });
+          const resolvedIdentity = resolved?.identityId
+            ? snapshot.identities.find((item) => item.id === resolved.identityId)
+            : undefined;
+          const effectiveIdentityId = identityId ?? resolved?.identityId;
+          const colorIdentity = identity ?? resolvedIdentity;
+          const siteId = explicitSiteId || identity?.siteId || resolvedIdentity?.siteId;
+          const label =
+            typeof args["label"] === "string" ? args["label"] : identity?.name ?? resolvedIdentity?.name;
+          const tab = projectTab(
             await surface().createTab({
               url: rawUrl,
               // An AI-opened page is an AI page operation from its first frame:
               // a site that autoplays should not surprise the user.
               muted: true,
-              ...(identityId ? { identityId } : {}),
+              ...(effectiveIdentityId ? { identityId: effectiveIdentityId } : {}),
               ...(siteId ? { siteId } : {}),
               ...(label ? { label } : {}),
-              ...(identity?.color ? { color: identity.color } : {}),
+              ...(colorIdentity?.color ? { color: colorIdentity.color } : {}),
             }),
           );
+          // 自动归类成功的页面把「用了谁、为什么」带回给调用方：模型据此
+          // 知道这一页的登录态来自哪个账号，不必再自己填一遍登录表单。
+          return {
+            ...tab,
+            ...(resolvedIdentity && resolved && resolved.reason !== "none"
+              ? {
+                  identityName: resolvedIdentity.name,
+                  resolvedBy: resolved.reason,
+                }
+              : {}),
+          };
         },
       },
       {

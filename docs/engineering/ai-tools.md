@@ -40,9 +40,10 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `get_workspace_summary` | read | — | 无 | 站点 / 账号 / 视图 / 运行中实例的数量与名称 |
+| `get_workspace_summary` | read | — | 无 | 站点 / 账号 / 视图 / 运行中实例的数量与名称；每个站点带 `identities`（仅 id、name、username，不含密码），单站点超过 20 个账号只带前 20 个并标 `identitiesTruncated` |
 | `update_settings` | write | — | 无。凭据、密钥库、MCP 端口与令牌不接受修改 | 改动后的键值 |
 | `list_sites` / `list_identities` / `list_views` / `list_flows` / `list_layouts` / `list_bookmarks` | read | — | 无 | 对应集合；`list_identities` 永远不含密码；`list_bookmarks` 不回传图标内容，只有 `hasFavicon` 标记；`list_flows` 返回 `{ flows, total }`——流程多于 50 条时返回前 50 条并标 `truncated`，步骤值截断到前 200 字符、步骤多于 60 条截到 60 并标 `stepsTruncated`（`run_flow` 用完整定义，不受预览截断影响） |
+| `resolve_browser_target` | read | — | 无 | 给定 `url` 返回该用哪个身份打开：`matched`、匹配的 `site`（id/name/baseUrl）、该站点账号列表（仅 id/name/username/role/startPath，不含密码）、`recommendedIdentityId`（传入的 `identityId` 属于该站点时回显它，否则取该站点第一个）、可执行的 `nextStep`；传入的 `identityId` 不属于匹配站点时带 `warning`，无匹配站点时不带 `site` |
 | `create_site` / `update_site` / `create_identity` / `create_identities` / `update_identity` / `link_identities_to_site` / `set_password` | write | — | 无。密码只写不读，返回值里没有明文字段 | 新建或更新后的对象，`create_identities` 额外带 `failures` |
 | `detach_identity_reference` | write | — | 无。已经是独立账号时无变化 | 断开后的账号 |
 | `create_view` / `update_view` / `set_view_layout` / `create_layout_preset` / `copy_view_to_site` | write | — | 无 | 视图或预设 |
@@ -54,16 +55,18 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
-| `launch_view` / `launch_identity` / `launch_clean_session` | run | — | 启动即返回，不等登录完成 | 实例 id 与启动结果 |
 | `stop_all` / `stop_instance` | run | — | 只按自有 profile 路径归属清理，不按进程名批量杀 | `{ ok: true }` |
 | `check_auth` | run | — | 无 | 是否仍登录、原因 |
+
+外部系统浏览器窗口由 `launch_*` 工具传 `external: true` 打开（见内置浏览器一节）。
 
 ### 内置浏览器 · 标签与布局
 
 | 工具 | 档位 | 闸门 | 时限与边界 | 返回 |
 | --- | --- | --- | --- | --- |
 | `list_browser_tabs` | read | — | 无。不返回存储分区；`clean: true` 才是干净会话，`profileId: "default"` 是默认档案。`sleeping: true` 的页面已被冻结（操作会先自动唤醒）；醒着但闲置的页面带 `sleepExempt` 说明没冻的原因（`on-stage-visible` / `audible` / `ai-active` / `policy` 等），两者都没有的下一轮扫描即冻结——判断哪个页在占资源并自行 close 用它 | 标签 id、所属账号、档案、标题、地址、布局、静音/有声、休眠状态与豁免原因 |
-| `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_tab` 的页面落自己的实例、不占台上格位（台外照常可读，闲置后休眠，操作前自动唤醒），`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器） |
+| `open_browser_tab` / `open_browser_view` | run | — | 不抬窗口、不切界面；`open_browser_tab` 的页面落自己的实例、不占台上格位（台外照常可读，闲置后休眠，操作前自动唤醒），归属按 identityId → 地址同源站点 → siteId 顺序解析，都匹配不到落一次性干净会话；`open_browser_view` 复用已打开的标签页 | `tabId`（或视图容器）；自动归类到账号时另带 `identityName` / `resolvedBy` |
+| `launch_view` / `launch_identity` / `launch_clean_session` | run | — | 默认即内置路径：`launch_view` 复用已打开的标签页、`launch_identity` 落账号分区并自动填充、`launch_clean_session` 是一次性干净会话。`external: true` 改开外部系统浏览器窗口（保真校验），启动即返回不等登录完成 | 标签页与视图状态（内置）/ 实例 id 与启动结果（`external: true`） |
 | `navigate_browser_tab` | run | 是 | 等加载完成。目标须是用户给的地址、已有站点/书签，或当前页的同站链接。被 beforeunload 拦下时快速返回 `cancelled: "beforeunload"`（页面留在原地且可继续操作），用 `handle_browser_dialog` 决定去留 | `{ tab }`；被拦时另有 `cancelled` 与 `note` |
 | `close_browser_tab` / `move_browser_tab` / `set_tab_page` | run | — | 只动界面，不影响登录态 | 更新后的浏览器状态摘要 |
 | `pop_out_browser_tab` | run | — | 把页面拆到独立 OS 窗口（配合系统分屏并排观察）；已拆出时再次调用即收回主舞台。同一实例同时只允许一个拆出窗口。拆出即页面重载：SPA 内存态不保留，登录态与存储随会话分区保留；之后的读取、点击、截图等工具照常对该标签页工作 | `{ windowId }`；收回时 `{ docked: true }` |
@@ -71,7 +74,8 @@ schema 未声明的参数，报错列出字段名；`hasText` / `hasNotText` / `
 
 **浏览器状态返回的投影。** 所有返回标签页或布局状态的工具（`list_browser_tabs`、
 `open_browser_tab`、`navigate_browser_tab`、`close_browser_tab`、`set_browser_layout`、
-`pin_browser_tab`、`move_browser_tab`、`set_tab_page`、`open_browser_view`）在 MCP 出口
+`pin_browser_tab`、`move_browser_tab`、`set_tab_page`、`open_browser_view`、
+`launch_view` / `launch_identity` / `launch_clean_session` 的内置路径）在 MCP 出口
 只保留决策字段：id、label、url、title、归属（identityId / siteId / instanceId / viewId /
 clean / profileId）、声音与加载状态。渲染层用的图标 data: URL、窗口几何、缩放、分区、
 DevTools 宽度一律不出走——每个标签页少几 KB，图标内容从不进上下文。

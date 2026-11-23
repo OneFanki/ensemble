@@ -49,7 +49,9 @@ describe("headless runs", () => {
     // the tray icon are all visible artifacts of a run nobody is watching.
     expect(mainSource).toMatch(/function syncOverlay[\s\S]{0,300}?if \(headless\) return/);
     expect(mainSource).toMatch(/function flashFocusLabel[\s\S]{0,300}?if \(headless\) return/);
-    expect(mainSource).toMatch(/if \(!headless\) createTray\(\)/);
+    // A spawned window skips the tray too: the primary's tray is the one that
+    // lists every window.
+    expect(mainSource).toMatch(/if \(!headless && !isSpawnedWindow\) \{\s*createTray\(\);/);
     expect(mainSource).toMatch(/function showMainWindow[\s\S]{0,200}?if \(headless\) return/);
   });
 

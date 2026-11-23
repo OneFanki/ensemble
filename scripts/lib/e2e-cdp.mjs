@@ -36,11 +36,20 @@
  */
 
 /** Reads a target's WebSocket URL from the debugging port the app wrote. */
-async function findRendererTarget(port) {
+export async function findRendererTarget(port) {
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  // Only the app window itself. The approval and focus-label windows load the
+  // same index.html with a hash, and a suite that latches onto one of those
+  // gets "Execution context was destroyed" seconds later when that auxiliary
+  // window tears down — an error that used to look like a renderer crash, and
+  // whose suite-specific pattern (suites whose first evaluate ran before the
+  // auxiliary window closed) read as flakiness nobody could pin.
   return list.find(
     (item) =>
-      item.type === "page" && item.url.includes("index.html") && !item.url.startsWith("devtools"),
+      item.type === "page" &&
+      item.url.includes("index.html") &&
+      !item.url.includes("index.html#") &&
+      !item.url.startsWith("devtools"),
   );
 }
 
@@ -144,6 +153,14 @@ export async function connectToWindow(url) {
  * renderer loads `index.html`, and only then does the port list a page target.
  * Every copy of this loop used 100 attempts at 250ms; the attempts are a parameter
  * here because a suite that deliberately starts a slow configuration needs longer.
+ *
+ * A target in the list is not a usable page. The debug target registers before
+ * the navigation commits, and an evaluate that lands in that pre-commit context
+ * dies with "Execution context was destroyed" when the real page replaces it —
+ * which took down whichever suite happened to evaluate first, in a pattern that
+ * shifted with machine load and looked like renderer crashes. So a candidate
+ * connection has to survive one probe round trip against the app's own document
+ * before it counts as the window.
  */
 export async function waitForWindow({
   userData,
@@ -154,15 +171,25 @@ export async function waitForWindow({
   let lastError;
   for (let attempt = 0; attempt < timeoutAttempts; attempt += 1) {
     await new Promise((done) => setTimeout(done, intervalMs));
+    let client;
     try {
       const target = await findRendererTarget(await waitForDebugPort(userData));
-      if (target) return await connectToWindow(target.webSocketDebuggerUrl);
+      if (!target) continue;
+      client = await connectToWindow(target.webSocketDebuggerUrl);
+      const ready = await client.evaluate(
+        `document.readyState === "complete" && Boolean(document.querySelector("#app"))`,
+      );
+      // The probe answered: this context is the committed page's and it will
+      // not be swapped again, so the suite's own first evaluate is safe here.
+      if (ready) return client;
     } catch (error) {
       // The port file is written before the page target exists, and a fetch
-      // against a port nobody is listening on throws. That is the normal first
-      // few attempts, not a failure.
+      // against a port nobody is listening on throws. So does a probe that was
+      // destroyed mid-flight by the commit — both are the normal first few
+      // attempts, not a failure.
       lastError = error;
     }
+    client?.close();
   }
   throw new Error(`应用窗口没有出现：${lastError?.message ?? "超时"}`);
 }

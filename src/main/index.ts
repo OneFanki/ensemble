@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { copyFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { SecretBox } from "@core/credentials/vault";
 import { setCoreLocale, t } from "@core/i18n/translate";
 import { resolveAuthTokenSource } from "@core/cdp/login";
@@ -9,6 +17,7 @@ import { nextActiveInstanceId } from "@core/launch/active-instance";
 import { resolveLoginFields } from "@core/login-fields";
 import { shouldRecordAutoFill } from "@core/autofill-history";
 import {
+  activateWindowForPid,
   disposeWindowFocus,
   foregroundWindowPid,
   type ScreenRect,
@@ -128,11 +137,35 @@ import { applyProxyToDefaultSession } from "./proxy";
 import { fixRealmEncoding, HttpAuthCoordinator } from "./http-auth";
 import { LoginCaptureStore } from "./embedded/login-capture";
 import { DEV_DEFAULT_PORT, McpServer } from "./mcp/server";
+import { launchSpawnedWindow, listSpawnedWindows } from "./spawn-window";
 import { createTrustedUpdateFetch } from "./update-fetch";
 import { DEV_APP_NAME, devUserDataDir } from "./user-data";
 import { acquireSingletonLock } from "./single-instance";
 
 const isDev = Boolean(process.env["ELECTRON_RENDERER_URL"]);
+
+/**
+ * Marks a child process as a spawned window rather than a full app instance.
+ *
+ * The tray is the one cross-window surface, so the primary instance alone owns
+ * it: a spawned window carries this flag and skips tray creation, instead of
+ * the taskbar filling with one identical icon per window.
+ */
+const SPAWNED_WINDOW_ARG = "--ensemble-spawned-window";
+const isSpawnedWindow = process.argv.includes(SPAWNED_WINDOW_ARG);
+
+/**
+ * Whether this build runs the stock Electron binary rather than a packaged one.
+ *
+ * A spawned window is launched with `process.execPath`, and the two binaries
+ * disagree about arguments: the stock binary needs the app directory as its
+ * first argument or it runs Electron's welcome screen instead of this app
+ * (observed as a child whose Chromium wrote caches but whose bundle never
+ * executed). The packaged executable embeds the app and takes no path. The dev
+ * env var is the wrong signal here — a direct `electron .` run has it unset and
+ * still needs the path.
+ */
+const runsStockElectronBinary = basename(process.execPath).toLowerCase().startsWith("electron");
 
 /**
  * The download transport for update assets. One instance for the whole process:
@@ -494,11 +527,28 @@ async function createPopoutWindow(tabId: string): Promise<BrowserWindow> {
     guestManager.uninstallHost(hostedContents);
   });
   const query = `theme=${dark ? "dark" : "light"}`;
+  /*
+   * The dev URL has no trailing slash ("http://localhost:5174"), so string
+   * concatenation used to produce "http://localhost:5174popout.html" — an
+   * invalid URL whose rejection this function then swallowed, leaving a window
+   * that was only its background colour while the mount request waited on a
+   * renderer that would never answer. `new URL` joins against the base the way
+   * the main window's own dev load resolves, and a failed load now propagates:
+   * a popout whose container did not load is a failed popout, and the caller
+   * docks the window and reports it instead of leaving a black rectangle behind.
+   */
   const loadPromise =
     isDev && process.env["ELECTRON_RENDERER_URL"]
-      ? win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}popout.html?${query}`)
+      ? win.loadURL(new URL(`popout.html?${query}`, `${process.env["ELECTRON_RENDERER_URL"]}/`).toString())
       : win.loadFile(join(__dirname, "../renderer/popout.html"), { query: { theme: dark ? "dark" : "light" } });
-  await loadPromise.catch(() => undefined);
+  try {
+    await loadPromise;
+  } catch (error) {
+    win.destroy();
+    throw new Error(
+      `拆出窗口容器加载失败：${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   // 弹窗尺寸变化时重新记录页面 bounds（截图路径与在屏判断读它）。
   win.on("resize", () => {
     if (!embedded || win.isDestroyed()) return;
@@ -1368,10 +1418,6 @@ function broadcastWorkspace(): void {
     if (win && !win.isDestroyed()) win.webContents.send(IPC.workspaceChanged, snapshot);
   }
   syncOverlay(snapshot);
-  // The tray menu offers "close all" only while something is running, so it has
-  // to be rebuilt whenever that stops being true. Rebuilding on every broadcast
-  // would churn a native menu for nothing.
-  ensureTrayMenuMatches(snapshot.instances.length);
 }
 
 /**
@@ -2237,6 +2283,25 @@ function loadTrayImage(): Electron.NativeImage {
   return nativeImage.createFromBuffer(Buffer.from("", "utf8"));
 }
 
+/*
+ * Spawned windows live one process per window, in sibling directories of this
+ * one (`<appData>/<userData name>-windows/window-<stamp>`); see
+ * `src/main/spawn-window.ts` for the data model. Both helpers below only name
+ * that shape once.
+ */
+function windowsRoot(): string {
+  return join(dirname(app.getPath("userData")), `${basename(app.getPath("userData"))}-windows`);
+}
+
+function launchSpawnedWindowFromApp(): void {
+  launchSpawnedWindow({
+    sourceUserData: app.getPath("userData"),
+    execPath: process.execPath,
+    appPath: runsStockElectronBinary ? app.getAppPath() : "",
+    extraArgs: [SPAWNED_WINDOW_ARG],
+  });
+}
+
 function showMainWindow(): void {
   // A headless run has no window to show; raising one would defeat the point.
   if (headless) return;
@@ -2272,57 +2337,119 @@ function parkWindowOffscreen(win: BrowserWindow): void {
   win.showInactive();
 }
 
+/** Local `HH:MM` for a spawned window's creation stamp; unreadable stamps fall
+ * back to "—", since the ordinal is what actually identifies the entry. */
+function windowLabel(createdAt: string): string {
+  const at = new Date(createdAt);
+  const time = Number.isNaN(at.getTime())
+    ? "—"
+    : `${at.getHours()}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `窗口 · ${time} 打开`;
+}
+
+/**
+ * Builds the tray menu at the moment it is shown, never ahead of time.
+ *
+ * `setContextMenu` would freeze a snapshot: spawned windows are separate
+ * processes whose births and exits this process does not observe, so a menu
+ * built earlier silently listed windows that no longer exist — or missed ones
+ * that do. Building on every open makes liveness a property of the moment the
+ * user actually looks, which is the only moment it matters.
+ */
+function buildTrayMenu(): Menu {
+  const mcp = mcpServer?.status();
+  const running = service?.snapshot().instances.length ?? 0;
+  /*
+   * The window group is the whole reason the tray belongs to one instance:
+   * the primary window is focused in-process, spawned windows are separate
+   * processes reachable only by the pid in their directory's lockfile, and
+   * activating a pid is a platform call.
+   */
+  const windows: Electron.MenuItemConstructorOptions[] = [
+    { label: "主窗口", click: () => showMainWindow() },
+    ...listSpawnedWindows(windowsRoot()).map((entry) => ({
+      label: windowLabel(entry.createdAt),
+      click: () => {
+        void activateWindowForPid(entry.pid);
+      },
+    })),
+  ];
+  return Menu.buildFromTemplate([
+    ...windows,
+    { type: "separator" },
+    {
+      label: "新开窗口",
+      click: () => {
+        launchSpawnedWindowFromApp();
+      },
+    },
+    { type: "separator" },
+    ...(running > 0
+      ? [
+          {
+            label: `关闭所有浏览器 (${running})`,
+            click: () => {
+              void service?.stopAll().then(() => broadcastWorkspace());
+            },
+          },
+          { type: "separator" as const },
+        ]
+      : []),
+    {
+      label: mcp?.running ? `AI 接入：已开启 (${mcp.port})` : "AI 接入：已关闭",
+      enabled: false,
+    },
+    { type: "separator" },
+    {
+      label: "退出",
+      click: () => {
+        void shutdownAndQuit();
+      },
+    },
+  ]);
+}
+
 function createTray(): void {
   if (tray) return;
   tray = new Tray(loadTrayImage());
   tray.setToolTip(appDisplayName);
-  const rebuild = () => {
-    if (!tray) return;
-    const mcp = mcpServer?.status();
-    const running = service?.snapshot().instances.length ?? 0;
-    trayInstanceCount = running;
-    tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: `打开 ${appDisplayName}`, click: () => showMainWindow() },
-        { type: "separator" },
-        ...(running > 0
-          ? [
-              {
-                label: `关闭所有浏览器 (${running})`,
-                click: () => {
-                  void service?.stopAll().then(() => broadcastWorkspace());
-                },
-              },
-              { type: "separator" as const },
-            ]
-          : []),
-        {
-          label: mcp?.running ? `AI 接入：已开启 (${mcp.port})` : "AI 接入：已关闭",
-          enabled: false,
-        },
-        { type: "separator" },
-        {
-          label: "退出",
-          click: () => {
-            void shutdownAndQuit();
-          },
-        },
-      ]),
-    );
-  };
-  rebuild();
-  tray.on("click", () => showMainWindow());
+  tray.on("click", () => {
+    // With other windows on screen, "open" has to ask *which* one: the list is
+    // the context menu, so a click pops that instead of guessing the primary.
+    if (listSpawnedWindows(windowsRoot()).length > 0) tray?.popUpContextMenu(buildTrayMenu());
+    else showMainWindow();
+  });
+  // The right-click menu is the same list, built now — never a snapshot taken
+  // at startup, which is how a tray ended up showing one window while three
+  // were open.
+  tray.on("right-click", () => tray?.popUpContextMenu(buildTrayMenu()));
   tray.on("double-click", () => showMainWindow());
-  trayRebuild = rebuild;
 }
 
-let trayRebuild: (() => void) | null = null;
-/** Instance count the tray menu was last built for; -1 forces the first build. */
-let trayInstanceCount = -1;
-
-function ensureTrayMenuMatches(count: number): void {
-  if (count === trayInstanceCount) return;
-  trayRebuild?.();
+/**
+ * The taskbar icon's right-click "new window" task.
+ *
+ * The task is just a plain start of the app: with an instance already running
+ * the duplicate launch resolves to a new window (see the singleton lock), and
+ * without one it starts Ensemble normally — one task, both jobs. Only the
+ * packaged build sets arguments; a dev build passes its app path so the child
+ * loads this workspace.
+ */
+function installJumpList(): void {
+  app.setUserTasks([
+    {
+      title: "新开窗口",
+      description: `再开一个 ${appDisplayName} 窗口`,
+      program: process.execPath,
+      // The stock Electron binary needs the app path as its first argument or
+      // the task opens its welcome screen instead of this app; a packaged
+      // binary embeds the app and takes none. The dev env var is the wrong
+      // signal — a direct `electron .` run has it unset and still needs the path.
+      arguments: runsStockElectronBinary ? `"${app.getAppPath()}"` : "",
+      iconPath: process.execPath,
+      iconIndex: 0,
+    },
+  ]);
 }
 
 /**
@@ -2545,7 +2672,9 @@ async function createWindow(): Promise<void> {
     if (quitting) return;
     // Closing the window is the common accident; the tray keeps the MCP endpoint
     // and any running browsers alive. Quit explicitly from the tray or the menu.
-    if (settingsCache?.closeToTray) {
+    // A spawned window has no tray — hiding it would strand the process where
+    // nothing on screen could bring it back — so it always quits outright.
+    if (settingsCache?.closeToTray && !isSpawnedWindow) {
       event.preventDefault();
       mainWindow?.hide();
       return;
@@ -2608,8 +2737,13 @@ async function createWindow(): Promise<void> {
   // (and on every theme change) is what actually colors them.
   if (!isMac) mainWindow.setTitleBarOverlay(titleBarOverlay(currentTheme));
   // A headless run has nothing to click a tray icon on, and a tray icon is itself
-  // a visible artifact on the user's desktop.
-  if (!headless) createTray();
+  // a visible artifact on the user's desktop. A spawned window skips the tray
+  // too: the primary instance's tray is the one that lists every window, so a
+  // second icon would be a duplicate handle to the same thing.
+  if (!headless && !isSpawnedWindow) {
+    createTray();
+    if (process.platform === "win32") installJumpList();
+  }
   startUpdateWatcher();
 }
 
@@ -3675,7 +3809,6 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.mcpUpdate, async (patch: McpPatch) => {
     if (!mcpServer) throw new Error("MCP 服务未初始化");
     const status = await mcpServer.update(patch ?? {});
-    trayRebuild?.();
     return status;
   });
 
@@ -3717,6 +3850,10 @@ function registerIpc(workspace: WorkspaceService): void {
 
   handle(IPC.appQuit, async () => {
     await shutdownAndQuit();
+  });
+
+  handle(IPC.appSpawnWindow, () => {
+    launchSpawnedWindowFromApp();
   });
 
   handle(IPC.appOpenExternal, async (url: string) => {
@@ -4326,6 +4463,11 @@ function registerIpc(workspace: WorkspaceService): void {
   handle(IPC.embeddedDropTab, (tabId: string, target: EmbeddedDropTarget) =>
     ensureEmbeddedBrowser().dropTab(String(tabId), target),
   );
+  handle(
+    IPC.embeddedDropInstance,
+    (sourceInstanceId: string, targetInstanceId: string, edge: "before" | "after") =>
+      ensureEmbeddedBrowser().dropInstance(String(sourceInstanceId), String(targetInstanceId), edge),
+  );
   handle(IPC.embeddedFill, (tabId: string) => ensureEmbeddedBrowser().fillLogin(String(tabId)));
   handle(IPC.embeddedDevTools, (tabId: string) => {
     ensureEmbeddedBrowser().openDevTools(String(tabId));
@@ -4562,10 +4704,27 @@ function logLine(message: string): void {
 // which twice sent a start into a silent quit with nothing but GPU warnings.
 const singletonLock = acquireSingletonLock(join(app.getPath("userData"), "lockfile"), process.pid);
 if (!singletonLock.acquired) {
-  const holder = singletonLock.holderPid !== undefined ? `（pid ${singletonLock.holderPid}）` : "";
-  console.error(
-    `[ensemble] 已有实例持有实例锁${holder}，本次启动退出。若确认没有正在运行的 Ensemble，可删除锁文件后重试：${join(app.getPath("userData"), "lockfile")}`,
-  );
+  if (singletonLock.holderPid !== undefined) {
+    /*
+     * A second start of the app is another way of asking for a new window.
+     * The running instance's files are the library; seed a sibling directory
+     * from them and hand the window over as a detached child, exactly as the
+     * in-app "new window" does. This process then has no role left — the
+     * workspace, MCP endpoint and tray all stay with the first instance.
+     */
+    logLine(`duplicate start: handing over a spawned window (holder pid ${singletonLock.holderPid})`);
+    launchSpawnedWindow({
+      sourceUserData: app.getPath("userData"),
+      execPath: process.execPath,
+      appPath: runsStockElectronBinary ? app.getAppPath() : "",
+      extraArgs: [SPAWNED_WINDOW_ARG],
+    });
+  } else {
+    const holder = singletonLock.holderPid !== undefined ? `（pid ${singletonLock.holderPid}）` : "";
+    console.error(
+      `[ensemble] 已有实例持有实例锁${holder}，本次启动退出。若确认没有正在运行的 Ensemble，可删除锁文件后重试：${join(app.getPath("userData"), "lockfile")}`,
+    );
+  }
   app.quit();
 } else {
 
@@ -5045,8 +5204,9 @@ app.on("window-all-closed", () => {
     return;
   }
   // Tray mode keeps the process (and with it the MCP endpoint) alive even if the
-  // window was destroyed without a close event.
-  if (settingsCache?.closeToTray) return;
+  // window was destroyed without a close event. A spawned window has no tray to
+  // come back through, so for it the window is the whole app.
+  if (settingsCache?.closeToTray && !isSpawnedWindow) return;
   // Windows were destroyed without a close event; still stop our browsers.
   void shutdownAndQuit();
 });

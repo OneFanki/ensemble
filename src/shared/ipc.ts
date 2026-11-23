@@ -313,6 +313,8 @@ export const IPC = {
   embeddedViewCollapse: "embedded:view-collapse",
   embeddedViewClose: "embedded:view-close",
   embeddedDropTab: "embedded:drop-tab",
+  /** Reorders whole instances on the account bar; see the API comment. */
+  embeddedDropInstance: "embedded:drop-instance",
   /** Fills the tab's saved credentials; refuses cross-origin pages. */
   embeddedFill: "embedded:fill",
   embeddedDevTools: "embedded:devtools",
@@ -371,6 +373,8 @@ export const IPC = {
   proxyTestConnectivity: "proxy:test-connectivity",
   appSetTheme: "app:set-theme",
   appQuit: "app:quit",
+  /** Spawns a second, fully isolated instance (its own user-data directory). */
+  appSpawnWindow: "app:spawn-window",
   appOpenExternal: "app:open-external",
   appCheckUpdate: "app:check-update",
   /** Starts the verified download of the release found by the last check. */
@@ -860,6 +864,19 @@ export interface EnsembleApi {
   /** Closes a view; "opened" leaves hand-made and AI tabs running. */
   closeEmbeddedView(viewId: string, mode: "all" | "opened"): Promise<EmbeddedState>;
   dropEmbeddedTab(tabId: string, target: EmbeddedDropTarget): Promise<EmbeddedState>;
+  /**
+   * Reorders whole instances on the account bar.
+   *
+   * The rail lists instances, so dragging a chip moves the dragged instance's
+   * whole page block before/after the target instance's block in the tab array —
+   * the same array the strip reads per instance, so per-instance page order is
+   * untouched.
+   */
+  dropEmbeddedInstance(
+    sourceInstanceId: string,
+    targetInstanceId: string,
+    edge: "before" | "after",
+  ): Promise<EmbeddedState>;
   fillEmbeddedLogin(tabId: string): Promise<{
     ok: boolean;
     reason?: string;
@@ -996,6 +1013,15 @@ export interface EnsembleApi {
   setTheme(theme: AppSettings["theme"]): Promise<void>;
   /** Fully quits: stops browsers and the MCP endpoint, then exits. */
   quitApp(): Promise<void>;
+  /**
+   * Spawns a second, fully isolated instance.
+   *
+   * The child gets a fresh user-data directory of its own, so it owns a separate
+   * workspace, credential vault, browser profiles and MCP endpoint. That is what
+   * makes two windows on two screens safe: nothing is shared, so nothing can
+   * race. The same per-directory instance lock keeps one directory single.
+   */
+  spawnWindow(): Promise<void>;
   /** Opens a documentation or release URL in the system browser. */
   openExternal(url: string): Promise<void>;
   /** Compares the running version with the latest GitHub release; check-only. */

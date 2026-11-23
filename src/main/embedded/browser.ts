@@ -952,8 +952,48 @@ export function navigationArrived(input: {
  * Session partitions are per identity and separate from the external browser's
  * profile directory on purpose — see `embeddedPartition`.
  */
-export class EmbeddedBrowser {
-  private host: BrowserWindow | null = null;
+/**
+ * Moves one instance's whole page block before/after another instance's block.
+ *
+ * The tab array is the global order every list reads: the account bar takes the
+ * first page per instance, the strip filters per instance, so moving the block
+ * reorders the rail without disturbing any per-instance page order. Returns
+ * `null` when nothing should change — dragging an instance onto itself, or onto
+ * a target that does not exist.
+ *
+ * Instances can interleave in this array (open A, open B, open another tab in A),
+ * and that is fine: both readers derive their orders per instance, so inserting
+ * the block beside the anchor's first (or last) page keeps every view honest.
+ * Exported for tests — the surrounding class carries a real window, and this
+ * logic is pure.
+ */
+export function reorderInstanceBlock<T extends { id: string; instanceId: string }>(
+  tabs: T[],
+  sourceInstanceId: string,
+  targetInstanceId: string,
+  edge: "before" | "after",
+): T[] | null {
+  if (sourceInstanceId === targetInstanceId) return null;
+  const block = tabs.filter((tab) => tab.instanceId === sourceInstanceId);
+  if (!block.length) return null;
+  if (!tabs.some((tab) => tab.instanceId === targetInstanceId)) return null;
+  const sourceIds = new Set(block.map((tab) => tab.id));
+  const rest = tabs.filter((tab) => !sourceIds.has(tab.id));
+  let insertAt: number;
+  if (edge === "before") {
+    insertAt = rest.findIndex((tab) => tab.instanceId === targetInstanceId);
+  } else {
+    insertAt = 0;
+    for (const [index, tab] of rest.entries()) {
+      if (tab.instanceId === targetInstanceId) insertAt = index + 1;
+    }
+  }
+  const next = [...rest];
+  next.splice(insertAt, 0, ...block);
+  return next;
+}
+
+export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
   /** Polls the system pointer while a touch page is on stage. */
   private touchCursorTimer?: ReturnType<typeof setInterval>;
 
@@ -2195,6 +2235,25 @@ export class EmbeddedBrowser {
   }
 
   /**
+   * Reorders instances on the account bar; the geometry is `reorderInstanceBlock`'s.
+   *
+   * Active ids travel with their pages: dragging a running instance, even the
+   * one on stage, changes where its block sits, not which page is showing.
+   */
+  dropInstance(
+    sourceInstanceId: string,
+    targetInstanceId: string,
+    edge: "before" | "after",
+  ): EmbeddedState {
+    const next = reorderInstanceBlock(this.tabs, sourceInstanceId, targetInstanceId, edge);
+    if (!next) return this.state();
+    this.tabs = next;
+    this.applyLayout();
+    this.emitState();
+    return this.state();
+  }
+
+  /**
    * Rebuilds the slot order from the tab order.
    *
    * Called after a reorder inside a view: the sidebar order is the layout order,
@@ -3398,8 +3457,13 @@ export class EmbeddedBrowser {
         ? BrowserWindow.fromWebContents(poppedContents)
         : undefined;
     if (popWindow && !popWindow.isDestroyed()) {
+      // 拆出的页面选中 = 把弹窗提到前台；strip 高亮它，主舞台不重排——它的像素
+      // 不在舞台里。restore/show 只保证「可见」：已经可见、只是被压在主窗口
+      // 后面的弹窗，show() 是空操作，Windows 的 focus() 又常被前台策略拒绝——
+      // 真正把窗口挪到前面的是 moveTop()，focus() 负责接键入。
       if (popWindow.isMinimized()) popWindow.restore();
       popWindow.show();
+      popWindow.moveTop();
       popWindow.focus();
       this.setActivePage(tab);
       this.emitState();

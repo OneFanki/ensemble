@@ -267,6 +267,8 @@ const api: EnsembleApi = {
     ipcRenderer.invoke(IPC.embeddedViewCollapse, viewId, collapsed),
   closeEmbeddedView: (viewId, mode) => ipcRenderer.invoke(IPC.embeddedViewClose, viewId, mode),
   dropEmbeddedTab: (tabId, target) => ipcRenderer.invoke(IPC.embeddedDropTab, tabId, target),
+  dropEmbeddedInstance: (sourceInstanceId, targetInstanceId, edge) =>
+    ipcRenderer.invoke(IPC.embeddedDropInstance, sourceInstanceId, targetInstanceId, edge),
   fillEmbeddedLogin: (tabId) => ipcRenderer.invoke(IPC.embeddedFill, tabId),
   openEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevTools, tabId),
   closeEmbeddedDevTools: (tabId) => ipcRenderer.invoke(IPC.embeddedDevToolsClose, tabId),
@@ -314,6 +316,7 @@ const api: EnsembleApi = {
   saveAppSettings: (patch) => ipcRenderer.invoke(IPC.settingsSave, patch),
   setTheme: (theme) => ipcRenderer.invoke(IPC.appSetTheme, theme),
   quitApp: () => ipcRenderer.invoke(IPC.appQuit),
+  spawnWindow: () => ipcRenderer.invoke(IPC.appSpawnWindow),
   openExternal: (url) => ipcRenderer.invoke(IPC.appOpenExternal, url),
   checkUpdate: () => ipcRenderer.invoke(IPC.appCheckUpdate),
   downloadUpdate: () => ipcRenderer.invoke(IPC.appDownloadUpdate),

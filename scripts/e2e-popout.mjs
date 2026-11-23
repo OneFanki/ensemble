@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { freePort, waitForDebugPort } from "./lib/e2e-ports.mjs";
 import { GUIDE_SEEN } from "./lib/guide-version.mjs";
-import { connectToWindow } from "./lib/e2e-cdp.mjs";
+import { connectToWindow, findRendererTarget } from "./lib/e2e-cdp.mjs";
 
 const PAGE_PORT = await freePort();
 const INSPECT_PORT = await freePort();
@@ -326,6 +326,40 @@ try {
     Boolean(shotMinimized?.path),
     shotMinimized,
   );
+
+  // ---- 4b. 激活已拆出的标签 = 唤起弹窗 ----
+  //
+  // 标签条点击已拆出的页面走 activateEmbeddedTab：弹窗必须被还原并可见。
+  // restore/show 只保证「可见」——压在主窗口后面的弹窗，show() 是空操作，
+  // Windows 的 focus() 又常被前台策略拒绝，所以主进程还要 moveTop()。这条
+  // 断言守护最小化情形（可还原可断言）；被遮挡情形没有可读的 z 序 API，
+  // 由主进程侧的 moveTop 承担。
+  const chromiumPort = await waitForDebugPort(userData);
+  let renderer = null;
+  for (let i = 0; i < 40 && !renderer; i += 1) {
+    await wait(250);
+    const target = await findRendererTarget(chromiumPort).catch(() => null);
+    if (target) renderer = await connectToWindow(target.webSocketDebuggerUrl);
+  }
+  const raised = renderer
+    ? await renderer
+        .evaluate(`window.ensemble.activateEmbeddedTab(${JSON.stringify(tabId)}).then(() => true).catch((e) => String(e))`)
+        .catch((e) => `evaluate failed: ${e}`)
+    : "no renderer target";
+  check("the strip's activate channel answers on a popped tab", raised === true, { raised });
+  await wait(600);
+  const afterRaise = await main.evaluate(`(async () => {
+    const electron = require("electron");
+    const win = electron.BrowserWindow.fromId(${windowId});
+    if (!win || win.isDestroyed()) return { error: "no popout window" };
+    return { minimized: win.isMinimized(), visible: win.isVisible() };
+  })()`);
+  check(
+    "activating a popped tab brings the popout back (minimised one is restored)",
+    afterRaise?.minimized === false && afterRaise?.visible === true,
+    afterRaise,
+  );
+
   await main.evaluate(`(async () => {
     const electron = require("electron");
     const win = electron.BrowserWindow.fromId(${windowId});

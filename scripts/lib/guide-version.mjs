@@ -10,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 
-const GUIDE_SOURCE = new URL("../../src/renderer/src/onboarding/guide.ts", import.meta.url);
+const GUIDE_SOURCE = new URL("../../src/shared/guide.ts", import.meta.url);
 
 const parsed = Number(
   readFileSync(GUIDE_SOURCE, "utf8").match(/GUIDE_VERSION\s*=\s*(\d+)/)?.[1],

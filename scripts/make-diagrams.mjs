@@ -1,9 +1,8 @@
 /**
  * Generates the README / landing-page diagrams.
  *
- * Two scenes here cannot be photographed: edge-to-edge tiling (a screenshot would
- * look like any window arrangement) and a transient overlay that only exists for
- * two seconds. They are drawn as SVG so they stay sharp at any width and stay
+ * One scene here cannot be photographed: a transient overlay that only exists
+ * for two seconds. It is drawn as SVG so it stays sharp at any width and stays
  * editable when the UI changes.
  *
  * Both languages are emitted from one source so the landing page can swap them
@@ -19,77 +18,6 @@ import { join } from "node:path";
 const OUTPUT_DIR = "docs/diagrams";
 
 const FONT = "system-ui, -apple-system, Segoe UI, sans-serif";
-
-function layoutGrid(t) {
-  const win = (x, y, color, title, rows) => `
-    <rect x="${x}" y="${y}" width="470" height="252" fill="#0d1014"/>
-    <rect x="${x}" y="${y}" width="470" height="30" fill="url(#chrome)"/>
-    <circle cx="${x + 16}" cy="${y + 15}" r="4" fill="${color}"/>
-    <text x="${x + 27}" y="${y + 20}" font-family="${FONT}" font-size="12" fill="#c9ced6">${title}</text>
-    <g fill="#171b21">
-      ${rows}
-    </g>`;
-  const lines = (x, y, widths) =>
-    widths
-      .map((width, index) => `<rect x="${x}" y="${y + index * 20}" width="${width}" height="10" rx="3"/>`)
-      .join("");
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="${t.aria}">
-  <title>${t.title}</title>
-  <defs>
-    <linearGradient id="stage" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#12151a"/>
-      <stop offset="1" stop-color="#0b0d10"/>
-    </linearGradient>
-    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1b212a"/>
-      <stop offset="1" stop-color="#151a21"/>
-    </linearGradient>
-  </defs>
-
-  <rect width="1200" height="720" rx="18" fill="url(#stage)"/>
-  <rect x="0.5" y="0.5" width="1199" height="719" rx="17.5" fill="none" stroke="#232a33"/>
-
-  <g font-family="${FONT}">
-    <text x="130" y="62" font-size="22" fill="#eef0f3" font-weight="600">${t.headline}</text>
-    <text x="${t.headlineX}" y="62" font-size="13" fill="#a3abb8">${t.subline}</text>
-    <text x="130" y="86" font-size="12" fill="#828c9a">${t.note}</text>
-  </g>
-
-  <rect x="130" y="108" width="940" height="504" fill="#0b0d10" stroke="#303844" stroke-width="1.5"/>
-${win(130, 108, "#e0a44e", t.accounts[0], `${lines(150, 158, [190, 300, 248])}
-      <rect x="150" y="222" width="120" height="22" rx="5" fill="#1f2733"/>
-      <rect x="283" y="222" width="86" height="22" rx="5" fill="#1a212a"/>`)}
-${win(600, 108, "#5cc8b6", t.accounts[1], `${lines(620, 158, [164, 280, 212])}
-      <rect x="620" y="222" width="86" height="22" rx="5" fill="#1a212a"/>`)}
-${win(130, 360, "#a396ff", t.accounts[2], `${lines(150, 410, [220, 286])}
-      <rect x="150" y="454" width="104" height="22" rx="5" fill="#1f2733"/>`)}
-${win(600, 360, "#98a2b0", t.accounts[3], lines(620, 410, [182, 256, 210]))}
-
-  <path d="M600 108V612M130 360H1070" stroke="#303844" stroke-width="1.5"/>
-
-  <g font-family="${FONT}">
-    <g transform="translate(130 652)">
-      <rect x="0" y="0" width="34" height="26" fill="none" stroke="#e0a44e" stroke-width="1.2"/>
-      <path d="M17 0v26" stroke="#e0a44e" stroke-width="1.2"/>
-      <rect x="15" y="10" width="4" height="6" fill="#e0a44e"/>
-    </g>
-    <text x="176" y="669" font-size="12" fill="#c9ced6">
-      <tspan fill="#e0a44e" font-weight="600">${t.gutterStrong}</tspan>
-      <tspan fill="#828c9a">${t.gutterRest}</tspan>
-    </text>
-
-    <g transform="translate(130 690)">
-      <circle cx="4" cy="0" r="4" fill="#e0a44e"/>
-      <circle cx="18" cy="0" r="4" fill="#5cc8b6"/>
-      <circle cx="32" cy="0" r="4" fill="#a396ff"/>
-      <circle cx="46" cy="0" r="4" fill="#98a2b0"/>
-      <text x="62" y="4" font-size="12" fill="#828c9a">${t.legend}</text>
-    </g>
-  </g>
-</svg>
-`;
-}
 
 function overlaySwitch(t) {
   const chrome = (x, y, width, title, color) => `
@@ -238,33 +166,6 @@ function overlaySwitch(t) {
 `;
 }
 
-const LAYOUT_GRID = {
-  en: {
-    aria: "Four browser windows tiled edge to edge in a 2x2 grid",
-    title: "2x2 tiling without gaps",
-    headline: "2 × 2",
-    headlineX: 196,
-    subline: "four accounts, one screen",
-    note: "Each window is its own profile; the layout is a preset, not a manual arrangement.",
-    accounts: ["Admin", "Reviewer", "Operator", "Viewer"],
-    gutterStrong: "0 px",
-    gutterRest: " gutter — window frames touch; the only line between them is the frame itself.",
-    legend: "identity colour — the same dot appears next to the name in the switcher",
-  },
-  zh: {
-    aria: "四个浏览器窗口以 2×2 平铺，边到边贴合",
-    title: "2×2 平铺，没有间隙",
-    headline: "2 × 2",
-    headlineX: 196,
-    subline: "四个账号，一块屏幕",
-    note: "每个窗口一个独立 Profile；布局是预设，不是手工摆出来的。",
-    accounts: ["管理员", "审核员", "运营", "只读"],
-    gutterStrong: "0 px",
-    gutterRest: " 间隙——窗口边框互相贴合，两者之间唯一的线就是边框本身。",
-    legend: "身份色——悬浮条里名字前面的圆点也是它",
-  },
-};
-
 const OVERLAY_SWITCH = {
   en: {
     aria: "Clicking a row in the floating switcher raises that browser window and briefly shows its account name over the window",
@@ -307,7 +208,6 @@ const OVERLAY_SWITCH = {
 
 mkdirSync(OUTPUT_DIR, { recursive: true });
 const outputs = [
-  ["layout-grid", LAYOUT_GRID, layoutGrid],
   ["overlay-switch", OVERLAY_SWITCH, overlaySwitch],
 ];
 for (const [name, strings, build] of outputs) {

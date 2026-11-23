@@ -486,27 +486,18 @@ const DEMO = {
 const SHOTS = [
   { name: "browser", locale: "zh", view: "browser" },
   { name: "browser-en", locale: "en", view: "browser" },
-  { name: "slot-tabs", locale: "zh", view: "browser", popup: true },
+  { audit: true, name: "slot-tabs", locale: "zh", view: "browser", popup: true },
   {
     // The flat stage — no view at all — carries the same page strip a cell does.
     // Worth its own shot: this is the state a user lands in when they only ever
     // click a site, and the strip there is the thing that used to be missing.
     name: "flat-strip",
+    audit: true,
     locale: "zh",
     view: "browser",
     flatStrip: true,
   },
   { name: "new-tab", locale: "zh", view: "browser", blankTab: true },
-  {
-    // The collapsed dock keeps one icon per running instance; the shot proves
-    // the strip is still usable when the panel is out of the way.
-    name: "dock-collapsed",
-    locale: "zh",
-    view: "browser",
-    collapsedDock: true,
-  },
-  { name: "sites", locale: "zh", view: "sites" },
-  { name: "sites-en", locale: "en", view: "sites" },
   { name: "identities", locale: "zh", view: "identities" },
   { name: "identities-en", locale: "en", view: "identities" },
   {
@@ -514,16 +505,16 @@ const SHOTS = [
     // The edit shot above shows an open table; this one shows the other half of
     // the pane — the shape that let the pane get narrower.
     name: "accounts-launch",
+    audit: true,
     locale: "zh",
     view: "accounts-use",
   },
-  { name: "settings", locale: "zh", view: "settings-general" },
-  { name: "settings-en", locale: "en", view: "settings-general" },
+  { audit: true, name: "settings", locale: "zh", view: "settings-general" },
+  { audit: true, name: "settings-en", locale: "en", view: "settings-general" },
   { name: "light", locale: "zh", view: "browser", theme: "light" },
-  { name: "light-en", locale: "en", view: "browser", theme: "light" },
-  { name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
-  { name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
-  { name: "env-menu", locale: "zh", view: "browser", clicks: [".toolbar .split-arrow"] },
+  { audit: true, name: "light-en", locale: "en", view: "browser", theme: "light" },
+  { audit: true, name: "light-settings", locale: "zh", view: "settings-general", theme: "light" },
+  { audit: true, name: "light-bookmarks", locale: "zh", view: "bookmarks", theme: "light" },
   {
     // The AI policy editor: four scopes, the address list, and the two ways to
     // add to it. This is the settings section that used to be a bare chip list.
@@ -536,6 +527,7 @@ const SHOTS = [
     // mark-read available without leaving the browser. Hovered, because the
     // per-row mark-read button only exists while the pointer is there.
     name: "bell-popover",
+    audit: true,
     locale: "zh",
     view: "browser",
     clicks: ["[data-messages-bell]"],
@@ -545,6 +537,7 @@ const SHOTS = [
     // The app menu: the once-in-a-while list, including the launch-surface
     // switch that has no other home now that the title bar is gone.
     name: "app-menu",
+    audit: true,
     locale: "zh",
     view: "browser",
     clicks: ["[data-app-menu]"],
@@ -575,6 +568,7 @@ const SHOTS = [
     // sequence. The AI page states what the assistant actually does; the
     // headless page states the thing people do not expect, so both earn a slot.
     name: "guide-ai",
+    audit: true,
     locale: "zh",
     view: "browser",
     clicks: [
@@ -586,6 +580,7 @@ const SHOTS = [
   },
   {
     name: "guide-headless",
+    audit: true,
     locale: "zh",
     view: "browser",
     clicks: [
@@ -601,14 +596,14 @@ const SHOTS = [
     // Audits the pages the README does not ship. They are still part of the
     // tour, and a page whose diagram is misaligned would be a shipped defect
     // nobody looked at — these shots exist to be inspected, not published.
-    name: "guide-twoSystems",
+    name: "guide-accounts",
     audit: true,
     locale: "zh",
     view: "browser",
     clicks: [
       "[data-app-menu]",
       '[data-menu-item="guide"]',
-      '[data-guide-dot="twoSystems"]',
+      '[data-guide-dot="accounts"]',
     ],
     settleMs: 2000,
   },
@@ -761,19 +756,25 @@ const SHOTS = [
     })()`,
   },
   {
+    // The site form opens from the accounts pane's `+` menu (the pane is already
+    // on its edit face via the `sites` view): one click opens the menu, the
+    // second picks 新建站点.
     name: "site-dialog",
+    audit: true,
     locale: "zh",
     view: "sites",
-    clicks: [".page-head-actions .btn.primary"],
+    clicks: ["[data-create-entry]", "[data-new-site]"],
   },
   {
     name: "identity-dialog",
+    audit: true,
     locale: "zh",
     view: "identities",
     clicks: ["[data-edit-identity]"],
   },
   {
     name: "identity-reference",
+    audit: true,
     locale: "zh",
     view: "identities",
     clicks: ["[data-edit-identity]"],
@@ -783,47 +784,41 @@ const SHOTS = [
     // The message centre: three kinds of "while you were not looking" in one
     // list, each row showing what it can still do.
     name: "messages",
+    audit: true,
     locale: "zh",
     view: "messages",
   },
   {
-    // Tags are a page of their own in the rail now, not a Settings tab.
-    name: "tags",
-    locale: "zh",
-    view: "tags",
-  },
-  {
     // Same reason as tags: flows are an asset people browse, not a setting.
     name: "flows",
+    audit: true,
     locale: "zh",
     view: "flows",
   },
   {
     name: "flows-edit",
+    audit: true,
     locale: "zh",
     view: "flows",
     clicks: [".detail-actions .icon-btn"],
   },
   {
     name: "settings-data",
+    audit: true,
     locale: "zh",
     view: "settings-data",
   },
   {
     name: "settings-mcp",
+    audit: true,
     locale: "zh",
     view: "settings-mcp",
   },
   {
     name: "settings-about",
+    audit: true,
     locale: "zh",
     view: "settings-about",
-  },
-  {
-    name: "layout-editor",
-    locale: "zh",
-    view: "views",
-    clicks: [".link-btn"],
   },
 ];
 
@@ -1209,22 +1204,31 @@ async function capture(shot) {
     });
     await wait(700);
 
-    // Manage the browser page's tabs so the browser shot shows a full 2×2 view.
+    // The stage holds one page. Open the first identity's console so the shot
+    // shows a real signed-in page and the identity bar carries it; the seeded
+    // view would tile four pages, a state no UI path reaches any more.
     if (shot.view === "browser") {
-      await client.evaluate(
-        `(async () => {
+      if (!shot.blankTab) {
+        const browserParams = shot.locale === "en" ? ["l=en"] : [];
+        const browserUrl =
+          `http://127.0.0.1:${PAGE_PORT}` + demoPath("/admin", shot.theme, browserParams);
+        await client.evaluate(`(async () => {
            const api = window.ensemble;
+           for (const tab of (await api.getEmbeddedState()).tabs) {
+             await api.closeEmbeddedTab(tab.id);
+           }
            const snap = await api.getWorkspace();
-           const view = snap.views[0];
-           // A new-tab shot is about the surface, not the grid; opening the view
-           // would add four dock rows behind a page nobody can see.
-           if (view && !${shot.blankTab ? "true" : "false"}) await api.openEmbeddedView(view.id);
+           const identity = snap.identities[0];
+           await api.openEmbeddedTab({
+             ...(identity ? { identityId: identity.id } : {}),
+             url: ${JSON.stringify(browserUrl)},
+           });
            return true;
-         })()`,
-      );
-      await wait(2500);
+         })()`);
+        await wait(2500);
+      }
       // A single page filling the whole stage. The docked panel needs the room:
-      // in a 2×2 cell it is a quarter of a quarter and every label clips.
+      // beside a full-width page every label fits; in a corner it would clip.
       if (shot.singleCell) {
         // The demo site renders its copy in the shot's language; without the
         // query the English screenshots showed a Chinese page behind the
@@ -1240,13 +1244,12 @@ async function capture(shot) {
           demoPath("/admin", shot.theme, singleCellParams);
         await client.evaluate(`(async () => {
           const api = window.ensemble;
-          for (const view of (await api.getEmbeddedState()).views) {
-            await api.closeEmbeddedView(view.id, "all");
+          for (const tab of (await api.getEmbeddedState()).tabs) {
+            await api.closeEmbeddedTab(tab.id);
           }
-          const created = await api.createEmbeddedView({ layoutId: "1x1", name: "单页" });
           const snap = await api.getWorkspace();
           const identityId = snap.identities[0]?.id;
-          await api.openEmbeddedTabInSlot(created.activeViewId, 0, {
+          await api.openEmbeddedTab({
             ...(identityId ? { identityId } : {}),
             url: ${JSON.stringify(singleCellUrl)},
           });
@@ -1254,14 +1257,11 @@ async function capture(shot) {
         })()`);
         await wait(2400);
       }
-      // A flat strip shot wants two pages in one instance and no view at all:
-      // that is the state the strip now covers, and a view would hide it.
+      // A flat strip shot wants two pages in one instance: that is the state
+      // the strip exists for.
       if (shot.flatStrip) {
         await client.evaluate(`(async () => {
           const api = window.ensemble;
-          for (const view of (await api.getEmbeddedState()).views) {
-            await api.closeEmbeddedView(view.id, "all");
-          }
           const tabs = (await api.getEmbeddedState()).tabs;
           const keep = tabs[0];
           for (const tab of tabs) {
@@ -1284,13 +1284,12 @@ async function capture(shot) {
       if (shot.blankTab) {
         await client.evaluate(`(async () => {
           const api = window.ensemble;
-          // Exactly one loose page: launch already opens one, and a second would
-          // be a duplicate "new tab" row in the dock for no reason.
+          // Exactly one page: launch already opens one, and a second would be
+          // a duplicate blank tab for no reason.
           for (const tab of (await api.getEmbeddedState()).tabs) {
-            if (!tab.viewId) await api.closeEmbeddedTab(tab.id);
+            await api.closeEmbeddedTab(tab.id);
           }
-          // Loose tab, so it gets the whole stage instead of one cell of a view.
-          await api.openEmbeddedTab({ viewId: null });
+          await api.openEmbeddedTab({});
           await new Promise((r) => setTimeout(r, 900));
           return true;
         })()`);
@@ -1312,36 +1311,13 @@ async function capture(shot) {
           await wait(1800);
         }
       }
-      // Collapse before freezing: the frozen images are placed at the stage
-      // rectangle measured at capture time, so collapsing afterwards would
-      // leave them at their old width and show a dead band beside the strip.
-      if (shot.collapsedDock) {
-        // One view is a single group, and a strip with one group cannot show
-        // its group boundaries. Open a second container and a loose page so the
-        // shot shows what the strip is actually for.
-        await client.evaluate(`(async () => {
-          const api = window.ensemble;
-          const created = await api.createEmbeddedView({ layoutId: "1x1", name: "第二组" });
-          await api.openEmbeddedTabInSlot(created.activeViewId, 0);
-          await new Promise((r) => setTimeout(r, 700));
-          await api.openEmbeddedTab({ viewId: null, url: "http://127.0.0.1:${PAGE_PORT}${demoPath("/docs", shot.theme)}" });
-          await new Promise((r) => setTimeout(r, 1200));
-          return true;
-        })()`);
-        await client.evaluate(`(() => {
-          document.querySelector('.dock-head .collapse-btn')?.click();
-          return true;
-        })()`);
-        await wait(700);
-      }
       // The pages are <webview> nodes in this document, so they are part of the
       // window's own pixels: a plain Page.captureScreenshot sees them. Nothing has
       // to be frozen and painted into the DOM first.
       //
       // The stage is still re-reported before the shot. A layout change above
-      // (view opened, dock collapsed) moves the stage, and main places the page
-      // nodes from the rect it was last given — capturing before that lands
-      // leaves every cell at the old width.
+      // moves the stage, and main places the page nodes from the rect it was
+      // last given — capturing before that lands leaves the page at the old size.
       const stageReport = await client.evaluate(`(async () => {
         const stage = document.querySelector('.stage');
         if (!stage) return false;

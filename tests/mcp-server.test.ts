@@ -712,6 +712,100 @@ describe("launch 工具默认走内置表面", () => {
     expect(externalCalls[2]?.args).toEqual([ids.siteId, undefined]);
     expect(probe.calls).toEqual([]);
   });
+
+  /*
+    回归：external 只认布尔值。它曾经对 "true"、1 这类值静默走内置路径，
+    调用方以为开的是外部窗口。失败方向虽然安全，但结果是错的。
+  */
+  it("external 不是布尔值时报错，内置表面与外部浏览器都不动", async () => {
+    const ids = await seedWorkspace();
+    const probe = launchProbeSurface();
+    const externalCalls = stubExternalLaunches();
+    await restartServer({ embedded: probe.surface });
+
+    const calls: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ["launch_view", { viewId: ids.viewId }],
+      ["launch_identity", { identityId: ids.identityId }],
+      ["launch_clean_session", {}],
+    ];
+    for (const bad of ["true", 1, "yes", null]) {
+      for (const [name, args] of calls) {
+        const json = (await rpc(toolCall(name, { ...args, external: bad }))).json;
+        expect(json.result.isError, `${name} external=${String(bad)}`).toBe(true);
+        expect(json.result.content[0].text).toContain("external 必须是布尔值");
+      }
+    }
+    expect(probe.calls).toEqual([]);
+    expect(externalCalls).toEqual([]);
+  });
+
+  /*
+    回归：resolve_browser_target 只在「地址匹配到了站点，而指定的账号不属于它」
+    时提醒。地址没匹配到任何站点时，指定的账号与地址之间没有矛盾可言——曾经
+    这时也提醒「账号不属于任何已录入站点」，还建议改开干净会话，等于让调用方
+    放弃自己明确指定的账号。
+  */
+  it("resolve_browser_target：地址没匹配到站点时沿用指定的账号，不报矛盾", async () => {
+    const ids = await seedWorkspace();
+    const otherSite = await service.saveSite({
+      name: "另一环境",
+      baseUrl: "http://localhost:4000",
+      loginPath: "/login",
+      autoSubmit: false,
+    });
+    const otherIdentity = await service.saveIdentity({
+      siteId: otherSite.id,
+      name: "另一账号",
+      username: "user-b",
+      role: "member",
+      color: "slate",
+      passwordMode: "inherit",
+    });
+    const resolve = async (args: Record<string, unknown>) =>
+      toolPayload((await rpc(toolCall("resolve_browser_target", args))).json) as {
+        matched: boolean;
+        site?: { id: string };
+        identities: Array<{ id: string }>;
+        recommendedIdentityId?: string;
+        nextStep: string;
+        warning?: string;
+      };
+
+    // 地址不匹配任何站点 + 指定了存在的账号：沿用该账号，不提醒
+    const unmatched = await resolve({
+      url: "http://localhost:9999/path",
+      identityId: otherIdentity.id,
+    });
+    expect(unmatched.matched).toBe(false);
+    expect(unmatched.site).toBeUndefined();
+    expect(unmatched.identities).toEqual([]);
+    expect(unmatched.recommendedIdentityId).toBe(otherIdentity.id);
+    expect(unmatched.nextStep).toContain(otherIdentity.id);
+    expect(unmatched.warning).toBeUndefined();
+
+    // 地址不匹配 + 没指定账号：才是干净会话的建议
+    const bare = await resolve({ url: "http://localhost:9999/path" });
+    expect(bare.recommendedIdentityId).toBeUndefined();
+    expect(bare.nextStep).toContain("干净会话");
+
+    // 地址匹配到站点 A，指定的账号却属于站点 B：这才是矛盾
+    const mismatched = await resolve({
+      url: "http://localhost:3000/dashboard",
+      identityId: otherIdentity.id,
+    });
+    expect(mismatched.matched).toBe(true);
+    expect(mismatched.site?.id).toBe(ids.siteId);
+    expect(mismatched.warning).toContain("不属于站点 启动站点");
+    expect(mismatched.recommendedIdentityId).toBe(ids.identityId);
+
+    // 账号确属匹配站点：回显，不提醒
+    const own = await resolve({
+      url: "http://localhost:3000/dashboard",
+      identityId: ids.identityId,
+    });
+    expect(own.recommendedIdentityId).toBe(ids.identityId);
+    expect(own.warning).toBeUndefined();
+  });
 });
 
 describe("MCP 返回体瘦身", () => {

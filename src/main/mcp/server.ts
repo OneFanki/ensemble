@@ -2465,6 +2465,17 @@ export class McpServer {
       if (!view) throw new Error(`视图不存在：${String(id)}`);
       return view;
     };
+    /**
+     * `launch_*` 的 external 开关，只认真正的布尔值。把 "true"、1 这类值静默
+     * 当成内置路径，调用方会以为开的是外部窗口。
+     */
+    const wantsExternal = (args: Record<string, unknown>): boolean => {
+      const value = args["external"];
+      if (value !== undefined && typeof value !== "boolean") {
+        throw new Error("external 必须是布尔值");
+      }
+      return value === true;
+    };
 
     // launch_* 默认落内置表面，与 browserTools 的浏览器工具共用同一条访问路径。
     const surface = () => this.embeddedSurface();
@@ -2739,19 +2750,25 @@ export class McpServer {
             ? snapshot.identities.find((item) => item.id === requestedId)
             : undefined;
           if (requestedId && !requested) throw new Error(`账号不存在：${requestedId}`);
-          // 指定了账号且确属该站点时回显它；否则建议该站点的第一个账号。
+          /*
+            建议用谁：调用方指定的账号确属匹配站点时回显它；地址没匹配到任何站点时
+            沿用它（没有矛盾可言，调用方知道自己要哪个账号）；否则取该站点的
+            第一个账号。
+          */
           const recommendedIdentityId =
-            requested && site && requested.siteId === site.id
+            requested && (!site || requested.siteId === site.id)
               ? requested.id
               : identities[0]?.id;
+          // 只有「地址匹配到了站点，而指定的账号不属于它」才是矛盾，才提醒。
           const warning =
-            requested && (!site || requested.siteId !== site.id)
-              ? `账号 ${requested.name} 不属于${site ? `站点 ${site.name}` : "任何已录入站点"}，请确认后再用它打开。`
+            requested && site && requested.siteId !== site.id
+              ? `账号 ${requested.name} 不属于站点 ${site.name}，请确认后再用它打开。`
               : undefined;
           let nextStep: string;
           if (!site) {
-            nextStep =
-              "没有匹配的站点：可直接用 open_browser_tab 打开（一次性干净会话）；若该地址需要登录且要保存，先用 create_site 录入站点再建账号。";
+            nextStep = requested
+              ? `地址没有匹配到任何已录入站点：用 open_browser_tab 打开并传 identityId: "${requested.id}"，会按这个账号打开。`
+              : "没有匹配的站点：可直接用 open_browser_tab 打开（一次性干净会话）；若该地址需要登录且要保存，先用 create_site 录入站点再建账号。";
           } else if (identities.length === 0) {
             nextStep = `站点 ${site.name} 还没有录入账号：先用 create_identity（siteId: "${site.id}"）创建，或直接用 open_browser_tab 打开干净会话。`;
           } else {
@@ -3444,7 +3461,7 @@ export class McpServer {
         ),
         run: async (args) => {
           const view = findView(args["viewId"]);
-          if (args["external"] !== true) {
+          if (!wantsExternal(args)) {
             // 默认路径：与 open_browser_view 同一条内置入口，成员页创建期预静音。
             const opened = await surface().openView(view.id, { muted: true });
             return projectState(opened);
@@ -3475,7 +3492,7 @@ export class McpServer {
         ),
         run: async (args) => {
           const identity = findIdentity(args["identityId"]);
-          if (args["external"] !== true) {
+          if (!wantsExternal(args)) {
             // 默认路径：显式传 identityId 开内置标签页；宿主会落账号分区并安排
             // 自动填充。没有可用起始地址时省略 url，页面停在空白页但分区仍正确。
             const startUrl = embeddedIdentityStartUrl(identity);
@@ -3509,7 +3526,7 @@ export class McpServer {
         run: async (args) => {
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
-          if (args["external"] !== true) {
+          if (!wantsExternal(args)) {
             // 默认路径：不带 identityId 的 AI 页面在内置表面固定是一次性干净
             // 会话（宿主实现保证），页面地址与外部路径同一推导（站点登录页）。
             const site = siteId ? findSite(siteId) : undefined;

@@ -170,6 +170,38 @@ Workspace data stays backward compatible: old files open as-is, and import and e
 
 ## [未发布]
 
+2.3.0 让 AI 能完整操作浏览器，但 AI 开页这一步有几处会把它带偏：默认开的是一次性干净会话，`launch_*` 默认开外部窗口，AI 操作中的页面被降到约 1fps。这个版本把这几处改掉。
+
+### 中文
+
+#### 修复
+
+- **AI 开页默认复用已录入的账号**。`open_browser_tab` 不带 `identityId` 时，会按地址找到同源站点的第一个账号，找不到再按 `siteId`；都不匹配才是一次性干净会话。返回值里的 `identityName` 和 `resolvedBy` 说明用了哪个账号、凭什么归的类。2.3.0 里不带 `identityId` 一律是干净会话，AI 得自己查出账号 id 再传进来，查不到就回去手填登录表单。
+- **`launch_view`、`launch_identity`、`launch_clean_session` 默认开在内置浏览器**。传 `external: true` 才开系统浏览器窗口。2.3.0 里这三个工具默认开外部窗口，AI 很容易把本该在内置页面里做的操作开到系统浏览器上。依赖旧行为的调用需要补上 `external: true`。
+- **AI 正在操作的页面保持正常出帧**。不在舞台上的页面平时停在窗口外来省资源，页面里的动画和 `requestAnimationFrame` 会降到约 1fps。AI 对它发命令期间和之后的一小段宽限里，这个页面会被摆回窗口内，滚动、动画结束后读取这类依赖画面的操作能拿到正常结果。宽限一过就回到原来的省资源状态。
+- **macOS 上窗口按钮不再压住账号条最左的入口**。窗口左上角三颗按钮下面的留白挪到了首行的账号条上，地址栏与它左缘对齐。
+
+#### 新增
+
+- **`resolve_browser_target`**（只读）。传一个地址，返回它属于哪个已录入的站点、这个站点下有哪些账号、建议用哪个 `identityId`。传了 `identityId` 但它不属于匹配到的站点时，返回里带一句提醒。
+- **`get_workspace_summary` 带上每个站点的账号列表**。只有 id、名称和用户名，不含密码；单个站点超过 20 个账号时只带前 20 个，并标 `identitiesTruncated`。
+
+### English
+
+2.3.0 let an AI drive the browser end to end, but the part where it opens a page could send it down the wrong path: the default was a throw-away clean session, `launch_*` opened external windows, and a page under AI control dropped to about 1fps. This release changes those.
+
+#### Fixed
+
+- **`open_browser_tab` reuses a stored account by default.** Without `identityId` it picks the first account of the site whose origin matches the URL, then falls back to `siteId`; only when nothing matches does it open a throw-away clean session. The return value carries `identityName` and `resolvedBy`, so the caller knows which account it got and why. In 2.3.0 a call without `identityId` was always a clean session, so an AI had to look up the account id itself and fell back to hand-filling the login form when it couldn't.
+- **`launch_view`, `launch_identity` and `launch_clean_session` open in the embedded browser by default.** They open a system browser window only with `external: true`. In 2.3.0 they opened external windows, and an AI would carry work meant for the embedded page into the system browser. Calls that relied on that need `external: true` now.
+- **A page an AI is driving keeps rendering at full rate.** Pages that are off stage normally sit outside the window to save resources, which drops their animations and `requestAnimationFrame` to about 1fps. While an AI is sending commands to such a page, and for a short grace period after, the page moves back inside the window, so scrolling and reads taken after an animation return real results. Once the grace period ends the page returns to the low-power state.
+- **On macOS the window buttons no longer cover the leftmost entry of the account bar.** The space reserved under the three buttons in the top-left corner now belongs to the account bar on the first row, and the address row lines up with it.
+
+#### Added
+
+- **`resolve_browser_target`** (read-only). Given a URL, it returns which stored site the URL belongs to, the accounts under that site, and the `identityId` it recommends. When the passed `identityId` does not belong to the matched site, the result carries a warning.
+- **`get_workspace_summary` lists the accounts of each site.** Only id, name and username, never the password; a site with more than 20 accounts gets the first 20 and an `identitiesTruncated` flag.
+
 ## [2.2.1] - 2026-11-16
 
 修掉 2.2.0 的内置更新器：从 2.1.0 升级会卡住，且下载进度一直是 0。**2.2.0 的用户需要手动下载这个版本**，因为卡住的那次升级没有把应用换掉。

@@ -210,8 +210,8 @@ try {
     layout,
   );
   check(
-    "the account bar offers a new-session entry",
-    layout?.hasNewSession === true,
+    "the account bar carries no new-session entry",
+    layout?.hasNewSession === false,
     layout,
   );
   // The bar sizes itself from its chips, capped at half the window. A bar that

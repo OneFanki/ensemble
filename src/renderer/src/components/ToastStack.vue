@@ -14,7 +14,10 @@ const store = useWorkspaceStore();
     the chain, so the anchor cannot be stolen.
   -->
   <Teleport to="body">
-    <div class="toast-stack" aria-live="polite">
+    <!-- A group, not a list: a toast's exit has to keep the element mounted for
+         the animation, and the survivors glide into the freed slot instead of
+         jumping when one leaves. -->
+    <TransitionGroup name="toast" tag="div" class="toast-stack" aria-live="polite">
       <div
         v-for="toast in store.toasts"
         :key="toast.id"
@@ -28,7 +31,7 @@ const store = useWorkspaceStore();
         <Info v-else :size="13" />
         <span>{{ toast.text }}</span>
       </div>
-    </div>
+    </TransitionGroup>
   </Teleport>
 </template>
 
@@ -67,7 +70,24 @@ const store = useWorkspaceStore();
   font-size: 11.5px;
   line-height: 1.5;
   box-shadow: var(--shadow-menu);
+}
+
+/*
+ * Enter and exit are a pair, like every other floater. The exit runs at the
+ * faster token and drops toward the stack's own corner — the toast leaves the
+ * way it arrived, in reverse. `forwards` holds the last frame until the group
+ * removes the element.
+ */
+.toast-enter-active {
   animation: toast-in var(--motion-fast) var(--ease-out);
+}
+
+.toast-leave-active {
+  animation: toast-out var(--motion-fast) var(--ease-in) forwards;
+}
+
+.toast-move {
+  transition: transform var(--motion-base) var(--ease-out);
 }
 
 .toast svg {
@@ -108,6 +128,13 @@ const store = useWorkspaceStore();
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(var(--motion-shift));
   }
 }
 </style>

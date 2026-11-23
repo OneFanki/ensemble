@@ -216,15 +216,15 @@ try {
   await wait(400);
   await wait(3000);
 
-  // --- 1. The account form's isolation fold, closed by default -------------
+  // --- 1. The account form's advanced fold, closed by default --------------
   const form = await openAccountForm(client);
   check(
-    "the account form opens with an isolation fold",
+    "the account form opens with an advanced fold",
     form?.dialogOpen === true && form?.toggleText !== null && form.toggleText.length > 0,
     form,
   );
   check(
-    "the isolation fold starts collapsed",
+    "the advanced fold starts collapsed",
     form?.panelClosed === true && form?.expanded === false,
     form,
   );
@@ -237,16 +237,17 @@ try {
     await wait(300);
     const panel = document.querySelector('[data-advanced-panel]');
     return {
-      note: panel?.querySelector('.note')?.textContent?.trim() ?? null,
-      // A brand-new account has no session data yet, so the fold holds only
-      // the sentence — no action.
+      // A brand-new account has no session data, so there is nothing isolation
+      // to explain yet: the fold holds only the optional fields.
+      isolation: Boolean(panel?.querySelector('.isolation')),
       clearButton: Boolean(panel?.querySelector('[data-clear-session]')),
+      optionalFields: Boolean(panel?.querySelector('input, .select-trigger')),
     };
   `,
   );
   check(
-    "expanding the fold explains isolation and offers no action yet",
-    fold?.note?.includes("独立保存") === true && fold?.clearButton === false,
+    "a new account's advanced fold holds only optional fields, no isolation",
+    fold?.isolation === false && fold?.clearButton === false && fold?.optionalFields === true,
     fold,
   );
 
@@ -294,19 +295,23 @@ try {
     await wait(700);
     document.querySelector('[data-advanced-toggle]')?.click();
     await wait(300);
-    const clearButton = document.querySelector('[data-clear-session]');
+    const panel = document.querySelector('[data-advanced-panel]');
+    const clearButton = panel?.querySelector('[data-clear-session]');
     const footerText = document.querySelector('.content .foot')?.textContent ?? '';
     return {
       footerFound: footerText.length > 0,
       clearButtonThere: Boolean(clearButton),
       clearLabel: clearButton?.textContent?.trim() ?? null,
       footerHasClear: footerText.includes('清除登录数据'),
+      isolationNote: panel?.querySelector('.isolation .note')?.textContent?.trim() ?? null,
     };
   `,
   );
   check(
-    "a saved account's fold holds the clear-login-data action",
-    editFold?.clearButtonThere === true && editFold?.clearLabel === "清除登录数据",
+    "a saved account's fold explains isolation and holds the clear action",
+    editFold?.clearButtonThere === true &&
+      editFold?.clearLabel === "清除登录数据" &&
+      editFold?.isolationNote?.includes("独立保存") === true,
     editFold,
   );
   check(
@@ -335,11 +340,10 @@ try {
     await wait(700);
   `,
   );
-  // The new-browser chooser is gone with the toolbar's split button: sessions are
-  // created and launched from the account bar in the window's first row, and the
-  // account pane carries the launch face. What has to hold is that no second door
-  // came back — a surviving chooser would be a third place to answer "whose page
-  // is this".
+  // The new-browser chooser is gone, and so is the account bar's own new-session
+  // door: identities are created in the account pane, beside the list the new row
+  // joins. What has to hold is that no second door came back — a surviving chooser
+  // would be a third place to answer "whose page is this".
   const chooser = await inApp(
     client,
     `
@@ -358,8 +362,8 @@ try {
     chooser,
   );
   check(
-    "the account bar is the door to a new session",
-    chooser?.railNewSession === true,
+    "the account bar carries no new-session door",
+    chooser?.railNewSession === false,
     chooser,
   );
 

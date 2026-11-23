@@ -1,7 +1,6 @@
 <script setup lang="ts">
 /**
- * An input container whose focus state is drawn by two CSS gradients, not a
- * border.
+ * An input container whose focus state is one 1px accent outline fading in.
  *
  * Two surfaces need this exact thing: the omnibox in the browser toolbar and
  * the search box on the new-tab page. They had drifted — one drew a 3px glow
@@ -15,23 +14,13 @@
  * state. A CSS border cannot hold that, and the field inside is borderless too
  * — it draws nothing of its own, so the shell is the only thing with an edge.
  *
- * ## The focus state: one outline, wiped in from the left
+ * ## The focus state: a 1px outline that fades in
  *
- * The whole perimeter lights up as a single 2px accent outline. The animation is
- * a clip wipe — the overlay is clipped to `inset(0 100% 0 0)` at rest and opens
- * to `inset(0)`, which reveals the left edge first, then both horizontal edges
- * running rightward, then the right edge. Nothing travels around the perimeter,
- * no keyframes for position, and 170ms linear is the whole thing.
- *
- * It *is* the settled state: when the wipe finishes there is nothing left to
- * swap in. That is the point — the version before this one ran a dash a full lap
- * (500ms) and then faded a second stroke in behind it (another 350ms), so a
- * click took almost a second to look finished.
- *
- * The two-strip version that briefly replaced it drew only the horizontal edges,
- * inset by the corner radius. On a real window that read as a broken outline —
- * the left and right sides never lit and the corners were simply missing. A
- * closed shape is what "this is the field you are typing in" looks like.
+ * An opacity fade, nothing else. The outline is the same closed shape at every
+ * moment — it only gets quieter and louder — so there is no reveal to follow
+ * and no settled state to swap into at the end. The wipe this replaced made a
+ * click the loudest event on the toolbar for 170ms; the fade answers it in the
+ * same motion the fill's colour change already uses.
  */
 withDefaults(
   defineProps<{
@@ -60,9 +49,7 @@ withDefaults(
 <template>
   <component :is="as" class="input-shell" :class="[size, { flat }]">
     <slot />
-    <!-- The resting edge only. The focus outline is a pseudo-element: one
-         overlay whose clip opens left to right, which a static stroke cannot
-         express. -->
+    <!-- The resting edge only. The focus outline is the `::after` overlay. -->
     <svg class="sweep" aria-hidden="true">
       <rect class="shell-outline" />
     </svg>
@@ -76,8 +63,7 @@ withDefaults(
   align-items: center;
   min-width: 0;
   /* No CSS border: the resting edge is an SVG hairline, and the focus state is
-     two rules on the horizontal edges. A border would be a third line nobody
-     asked for. */
+     the `::after` outline. A border would be a third line nobody asked for. */
   background: var(--field);
   transition: background var(--motion-base) var(--ease-out);
 }
@@ -110,7 +96,7 @@ withDefaults(
 }
 
 /* A flat shell groups fields on a surface that already has an edge; its focus
-   state is a neutral line rather than the accent rules. */
+   state is a neutral line rather than the accent outline. */
 .input-shell.flat:focus-within .shell-outline {
   stroke: var(--line);
 }
@@ -140,13 +126,7 @@ withDefaults(
   outline: none;
 }
 
-/*
- * Focused: the fill lifts one step and the two horizontal rules draw.
- *
- * No outer ring. There used to be a 3px `--accent-soft` glow, which on the dark
- * chrome read as a fuzzy halo around a 30px field — the heaviest decoration in
- * the toolbar — and on light turned into a smear of tinted gold over white.
- */
+/* Focused: the fill lifts one step; the outline is the `::after` overlay. */
 .input-shell:focus-within {
   background: var(--chrome);
 }
@@ -156,48 +136,35 @@ withDefaults(
 }
 
 /*
- * The focus state.
+ * The focus outline: one 1px accent line around the whole perimeter, and the
+ * only animation is its opacity.
  *
- * One overlay carries the whole outline — all four edges and the rounded
- * corners — and the animation is a wipe from the left end to the right one: the
- * clip is opened from `inset(0 100% 0 0)` to `inset(0)`, so the left vertical
- * edge appears first, both horizontal edges run rightward, and the right
- * vertical edge arrives last. 170ms, linear.
+ * All four edges and the rounded corners ride one overlay, and the only
+ * animation is its opacity. It used to be a 2px stroke wiped in from the left
+ * (170ms); that made a click the loudest thing on screen. 1px is the weight the
+ * resting hairline already carries, and a fade is the same answer the fill's
+ * colour change gives.
  *
- * Why the whole perimeter instead of two horizontal strips: strips inset by the
- * corner radius leave the left and right edges unlit and cut the corners off
- * completely, which reads as a broken outline rather than a focused field. The
- * wipe gives the same "draws itself leftward to rightward" motion while ending
- * on a closed shape.
- *
- * `linear`, not eased: the revealed width *is* the progress, so an ease would
- * read as the field hesitating and then rushing. 170ms is short enough to be a
- * response to the click and long enough to see the direction.
- *
- * The overlay is 2px on a `border`, so it lands a pixel inside the shell's edge
- * and covers the resting hairline instead of sitting a second line beside it.
+ * The 1px border on an `inset: 0` overlay lands exactly over the resting
+ * hairline, covering it instead of sitting a second line beside it.
  */
 .input-shell::after {
   content: "";
   position: absolute;
   inset: 0;
-  border: 2px solid var(--accent);
+  border: 1px solid var(--accent);
   border-radius: var(--shell-radius, var(--radius));
-  clip-path: inset(0 100% 0 0);
   opacity: 0;
   pointer-events: none;
 }
 
 .input-shell:focus-within::after {
-  clip-path: inset(0 0 0 0);
   opacity: 1;
-  transition:
-    clip-path 170ms linear,
-    opacity 90ms linear;
+  transition: opacity var(--motion-base) var(--ease-out);
 }
 
-/* Leaving focus drops the outline at once: a line that unwound for as long as
-   it took to draw would still be visible after the caret moved on. */
+/* Leaving focus drops the outline quickly: a slow unwind would still be
+   visible after the caret moved on. */
 .input-shell:not(:focus-within)::after {
   transition: opacity 90ms var(--ease-out);
 }
@@ -206,7 +173,8 @@ withDefaults(
  * The resting edge.
  *
  * The SVG fills the shell exactly and draws one hairline on the same geometry
- * the rules ride, so there is no second edge at a different width underneath.
+ * the focus outline covers, so there is no second edge at a different width
+ * underneath.
  */
 .sweep {
   position: absolute;
@@ -221,7 +189,7 @@ withDefaults(
 }
 
 /* Resting edge, flush with the shell: a 1px stroke centred half a pixel inside
-   the box covers exactly 0–1px, the same weight the old border had. */
+   the box covers exactly 0–1px, the same weight the focus outline carries. */
 .shell-outline {
   /* Geometry as CSS so the radius can follow the shell's variant, including the
      find bar's smaller override. */

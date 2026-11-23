@@ -303,7 +303,6 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-menu);
   z-index: 71;
   outline: none;
-  transform-origin: left center;
 }
 
 /*
@@ -320,34 +319,45 @@ onBeforeUnmount(() => {
 }
 
 /*
- * Open and close are the same motion in two directions.
+ * Open and close are both slides, but they are not mirror images — on purpose.
  *
- * The pane used to animate in and then disappear in a single frame on close,
- * which read as a glitch rather than a dismissal: the eye follows the panel in
- * and then it is simply gone. A `Transition` (not an enter-only `animation`) is
- * what makes both directions share a curve, and the leave has to be *faster*
- * than the enter — dismissal should feel like getting out of the way, not like
- * watching the panel reverse itself.
+ * The pane carries a `backdrop-filter`, and in Chromium a `backdrop-filter`
+ * element is stripped of its blur for as long as its own opacity is below 1 —
+ * the fade-in used to end with the glass snapping on in the last frames, which
+ * read as two different surfaces taking turns. So the pane itself does not
+ * fade: it slides in with the glass already on, and the motion is what carries
+ * the entrance. (`backdrop-filter` could be transitioned from blur(0) instead,
+ * but that re-samples the whole page behind it every frame — measured jank for
+ * a surface that opens several times an hour.)
  *
- * `transform` and `opacity` only: both are compositor properties, so the blur
- * underneath is never re-rasterised per frame.
+ * The entrance is a nudge — one `--motion-shift` off its resting spot, so the
+ * eye reads "it arrived", not "it flew in". The exit is the full travel out of
+ * the window: an exit has to end with the thing gone anyway, and stopping the
+ * motion partway read as the pane being yanked mid-step — it moved a little,
+ * then the page just replaced it. A slide that leaves the viewport entirely is
+ * the same motion carried to its end, and `transform` only on the pane: a
+ * compositor property, so the blur underneath is never re-rasterised per frame.
+ *
+ * `--ease-in` on the way out per the motion tokens' split — exits accelerate
+ * away; entries settle. The scrim fades on its own — it is a plain element with
+ * no filter, and opacity there is free.
  */
 .floating-pane-enter-active {
-  transition:
-    opacity var(--motion-slow) var(--ease-out),
-    transform var(--motion-slow) var(--ease-out);
+  transition: transform var(--motion-slow) var(--ease-out);
 }
 
 .floating-pane-leave-active {
-  transition:
-    opacity calc(var(--motion-base) * 0.75) var(--ease-out),
-    transform calc(var(--motion-base) * 0.75) var(--ease-out);
+  transition: transform var(--motion-slow) var(--ease-in);
+  /* Gone is gone: clicks during the exit belong to the page behind. */
+  pointer-events: none;
 }
 
-.floating-pane-enter-from,
+.floating-pane-enter-from {
+  transform: translateX(calc(-1 * var(--motion-shift)));
+}
+
 .floating-pane-leave-to {
-  opacity: 0;
-  transform: translateX(calc(-1 * var(--motion-shift))) scaleX(var(--motion-pop-scale));
+  transform: translateX(-100%);
 }
 
 /* The scrim fades with the pane; it has no motion of its own. */
@@ -357,7 +367,7 @@ onBeforeUnmount(() => {
 }
 
 .floating-pane-leave-active .floating-scrim {
-  transition-duration: calc(var(--motion-base) * 0.75);
+  transition-timing-function: var(--ease-in);
 }
 
 .floating-pane-enter-from .floating-scrim,

@@ -112,6 +112,7 @@ function onKeydown(event: KeyboardEvent) {
     </button>
 
     <Teleport to="body">
+      <Transition name="menu-pop">
       <div
         v-if="open"
         ref="panel"
@@ -141,6 +142,7 @@ function onKeydown(event: KeyboardEvent) {
         </button>
         <p v-if="!options.length" class="empty-line">{{ $t("app.noOptions") }}</p>
       </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -230,7 +232,6 @@ function onKeydown(event: KeyboardEvent) {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   padding: 4px;
-  animation: popover-in var(--motion-base) var(--ease-out);
   /* Grows from the edge it hangs off, so the scale reads as the panel opening
      rather than as the whole box shrinking toward its middle. */
   transform-origin: top center;
@@ -238,6 +239,26 @@ function onKeydown(event: KeyboardEvent) {
 
 @keyframes popover-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts the panel, and `pointer-events: none` hands clicks back to the page
+   during the exit instead of letting a vanishing panel eat one. */
+.menu-pop-leave-active {
+  animation: popover-in-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: popover-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes popover-in-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }

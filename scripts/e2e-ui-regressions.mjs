@@ -466,6 +466,43 @@ try {
     starter?.tabs === 1 && (!starter?.url || starter.url === "about:blank") && starter?.surface === true,
     starter,
   );
+
+  // --- Overlays on the blank page dismiss on an outside click ---------------
+  // Every floating layer in the app closes when the click lands outside it —
+  // toolbar menus, selects, flyouts. The blank page's own two (engine picker,
+  // backdrop swatches) once stayed open and had to be closed by hand, so both
+  // are pinned here through the real dismissal path: open, click elsewhere,
+  // assert gone.
+  const overlays = await client.evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const out = {};
+    // Past the exit animation (110ms): "gone from the DOM" is only true after
+    // Vue unmounts the leaving element.
+    const settle = () => wait(260);
+    const elsewhere = () => document.querySelector('.nt-brand')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    document.querySelector('.nt-engine-btn')?.click();
+    await wait(220);
+    out.engineOpened = Boolean(document.querySelector('.nt-engine-menu'));
+    elsewhere();
+    await settle();
+    out.engineClosedOutside = !document.querySelector('.nt-engine-menu');
+    document.querySelector('.nt-look-btn')?.click();
+    await wait(220);
+    out.swatchesOpened = Boolean(document.querySelector('.nt-swatch'));
+    elsewhere();
+    await settle();
+    out.swatchesClosedOutside = !document.querySelector('.nt-swatch');
+    return out;
+  })()`);
+  check(
+    "the engine picker and the backdrop swatches close on an outside click",
+    overlays?.engineOpened === true &&
+      overlays?.engineClosedOutside === true &&
+      overlays?.swatchesOpened === true &&
+      overlays?.swatchesClosedOutside === true,
+    overlays,
+  );
+
   const shellBefore = await client.evaluate(`(() => {
     const body = document.querySelector('.app-body');
     const shell = document.querySelector('.app-shell');
@@ -591,22 +628,17 @@ try {
     { stepper: sizing?.stepper },
   );
 
-  // --- The new session door, in the account bar -----------------------------
-  // The toolbar's split "+" is gone: a session is not a page, and the door that
-  // creates one belongs beside the list of running sessions. What this pins is
-  // that the old chooser did not come back as a second answer to "whose page is
-  // this", and that the bar's own door opens the one form.
-  const door = await client.evaluate(`(async () => {
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    const trigger = document.querySelector('[data-rail-new-session]');
-    trigger?.click();
-    await wait(400);
-    const dialog = document.querySelector('[data-rail-session-name]');
+  // --- The account bar has no write of its own ------------------------------
+  // The toolbar's split "+" is gone, and so is the bar's own new-session door:
+  // a session is not a page, and creating an identity happens in the account
+  // pane, beside the list the new row joins. What this pins is that neither
+  // door came back as a second answer to "whose page is this".
+  const door = await client.evaluate(`(() => {
     return {
       chooser: Boolean(document.querySelector('.open-panel, .open-menu')),
       split: Boolean(document.querySelector('.toolbar .split')),
-      dialog: Boolean(dialog),
-      nativeTitles: document.querySelectorAll('[data-account-rail] :is(button, [role="tab"])[title]').length,
+      newSession: Boolean(document.querySelector('[data-rail-new-session]')),
+      nameField: Boolean(document.querySelector('[data-rail-session-name]')),
     };
   })()`);
   check(
@@ -614,18 +646,11 @@ try {
     door?.chooser === false && door?.split === false,
     door,
   );
-  check("the account bar's plus opens the new-session form", door?.dialog === true, door);
-  const doorClosed = await client.evaluate(`(async () => {
-    document.querySelector('[role="dialog"] [aria-label]')?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    const cancel = [...document.querySelectorAll('[role="dialog"] button')].find(
-      (el) => el.textContent?.trim() === '取消' || el.textContent?.trim() === 'Cancel',
-    );
-    cancel?.click();
-    await new Promise((r) => setTimeout(r, 300));
-    return Boolean(document.querySelector('[data-rail-session-name]'));
-  })()`);
-  check("the new-session form closes without creating anything", doorClosed === false, { doorClosed });
+  check(
+    "the account bar carries no new-session door or form",
+    door?.newSession === false && door?.nameField === false,
+    door,
+  );
 
   // Closing a running session is a right-click on its chip, the way a browser
   // closes a tab: the chip carries no resting cross any more.
@@ -1134,25 +1159,25 @@ try {
     newTabField,
   );
   check(
-    "the focus outline is closed at rest and fully open when focused",
-    // A clip wipe, not two strips: at rest the overlay is clipped to nothing
-    // (`inset(0px 100% ...)`) and when focused the clip is `inset(0px)`. The
-    // direction of the reveal is the browser's to interpolate; what the assertion
-    // holds is that the end states are closed and open, so the field ends up with
-    // all four edges rather than only its top and bottom.
+    "the focus outline is invisible at rest and fully drawn when focused",
+    // A 1px accent outline fading in: the state is opacity, nothing else — no
+    // clip, no travel. The end states are hidden and shown; the shape is the
+    // same closed outline at every moment.
     newTabField?.matchesFocus === true &&
-      /100%/.test(newTabField.resting.clipPath) &&
-      !/100%/.test(newTabField.focused.clipPath) &&
-      newTabField.focused.opacity === "1",
+      newTabField.resting.opacity === "0" &&
+      newTabField.focused.opacity === "1" &&
+      (newTabField.focused.clipPath === "none" || newTabField.focused.clipPath === ""),
     newTabField,
   );
   check(
     "the focus outline covers all four edges of the field",
     // The regression this locks: the two-strip version lit the top and bottom
     // edges only, so the left and right sides never highlighted and the corners
-    // were missing entirely — a broken ring on a focused field.
+    // were missing entirely — a broken ring on a focused field. 1px is the same
+    // weight as the resting hairline it covers.
     ["top", "right", "bottom", "left"].every(
-      (edge) => newTabField?.focused[`border${edge[0].toUpperCase()}${edge.slice(1)}Width`] === "2px",
+      (edge) => parseFloat(newTabField?.focused[`border${edge[0].toUpperCase()}${edge.slice(1)}Width`] ?? "0") > 0 &&
+        parseFloat(newTabField?.focused[`border${edge[0].toUpperCase()}${edge.slice(1)}Width`] ?? "0") <= 1.01,
     ) &&
       newTabField?.focused.borderTopColor !== "rgba(0, 0, 0, 0)" &&
       parseFloat(newTabField?.focused.borderRadius ?? "0") >= newTabField.radius &&
@@ -1885,8 +1910,10 @@ try {
   // "follow global" is what most sites will be left on, so answering "will this
   // site submit?" only while the list is open answers it when it no longer matters.
   const submitMode = await client.evaluate(`(async () => {
+    // The site dialog is found by its login-path field, not by the select: the
+    // select lives in the advanced fold, which is closed until openForm opens it.
     const dialog = () => [...document.querySelectorAll('[role="dialog"]')].find(
-      (el) => el.querySelector('.field .select'),
+      (el) => el.querySelector('[data-field="loginPath"]'),
     );
     const effective = () => dialog()?.querySelector('[data-submit-effective]')?.textContent.trim() ?? "";
     const trigger = () => dialog()?.querySelector('.select-trigger .select-value')?.textContent.trim() ?? "";
@@ -1902,6 +1929,10 @@ try {
       }
       door?.click();
       await new Promise((r) => setTimeout(r, 500));
+      // The auto-submit control lives in the advanced fold now; a fresh site
+      // opens with the fold closed, so open it before reading the control.
+      dialog()?.querySelector('[data-advanced-toggle]')?.click();
+      await new Promise((r) => setTimeout(r, 300));
       return dialog();
     };
     const closeForm = async () => {

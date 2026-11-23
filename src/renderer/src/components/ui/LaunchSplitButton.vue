@@ -147,6 +147,7 @@ function chooseExternal(engineId: string): void {
     </button>
 
     <Teleport to="body">
+      <Transition name="menu-pop">
       <div
         v-if="open"
         ref="panel"
@@ -197,6 +198,7 @@ function chooseExternal(engineId: string): void {
           </span>
         </button>
       </div>
+      </Transition>
     </Teleport>
   </span>
 </template>
@@ -367,12 +369,31 @@ function chooseExternal(engineId: string): void {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: launch-panel-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
 }
 
 @keyframes launch-panel-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts the panel, and `pointer-events: none` hands clicks back to the page
+   during the exit instead of letting a vanishing panel eat one. */
+.menu-pop-leave-active {
+  animation: launch-panel-in-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: launch-panel-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes launch-panel-in-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }

@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { GUIDE_PAGES, type GuideScene } from "../onboarding/guide";
 import AppButton from "./ui/AppButton.vue";
+import SceneAccounts from "./guide/SceneAccounts.vue";
 import SceneAiActs from "./guide/SceneAiActs.vue";
 import SceneCompare from "./guide/SceneCompare.vue";
 import SceneDevtools from "./guide/SceneDevtools.vue";
@@ -11,7 +12,6 @@ import SceneHeadless from "./guide/SceneHeadless.vue";
 import SceneIsolation from "./guide/SceneIsolation.vue";
 import SceneMcp from "./guide/SceneMcp.vue";
 import SceneReopen from "./guide/SceneReopen.vue";
-import SceneSystems from "./guide/SceneSystems.vue";
 
 /**
  * The guide: a paginated tour, one idea per page, each with a looping diagram.
@@ -51,7 +51,7 @@ const { t } = useI18n();
 /** The scene component for each page id. Kept here so `guide.ts` stays data-only. */
 const SCENES: Record<GuideScene, unknown> = {
   isolation: SceneIsolation,
-  twoSystems: SceneSystems,
+  accounts: SceneAccounts,
   compare: SceneCompare,
   mcp: SceneMcp,
   aiActs: SceneAiActs,

@@ -202,8 +202,8 @@ async function connectRenderer() {
         (item) =>
           item.type === "page" &&
           item.url.includes("index.html") &&
-          !item.url.startsWith("devtools") &&
-          !item.url.includes("approval"),
+          !item.url.includes("index.html#") &&
+          !item.url.startsWith("devtools"),
       );
       if (target) return connectToWindow(target.webSocketDebuggerUrl);
     } catch {

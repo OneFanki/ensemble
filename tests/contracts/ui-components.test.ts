@@ -155,29 +155,25 @@ describe("the address bar and the new-tab search box are one control", () => {
     expect(shell).toContain("--accent");
   });
 
-  it("the focus outline closes at rest and opens left to right", () => {
-    // One overlay carries the whole outline and the reveal is a clip wipe: closed
-    // at rest (`inset(0 100% 0 0)` — nothing from the right edge inward) and open
-    // when focused (`inset(0 0 0 0)`). Opening the clip from the right is what
-    // makes the line appear to travel left to right.
-    //
-    // Why not the two horizontal strips this replaces: strips inset by the corner
-    // radius never lit the left and right sides, so a focused field read as a
-    // broken ring. All four edges are part of the state.
-    expect(shell).toContain("clip-path: inset(0 100% 0 0)");
-    expect(shell).toContain("clip-path: inset(0 0 0 0)");
-    expect(shell).toContain("border: 2px solid var(--accent)");
+  it("the focus outline is a quiet 1px fade", () => {
+    // One overlay carries the whole outline — all four edges and the rounded
+    // corners — and the only animation is its opacity. The wipe this replaced
+    // (2px stroke, clip opened left to right, 170ms) made a click the loudest
+    // event on screen; 1px is the weight the resting hairline already carries,
+    // and a fade is the same answer the fill's colour change gives.
+    expect(shell).toContain("border: 1px solid var(--accent)");
     expect(shell).toContain("border-radius: var(--shell-radius, var(--radius))");
-    // Nothing loops, and no SVG dash travels the perimeter any more.
+    // No reveal, no travel, no loop: the shape is closed at every moment.
+    expect(shell).not.toContain("clip-path");
     expect(shell).not.toContain("infinite");
     expect(shell).not.toContain("sweep-line");
     expect(shell).not.toContain("stroke-dashoffset");
+    expect(shell).toMatch(/\.input-shell:focus-within::after\s*\{\s*opacity: 1;/);
   });
 
-  it("the focus outline is the settled state, not a prelude to one", () => {
-    // The motion has to finish on the thing the field keeps. A delayed opacity
-    // fade on a separate stroke meant a click took two stages to look done.
+  it("the fade is a single opacity transition with no staged reveal", () => {
+    // The motion has to be one quiet step, not a prelude to a settle.
     expect(shell).not.toMatch(/transition-delay:\s*\d+m?s/);
-    expect(shell).toMatch(/clip-path\s+170ms\s+linear/);
+    expect(shell).toMatch(/transition:\s*opacity var\(--motion-base\) var\(--ease-out\)/);
   });
 });

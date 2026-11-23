@@ -9,10 +9,6 @@
  * 它原来是左栏里的一列。换成横向条以后，每一段可用宽度都给了名字：列里只能
  * 显示十个字，条里能显示一整条名字，且不占页面像素。
  *
- * 它同时是新建会话的入口：会话原来只能在设置页创建，于是「再开一个身份」要先
- * 离开浏览器、建完再回来找。这一栏本来就是「哪些会话在跑」的清单，加号放在
- * 它的头部才是同一件事。
- *
  * AI 三态点、冻结三态映射与账号名解析是从旧的 `InstanceRail` 搬来的，选择器
  * （`data-ai-dot` / `data-freeze` / `data-instance-chip`）保留，e2e 仍在用。
  */
@@ -21,17 +17,21 @@ import { lastActionAtByTab } from "@shared/ai-dot";
 import type { EmbeddedTab } from "@shared/embedded";
 import { type InstanceFreezeState, instanceFreezeState } from "@shared/instance-freeze";
 import type { Identity, RoleColor } from "@shared/types";
-import { ExternalLink, PictureInPicture2, Plus, UsersRound, X } from "lucide-vue-next";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  PictureInPicture2,
+  UsersRound,
+  X,
+} from "lucide-vue-next";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAiDotTip } from "../composables/aiDotTip";
+import { useHorizontalStrip } from "../composables/horizontalStrip";
 import { useNowMs } from "../composables/useNowMs";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
-import Modal from "./Modal.vue";
-import AppButton from "./ui/AppButton.vue";
-import FormField from "./ui/FormField.vue";
-import TextField from "./ui/TextField.vue";
 
 /**
  * 左栏能打开的管理浮层。
@@ -251,6 +251,72 @@ function labelOf(item: RailItem): { text: string; dot?: string; detail?: string[
 const failedAvatars = ref<Set<string>>(new Set());
 
 /**
+ * 列表的横向滚动配套：滚轮横滚与两端箭头。
+ *
+ * 滚动条本身是隐藏的（见样式），溢出的提示由两端的小箭头承担——箭头只在
+ * 该方向还有内容时出现，点击平滑滚动约七成视口。
+ */
+const strip = useHorizontalStrip();
+
+/**
+ * 身份条的拖拽排序，与标签条的拖拽同一套手势。
+ *
+ * 拖动数据用独立的 MIME（`x-ensemble-instance`），和页面拖拽
+ * （`x-ensemble-page`）互不误认：把身份拖到舞台上不该被当成页面接收，
+ * 反过来也是。外部实例（系统浏览器）不参与——它们的顺序不是本进程的
+ * tabs 数组排的，没有可搬的块。
+ */
+const dragInstanceId = ref<string | null>(null);
+const chipDropHint = ref<{ instanceId: string; edge: "before" | "after" } | null>(null);
+
+function onChipDragStart(item: RailItem, event: DragEvent): void {
+  if (item.external) {
+    event.preventDefault();
+    return;
+  }
+  dragInstanceId.value = item.instanceId;
+  event.dataTransfer?.setData("application/x-ensemble-instance", item.instanceId);
+  event.dataTransfer?.setData("text/plain", item.instanceId);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+
+function onChipDragEnd(): void {
+  dragInstanceId.value = null;
+  chipDropHint.value = null;
+}
+
+function onChipDragOver(item: RailItem, event: DragEvent): void {
+  const dragId = dragInstanceId.value;
+  if (!dragId || dragId === item.instanceId || item.external) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const edge: "before" | "after" = event.clientX - rect.left < rect.width / 2 ? "before" : "after";
+  chipDropHint.value = { instanceId: item.instanceId, edge };
+}
+
+function onChipDragLeave(item: RailItem): void {
+  if (chipDropHint.value?.instanceId === item.instanceId) chipDropHint.value = null;
+}
+
+async function onChipDrop(item: RailItem, event: DragEvent): Promise<void> {
+  event.preventDefault();
+  const dragId = dragInstanceId.value;
+  const hint = chipDropHint.value;
+  chipDropHint.value = null;
+  dragInstanceId.value = null;
+  if (!dragId || dragId === item.instanceId || item.external) return;
+  if (!hint || hint.instanceId !== item.instanceId) return;
+  await embedded.dropInstance(dragId, item.instanceId, hint.edge);
+}
+
+function chipDropClass(item: RailItem): Record<string, boolean> {
+  const hint = chipDropHint.value;
+  if (!dragInstanceId.value || !hint || hint.instanceId !== item.instanceId) return {};
+  return { [`drop-${hint.edge}`]: true };
+}
+
+/**
  * 点一个条目。
  *
  * 三件事按顺序决定：
@@ -341,44 +407,6 @@ function toggleLayer(layer: AccountRailLayer): void {
   else emit("openLayer", layer);
 }
 
-/**
- * 在这一栏里新建一个会话。
- *
- * 会话原本只能在设置页里创建，于是「想再开一个干净身份看看」这条路上，用户
- * 得离开浏览器去管理页，建完再回来，再在这一栏里找它。这一栏本来就是「哪些
- * 会话在跑」的清单，新建入口放在它的头部，是同一件事的加号。
- *
- * 建成即启动：用户来这里是为了那个会话产生的页面，不是为了在磁盘上多一条
- * 记录。名字留空则以「会话 N」补位，仍走 store 的校验。
- */
-const creating = ref(false);
-const createName = ref("");
-const createError = ref("");
-
-function openCreate(): void {
-  createName.value = "";
-  createError.value = "";
-  creating.value = true;
-}
-
-async function submitCreate(): Promise<void> {
-  const name = createName.value.trim();
-  if (!name) {
-    createError.value = t("app.sessionNeedsName");
-    return;
-  }
-  // The id comes from the diff, not from the name: two sessions may legitimately
-  // share a name, and `find` by name would then launch the wrong one.
-  const before = new Set((workspace.settings.profiles ?? []).map((profile) => profile.id));
-  const saved = await workspace.createProfile(name);
-  // `run` in the store answers `undefined` after toasting the rejection, so a
-  // dialog that closes here only ever closes on a write that landed.
-  if (saved === undefined) return;
-  const created = saved.profiles.find((profile) => !before.has(profile.id));
-  creating.value = false;
-  if (created) await embedded.openProfileTab(created.id);
-}
-
 /** 关掉一个内置实例的全部页面 / 停掉一个外部实例。 */
 async function closeItem(item: RailItem): Promise<void> {
   if (item.external) {
@@ -435,12 +463,12 @@ function markAvatarBroken(instanceId: string): void {
     :aria-label="t('app.railLabel')"
   >
     <!--
-      Two controls at the left end, and they are not chips.
+      One control at the left end, and it is not a chip.
 
-      「多账号」 is the door to the pane that manages the whole list; the "+" is
-      the door to a new session. They sit before the chips so the bar reads
-      left-to-right as "the list, add to it, and here is what is running" — and so
-      they never scroll away with a long list.
+      「多账号」 is the door to the pane that manages the whole list. It sits
+      before the chips so the bar reads left-to-right as "the list, and here is
+      what is running" — and so it never scrolls away with a long list. Creating
+      an identity lives in that pane, beside the list the new row joins.
     -->
     <div class="bar-doors no-drag">
       <button
@@ -455,34 +483,46 @@ function markAvatarBroken(instanceId: string): void {
       >
         <UsersRound :size="14" />
       </button>
-      <button
-        type="button"
-        class="bar-door"
-        :aria-label="t('app.sessionCreateHere')"
-        v-tooltip="t('app.sessionCreateHere')"
-        data-rail-new-session
-        @click="openCreate"
-      >
-        <Plus :size="14" />
-      </button>
       <span class="bar-sep" aria-hidden="true"></span>
     </div>
 
-    <div class="bar-list no-drag" role="tablist" :aria-label="t('app.railLabel')" data-rail-list>
-      <button
+    <!--
+      条目区：唯一可以横向滚动的部分。
+
+      滚动条不出现（隐藏后也不占布局空间）；「还有更多」由两端的小箭头表达，
+      箭头在该方向没有内容时不渲染。包一层定位容器是为了让箭头钉在列表的
+      可视边缘——放在滚动容器内部的话，它们会跟着内容一起滚走。
+    -->
+    <div class="bar-scroll no-drag">
+      <div
+        :ref="strip.scroller"
+        class="bar-list"
+        role="tablist"
+        :aria-label="t('app.railLabel')"
+        data-rail-list
+        @wheel="strip.onWheel"
+        @scroll.passive="strip.onScroll"
+      >
+        <button
         v-for="item in items"
         :key="item.id"
         type="button"
         role="tab"
         class="rail-item"
-        :class="{ 'on-stage': item.onStage }"
+        :class="{ 'on-stage': item.onStage, ...chipDropClass(item) }"
         :aria-selected="item.onStage"
         :data-account-item="item.instanceId"
         :data-instance-chip="item.instanceId"
         :data-on-stage="item.onStage ? '1' : '0'"
+        :draggable="!item.external"
         v-tooltip="labelOf(item)"
         @click="activate(item, $event)"
         @contextmenu="openMenu(item, $event)"
+        @dragstart="onChipDragStart(item, $event)"
+        @dragend="onChipDragEnd"
+        @dragover="onChipDragOver(item, $event)"
+        @dragleave="onChipDragLeave(item)"
+        @drop="onChipDrop(item, $event)"
       >
         <!-- 头像就是站点：有图标用图标，没有就用站点名首字；默认会话固定「默」。 -->
         <span
@@ -536,6 +576,29 @@ function markAvatarBroken(instanceId: string): void {
           :data-freeze="item.freeze"
         ></span>
       </button>
+      </div>
+
+      <!-- 两端箭头：该方向没有内容时不渲染，出现时钉在列表可视边缘。 -->
+      <button
+        v-if="strip.canLeft.value"
+        type="button"
+        class="bar-nudge left"
+        :aria-label="t('app.stripNudgeLeft')"
+        v-tooltip="t('app.stripNudgeLeft')"
+        @click="strip.nudge(-1)"
+      >
+        <ChevronLeft :size="12" />
+      </button>
+      <button
+        v-if="strip.canRight.value"
+        type="button"
+        class="bar-nudge right"
+        :aria-label="t('app.stripNudgeRight')"
+        v-tooltip="t('app.stripNudgeRight')"
+        @click="strip.nudge(1)"
+      >
+        <ChevronRight :size="12" />
+      </button>
     </div>
 
     <!--
@@ -547,6 +610,7 @@ function markAvatarBroken(instanceId: string): void {
       which an 11px cross never did.
     -->
     <Teleport to="body">
+      <Transition name="menu-pop">
       <div
         v-if="menu"
         class="rail-menu"
@@ -566,47 +630,9 @@ function markAvatarBroken(instanceId: string): void {
           <span>{{ menu.item.external ? t("app.stop") : t("app.closeSession") }}</span>
         </button>
       </div>
+      </Transition>
     </Teleport>
   </header>
-
-  <!--
-    Creating a session from the bar.
-
-    It is a form, so it is a dialog (the app's rule for every write): the name is
-    the only field, and a dialog puts the focus in it and the verdict one click
-    away instead of opening a second surface inside a row of chips.
-
-    The page opens as soon as the name is accepted — creating a session from this
-    bar means "I want to browse as someone else", and leaving the user with a new
-    chip and no window would be answering a question they did not ask.
-  -->
-  <Modal
-    v-if="creating"
-    :open="true"
-    :title="t('app.sessionCreateHere')"
-    width="380px"
-    @close="creating = false"
-  >
-    <form class="create-form" @submit.prevent="submitCreate">
-      <FormField :label="t('app.sessionNameLabel')">
-        <TextField
-          v-model="createName"
-          type="text"
-          maxlength="60"
-          :placeholder="t('app.sessionNamePlaceholder')"
-          data-rail-session-name
-        />
-      </FormField>
-      <p v-if="createError" class="create-error" role="alert">{{ createError }}</p>
-    </form>
-    <template #footer>
-      <span class="spacer"></span>
-      <AppButton @click="creating = false">{{ t("app.cancel") }}</AppButton>
-      <AppButton variant="primary" data-rail-session-create @click="submitCreate">
-        {{ t("app.sessionCreate") }}
-      </AppButton>
-    </template>
-  </Modal>
 </template>
 
 <style scoped>
@@ -621,6 +647,12 @@ function markAvatarBroken(instanceId: string): void {
  * 变化，而「一半」是两者都不至于被挤没的地方。超过上限横向滚动，而不是压扁条目
  * ——压扁会让每个名字都变成两三个字加省略号，等于全都读不出来。
  *
+ * 右缘的全高细线是它和页面标签条的分界：两端都是一行同高的「标签状」控件，
+ * 只靠间距分不开。分组用两件事表达——这一段垫一层比标签条亮半档的底色
+ * （`--chrome` 半掺 `--frame`，亮浅两主题同式），细线再给出硬边界。合起来读作
+ * 「左边（入口 + 身份）是一块面板，右边（页面标签）是另一块」。线画在条自身
+ * 而不是标签条上，身份列表横向滚满一半窗口时它仍在原位。
+ *
  * 空白处是拖拽区（浮层打开时由 `data-floating` 收回，见 base.css）；
  * 条目与按钮都是 `no-drag`。
  */
@@ -633,7 +665,9 @@ function markAvatarBroken(instanceId: string): void {
      contents would eat the tab strip on the first wide workspace. */
   max-width: 50vw;
   height: 100%;
-  padding: 0 2px 0 4px;
+  padding: 0 7px 0 4px;
+  background: color-mix(in srgb, var(--chrome) 62%, var(--frame));
+  border-right: 1px solid var(--line);
 }
 
 /* 两个入口：图标按钮，和条目同高，靠一条竖线与条目分开。 */
@@ -680,29 +714,68 @@ function markAvatarBroken(instanceId: string): void {
 /*
  * 条目区：唯一可以横向滚动的部分。
  *
- * `overflow-x: auto` 而不是 `hidden`：条目多到超过半屏时，用户要能自己找到后面
- * 的账号。滚动条按需出现（`scrollbar-width: thin`），常态不占高度。
+ * 滚动条不出现也不占布局空间（两端箭头承担「还有更多」的职责）；滚动容器
+ * 由外层定位容器包裹，箭头钉在可视边缘而不是跟着内容滚走。
  */
+.bar-scroll {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  height: 100%;
+}
+
 .bar-list {
   display: flex;
   align-items: center;
   gap: 2px;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+  scrollbar-width: none;
 }
 
 .bar-list::-webkit-scrollbar {
-  height: 3px;
+  display: none;
 }
 
-.bar-list::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 2px;
+/*
+ * 两端箭头。底色是列表自身的面色向透明的渐变：箭头压在条目上时，被压住的
+ * 名字在渐变里淡出而不是被生硬地切掉，箭头本身也始终可读。行高与列表同高。
+ */
+.bar-nudge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  z-index: 1;
+}
+
+.bar-nudge:hover {
+  color: var(--text);
+}
+
+.bar-nudge.left {
+  left: 0;
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--chrome) 62%, var(--frame)) 45%,
+    transparent
+  );
+}
+
+.bar-nudge.right {
+  right: 0;
+  background: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--chrome) 62%, var(--frame)) 45%,
+    transparent
+  );
 }
 
 /*
@@ -735,6 +808,29 @@ function markAvatarBroken(instanceId: string): void {
 .rail-item.on-stage {
   background: var(--selected);
   color: var(--text);
+}
+
+/*
+ * 拖拽排序的落点标记：与标签条同一支细线，画在悬停目标靠近指针的一缘。
+ * 徽标（AI/冻结）挂在头像的角上，标记挂在外缘，两者不争同一块空间。
+ */
+.rail-item.drop-before::after,
+.rail-item.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.rail-item.drop-before::after {
+  left: 0;
+}
+
+.rail-item.drop-after::after {
+  right: 0;
 }
 
 /*
@@ -876,13 +972,32 @@ function markAvatarBroken(instanceId: string): void {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: rail-menu-in var(--motion-fast) var(--ease-out);
 }
 
 @keyframes rail-menu-in {
   from {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts, and `pointer-events: none` keeps a vanishing menu from eating a
+   click that was aimed past it. */
+.menu-pop-leave-active {
+  animation: rail-menu-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: rail-menu-in var(--motion-fast) var(--ease-out);
+}
+
+@keyframes rail-menu-out {
+  to {
+    opacity: 0;
+    transform: scale(var(--motion-pop-scale));
   }
 }
 
@@ -910,18 +1025,6 @@ function markAvatarBroken(instanceId: string): void {
 }
 
 .rail-menu-item:hover svg {
-  color: var(--red);
-}
-
-.create-form {
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-}
-
-.create-error {
-  margin: 0;
-  font-size: 11px;
   color: var(--red);
 }
 </style>

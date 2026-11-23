@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * "One system, four roles, side by side" — why the isolation matters.
+ * "One system, two roles, two windows side by side" — why any of this matters.
  *
- * The four cells fill in sequence, and each one reveals a different amount of
- * chrome: an admin cell has a delete action, a member cell does not, a guest
- * cell is masked. That difference is the whole reason someone opens this app, so
- * the animation is a role-by-role comparison rather than four identical boxes.
+ * The stage holds one page; the way to see two accounts at once is to pop a
+ * page out (or open a second Ensemble window) and put the pictures next to each
+ * other. So the diagram draws two separate OS windows — each with its own
+ * title bar, no shell around them — and the difference lands last: the admin's
+ * page carries a delete action the member's page simply does not have. Two
+ * frames inside one shell would draw the split-screen story this app retired.
  */
 import { useI18n } from "vue-i18n";
 
@@ -19,60 +21,42 @@ const { t } = useI18n();
     role="img"
     :aria-label="t('app.guideSceneCompareAlt')"
   >
-    <!-- The stage the four cells sit on. -->
-    <rect x="8" y="8" width="504" height="364" rx="12" class="shell" />
-
-    <!-- Cell 1: admin — full rows plus a destructive action. -->
-    <g class="cell cell-1">
-      <rect x="26" y="34" width="226" height="130" rx="9" class="surface" />
-      <circle cx="44" cy="52" r="5" class="role-a" />
-      <text x="56" y="56" class="cell-label">{{ t("app.guideSceneRoleAdmin") }}</text>
-      <rect x="42" y="72" width="194" height="18" rx="5" class="row" />
-      <rect x="42" y="96" width="194" height="18" rx="5" class="row" />
-      <rect x="42" y="120" width="194" height="18" rx="5" class="row" />
-      <rect x="150" y="124" width="34" height="10" rx="3" class="danger" />
-      <rect x="190" y="124" width="34" height="10" rx="3" class="bar dim" />
-    </g>
-
-    <!-- Cell 2: member — the same rows, no destructive action. -->
-    <g class="cell cell-2">
-      <rect x="266" y="34" width="226" height="130" rx="9" class="surface" />
-      <circle cx="284" cy="52" r="5" class="role-b" />
-      <text x="296" y="56" class="cell-label">{{ t("app.guideSceneRoleMember") }}</text>
-      <rect x="282" y="72" width="194" height="18" rx="5" class="row" />
-      <rect x="282" y="96" width="194" height="18" rx="5" class="row" />
-      <rect x="282" y="120" width="194" height="18" rx="5" class="row" />
-      <rect x="430" y="124" width="34" height="10" rx="3" class="bar dim" />
-    </g>
-
-    <!-- Cell 3: guest — the data itself is masked. -->
-    <g class="cell cell-3">
-      <rect x="26" y="178" width="226" height="130" rx="9" class="surface" />
-      <circle cx="44" cy="196" r="5" class="role-c" />
-      <text x="56" y="200" class="cell-label">{{ t("app.guideSceneRoleGuest") }}</text>
-      <rect x="42" y="216" width="194" height="18" rx="5" class="row" />
-      <rect x="42" y="240" width="194" height="18" rx="5" class="row" />
-      <rect x="42" y="264" width="194" height="18" rx="5" class="row" />
-      <g class="masked">
-        <rect x="52" y="221" width="60" height="8" rx="4" class="bar dim" />
-        <rect x="52" y="245" width="72" height="8" rx="4" class="bar dim" />
-        <rect x="52" y="269" width="48" height="8" rx="4" class="bar dim" />
+    <!-- The admin's window: full rows plus the destructive action. -->
+    <g class="win win-admin">
+      <rect x="24" y="44" width="228" height="252" rx="10" class="surface" />
+      <!-- Its own title bar: an independent window, not a cell on a stage. -->
+      <circle cx="42" cy="62" r="4" class="win-dot" />
+      <circle cx="56" cy="62" r="4" class="win-dot" />
+      <circle cx="70" cy="62" r="4" class="win-dot" />
+      <circle cx="96" cy="84" r="6" class="role-a" />
+      <text x="110" y="88" class="win-label">{{ t("app.guideSceneRoleAdmin") }}</text>
+      <rect x="40" y="106" width="196" height="20" rx="5" class="row" />
+      <rect x="40" y="132" width="196" height="20" rx="5" class="row" />
+      <rect x="40" y="158" width="196" height="20" rx="5" class="row" />
+      <rect x="40" y="184" width="196" height="20" rx="5" class="row" />
+      <!-- The delete action only the admin has. It lands last on purpose. -->
+      <g class="danger">
+        <rect x="150" y="188" width="40" height="12" rx="4" class="danger-fill" />
+        <rect x="196" y="188" width="30" height="12" rx="4" class="bar dim" />
       </g>
     </g>
 
-    <!-- Cell 4: reviewer — one extra verb nobody else has. -->
-    <g class="cell cell-4">
-      <rect x="266" y="178" width="226" height="130" rx="9" class="surface" />
-      <circle cx="284" cy="196" r="5" class="role-d" />
-      <text x="296" y="200" class="cell-label">{{ t("app.guideSceneRoleReviewer") }}</text>
-      <rect x="282" y="216" width="194" height="18" rx="5" class="row" />
-      <rect x="282" y="240" width="194" height="18" rx="5" class="row" />
-      <rect x="282" y="264" width="194" height="18" rx="5" class="row" />
-      <rect x="404" y="268" width="30" height="10" rx="3" class="approve" />
-      <rect x="440" y="268" width="26" height="10" rx="3" class="bar dim" />
+    <!-- The member's window: the same rows, and no destructive action. -->
+    <g class="win win-member">
+      <rect x="268" y="44" width="228" height="252" rx="10" class="surface" />
+      <circle cx="286" cy="62" r="4" class="win-dot" />
+      <circle cx="300" cy="62" r="4" class="win-dot" />
+      <circle cx="314" cy="62" r="4" class="win-dot" />
+      <circle cx="340" cy="84" r="6" class="role-b" />
+      <text x="354" y="88" class="win-label">{{ t("app.guideSceneRoleMember") }}</text>
+      <rect x="284" y="106" width="196" height="20" rx="5" class="row" />
+      <rect x="284" y="132" width="196" height="20" rx="5" class="row" />
+      <rect x="284" y="158" width="196" height="20" rx="5" class="row" />
+      <rect x="284" y="184" width="196" height="20" rx="5" class="row" />
+      <rect x="424" y="188" width="46" height="12" rx="4" class="bar dim" />
     </g>
 
-    <text x="260" y="336" text-anchor="middle" class="caption">
+    <text x="260" y="332" text-anchor="middle" class="caption">
       {{ t("app.guideSceneCompareCaption") }}
     </text>
   </svg>
@@ -85,13 +69,13 @@ const { t } = useI18n();
   overflow: visible;
 }
 
-.shell {
-  fill: color-mix(in srgb, var(--surface-2) 45%, transparent);
-  stroke: var(--line);
-}
 .surface {
   fill: var(--surface);
   stroke: var(--line);
+}
+.win-dot {
+  fill: var(--faint);
+  opacity: 0.5;
 }
 .row {
   fill: var(--faint);
@@ -101,9 +85,9 @@ const { t } = useI18n();
   fill: var(--faint);
   opacity: 0.4;
 }
-.cell-label {
+.win-label {
   fill: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-sans);
 }
 .caption {
@@ -111,11 +95,8 @@ const { t } = useI18n();
   font-size: 11.5px;
   font-family: var(--font-sans);
 }
-.danger {
+.danger-fill {
   fill: color-mix(in srgb, var(--red) 42%, transparent);
-}
-.approve {
-  fill: color-mix(in srgb, var(--green) 42%, transparent);
 }
 .role-a {
   fill: var(--role-amber);
@@ -123,41 +104,25 @@ const { t } = useI18n();
 .role-b {
   fill: var(--role-teal);
 }
-.role-c {
-  fill: var(--role-violet);
-}
-.role-d {
-  fill: var(--role-blue);
-}
 
-/* Each cell lands on its own beat and stays. The two cells whose chrome differs
-   the most (delete vs. none, approve vs. none) land last so the difference is the
-   thing still on screen at rest. */
-.cell {
+/* The windows land in sequence and stay; the delete chip arrives last, so the
+   difference between the two windows is the thing still happening at rest. */
+.win {
   transform-box: fill-box;
   transform-origin: center;
-  animation: cell-in 0.45s ease-out forwards;
+  animation: win-in 0.45s ease-out forwards;
 }
-.cell-1 {
+.win-admin {
   animation-delay: 0s;
 }
-.cell-2 {
-  animation-delay: 0.14s;
+.win-member {
+  animation-delay: 0.18s;
 }
-.cell-3 {
-  animation-delay: 0.28s;
-}
-.cell-4 {
-  animation-delay: 0.42s;
+.danger {
+  animation: chip-in 0.4s ease-out 0.55s forwards;
 }
 
-/* The mask draws over the guest's rows after its cell has landed: it is the
-   difference that needs a beat of its own to be noticed. */
-.masked {
-  animation: mask-in 0.5s ease-out 0.62s forwards;
-}
-
-@keyframes cell-in {
+@keyframes win-in {
   0% {
     opacity: 0;
     transform: translateY(7px) scale(0.99);
@@ -168,7 +133,7 @@ const { t } = useI18n();
   }
 }
 
-@keyframes mask-in {
+@keyframes chip-in {
   0% {
     opacity: 0;
   }
@@ -178,8 +143,8 @@ const { t } = useI18n();
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cell,
-  .masked {
+  .win,
+  .danger {
     animation: none;
     opacity: 1;
   }

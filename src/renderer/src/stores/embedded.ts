@@ -336,6 +336,18 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     state.value = await window.ensemble.dropEmbeddedTab(tabId, target);
   }
 
+  /**
+   * Reorders instances on the account bar; the main side moves the dragged
+   * instance's whole page block beside the target's.
+   */
+  async function dropInstance(
+    sourceInstanceId: string,
+    targetInstanceId: string,
+    edge: "before" | "after",
+  ): Promise<void> {
+    state.value = await window.ensemble.dropEmbeddedInstance(sourceInstanceId, targetInstanceId, edge);
+  }
+
   async function navigate(tabId: string, url: string): Promise<void> {
     await window.ensemble.navigateEmbeddedTab(tabId, url);
   }
@@ -434,6 +446,7 @@ export const useEmbeddedStore = defineStore("embedded", () => {
     setMuted,
     setDefaultViewport,
     dropTab,
+    dropInstance,
     navigate,
     dragTab: setDragTab,
     setStage,

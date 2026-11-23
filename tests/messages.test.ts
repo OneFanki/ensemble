@@ -42,16 +42,24 @@ describe("message store", () => {
     expect(reopened.list()[0]?.titleKey).toBe("app.messagesLoginFailed");
   });
 
-  it("keeps the newest entries when the cap is reached", () => {
-    for (let index = 0; index < MESSAGE_LIMIT + 5; index += 1) {
-      store.add({ kind: "app", tone: "info", titleKey: `messages.m${index}` });
-    }
-    const list = store.list();
-    expect(list).toHaveLength(MESSAGE_LIMIT);
-    // The last one written is first, and the five oldest are the ones gone.
-    expect(list[0]?.titleKey).toBe(`messages.m${MESSAGE_LIMIT + 4}`);
-    expect(list.some((item) => item.titleKey === "messages.m0")).toBe(false);
-  });
+  it(
+    "keeps the newest entries when the cap is reached",
+    () => {
+      for (let index = 0; index < MESSAGE_LIMIT + 5; index += 1) {
+        store.add({ kind: "app", tone: "info", titleKey: `messages.m${index}` });
+      }
+      const list = store.list();
+      expect(list).toHaveLength(MESSAGE_LIMIT);
+      // The last one written is first, and the five oldest are the ones gone.
+      expect(list[0]?.titleKey).toBe(`messages.m${MESSAGE_LIMIT + 4}`);
+      expect(list.some((item) => item.titleKey === "messages.m0")).toBe(false);
+    },
+    // `add` persists on every call, so this case rewrites a 500-message file
+    // 505 times. In isolation that is ~2s; beside 107 parallel workers the same
+    // work has been seen to cross the default 10s budget, which said nothing
+    // about the cap and everything about machine load.
+    30_000,
+  );
 
   /**
    * Background checks run on a timer. Without de-duplication one broken site

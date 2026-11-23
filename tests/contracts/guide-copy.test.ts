@@ -50,7 +50,7 @@ describe("the guide describes the app that exists", () => {
       // is renamed without touching the scene that draws it.
       for (const key of [
         "guideSceneIsolationAlt",
-        "guideSceneSystemsAlt",
+        "guideSceneAccountsAlt",
         "guideSceneCompareAlt",
         "guideSceneMcpAlt",
         "guideSceneActsAlt",
@@ -91,8 +91,27 @@ describe("the guide describes the app that exists", () => {
     // edit that moves a site page to the front would undo the rewrite silently.
     const ids = GUIDE_PAGES.map((page) => page.id);
     expect(ids[0]).toBe("isolation");
-    expect(ids.indexOf("twoSystems")).toBeLessThan(ids.indexOf("mcp"));
+    expect(ids.indexOf("accounts")).toBeLessThan(ids.indexOf("mcp"));
     expect(ids.indexOf("compare")).toBeLessThan(ids.indexOf("mcp"));
+  });
+
+  it("tells the pages in the 身份 vocabulary the interface uses", () => {
+    // The isolation page once spoke of "instances" and the second page was a
+    // vocabulary lesson about two systems. The interface calls the containers
+    // 身份 and the launchable entries 账号; the guide must use the same words,
+    // because a tour that teaches a different naming scheme than the screens
+    // it introduces sends the reader back to square one.
+    for (const locale of ["zh", "en"] as const) {
+      const strings = appStrings(locale);
+      const values = Object.values(strings);
+      expect(
+        values.some((v) => /实例|instance/i.test(v) && /cookie/i.test(v)),
+        `${locale}: isolation page still says instance`,
+      ).toBe(false);
+      for (const key of Object.keys(strings)) {
+        expect(key, `${locale}: ${key}`).not.toContain("Systems");
+      }
+    }
   });
 
   it("gives the headless and developer pages their own beat", () => {
@@ -130,7 +149,7 @@ describe("the guide describes the app that exists", () => {
   it("bumps the version when the content changes", () => {
     // Read-on-open means a stale `guideVersion` in someone's settings is the only
     // thing keeping them from seeing the rewrite.
-    expect(GUIDE_VERSION).toBeGreaterThanOrEqual(4);
+    expect(GUIDE_VERSION).toBeGreaterThanOrEqual(7);
   });
 
   it("plays each diagram's entrance once instead of looping the whole scene", () => {

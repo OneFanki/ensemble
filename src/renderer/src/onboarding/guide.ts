@@ -1,4 +1,7 @@
+import { GUIDE_VERSION } from "@shared/guide";
 import type { AppSettings } from "@shared/types";
+
+export { GUIDE_VERSION };
 
 /**
  * The in-app guide: what this app is for, and the shortest path to using it.
@@ -20,8 +23,9 @@ import type { AppSettings } from "@shared/types";
  *    first or everything after it sounds like a special-purpose tool.
  * 2. **Every tab is isolated, so several accounts can be present at once.** This
  *    is the one idea the whole product rests on.
- * 3. **Two separable systems: profiles/bookmarks, and sites/identities.** People
- *    confuse them on their own; naming both here saves the confusion later.
+ * 3. **Accounts sign in with one click.** The account is the concrete thing a
+ *    new user can act on; the vocabulary lesson it replaced read as setup
+ *    instructions and got skipped.
  * 4. **Side-by-side comparison of one system across roles.** Why isolation
  *    matters — the thing you actually came to do.
  * 5. **The AI connects over MCP** and drives these pages.
@@ -41,24 +45,10 @@ import type { AppSettings } from "@shared/types";
  * rather than in the sequence — the sequence is read once, standing up, and
  * anything longer gets skipped.
  */
-/**
- * Bumped when the guide's content changes enough that someone who already read
- * the old one should see this one.
- *
- * 2: the first screen opened with what the window *is*, then the three steps.
- * 3: the guide led with the AI instead of the manual path; added what the AI can
- *    observe, its activity record, and the two browser surfaces.
- * 4: the whole thing became a paginated tour with a looping diagram per page,
- *    and the order now starts from "it is a browser" / "every tab is isolated"
- *    rather than from site setup. Adds the headless-AI page and the developer
- *    tools page.
- */
-export const GUIDE_VERSION = 4;
-
 /** Which diagram a page draws. One component per id, resolved in the dialog. */
 export type GuideScene =
   | "isolation"
-  | "twoSystems"
+  | "accounts"
   | "compare"
   | "mcp"
   | "aiActs"
@@ -89,12 +79,12 @@ export const GUIDE_PAGES: GuidePage[] = [
     ],
   },
   {
-    id: "twoSystems",
-    titleKey: "app.guidePageSystemsTitle",
-    bodyKey: "app.guidePageSystemsBody",
+    id: "accounts",
+    titleKey: "app.guidePageAccountsTitle",
+    bodyKey: "app.guidePageAccountsBody",
     bullets: [
-      { titleKey: "app.guidePageSystemsBullet1" },
-      { titleKey: "app.guidePageSystemsBullet2" },
+      { titleKey: "app.guidePageAccountsBullet1" },
+      { titleKey: "app.guidePageAccountsBullet2" },
     ],
   },
   {

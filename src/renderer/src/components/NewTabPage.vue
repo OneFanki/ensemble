@@ -12,7 +12,8 @@ import {
   Search,
   Star,
 } from "lucide-vue-next";
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch, type ComponentPublicInstance } from "vue";
+import { onClickOutside } from "@vueuse/core";
 import { useI18n } from "vue-i18n";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -55,6 +56,10 @@ const { t } = useI18n();
 const query = ref("");
 const error = ref("");
 const engineOpen = ref(false);
+/** The three overlays on this surface, for the click-outside dismissal. */
+const boxRoot = ref<ComponentPublicInstance | null>(null);
+const engineRoot = ref<HTMLElement | null>(null);
+const lookRoot = ref<HTMLElement | null>(null);
 const adding = ref(false);
 const draftName = ref("");
 const draftTemplate = ref("");
@@ -134,8 +139,26 @@ const suggestions = computed(() => {
 
 /** The suggestion Enter will open; `-1` means none highlighted — Enter searches. */
 const suggestIndex = ref(-1);
+/** A click outside the field puts the list away; typing brings it back. */
+const suggestDismissed = ref(false);
 
 watch(query, () => {
+  suggestIndex.value = -1;
+  suggestDismissed.value = false;
+});
+
+/*
+ * Every overlay on this surface closes when the click lands outside it, the
+ * same contract the toolbar menus and the select fields already meet.
+ */
+onClickOutside(engineRoot, () => {
+  engineOpen.value = false;
+});
+onClickOutside(lookRoot, () => {
+  picking.value = false;
+});
+onClickOutside(boxRoot, () => {
+  suggestDismissed.value = true;
   suggestIndex.value = -1;
 });
 
@@ -143,14 +166,17 @@ function onInputKeydown(event: KeyboardEvent): void {
   if (!suggestions.value.length) return;
   if (event.key === "ArrowDown") {
     event.preventDefault();
+    suggestDismissed.value = false;
     suggestIndex.value = (suggestIndex.value + 1) % suggestions.value.length;
   } else if (event.key === "ArrowUp") {
     event.preventDefault();
+    suggestDismissed.value = false;
     suggestIndex.value =
       suggestIndex.value < 0
         ? suggestions.value.length - 1
         : (suggestIndex.value - 1 + suggestions.value.length) % suggestions.value.length;
   } else if (event.key === "Escape") {
+    suggestDismissed.value = true;
     suggestIndex.value = -1;
   }
 }
@@ -247,7 +273,7 @@ function openBookmark(bookmark: Bookmark): void {
         <span class="nt-wordmark">Ensemble</span>
       </div>
 
-      <InputShell as="form" size="hero" class="nt-box" @submit.prevent="submit">
+      <InputShell ref="boxRoot" as="form" size="hero" class="nt-box" @submit.prevent="submit">
         <Search :size="15" class="nt-magnifier" aria-hidden="true" />
         <input
           v-model="query"
@@ -263,7 +289,12 @@ function openBookmark(bookmark: Bookmark): void {
         <!-- Bookmark suggestions across the whole tree: the deep-path escape
              hatch. Enter with a row highlighted opens it; otherwise the
              default (URL or search engine) applies. -->
-        <div v-if="suggestions.length" class="nt-suggest" role="listbox" :aria-label="t('app.bookmarks')">
+        <div
+          v-if="suggestions.length && !suggestDismissed"
+          class="nt-suggest"
+          role="listbox"
+          :aria-label="t('app.bookmarks')"
+        >
           <button
             v-for="(bookmark, index) in suggestions"
             :key="bookmark.id"
@@ -289,17 +320,18 @@ function openBookmark(bookmark: Bookmark): void {
           its search engine there: it is an attribute of the box, not a prefix
           to the words being typed.
         -->
-        <div class="nt-engine">
+        <div ref="engineRoot" class="nt-engine">
           <button
             type="button"
             class="nt-engine-btn"
             :aria-label="t('app.newTabEngine')"
             :aria-expanded="engineOpen"
-            @click="engineOpen = !engineOpen"
+            @click="engineOpen = !engineOpen; picking = false"
           >
             <span class="nt-engine-name">{{ engine.name }}</span>
             <ChevronDown :size="12" class="chev" :class="{ flip: engineOpen }" />
           </button>
+          <Transition name="menu-pop">
           <div v-if="engineOpen" class="nt-engine-menu" role="listbox">
             <button
               v-for="item in workspace.searchEngines"
@@ -320,6 +352,7 @@ function openBookmark(bookmark: Bookmark): void {
               {{ t("app.newTabEngineAdd") }}
             </button>
           </div>
+          </Transition>
         </div>
         <!-- Only while there is something to submit. A permanently disabled
              glyph is a control that never does anything, and the field already
@@ -386,7 +419,7 @@ function openBookmark(bookmark: Bookmark): void {
       is only interesting while looking at the page it changes, and this keeps
       it out of the way of the search box.
     -->
-    <div class="nt-look">
+    <div ref="lookRoot" class="nt-look">
       <div v-if="picking" class="nt-swatches" role="radiogroup" :aria-label="t('app.newTabBackground')">
         <button
           v-for="item in NEW_TAB_BACKDROPS"
@@ -407,7 +440,7 @@ function openBookmark(bookmark: Bookmark): void {
         class="nt-look-btn"
         :aria-label="t('app.newTabBackground')"
         :aria-expanded="picking"
-        @click="picking = !picking"
+        @click="picking = !picking; engineOpen = false"
       >
         <Palette :size="14" />
       </button>
@@ -668,12 +701,31 @@ function openBookmark(bookmark: Bookmark): void {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: nt-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
 @keyframes nt-menu-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts, and `pointer-events: none` hands clicks back to the page during
+   the exit. */
+.menu-pop-leave-active {
+  animation: nt-menu-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: nt-menu-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes nt-menu-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }

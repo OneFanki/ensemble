@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SiteDraft } from "@shared/types";
-import { Trash2 } from "lucide-vue-next";
+import { ChevronRight, Trash2 } from "lucide-vue-next";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -17,12 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [];
-  /**
-   * `firstAccount` is set when the user filled the optional account section
-   * while creating a site. The shell saves the site first and then creates the
-   * account on it — one dialog, one step, no second form to fill in a row.
-   */
-  save: [draft: SiteDraft, firstAccount?: { name: string; username: string; password: string }];
+  save: [draft: SiteDraft];
   delete: [];
 }>();
 
@@ -43,20 +38,6 @@ const passwordDraft = ref("");
 const clearPassword = ref(false);
 
 /**
- * The optional first account, only offered while creating a site.
- *
- * A site with no account cannot open anything signed in, so the common path is
- * "new site, then its first login". Asking for it here saves a second dialog and
- * a trip back to the page — and leaving both fields empty is the answer for a
- * site that is only being filed before its logins are known.
- */
-const firstAccountName = ref("");
-const firstAccountUsername = ref("");
-const firstAccountPassword = ref("");
-
-const showingFirstAccount = computed(() => !form.id);
-
-/**
  * Whether this site already has a default password.
  *
  * Read from `credentials.site`, which is a map of *existence* only — the
@@ -67,6 +48,26 @@ const hasSitePassword = computed(() => {
   if (!id) return false;
   return Boolean(store.credentials?.site[id]);
 });
+
+/**
+ * Whether the site already carries a value that only the fold holds.
+ *
+ * The fold is where every non-required field lives, so a site that uses one of
+ * them opens with the fold down — editing a token-header site should not start
+ * by hiding the token fields it was saved with.
+ */
+function usesAdvanced(draft: SiteDraft): boolean {
+  return Boolean(
+    draft.authCheckPath ||
+      draft.authCheckSignedOut ||
+      draft.authTokenKey ||
+      draft.authTokenHeader ||
+      draft.autoSubmit !== undefined ||
+      (draft.id && store.credentials?.site[draft.id]),
+  );
+}
+
+const advancedOpen = ref(usesAdvanced(props.draft));
 
 /**
  * The auto-submit choice as three options instead of a boolean.
@@ -104,6 +105,7 @@ watch(
     // password would otherwise be submitted against the new site.
     passwordDraft.value = "";
     clearPassword.value = false;
+    advancedOpen.value = usesAdvanced(next);
   },
 );
 
@@ -125,38 +127,19 @@ function submit() {
     error.message = t("app.errCheckPath");
     return;
   }
-  // Half a first account is an error worth naming: a username with no display
-  // name (or the other way round) used to be a silently skipped save when this
-  // lived on the old site page, which is why both fields are required together.
-  const accountName = firstAccountName.value.trim();
-  const accountUsername = firstAccountUsername.value.trim();
-  if (showingFirstAccount.value && Boolean(accountName) !== Boolean(accountUsername)) {
-    error.message = t("app.errFirstAccountPair");
-    return;
-  }
-  emit(
-    "save",
-    {
-      ...form,
-      name: form.name.trim(),
-      baseUrl: form.baseUrl.trim(),
-      authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
-      authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
-      authTokenKey: (form.authTokenKey ?? "").trim() || undefined,
-      authTokenHeader: (form.authTokenHeader ?? "").trim() || undefined,
-      // Only what the user actually did. An empty input and an unfelt checkbox
-      // both mean "leave the stored password alone".
-      ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
-      ...(clearPassword.value && !passwordDraft.value ? { clearSitePassword: true } : {}),
-    },
-    accountName && accountUsername
-      ? {
-          name: accountName,
-          username: accountUsername,
-          password: firstAccountPassword.value,
-        }
-      : undefined,
-  );
+  emit("save", {
+    ...form,
+    name: form.name.trim(),
+    baseUrl: form.baseUrl.trim(),
+    authCheckPath: (form.authCheckPath ?? "").trim() || undefined,
+    authCheckSignedOut: (form.authCheckSignedOut ?? "").trim() || undefined,
+    authTokenKey: (form.authTokenKey ?? "").trim() || undefined,
+    authTokenHeader: (form.authTokenHeader ?? "").trim() || undefined,
+    // Only what the user actually did. An empty input and an unfelt checkbox
+    // both mean "leave the stored password alone".
+    ...(passwordDraft.value ? { password: passwordDraft.value } : {}),
+    ...(clearPassword.value && !passwordDraft.value ? { clearSitePassword: true } : {}),
+  });
 }
 
 const namePlaceholder = computed(() => t("app.siteNameExample"));
@@ -176,7 +159,7 @@ function normalizePath(event: Event) {
   <Modal
     :open="true"
     :title="form.id ? $t('app.editSiteTitle') : $t('app.newSiteTitle')"
-    width="620px"
+    width="560px"
     @close="emit('close')"
   >
     <div class="form">
@@ -188,165 +171,125 @@ function normalizePath(event: Event) {
         <TextField v-model="form.baseUrl" mono placeholder="http://localhost:5173" />
       </FormField>
 
-      <div class="row">
-        <FormField grow :label="$t('app.loginEntry')">
-          <TextField
-            v-model="form.loginPath"
-            mono
-            data-field="loginPath"
-            placeholder="/login"
-            @blur="normalizePath"
-          />
-        </FormField>
-        <FormField grow :label="$t('app.loginCheckOptional')">
-          <TextField
-            v-model="form.authCheckPath"
-            mono
-            data-field="authCheckPath"
-            :placeholder="$t('app.authCheckPlaceholder')"
-            @blur="normalizePath"
-          />
-        </FormField>
-      </div>
-
-      <FormField :label="$t('app.loginMarkerOptional')" :hint="$t('app.loginMarkerHintRestored')">
+      <FormField :label="$t('app.loginPath')">
         <TextField
-          v-model="form.authCheckSignedOut"
+          v-model="form.loginPath"
           mono
-          data-field="authCheckSignedOut"
-          :placeholder="$t('app.loginMarkerPlaceholder')"
+          data-field="loginPath"
+          placeholder="/login"
+          @blur="normalizePath"
         />
       </FormField>
 
-      <!-- Header-token sites: the session lives in localStorage and rides a
-           private header, so a cookie-only probe reads every session as signed
-           out. The token is read from the page at check time. -->
-      <div class="row">
-        <FormField grow :label="$t('app.loginTokenKeyOptional')" :hint="$t('app.loginTokenKeyHintRestored')">
-          <TextField
-            v-model="form.authTokenKey"
-            mono
-            data-field="authTokenKey"
-            :placeholder="$t('app.loginTokenKeyPlaceholder')"
-          />
-        </FormField>
-        <FormField :label="$t('app.loginTokenHeaderOptional')">
-          <TextField
-            v-model="form.authTokenHeader"
-            mono
-            data-field="authTokenHeader"
-            placeholder="token"
-          />
-        </FormField>
-      </div>
-
-      <section class="group">
-        <div class="group-head">
-          <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
-        </div>
-
-        <!--
-          Three states, not a checkbox: the boolean could not express "whatever
-          the global default says", and that default is now the answer for almost
-          every site. An override is stored only when someone means *this* site,
-          so changing the global setting still reaches sites with no opinion.
-
-          The resolved value sits under the field rather than inside the dropdown:
-          "follow global" is the answer for most sites, and an option hint is only
-          visible while the list is open — i.e. exactly when the question is moot.
-        -->
-        <FormField :label="$t('app.autoSubmitLabel')">
-          <SelectField
-            :model-value="submitMode"
-            :options="submitModeOptions"
-            @update:model-value="setSubmitMode"
-          />
-          <span v-if="submitMode === 'default'" class="hint" data-submit-effective>
-            {{
-              $t("app.autoSubmitEffective", {
-                state: store.settings.autoSubmitLogin
-                  ? $t("app.autoSubmitAlways")
-                  : $t("app.autoSubmitNever"),
-              })
-            }}
-          </span>
-        </FormField>
-      </section>
-
       <!--
-        The site's default password, which every account on this site inherits
-        unless it sets its own.
-
-        It belongs on this dialog because it is a property of the site, and
-        because the alternative was worse: the only way to set it was inside an
-        account dialog, so a site whose accounts all inherited had a password
-        nobody could find — and the fill failure said "this account has no
-        password", pointing at the wrong dialog.
-
-        Never prefilled, and never shown once saved: the renderer never receives
-        a password back, only whether one exists.
+        Everything optional lives behind one fold, so the form's ordinary path is
+        three fields and a save. The fold opens itself when the site already uses
+        what it holds: editing a site must not start by hiding its own settings.
       -->
-      <section class="group">
-        <div class="group-head">
-          <span class="group-title">{{ $t("app.siteDefaultPassword") }}</span>
-        </div>
-
-        <FormField>
-          <TextField
-            v-model="passwordDraft"
-            type="password"
-            mono
-            autocomplete="new-password"
-            :placeholder="
-              hasSitePassword ? $t('app.siteDefaultPasswordReplace') : $t('app.siteDefaultPasswordEmpty')
-            "
-          />
-        </FormField>
-
-        <!-- Removing a password is a separate, deliberate act: an emptied input
-             must not silently delete a secret the user did not mean to touch. -->
-        <Checkbox v-if="hasSitePassword && !clearPassword" v-model="clearPassword">
-          {{ $t("app.siteDefaultPasswordClear") }}
-        </Checkbox>
-        <p v-if="clearPassword" class="hint warn">{{ $t("app.siteDefaultPasswordClearNote") }}</p>
-      </section>
-
-      <!-- Creating a site is the moment its first login is known. Filling these
-           two fields saves leaving for the account form and coming back; leaving
-           them empty is the answer for a site that is only being filed now. -->
-      <section v-if="showingFirstAccount" class="group">
-        <div class="group-head">
-          <span class="group-title">{{ $t("app.firstAccountTitle") }}</span>
-          <span class="hint">{{ $t("app.firstAccountOptional") }}</span>
-        </div>
-
-        <div class="row">
-          <FormField grow :label="$t('app.displayName')">
+      <section class="advanced" :class="{ open: advancedOpen }">
+        <button
+          type="button"
+          class="advanced-head"
+          data-advanced-toggle
+          :aria-expanded="advancedOpen"
+          @click="advancedOpen = !advancedOpen"
+        >
+          <ChevronRight :size="12" class="advanced-chevron" />
+          <span>{{ $t("app.advancedTitle") }}</span>
+        </button>
+        <div v-if="advancedOpen" class="advanced-body" data-advanced-panel>
+          <FormField :label="$t('app.authCheckPath')">
             <TextField
-              v-model="firstAccountName"
-              data-first-account-name
-              :placeholder="$t('app.displayNameExample')"
-            />
-          </FormField>
-          <FormField grow :label="$t('app.username')">
-            <TextField
-              v-model="firstAccountUsername"
+              v-model="form.authCheckPath"
               mono
-              data-first-account-username
-              placeholder="admin@test.local"
+              data-field="authCheckPath"
+              :placeholder="$t('app.authCheckPlaceholder')"
+              @blur="normalizePath"
             />
           </FormField>
-        </div>
 
-        <FormField :label="$t('app.password')">
-          <TextField
-            v-model="firstAccountPassword"
-            type="password"
-            mono
-            autocomplete="new-password"
-            :placeholder="$t('app.firstAccountPasswordHint')"
-          />
-        </FormField>
+          <FormField :label="$t('app.loginMarker')" :hint="$t('app.loginMarkerHintRestored')">
+            <TextField
+              v-model="form.authCheckSignedOut"
+              mono
+              data-field="authCheckSignedOut"
+              :placeholder="$t('app.loginMarkerPlaceholder')"
+            />
+          </FormField>
+
+          <!-- Header-token sites: the session lives in localStorage and rides a
+               private header, so a cookie-only probe reads every session as signed
+               out. The token is read from the page at check time. -->
+          <div class="row">
+            <FormField grow :label="$t('app.loginTokenKey')" :hint="$t('app.loginTokenKeyHintRestored')">
+              <TextField
+                v-model="form.authTokenKey"
+                mono
+                data-field="authTokenKey"
+                :placeholder="$t('app.loginTokenKeyPlaceholder')"
+              />
+            </FormField>
+            <FormField grow :label="$t('app.loginTokenHeader')">
+              <TextField
+                v-model="form.authTokenHeader"
+                mono
+                placeholder="token"
+              />
+            </FormField>
+          </div>
+
+          <!--
+            Three states, not a checkbox: the boolean could not express "whatever
+            the global default says", and that default is now the answer for almost
+            every site. An override is stored only when someone means *this* site,
+            so changing the global setting still reaches sites with no opinion.
+
+            The resolved value sits under the field rather than inside the dropdown:
+            "follow global" is the answer for most sites, and an option hint is only
+            visible while the list is open — i.e. exactly when the question is moot.
+          -->
+          <FormField as="div" :label="$t('app.autoSubmitLabel')">
+            <SelectField
+              :model-value="submitMode"
+              :options="submitModeOptions"
+              @update:model-value="setSubmitMode"
+            />
+            <span v-if="submitMode === 'default'" class="hint" data-submit-effective>
+              {{
+                $t("app.autoSubmitEffective", {
+                  state: store.settings.autoSubmitLogin
+                    ? $t("app.autoSubmitAlways")
+                    : $t("app.autoSubmitNever"),
+                })
+              }}
+            </span>
+          </FormField>
+
+          <!--
+            The site's default password, which every account on this site inherits
+            unless it sets its own.
+
+            Never prefilled, and never shown once saved: the renderer never receives
+            a password back, only whether one exists.
+          -->
+          <FormField as="div" :label="$t('app.siteDefaultPassword')">
+            <TextField
+              v-model="passwordDraft"
+              type="password"
+              mono
+              autocomplete="new-password"
+              :placeholder="
+                hasSitePassword ? $t('app.siteDefaultPasswordReplace') : $t('app.siteDefaultPasswordEmpty')
+              "
+            />
+            <!-- Removing a password is a separate, deliberate act: an emptied input
+                 must not silently delete a secret the user did not mean to touch. -->
+            <Checkbox v-if="hasSitePassword && !clearPassword" v-model="clearPassword">
+              {{ $t("app.siteDefaultPasswordClear") }}
+            </Checkbox>
+            <p v-if="clearPassword" class="hint warn">{{ $t("app.siteDefaultPasswordClearNote") }}</p>
+          </FormField>
+        </div>
       </section>
 
       <p v-if="error.message" class="error" role="alert">{{ error.message }}</p>
@@ -386,27 +329,46 @@ function normalizePath(event: Event) {
   color: var(--amber);
 }
 
-.group {
+/*
+ * The advanced fold. A quiet header line — chevron plus words, the same shape as
+ * the app's other folds — opening on click to the fields it holds.
+ */
+.advanced {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  padding: 12px;
+  padding: 9px 12px;
+}
+
+.advanced-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 0;
+  width: 100%;
+  text-align: left;
+}
+
+.advanced-head:hover {
+  color: var(--text-secondary);
+}
+
+.advanced-chevron {
+  color: var(--faint);
+  transition: transform 0.15s ease;
+}
+
+.advanced.open .advanced-chevron {
+  transform: rotate(90deg);
+}
+
+.advanced-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.group-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.group-title {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  gap: 12px;
+  padding-top: 10px;
 }
 
 .error {

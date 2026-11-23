@@ -15,6 +15,11 @@ import AiActivityPage from "./AiActivityPage.vue";
 import FloatingPane from "./ui/FloatingPane.vue";
 
 const props = defineProps<{
+  /** Whether the layer is open. The layer itself stays mounted for the
+   * window's lifetime: a `v-if` here would unmount the shell mid-exit and the
+   * pane's leave animation would never play (the same trap ManageLayer once
+   * fell into). */
+  open: boolean;
   /**
    * Site to open on, when the opener knows one.
    *
@@ -31,7 +36,7 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <FloatingPane :label="t('app.aiActivityTitle')" @close="emit('close')">
-    <AiActivityPage :origin="props.origin ?? null" />
+  <FloatingPane :open="props.open" :label="t('app.aiActivityTitle')" @close="emit('close')">
+    <AiActivityPage v-if="props.open" :origin="props.origin ?? null" />
   </FloatingPane>
 </template>

@@ -120,6 +120,7 @@ watch(open, async (isOpen) => {
 
 <template>
   <Teleport to="body">
+    <Transition name="menu-pop">
     <div
       v-if="message"
       ref="el"
@@ -167,6 +168,7 @@ watch(open, async (isOpen) => {
         </AppButton>
       </div>
     </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -190,7 +192,6 @@ watch(open, async (isOpen) => {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: message-detail-in var(--motion-base) var(--ease-out);
   transform-origin: top center;
   /* Focused on open so Esc reaches it, but the layer is not a text field: the
      global focus ring drew a bright outline around the whole popover, which
@@ -202,6 +203,26 @@ watch(open, async (isOpen) => {
   from {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts, and `pointer-events: none` keeps a vanishing menu from eating a
+   click that was aimed past it. */
+.menu-pop-leave-active {
+  animation: message-detail-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: message-detail-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes message-detail-out {
+  to {
+    opacity: 0;
+    transform: scale(var(--motion-pop-scale));
   }
 }
 

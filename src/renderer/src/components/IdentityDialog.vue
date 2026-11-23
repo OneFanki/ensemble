@@ -36,21 +36,26 @@ const form = reactive<IdentityDraft>({ ...props.draft });
 const password = ref("");
 const reveal = ref(false);
 const error = ref<string | null>(null);
-/**
- * The isolation fold, closed unless the user asks.
- *
- * An account's session data is separate by default and needs no decision at
- * creation time, so the fold stays shut; it is the way in to the one action
- * that touches that data (clearing it) and to the sentence that says what the
- * isolation means. Nothing here adds a field to the draft.
- */
-const advancedOpen = ref(false);
 /** In inherit mode the password input stays hidden until the user asks to edit. */
 const editingSitePassword = ref(false);
 /** Inline "create a site from the address you are on" fields. */
 const newSiteName = ref("");
 const newSiteUrl = ref("");
 const creatingSite = ref(false);
+
+/**
+ * Whether the account already carries a value that only the fold holds.
+ *
+ * The fold is where every non-required field lives, so an account that uses one
+ * of them opens with the fold down — editing must not start by hiding the
+ * engine override or the note it was saved with.
+ */
+function usesAdvanced(draft: IdentityDraft): boolean {
+  return Boolean(draft.engineId || draft.note || (draft.startPath && draft.startPath !== "/"));
+}
+
+/** The advanced fold, closed unless the account already lives here. */
+const advancedOpen = ref(usesAdvanced(props.draft));
 
 watch(
   () => props.draft,
@@ -59,6 +64,7 @@ watch(
     password.value = "";
     editingSitePassword.value = false;
     creatingSite.value = false;
+    advancedOpen.value = usesAdvanced(next);
   },
 );
 
@@ -97,6 +103,17 @@ const roleSuggestions = computed<string[]>(() => [
 ]);
 
 const envPasswordSet = computed(() => Boolean(store.credentials?.site[form.siteId]));
+
+/**
+ * One hover explanation for the credential control, following the mode: what
+ * the chosen mode does with the password. The reference mode's own box carries
+ * the longer explanation once a source is picked.
+ */
+const credentialsHint = computed(() => {
+  if (form.passwordMode === "inherit") return t("app.inheritNote");
+  if (form.passwordMode === "custom") return t("app.customNote");
+  return t("app.referenceHint");
+});
 
 /**
  * Candidate sources for a reference: identities on the same site that are not
@@ -348,64 +365,36 @@ async function rebuildProfile() {
         />
       </FormField>
 
-      <FormField as="div" :label="$t('app.identityColor')">
-        <div class="colors" :class="{ locked: referencing }">
+      <FormField as="div" :label="$t('app.credentialsLabel')" :hint="credentialsHint">
+        <div class="segmented">
           <button
-            v-for="color in ROLE_COLORS"
-            :key="color"
             type="button"
-            class="color"
-            :class="{ on: form.color === color }"
-            :style="{ '--role': `var(--role-${color})` }"
-            :aria-label="colorLabels[color]"
-            :title="colorLabels[color]"
-            :disabled="referencing"
-            @click="form.color = color"
-          ></button>
+            class="seg"
+            :class="{ on: form.passwordMode === 'inherit' }"
+            @click="setMode('inherit')"
+          >
+            {{ $t("app.passwordInherit") }}
+          </button>
+          <button
+            type="button"
+            class="seg"
+            :class="{ on: form.passwordMode === 'custom' }"
+            @click="setMode('custom')"
+          >
+            {{ $t("app.passwordCustom") }}
+          </button>
+          <!-- Referencing another site's account is the default way to reuse a
+               login; it is only offered when a source exists. -->
+          <button
+            type="button"
+            class="seg"
+            :class="{ on: referencing }"
+            :disabled="!referenceOptions.length && !referencing"
+            @click="setMode('reference')"
+          >
+            {{ $t("app.passwordReference") }}
+          </button>
         </div>
-      </FormField>
-
-      <section class="group">
-        <div class="group-head">
-          <span class="group-title">{{ $t("app.loginFormGroup") }}</span>
-        </div>
-
-        <FormField as="div" :label="$t('app.credentialsLabel')">
-          <div class="segmented">
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: form.passwordMode === 'inherit' }"
-              @click="setMode('inherit')"
-            >
-              {{ $t("app.passwordInherit") }}
-            </button>
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: form.passwordMode === 'custom' }"
-              @click="setMode('custom')"
-            >
-              {{ $t("app.passwordCustom") }}
-            </button>
-            <!-- Referencing another site's account is the default way to reuse a
-                 login; it is only offered when a source exists. -->
-            <button
-              type="button"
-              class="seg"
-              :class="{ on: referencing }"
-              :disabled="!referenceOptions.length && !referencing"
-              :title="
-                referenceOptions.length
-                  ? $t('app.referenceHint')
-                  : $t('app.referenceNoSource')
-              "
-              @click="setMode('reference')"
-            >
-              {{ $t("app.passwordReference") }}
-            </button>
-          </div>
-        </FormField>
 
         <div v-if="referencing" class="ref-box">
           <div class="ref-head">
@@ -493,49 +482,18 @@ async function rebuildProfile() {
             {{ $t("app.saveToIdentity") }}
           </AppButton>
         </div>
-
-        <p class="note">
-          <template v-if="form.passwordMode === 'inherit'">
-            {{ $t("app.inheritNote") }}
-          </template>
-          <template v-else-if="form.passwordMode === 'custom'">
-            {{ $t("app.customNote") }}
-          </template>
-        </p>
-
-        <ExtraLoginFields
-          v-model="form.extraFields"
-          :scope-hint="$t('app.identityFieldsScope')"
-        />
-      </section>
-
-      <div class="row">
-        <FormField grow :label="$t('app.startPathLabel')">
-          <TextField v-model="form.startPath" mono placeholder="/" />
-        </FormField>
-        <FormField grow :label="$t('app.engineOverride')">
-          <SelectField
-            :model-value="engineValue"
-            :options="engineOptions"
-            @update:model-value="
-              form.engineId = $event === '__inherit__' ? undefined : $event
-            "
-          />
-        </FormField>
-      </div>
-
-      <FormField :label="$t('app.noteOptional')">
-        <TextField
-          v-model="form.note"
-          :readonly="referencing"
-          :placeholder="$t('app.noteExample')"
-        />
       </FormField>
 
-      <!-- Isolation, folded away. Every account already keeps its session to
-           itself, so the default path through this form asks nothing about it;
-           the fold holds the one sentence that says what that means and the one
-           action that touches the data. -->
+      <ExtraLoginFields
+        v-model="form.extraFields"
+        :scope-hint="$t('app.identityFieldsScope')"
+      />
+
+      <!--
+        Everything optional lives behind one fold, so the form's ordinary path is
+        a name, a site, a username and the credential choice. The fold opens
+        itself when the account already uses what it holds.
+      -->
       <section class="advanced" :class="{ open: advancedOpen }">
         <button
           type="button"
@@ -545,20 +503,65 @@ async function rebuildProfile() {
           @click="advancedOpen = !advancedOpen"
         >
           <ChevronRight :size="12" class="advanced-chevron" />
-          <span>{{ $t("app.isolationFoldTitle") }}</span>
+          <span>{{ $t("app.advancedTitle") }}</span>
         </button>
         <div v-if="advancedOpen" class="advanced-body" data-advanced-panel>
-          <p class="note">{{ $t("app.isolationFoldNote") }}</p>
-          <AppButton
-            v-if="form.id"
-            variant="danger"
-            data-clear-session
-            :disabled="store.busy === 'identity'"
-            @click="rebuildProfile"
-          >
-            <RotateCcw :size="12" />
-            {{ $t("app.rebuildProfile") }}
-          </AppButton>
+          <FormField as="div" :label="$t('app.identityColor')">
+            <div class="colors" :class="{ locked: referencing }">
+              <button
+                v-for="color in ROLE_COLORS"
+                :key="color"
+                type="button"
+                class="color"
+                :class="{ on: form.color === color }"
+                :style="{ '--role': `var(--role-${color})` }"
+                :aria-label="colorLabels[color]"
+                :title="colorLabels[color]"
+                :disabled="referencing"
+                @click="form.color = color"
+              ></button>
+            </div>
+          </FormField>
+
+          <div class="row">
+            <FormField grow :label="$t('app.startPathLabel')">
+              <TextField v-model="form.startPath" mono placeholder="/" />
+            </FormField>
+            <FormField grow :label="$t('app.engineOverride')">
+              <SelectField
+                :model-value="engineValue"
+                :options="engineOptions"
+                @update:model-value="
+                  form.engineId = $event === '__inherit__' ? undefined : $event
+                "
+              />
+            </FormField>
+          </div>
+
+          <FormField :label="$t('app.noteOptional')">
+            <TextField
+              v-model="form.note"
+              :readonly="referencing"
+              :placeholder="$t('app.noteExample')"
+            />
+          </FormField>
+
+          <!-- Isolation. Every account already keeps its session to itself, so
+               the ordinary path asks nothing about it; this block holds the one
+               action that touches that data. It exists only for a saved account. -->
+          <div v-if="form.id" class="isolation">
+            <span class="isolation-title">{{ $t("app.isolationFoldTitle") }}</span>
+            <p class="note">{{ $t("app.isolationFoldNote") }}</p>
+            <AppButton
+              variant="danger"
+              data-clear-session
+              :disabled="store.busy === 'identity'"
+              @click="rebuildProfile"
+            >
+              <RotateCcw :size="12" />
+              {{ $t("app.rebuildProfile") }}
+            </AppButton>
+          </div>
         </div>
       </section>
 
@@ -608,11 +611,6 @@ async function rebuildProfile() {
 
 .new-site .btn {
   align-self: flex-start;
-}
-
-.hint {
-  font-size: 10.5px;
-  color: var(--faint);
 }
 
 .colors {
@@ -771,9 +769,8 @@ async function rebuildProfile() {
 }
 
 /*
- * The isolation fold. A quiet header line, the same shape as the app's group
- * headings elsewhere: chevron plus words, opening on click. Closed by default,
- * which is the point — the form's ordinary path never asks about it.
+ * The advanced fold. A quiet header line — chevron plus words, the same shape as
+ * the site dialog's fold — opening on click to the fields it holds.
  */
 .advanced {
   border: 1px solid var(--line-soft);
@@ -809,32 +806,27 @@ async function rebuildProfile() {
 .advanced-body {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 9px;
-  padding-top: 9px;
+  gap: 12px;
+  padding-top: 10px;
 }
 
-.group {
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  padding: 12px;
+.isolation {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.group-head {
-  display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 8px;
-  flex-wrap: wrap;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 10px;
 }
 
-.group-title {
+.isolation-title {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.isolation .btn {
+  align-self: flex-start;
 }
 
 .error {

@@ -73,14 +73,13 @@ describe("hover labels", () => {
   });
 
   it("gives every account-bar control a label through the directive", () => {
-    // The bar is the left of the window's first row: the accounts entry, the new
-    // session entry, and each chip's label — the state plus the whole account
-    // name, which is the fact a truncated chip hides. No native `title` may creep
-    // back in: every hint here is the app's own drawn layer.
-    //
-    // Scoped to the bar's own markup: the dialog below it passes a `title` prop
-    // to `Modal`, which is a dialog heading and not a hover label.
-    const bar = rail.slice(rail.indexOf("<template>"), rail.indexOf("<Modal"));
+    // The bar is the left of the window's first row: the accounts entry and each
+    // chip's label — the state plus the whole account name, which is the fact a
+    // truncated chip hides. No native `title` may creep back in: every hint here
+    // is the app's own drawn layer. (The bar draws no dialog of its own; a
+    // `Modal` elsewhere may pass a `title` prop, which is a dialog heading, not
+    // a hover label — hence the slice ends at the template's close.)
+    const bar = rail.slice(rail.indexOf("<template>"), rail.lastIndexOf("</template>"));
     expect(bar).toContain('v-tooltip="t(\'app.railAccountsHint\')"');
     expect(bar).toContain('v-tooltip="labelOf(item)"');
     expect(bar).not.toMatch(/:title="t\('app\./);

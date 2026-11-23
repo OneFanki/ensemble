@@ -424,6 +424,7 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
 
     <!-- Right-click menu. Positioned inside the bar: it sits at y=0, so a panel
          anchored at the pointer always stays within the page. -->
+    <Transition name="menu-pop">
     <div v-if="menu" class="bb-menu" role="menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }">
       <button type="button" role="menuitem" class="bb-menu-row" @click="editFromMenu">
         <Pencil :size="11" />
@@ -436,6 +437,7 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
         }}
       </button>
     </div>
+    </Transition>
 
     <BookmarkDialog
       v-if="bookmarkDialog"
@@ -603,12 +605,31 @@ async function onFolderSave(draft: BookmarkFolderDraft): Promise<void> {
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: bb-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
 }
 
 @keyframes bb-menu-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts, and `pointer-events: none` hands clicks back to the page during
+   the exit. */
+.menu-pop-leave-active {
+  animation: bb-menu-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: bb-menu-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes bb-menu-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }

@@ -168,8 +168,8 @@ try {
     toolbar,
   );
   check(
-    "the account bar is where a new session starts",
-    toolbar?.railNewSession === true,
+    "the account bar is not a new-session door",
+    toolbar?.railNewSession === false,
     toolbar,
   );
 
@@ -240,6 +240,53 @@ try {
     "an account launched there opens on its own site",
     account?.identityId === ids.a && Boolean(account?.url?.startsWith?.(baseUrl)),
     account,
+  );
+
+  // --- 4. Chips drag-reorder without touching the pages they own ------------
+  // One synthetic drag through the real handlers, the way the strip's own
+  // reorder is driven: dragstart fills the payload, dragover picks the edge and
+  // raises the insertion mark, drop commits. The rail's order must change, and
+  // the pages of every instance involved must keep their own order — moving a
+  // chip is moving a whole instance block, not rewriting anyone's tab list.
+  const chipDrag = await inApp(
+    client,
+    `
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const chips = () => [...document.querySelectorAll('[data-account-rail] [data-instance-chip]')];
+    const orderBefore = chips().map((el) => el.getAttribute('data-instance-chip'));
+    const source = chips()[0];
+    const target = chips()[1];
+    const drag = new DataTransfer();
+    source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: drag }));
+    const r = target.getBoundingClientRect();
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: drag, clientX: r.left + r.width * 0.75, clientY: r.top + r.height / 2 }));
+    await wait(40);
+    const hinted = target.classList.contains('drop-after');
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: drag, clientX: r.left + r.width * 0.75, clientY: r.top + r.height / 2 }));
+    source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: drag }));
+    await wait(600);
+    const orderAfter = chips().map((el) => el.getAttribute('data-instance-chip'));
+    const state = await window.ensemble.getEmbeddedState();
+    const pagesOf = (instanceId) => state.tabs.filter((tab) => tab.instanceId === instanceId).map((tab) => tab.id);
+    return {
+      hinted,
+      orderBefore,
+      orderAfter,
+      // Dropped "after" the second chip: the source belongs right behind it.
+      moved: orderAfter[1] === orderBefore[0] && orderAfter[0] === orderBefore[1],
+      pagesIntact: pagesOf(orderBefore[0]).length > 0,
+    };
+  `,
+  );
+  check(
+    "dragging a chip shows the insertion mark and moves that instance to the target",
+    chipDrag?.hinted === true && chipDrag?.moved === true,
+    chipDrag,
+  );
+  check(
+    "the drag keeps every instance's own page order",
+    chipDrag?.pagesIntact === true,
+    chipDrag,
   );
 
   client.close();

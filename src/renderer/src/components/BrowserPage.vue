@@ -20,6 +20,7 @@ import type {
 } from "@shared/types";
 import {
   Activity,
+  AppWindow,
   ArrowLeft,
   ArrowRight,
   Bell,
@@ -28,6 +29,8 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Copy,
   CornerDownLeft,
@@ -65,6 +68,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { useFloatingLayer } from "../composables/floatingLayer";
 import { useAiDotTip } from "../composables/aiDotTip";
+import { useHorizontalStrip } from "../composables/horizontalStrip";
 import { useMessageRows } from "../composables/messageRows";
 import { useNowMs } from "../composables/useNowMs";
 import { useStageGeometry } from "../composables/stageGeometry";
@@ -206,6 +210,16 @@ function openGuideFromMenu(): void {
   emit("openGuide");
 }
 
+/**
+ * 多开：让主进程拉起一个数据完全隔离的第二实例。
+ *
+ * 菜单收起要赶在 IPC 之前——spawn 是发后即忘，但菜单若等回来再收，会多亮半秒。
+ */
+async function spawnWindowFromMenu(): Promise<void> {
+  appMenuOpen.value = false;
+  await window.ensemble.spawnWindow();
+}
+
 async function checkForUpdates(): Promise<void> {
   appMenuOpen.value = false;
   const result = await window.ensemble.checkUpdate();
@@ -293,7 +307,11 @@ function aiDotOf(page: EmbeddedTab): { state: "active" | "recent"; text: string;
  */
 function tabLabelOf(page: EmbeddedTab): { text: string; dot?: string; detail: string[] } {
   const dot = aiDotOf(page);
-  const detail = [store.titleOf(page), page.url];
+  const detail: string[] = [];
+  // 主行不是页面标题时（AI 状态行）标题才补进明细；平时标题就是主行，再列一遍
+  // 等于同一个名字读两次。地址永远在明细里。
+  if (dot) detail.push(store.titleOf(page));
+  detail.push(page.url);
   const state = sleepStateOf(page);
   if (state) detail.push(state === "sleeping" ? t("app.tabSleeping") : t("app.tabNeverSleep"));
   if (!dot) return { text: store.titleOf(page), detail };
@@ -402,20 +420,23 @@ const activeTab = computed(() => store.activeTab);
 const zoomNotice = computed(() => store.zoomNotice);
 
 /**
- * The strip swaps its pages as a set when the selection moves to another
- * instance: every key changes at once, so the enter/leave pair reads as "a new
- * tab appeared and the old one was closed". Same title, same place — there is
- * nothing to animate, and the switch below turns the transition off for that
- * one frame. New tabs inside one instance and reordering keep theirs.
+ * The strip's horizontal-scroll kit: wheel turns into horizontal glide, and the
+ * two edge chevrons show only while that side still has content. The scrollbar
+ * itself never appears — see the composable for why these two are the scrollbar's
+ * replacements rather than decorations on top of it.
  */
-const stripAnimated = ref(true);
+const strip = useHorizontalStrip();
 
-watch(windowInstanceId, () => {
-  stripAnimated.value = false;
-  requestAnimationFrame(() => {
-    stripAnimated.value = true;
-  });
-});
+/**
+ * The strip swaps its pages as a set when the selection moves to another
+ * instance: every key changes at once. Animate that swap and the leave phase
+ * keeps the old tabs mounted while the enter phase is already drawing the new
+ * ones — one frame where two identities' tabs share the strip, which reads as
+ * a flash. So the whole list element is keyed by the instance: switching
+ * replaces the subtree atomically, with no enter/leave to run at all. The
+ * transition on the group only ever sees changes *within* one instance — a new
+ * tab, a close, a drag reorder — which is where animation means something.
+ */
 
 /**
  * Whether the active page is already a bookmark.
@@ -1454,8 +1475,21 @@ function fillMessage(reason?: string): string {
         @close-layer="emit('update:layer', null)"
       />
       <div class="tabstrip" :data-platform="platform">
-        <div class="tabs" role="tablist" :aria-label="t('app.browserTabs')">
-          <TransitionGroup :name="stripAnimated ? 'tab' : 'strip-still'">
+        <!--
+          定位容器：两端箭头钉在标签列表的可视边缘（该方向没有内容时不渲染），
+          滚动条不出现，「还有更多」由箭头表达。列表本体按实例 key 整棵替换。
+        -->
+        <div class="tabs-wrap">
+          <div
+            :key="windowInstanceId ?? 'none'"
+            :ref="strip.scroller"
+            class="tabs"
+            role="tablist"
+            :aria-label="t('app.browserTabs')"
+            @wheel="strip.onWheel"
+            @scroll.passive="strip.onScroll"
+          >
+        <TransitionGroup name="tab">
             <button
               v-for="page in windowPages"
               :key="page.id"
@@ -1552,6 +1586,29 @@ function fillMessage(reason?: string): string {
               </span>
             </button>
           </TransitionGroup>
+          </div>
+
+          <!-- 两端箭头：该方向没有内容时不渲染。 -->
+          <button
+            v-if="strip.canLeft.value"
+            type="button"
+            class="strip-nudge left"
+            :aria-label="t('app.stripNudgeLeft')"
+            v-tooltip="t('app.stripNudgeLeft')"
+            @click="strip.nudge(-1)"
+          >
+            <ChevronLeft :size="12" />
+          </button>
+          <button
+            v-if="strip.canRight.value"
+            type="button"
+            class="strip-nudge right"
+            :aria-label="t('app.stripNudgeRight')"
+            v-tooltip="t('app.stripNudgeRight')"
+            @click="strip.nudge(1)"
+          >
+            <ChevronRight :size="12" />
+          </button>
         </div>
         <button
           type="button"
@@ -1639,6 +1696,7 @@ function fillMessage(reason?: string): string {
             </InputShell>
 
             <!-- Sites are the bookmarks: typing a name resolves to its login URL. -->
+            <Transition name="menu-pop">
             <div v-if="suggestionsOpen && siteSuggestions.length" class="site-suggestions">
               <button
                 v-for="item in siteSuggestions"
@@ -1651,6 +1709,7 @@ function fillMessage(reason?: string): string {
                 <span class="sugg-url mono">{{ item.url }}</span>
               </button>
             </div>
+            </Transition>
           </div>
 
           <button
@@ -1701,6 +1760,7 @@ function fillMessage(reason?: string): string {
                    without the icon looking like a toggle that was switched on. -->
               <span v-if="aiRunning" class="ai-live-dot"></span>
             </button>
+            <Transition name="menu-pop">
             <AiPanel
               v-if="aiPanelOpen"
               :open="aiPanelOpen"
@@ -1709,6 +1769,7 @@ function fillMessage(reason?: string): string {
               @open-console="openAiConsole"
               @open-settings="openAiSettings"
             />
+            </Transition>
           </div>
           <button
             type="button"
@@ -1738,6 +1799,7 @@ function fillMessage(reason?: string): string {
               <Download :size="15" />
               <span v-if="activeDownloads" class="download-badge">{{ activeDownloads }}</span>
             </button>
+            <Transition name="menu-pop">
             <div v-if="downloadsOpen" class="downloads-panel">
               <div class="downloads-head">
                 <span>{{ t("app.downloads") }}</span>
@@ -1805,6 +1867,7 @@ function fillMessage(reason?: string): string {
                 </div>
               </div>
             </div>
+            </Transition>
           </div>
           <!--
             Workspace-wide resolution. It sits in the toolbar because it is a
@@ -1828,6 +1891,7 @@ function fillMessage(reason?: string): string {
                 {{ globalViewport.width }}×{{ globalViewport.height }}
               </span>
             </button>
+            <Transition name="menu-pop">
             <div v-if="globalViewportOpen" class="global-viewport-menu" role="menu">
               <!--
                 Zoom, inside the size menu.
@@ -1899,6 +1963,7 @@ function fillMessage(reason?: string): string {
                 {{ preset.name }}
               </button>
             </div>
+            </Transition>
           </div>
           <!--
             Zoom is not a toolbar control any more.
@@ -1956,6 +2021,7 @@ function fillMessage(reason?: string): string {
               <span v-if="workspace.unreadMessages > 0" class="bell-dot"></span>
             </button>
 
+            <Transition name="menu-pop">
             <div v-if="bellOpen" class="bell-panel" role="dialog" :aria-label="t('app.messages')" data-bell-panel>
               <div class="bell-head">
                 <span>{{ t("app.messages") }}</span>
@@ -2054,6 +2120,7 @@ function fillMessage(reason?: string): string {
                 {{ t("app.messagesOpenCentre") }}
               </button>
             </div>
+            </Transition>
 
             <!--
               The row's detail, beside the popover rather than inside it: opening it
@@ -2083,6 +2150,7 @@ function fillMessage(reason?: string): string {
             >
               <MoreHorizontal :size="16" />
             </button>
+            <Transition name="menu-pop">
             <div v-if="appMenuOpen" class="app-menu" role="menu">
               <!-- The built-in throwaway. Where launches go is decided at each
                    launch point now, so this menu carries only the session action. -->
@@ -2183,6 +2251,21 @@ function fillMessage(reason?: string): string {
                 <BookOpenText :size="14" />
                 <span>{{ t("app.guideOpen") }}</span>
               </button>
+              <!--
+                A second Ensemble, isolated: its own workspace, vault and
+                profiles, so two screens can each run one without anything
+                shared. This menu is the app-level door to it.
+              -->
+              <button
+                type="button"
+                role="menuitem"
+                class="app-menu-item"
+                data-menu-item="new-window"
+                @click="spawnWindowFromMenu"
+              >
+                <AppWindow :size="14" />
+                <span>{{ t("app.newWindow") }}</span>
+              </button>
               <div class="app-menu-rule" role="separator"></div>
               <button type="button" role="menuitem" class="app-menu-item" @click="checkForUpdates">
                 <RefreshCw :size="14" />
@@ -2203,6 +2286,7 @@ function fillMessage(reason?: string): string {
                 <span>{{ t("app.quitApp") }}</span>
               </button>
             </div>
+            </Transition>
           </div>
         </div>
         <div ref="stage" class="stage">
@@ -2214,9 +2298,11 @@ function fillMessage(reason?: string): string {
           its own. Cheap and centred like every browser's: a short-lived label is
           all the confirmation the gesture needs, and it must not take a row.
         -->
-        <div v-if="zoomNotice" class="zoom-toast mono" data-zoom-toast>
-          {{ zoomNotice.zoom }}%
-        </div>
+        <Transition name="zoom-pop">
+          <div v-if="zoomNotice" class="zoom-toast mono" data-zoom-toast>
+            {{ zoomNotice.zoom }}%
+          </div>
+        </Transition>
         <!--
           Find sits over the page, top-right, like every browser since Chrome.
 
@@ -2420,6 +2506,7 @@ function fillMessage(reason?: string): string {
     </div>
 
     <Teleport to="body">
+      <Transition name="menu-pop">
       <div
         v-if="reloadMenu"
         class="reload-menu"
@@ -2436,6 +2523,7 @@ function fillMessage(reason?: string): string {
         </button>
         <p class="reload-menu-note">{{ t("app.browserClearCacheReloadHint") }}</p>
       </div>
+      </Transition>
     </Teleport>
 
     <!--
@@ -2444,6 +2532,7 @@ function fillMessage(reason?: string): string {
       covered by the native page under the cursor.
     -->
     <Teleport to="body">
+      <Transition name="menu-pop">
       <div
         v-if="tabMenu"
         class="tab-menu"
@@ -2542,6 +2631,7 @@ function fillMessage(reason?: string): string {
           {{ t("app.browserCloseOtherTabs") }}
         </button>
       </div>
+      </Transition>
     </Teleport>
 
     <BookmarkDialog
@@ -2641,25 +2731,70 @@ function fillMessage(reason?: string): string {
  * `flex: 1 1 auto`, which stretched the row to the full window and left the "+"
  * floating in the middle of the strip, far from the tab it belongs to.
  * Overflowing rows still shrink: `min-width: 0` plus the tabs' own `min-width`.
+ *
+ * The wrapper exists for the edge chevrons: they pin to the list's visible
+ * edges, which only works from outside the scroll container — inside it they
+ * would scroll away with the content. The scroller itself is hidden; the
+ * chevrons are what says "there is more".
  */
+.tabs-wrap {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  flex: 0 1 auto;
+  height: 100%;
+}
+
 .tabs {
   display: flex;
   align-items: flex-end;
   gap: 1px;
   min-width: 0;
-  /* Sideways, not hidden. Hiding was how the strip used to "fit": once the row was
+  flex: 1 1 auto;
+  /* Sideways, not shown. Hiding was how the strip used to "fit": once the row was
      full, every tab shrank together until the titles were three characters and
      the ones past the edge were unreachable. A scrolling row keeps every title
-     whole and lets the user walk to the rest. */
+     whole and lets the user walk to the rest — by wheel or by the edge chevrons.
+     The scrollbar itself never renders and never takes layout space. */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  flex: 0 1 auto;
   height: 100%;
 }
 
 .tabs::-webkit-scrollbar {
-  height: 0;
+  display: none;
+}
+
+/*
+ * The strip's edge chevrons. Their fade is painted from the strip's own frame
+ * colour, so a tab sliding under one dissolves into the surface instead of
+ * being cut by a hard edge.
+ */
+.strip-nudge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  z-index: 1;
+}
+
+.strip-nudge:hover {
+  color: var(--text);
+}
+
+.strip-nudge.left {
+  left: 0;
+  background: linear-gradient(to right, var(--frame) 45%, transparent);
+}
+
+.strip-nudge.right {
+  right: 0;
+  background: linear-gradient(to left, var(--frame) 45%, transparent);
 }
 
 /*
@@ -3002,12 +3137,37 @@ function fillMessage(reason?: string): string {
   flex-direction: column;
   /* Same entry as every other anchored panel: it hangs off the button, so it
      grows down and out of it rather than fading in place. */
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
 @keyframes app-menu-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/*
+ * One enter/leave pair shared by every anchored panel in this file (app menu,
+ * AI panel, bell, viewport, address suggestions, downloads, reload and tab
+ * menus). The entrance used to hang directly off each panel's own class, which
+ * meant closing was an instant unmount: the panel appeared with a motion and
+ * left with none. Declaring the entrance on the Transition's enter class and
+ * pairing it with an exit is what makes both directions real; `forwards` holds
+ * the last frame until Vue unmounts, and `pointer-events: none` hands clicks to
+ * the page behind during the exit.
+ */
+.menu-pop-enter-active {
+  animation: app-menu-in var(--motion-base) var(--ease-out);
+}
+
+.menu-pop-leave-active {
+  animation: app-menu-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+@keyframes app-menu-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
@@ -3185,7 +3345,6 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
@@ -3230,7 +3389,6 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
@@ -3637,7 +3795,6 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
@@ -3679,7 +3836,6 @@ function fillMessage(reason?: string): string {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden;
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top center;
 }
 
@@ -3724,7 +3880,6 @@ function fillMessage(reason?: string): string {
   background: var(--surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden auto;
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top right;
 }
 
@@ -3920,7 +4075,24 @@ function fillMessage(reason?: string): string {
   letter-spacing: 0.02em;
   box-shadow: var(--shadow-menu);
   pointer-events: none;
+}
+
+/* Enter and exit as a pair. The exit keeps the centring translate that the
+   base style carries — an animation replaces the whole transform, so dropping
+   it here would snap the pill to the uncentred position on its way out. */
+.zoom-pop-enter-active {
   animation: zoom-toast-in 160ms var(--ease-out);
+}
+
+.zoom-pop-leave-active {
+  animation: zoom-toast-out 110ms var(--ease-in) forwards;
+}
+
+@keyframes zoom-toast-out {
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
 }
 
 @keyframes zoom-toast-in {
@@ -4214,7 +4386,6 @@ function fillMessage(reason?: string): string {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
-  animation: app-menu-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
 }
 

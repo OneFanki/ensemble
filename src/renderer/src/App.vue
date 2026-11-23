@@ -546,19 +546,7 @@ function openEditIdentity(identityId: string) {
  * 做兼容性 round-trip，只是不再有页面打开它们。
  */
 
-/**
- * Saves a site, and its first account when the dialog collected one.
- *
- * The account is written after the site, against the id that save just
- * returned: the site dialog has no id for a new site, so the shell is the only
- * place that can thread one write into the next. A failed account save leaves
- * the site in place and reports through the store — losing the site because its
- * optional first account was wrong would be the worse outcome.
- */
-async function saveSite(
-  draft: SiteDraft,
-  firstAccount?: { name: string; username: string; password: string },
-) {
+async function saveSite(draft: SiteDraft) {
   const result = await store.saveSite(draft);
   if (!result) return;
   siteDraft.value = null;
@@ -567,18 +555,6 @@ async function saveSite(
     : result.sites.find((item) => item.name === draft.name);
   if (!saved) return;
   store.markSiteUsed(saved.id);
-  if (!firstAccount) return;
-  await store.saveIdentity({
-    siteId: saved.id,
-    name: firstAccount.name,
-    username: firstAccount.username,
-    role: "admin",
-    color: "teal",
-    passwordMode: firstAccount.password ? "custom" : "inherit",
-    startPath: "/",
-    extraFields: [],
-    ...(firstAccount.password ? { password: firstAccount.password } : {}),
-  });
 }
 
 async function saveIdentity(draft: IdentityDraft) {
@@ -836,8 +812,11 @@ async function handleLocale(locale: LocaleSetting) {
       @save-capture="saveCapturedLogin"
     />
 
-    <!-- The full AI activity log, opened from the AI panel in the address row. -->
-    <AiActivityLayer v-if="aiLayerOpen" :origin="aiOrigin" @close="aiLayerOpen = false" />
+    <!-- The full AI activity log, opened from the AI panel in the address row.
+         Mounted for the window's lifetime with the open state as a prop, so the
+         pane's exit animation gets to play; a `v-if` here unmounts the shell
+         mid-exit (the trap ManageLayer's own comment documents). -->
+    <AiActivityLayer :open="aiLayerOpen" :origin="aiOrigin" @close="aiLayerOpen = false" />
 
     <!-- A login seen in an embedded page. Floating above the dock so it never
          covers the page the user is still working in, and never takes a row in

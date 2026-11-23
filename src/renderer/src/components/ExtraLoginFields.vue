@@ -2,6 +2,8 @@
 import type { LoginField } from "@shared/types";
 import { Plus, X } from "lucide-vue-next";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
+import HintIcon from "./ui/HintIcon.vue";
 import IconButton from "./ui/IconButton.vue";
 import TextField from "./ui/TextField.vue";
 
@@ -15,6 +17,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [value: LoginField[]];
 }>();
+
+const { t } = useI18n();
 
 const rows = computed({
   get: () => props.modelValue ?? [],
@@ -32,16 +36,23 @@ function update(index: number, patch: Partial<LoginField>) {
 function removeRow(index: number) {
   rows.value = rows.value.filter((_, position) => position !== index);
 }
+
+/**
+ * One hover explanation for the whole field: what a field name matches on the
+ * page, and whose values these are. Both sentences answer the same question —
+ * "what do I put here" — so they travel together.
+ */
+const hintText = computed(() => {
+  const scope = props.scopeHint;
+  return scope ? `${t("app.extraFieldsHint")} ${scope}` : t("app.extraFieldsHint");
+});
 </script>
 
 <template>
   <div class="extra-fields">
     <div class="extra-head">
       <span class="label">{{ $t("app.extraFieldsTitle") }}</span>
-      <button v-if="!disabled" type="button" class="add" @click="addRow">
-        <Plus :size="11" />
-        {{ $t("app.addField") }}
-      </button>
+      <HintIcon :text="hintText" />
     </div>
 
     <div v-for="(row, index) in rows" :key="index" class="row">
@@ -69,13 +80,10 @@ function removeRow(index: number) {
       </IconButton>
     </div>
 
-    <p class="hint">
-      {{ $t("app.extraFieldsHint") }}
-      <template v-if="scopeHint">
-        <br />
-        {{ scopeHint }}
-      </template>
-    </p>
+    <button v-if="!disabled" type="button" class="add" data-add-field @click="addRow">
+      <Plus :size="11" />
+      {{ $t("app.addField") }}
+    </button>
   </div>
 </template>
 
@@ -89,7 +97,7 @@ function removeRow(index: number) {
 .extra-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 5px;
 }
 
 .label {
@@ -99,18 +107,6 @@ function removeRow(index: number) {
   color: var(--faint);
 }
 
-.add {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.add:hover {
-  color: var(--text);
-}
-
 .row {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
@@ -118,10 +114,27 @@ function removeRow(index: number) {
   align-items: center;
 }
 
-.hint {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.5;
-  color: var(--faint);
+/*
+ * The add row is a real button, not a link in the corner: a dashed outline the
+ * width of the field reads as "there is room for another row here", which is
+ * the one thing a bare "+ 添加字段" next to the caption never said loudly
+ * enough.
+ */
+.add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.add:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 30%, var(--line));
+  background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 </style>

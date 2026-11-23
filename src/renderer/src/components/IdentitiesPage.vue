@@ -25,6 +25,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { onClickOutside } from "@vueuse/core";
 import { useAnchoredPanel } from "../composables/anchoredPanel";
+import { profileLabel } from "../profile-label";
 import { useConfirmStore } from "../stores/confirm";
 import { useEmbeddedStore } from "../stores/embedded";
 import { useWorkspaceStore } from "../stores/workspace";
@@ -72,6 +73,19 @@ const cleanProfile = computed(() =>
   (store.settings.profiles ?? []).find((profile) => profile.retention === "ephemeral"),
 );
 const defaultProfileId = computed(() => store.settings.defaultProfileId);
+
+/**
+ * The row's on-screen name, resolving the built-ins from the message table.
+ *
+ * The stored names of the two built-ins are data: an install whose settings file
+ * predates a vocabulary change still holds the old words, and printing those put
+ * 「默认档案」 in a pane whose every other surface says 身份. Same rule as the
+ * account bar's chips — built-ins read their current label, user rows read the
+ * name they were given.
+ */
+function labelOf(profile: BrowserProfile): string {
+  return profileLabel(profile, t);
+}
 
 /**
  * A launch happened, so the pane has done its job.
@@ -1063,22 +1077,22 @@ defineExpose({ mode, setMode });
           class="nav-row"
           :class="{ current: profile.id === defaultProfileId }"
           :data-launch-session="profile.id"
-          :title="profile.name"
+          :title="labelOf(profile)"
           @click="launchSession(profile.id)"
         >
           <Layers :size="12" class="nav-icon" />
-          <span class="nav-name">{{ profile.name }}</span>
+          <span class="nav-name">{{ labelOf(profile) }}</span>
         </button>
         <button
           v-if="cleanProfile"
           type="button"
           class="nav-row dashed"
           :data-launch-session="cleanProfile.id"
-          :title="cleanProfile.name"
+          :title="labelOf(cleanProfile)"
           @click="launchSession(cleanProfile.id)"
         >
           <ShieldOff :size="12" class="nav-icon" />
-          <span class="nav-name">{{ cleanProfile.name }}</span>
+          <span class="nav-name">{{ labelOf(cleanProfile) }}</span>
         </button>
 
         <div class="nav-head nav-head-sites">
@@ -1101,6 +1115,7 @@ defineExpose({ mode, setMode });
               <Plus :size="11" />
             </button>
             <Teleport to="body">
+              <Transition name="menu-pop">
               <div
                 v-if="createOpen"
                 ref="createPanel"
@@ -1119,6 +1134,7 @@ defineExpose({ mode, setMode });
                   <span>{{ $t("app.newSite") }}</span>
                 </button>
               </div>
+              </Transition>
             </Teleport>
           </span>
         </div>
@@ -1335,7 +1351,7 @@ defineExpose({ mode, setMode });
           :data-identity-row="profile.id"
         >
           <Layers :size="12" class="nav-icon" />
-          <span class="nav-name">{{ profile.name }}</span>
+          <span class="nav-name">{{ labelOf(profile) }}</span>
           <span
             v-if="profile.id === defaultProfileId"
             class="identity-badge"
@@ -1378,7 +1394,7 @@ defineExpose({ mode, setMode });
         </div>
         <div v-if="cleanProfile" class="nav-row identity-row dashed" :data-identity-row="cleanProfile.id">
           <ShieldOff :size="12" class="nav-icon" />
-          <span class="nav-name">{{ cleanProfile.name }}</span>
+          <span class="nav-name">{{ labelOf(cleanProfile) }}</span>
         </div>
 
         <div class="nav-head nav-head-sites">
@@ -1401,6 +1417,7 @@ defineExpose({ mode, setMode });
               <Plus :size="11" />
             </button>
             <Teleport to="body">
+              <Transition name="menu-pop">
               <div
                 v-if="createOpen"
                 ref="createPanel"
@@ -1419,6 +1436,7 @@ defineExpose({ mode, setMode });
                   <span>{{ $t("app.newSite") }}</span>
                 </button>
               </div>
+              </Transition>
             </Teleport>
           </span>
         </div>
@@ -1485,6 +1503,7 @@ defineExpose({ mode, setMode });
                behind `⋯` they stop reading as peers of "launch". Teleported to
                the body because the pane clips its own scroll area. -->
           <Teleport to="body">
+            <Transition name="menu-pop">
             <div
               v-if="selectMenuOpen"
               ref="selectMenu"
@@ -1523,6 +1542,7 @@ defineExpose({ mode, setMode });
                 <span>{{ $t("app.accountsExport") }}</span>
               </button>
             </div>
+            </Transition>
           </Teleport>
         </div>
 
@@ -1774,32 +1794,7 @@ defineExpose({ mode, setMode });
  * only needs breathing room, not a margin.
  */
 .page.identities {
-  padding: 14px 16px 12px;
-}
-
-/*
- * The pane's one fixed row: face switch on the left, write actions on the right.
- *
- * It is a header rather than a `PageHeader` because a page header exists to say
- * the page's name, and this pane's name is already on the button that opened it.
- * Keeping it a single row also keeps the content's top edge still: the bar's
- * height does not change when the edit face's two buttons appear, so nothing
- * below it moves between faces.
- */
-.pane-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex: 0 0 auto;
-  min-height: 30px;
-  padding-bottom: 12px;
-}
-
-.pane-bar-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
+  padding: 8px 16px 12px;
 }
 
 .vault-banner {
@@ -1863,12 +1858,31 @@ defineExpose({ mode, setMode });
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: create-panel-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
 }
 
 @keyframes create-panel-in {
   from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
+  }
+}
+
+/* The exit mirrors the entrance at the faster, accelerating token split:
+   entries settle, exits leave. `forwards` holds the last frame until Vue
+   unmounts the panel, and `pointer-events: none` hands clicks back to the page
+   during the exit instead of letting a vanishing panel eat one. */
+.menu-pop-leave-active {
+  animation: create-panel-out var(--motion-fast) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+.menu-pop-enter-active {
+  animation: create-panel-in var(--motion-base) var(--ease-out);
+}
+
+@keyframes create-panel-out {
+  to {
     opacity: 0;
     transform: translateY(calc(-1 * var(--motion-shift))) scale(var(--motion-pop-scale));
   }
@@ -2055,7 +2069,6 @@ defineExpose({ mode, setMode });
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  animation: create-panel-in var(--motion-base) var(--ease-out);
   transform-origin: top left;
 }
 
@@ -2272,7 +2285,7 @@ defineExpose({ mode, setMode });
 .split-face {
   display: grid;
   grid-template-columns: 148px minmax(0, 1fr);
-  margin-top: 14px;
+  margin-top: 4px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -3077,7 +3090,7 @@ defineExpose({ mode, setMode });
 
 @media (max-width: 900px) {
   .identities {
-    padding: 14px;
+    padding: 8px 14px 12px;
   }
 
   .search {

@@ -618,8 +618,16 @@ try {
       const boxes = [...document.querySelectorAll('.guest-pool webview')]
         .map((node) => {
           const style = getComputedStyle(node);
+          // Painted means visible to a person. 1% is the nudge that unlocks a
+          // woken page's frame scheduler (GuestPool.vue): it lasts a frame or
+          // two on a 2px strip at the window's edge, and several pages nudging
+          // at once share that strip — none of that is one page showing over
+          // another. Where those pages are allowed to sit is guarded by
+          // e2e-ai-frames; this probe guards what the user would see.
           const visible =
-            style.opacity !== '0' && style.visibility !== 'hidden' && style.display !== 'none';
+            Number.parseFloat(style.opacity) > 0.02 &&
+            style.visibility !== 'hidden' &&
+            style.display !== 'none';
           const rect = node.getBoundingClientRect();
           return {
             visible,

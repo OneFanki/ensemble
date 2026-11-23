@@ -85,6 +85,7 @@ describe("automation scripts", () => {
     "capture-screenshots.mjs",
     "smoke-packaged-mcp.mjs",
     "e2e-autofill.mjs",
+    "e2e-ai-frames.mjs",
     "e2e-batch-launch.mjs",
     "e2e-browser-views.mjs",
     "e2e-dom-resolver.mjs",
@@ -118,15 +119,20 @@ describe("automation scripts", () => {
     }
   });
 
-  it("exempts only the suites that need a real window", () => {
+  it("exempts only the suites that need a real window, and the runner skips exactly those", () => {
     // `e2e-minimize` and `e2e-popout` start the app *with* a window on purpose:
     // a headless run parks it at opacity 0, where `minimize()` is a no-op, and
     // those suites are exactly about what a really minimised window does
-    // (popout checks screenshots of a minimised popout). `e2e-ai-frames` needs
-    // a visible window too: rAF throttling is compositor behaviour, and a
-    // window that was never shown cannot reproduce the off-stage cull it
-    // asserts on. They are the only exemptions, and they are pinned here so a
-    // new script cannot excuse itself by copying their pattern.
+    // (popout checks screenshots of a minimised popout). They are the only
+    // exemptions, pinned here so a new script cannot excuse itself by copying
+    // their pattern.
+    //
+    // `e2e-ai-frames` used to be listed with them, on the belief that the
+    // compositor's cull of an off-window page needs a shown window. Measured on
+    // Electron 45: headless reproduces it (about 1fps outside the window, about
+    // 60fps once the node intersects it), so the suite runs headless like the
+    // rest. Minimise/occlusion throttling still needs a real window; that is not
+    // what it asserts.
     for (const name of ["e2e-minimize.mjs", "e2e-popout.mjs"]) {
       const text = readFileSync(join(process.cwd(), "scripts", name), "utf8");
       expect(text).not.toContain("ENSEMBLE_HEADLESS");
@@ -138,6 +144,17 @@ describe("automation scripts", () => {
         const source = readFileSync(join(process.cwd(), "scripts", name), "utf8");
         return source.includes("spawn(") && !source.includes("ENSEMBLE_HEADLESS");
       });
-    expect(exempt).toEqual(["e2e-ai-frames.mjs", "e2e-minimize.mjs", "e2e-popout.mjs"]);
+    expect(exempt).toEqual(["e2e-minimize.mjs", "e2e-popout.mjs"]);
+
+    /*
+      The default runner must skip every suite that would put a window on the
+      desktop: those two, plus `e2e-external-launch`, which opens the system
+      browser. The list in the runner and the facts on disk drifted once — the
+      two window suites were known to need a window but never registered — and
+      `pnpm e2e:all` popped real windows over whatever the user was doing.
+    */
+    const runner = readFileSync(join(process.cwd(), "scripts", "run-all-e2e.mjs"), "utf8");
+    const skipList = [...runner.matchAll(/"(e2e-[a-z0-9-]+\.mjs)"/g)].map((match) => match[1]!);
+    expect([...skipList].sort()).toEqual([...exempt, "e2e-external-launch.mjs"].sort());
   });
 });

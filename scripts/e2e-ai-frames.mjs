@@ -4,15 +4,17 @@
  *
  * 缺陷：停放页的 `<webview>` 节点被停在窗外，合成器不为窗外节点出帧，页内
  * rAF 被压到约 1fps；AI 命令（滚轮投递、动画后读取）依赖合成帧，宽限期内
- * 必须满帧。这个事实只能对真实合成器断言：窗口必须真实可见地摆在桌面上
- * （遮挡节流与窗外 cull 都是合成器行为，隐藏窗口测不出差异），所以本套件
- * 与 `run-all-e2e.mjs` 的可见窗口套件一样是 opt-in，不进默认全量。
+ * 必须满帧。这个事实只能对真实合成器断言，但对合成器 cull 的断言在无头窗口
+ * 下同样成立（实测 Electron 45：节点在窗外约 1fps，摆回窗口内约 60fps），所以
+ * 本套件以 `ENSEMBLE_HEADLESS` 运行，进默认全量。窗口最小化或被遮挡时的节流
+ * 不在这里的覆盖范围内——那需要真实可见的窗口。
  *
  * 时序（宽限与扫描由 `ENSEMBLE_SLEEP_TEST` 缩到秒级）：
  * 1. AI 打开一个无台页（必然停放），等 sweep 把它冻结；
  * 2. 一条 AI 命令装 rAF 采样器（唤醒页面并刷新宽限），随即返回；
  * 3. 宽限期内、无命令在飞时读采样：间隔必须是帧级，而不是约 1 秒；
- * 4. 宽限过后页面回到冻结（省资源行为不因修复而丢失）。
+ * 4. 同一时刻节点只露出窗口左缘的一条，不压在任何台上页上面；
+ * 5. 宽限过后页面回到冻结（省资源行为不因修复而丢失）。
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -84,6 +86,7 @@ const electron =
 const app = spawn(electron, [".", `--user-data-dir=${userData}`, "--remote-debugging-port=0"], {
   env: {
     ...process.env,
+    ENSEMBLE_HEADLESS: "1",
     ENSEMBLE_SLEEP_TEST: "1",
     ENSEMBLE_SLEEP_GRACE_MS: String(GRACE_MS),
     ENSEMBLE_SLEEP_SWEEP_MS: String(SWEEP_MS),
@@ -212,6 +215,16 @@ try {
     probeDetail = await client.evaluate(`(() => {
       const node = document.querySelector('webview[data-tab-id="${tabId}"]');
       const style = node ? node.style : null;
+      const rect = node ? node.getBoundingClientRect() : null;
+      // 其它落在窗口内的页面节点：本页不能压在它们任何一页上面。
+      const others = [...document.querySelectorAll('.guest-pool webview')]
+        .filter((item) => item !== node)
+        .map((item) => item.getBoundingClientRect())
+        .filter((box) => box.width > 0 && box.right > 0 && box.left < innerWidth);
+      const right = rect ? rect.x + rect.width : null;
+      const overlap = rect
+        ? Math.max(0, ...others.map((box) => Math.min(right, box.right) - Math.max(rect.x, box.left)))
+        : null;
       const state = window.ensemble.getEmbeddedState();
       return state.then((next) => {
         const tab = next.tabs.find((item) => item.id === ${JSON.stringify(tabId)});
@@ -219,6 +232,8 @@ try {
           gaps: ${JSON.stringify(gaps)},
           left: style ? Number.parseFloat(style.left) : null,
           width: style ? Number.parseFloat(style.width) : null,
+          right: right === null ? null : Math.round(right * 100) / 100,
+          overlap: overlap === null ? null : Math.round(overlap * 100) / 100,
           sleeping: tab?.sleeping === true,
           sleepExempt: tab?.sleepExempt ?? null,
         };
@@ -234,6 +249,20 @@ try {
     "rAF runs at frame rate while the AI grace holds",
     gaps.length >= 5 && median < 250,
     { gaps, median, node: probeDetail },
+  );
+  /*
+    满帧靠的是「节点与窗口相交」，不是「节点摆在舞台上」。出帧页若整页摆到
+    舞台上，就与台上页同矩形，解锁帧调度用的透明度抖动会以 1% 盖在用户正在
+    看的那一页上（批量启动时好几页同时如此）。4px 与 batch-launch 探针判定
+    「两页重叠」的门槛同值。
+  */
+  check(
+    "the AI-frames page only peeks in at the window edge, clear of every on-stage page",
+    probeDetail?.right !== null &&
+      probeDetail?.right !== undefined &&
+      probeDetail.right <= 4 &&
+      probeDetail.overlap <= 4,
+    { right: probeDetail?.right, overlap: probeDetail?.overlap },
   );
 
   // 宽限一过，省资源行为必须照旧：页面回到冻结。

@@ -9,17 +9,25 @@ import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 
 /**
- * Suites that open real browser windows and are therefore opt-in.
+ * Suites that open real windows on the desktop and are therefore opt-in.
  *
  * Everything here is discovered by the glob below, but running it unasked pops
  * visible windows on whatever the user is doing. Naming them (rather than
  * renaming the files) keeps the "every e2e-* runs" rule intact while making the
  * exception one readable line.
+ *
+ * Membership is about what the suite launches, not what it asserts: a suite
+ * that spawns Electron without `ENSEMBLE_HEADLESS` shows a real app window
+ * (minimize and pop-out need one — their subject is the OS window itself),
+ * and `e2e-external-launch` opens the system browser. Compositor culling of an
+ * off-window guest, by contrast, reproduces headless: `e2e-ai-frames` measures
+ * about 1fps with the node outside the window and about 60fps once it is back,
+ * so it belongs in the default run.
  */
 const VISIBLE_WINDOW_SUITES = new Set([
   "e2e-external-launch.mjs",
-  // rAF 帧率是合成器行为，隐藏窗口测不出窗外 cull 的差异，必须有真实可见窗口。
-  "e2e-ai-frames.mjs",
+  "e2e-minimize.mjs",
+  "e2e-popout.mjs",
 ]);
 
 const files = readdirSync("scripts")

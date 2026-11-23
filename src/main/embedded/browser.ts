@@ -4091,10 +4091,18 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
    * without relying on CDP pipelining. `lifecycle()` deliberately bypasses this
    * hook, or the freeze sweep would keep every page awake by marking its own
    * freeze as activity.
+   *
+   * 同时把刷新后的 AI 宽限广播出去：渲染层据此让 AI 活跃页保持出帧（见
+   * `needsCompositorFrames`），状态不广播，摆位就不会跟着宽限走。
    */
   private async markCdpActivity(tabId: string): Promise<void> {
     if (!this.options.aiIdleFreeze) return;
     this.aiActiveUntil.set(tabId, Date.now() + this.sleepGraceMs);
+    // 宽限刷新必须立刻广播：渲染层靠 sleepExempt === "ai-active" 把不在台上的
+    // 节点摆回窗口内（窗外节点被合成器 cull，rAF 只剩约 1fps），不广播的话
+    // 第一条命令期间的摆位要等下一次 sweep 才会生效。sendState 自带合并，
+    // 逐条命令触发不会放大成逐条 IPC。
+    this.sendState();
     await this.wakeTab(tabId);
   }
 

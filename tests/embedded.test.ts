@@ -12,7 +12,9 @@ import {
   embeddedSlotRects,
   embeddedTabPartition,
   embeddedViewRect,
+  ghostPresentationRect,
   inlineFavicon,
+  needsCompositorFrames,
   neighborZoomStep,
   normalizeEmbeddedUrl,
   guestNodeRect,
@@ -387,6 +389,77 @@ describe("where a page node sits", () => {
     expect(parked.width).toBe(win.width);
     expect(parked.height).toBe(win.height);
     expect(parked.x).toBe(-win.width);
+  });
+});
+
+describe("AI 活跃页的出帧摆位", () => {
+  /*
+   * 缺陷背景：停放页的节点停在窗外，合成器不为窗外节点出帧，页内 rAF 被压到
+   * 约 1fps；AI 命令依赖合成帧（滚轮投递、动画后读取），在命令在飞与宽限期
+   * 内必须满帧。这里钉住两层契约：哪个豁免理由算「必须出帧」，以及出帧摆位
+   * 是否真的落在窗口视口内。
+   */
+  const stage = { x: 52, y: 113, width: 900, height: 600 };
+  const win = { width: 1280, height: 800 };
+  const bounds = { x: 10, y: 26, width: 880, height: 574 };
+
+  it("只有 ai-active 豁免要求持续出帧", () => {
+    expect(needsCompositorFrames({ sleepExempt: "ai-active" })).toBe(true);
+    // 其他豁免不改变窗外摆位：台上页本来就在窗口内，有声页与策略豁免页维持
+    // 现状（省资源行为不动），无豁免与已冻结页照常停放。
+    expect(needsCompositorFrames({ sleepExempt: "on-stage-visible" })).toBe(false);
+    expect(needsCompositorFrames({ sleepExempt: "audible" })).toBe(false);
+    expect(needsCompositorFrames({ sleepExempt: "policy" })).toBe(false);
+    expect(needsCompositorFrames({})).toBe(false);
+    expect(needsCompositorFrames(undefined)).toBe(false);
+  });
+
+  it("AI 活跃页的 ghost 摆位落在舞台原点且保留自身尺寸", () => {
+    const rect = ghostPresentationRect({ stage, own: bounds, window: win });
+    // 左上角在舞台内：节点与可见区域相交，合成器因此持续 raster。
+    expect(rect.x).toBeGreaterThanOrEqual(stage.x);
+    expect(rect.y).toBeGreaterThanOrEqual(stage.y);
+    expect(rect.x).toBeLessThan(stage.x + stage.width);
+    expect(rect.y).toBeLessThan(stage.y + stage.height);
+    expect(rect.width).toBe(bounds.width);
+    expect(rect.height).toBe(bounds.height);
+  });
+
+  it("没有自身盒子的 AI 活跃页退到舞台尺寸，而不是 0×0", () => {
+    const rect = ghostPresentationRect({ stage, own: null, window: win });
+    expect(rect.x).toBe(stage.x);
+    expect(rect.y).toBe(stage.y);
+    expect(rect.width).toBe(stage.width);
+    expect(rect.height).toBe(stage.height);
+  });
+
+  it("舞台未上报（控制台盖住浏览器）时退到窗口原点，仍在视口内", () => {
+    const rect = ghostPresentationRect({ stage: null, own: bounds, window: win });
+    expect(rect.x).toBe(0);
+    expect(rect.y).toBe(0);
+    expect(rect.width).toBe(bounds.width);
+    expect(rect.height).toBe(bounds.height);
+    const bare = ghostPresentationRect({ stage: null, own: null, window: win });
+    expect(bare.width).toBe(win.width);
+    expect(bare.height).toBe(win.height);
+  });
+
+  it("AI 活跃页的最终落点与窗口相交——这是合成器肯出帧的前提", () => {
+    // 按组件的实际取用方式组合两个函数：needsFrames 决定走 ghost 摆位还是
+    // 窗外停放。变异任何一环（豁免判定、ghost 几何）都会让这条变红。
+    const tab = { sleepExempt: "ai-active" as const };
+    const rect = needsCompositorFrames(tab)
+      ? ghostPresentationRect({ stage, own: bounds, window: win })
+      : guestNodeRect({ stage, bounds, onStage: false, window: win });
+    const intersectsWindow =
+      rect.x + rect.width > 0 &&
+      rect.y + rect.height > 0 &&
+      rect.x < win.width &&
+      rect.y < win.height;
+    expect(intersectsWindow).toBe(true);
+    // 反向对照：非 AI 活跃页维持窗外停放（沿用既有契约）。
+    const parked = guestNodeRect({ stage, bounds, onStage: false, window: win });
+    expect(parked.x + parked.width).toBeLessThanOrEqual(0);
   });
 });
 

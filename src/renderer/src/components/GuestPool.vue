@@ -16,7 +16,12 @@
  * reports the guest id back. Creation-time matters — `partition` and
  * `allowpopups` cannot be applied afterwards.
  */
-import { guestNodeRect, type StageRect } from "@shared/embedded";
+import {
+  ghostPresentationRect,
+  guestNodeRect,
+  needsCompositorFrames,
+  type StageRect,
+} from "@shared/embedded";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useEmbeddedStore } from "../stores/embedded";
 
@@ -37,6 +42,14 @@ interface Mounted {
   presenting: number;
   /** Main has been told this node has a real box (reported once). */
   laidOut: boolean;
+  /**
+   * Whether the node is currently in the AI-frames ghost state.
+   *
+   * Entering that state needs a one-shot opacity nudge to unlock the guest's
+   * rAF scheduler (see the layout note); leaving it re-arms the nudge, so a
+   * page that froze and woke again gets a fresh one.
+   */
+  framesGhosted: boolean;
 }
 
 const embedded = useEmbeddedStore();
@@ -68,7 +81,7 @@ const nodes = new Map<string, Mounted>();
 function placeFor(
   tabId: string,
   stage: StageRect | null,
-): { rect: StageRect; onStage: boolean } {
+): { rect: StageRect; onStage: boolean; needsFrames: boolean } {
   const tab = embedded.tabs.find((item) => item.id === tabId);
   /*
    * Whether this page is one of the pages the stage is showing.
@@ -101,6 +114,10 @@ function placeFor(
       window: { width: window.innerWidth, height: window.innerHeight },
     }),
     onStage,
+    // AI 正在操作（命令在飞或宽限期内）的页面必须满帧：即使不在台上，节点也
+    // 要摆进窗口让合成器继续 raster，否则页内 rAF 被压到约 1fps，滚轮投递、
+    // 动画后读取这类依赖合成帧的操作全部失真。
+    needsFrames: needsCompositorFrames(tab),
   };
 }
 
@@ -169,20 +186,21 @@ function layout(): void {
      * width, so `set_browser_viewport` looked like it did nothing on any page
      * that was not already on stage. Only a page with no box of its own — a
      * brand-new tab, a park that was zeroed — falls back to the stage size.
+     *
+     * AI 正在操作的页面（`sleepExempt === "ai-active"`，命令在飞或宽限期内）
+     * 走同一条 ghost 摆位：它不在台上时节点停在窗外，合成器不为窗外节点出帧，
+     * 页内 rAF 被压到约 1fps——AI 的滚轮投递、动画后读取都依赖合成帧，必须
+     * 满帧。两种来由共用一个几何函数（ghostPresentationRect），宽限一过判定
+     * 自动翻 false，节点回到窗外，省资源行为不受影响。
      */
-    const ghost = presenting && !placement.onStage;
+    const ghost = (presenting || placement.needsFrames) && !placement.onStage;
     const ownBox = placement.rect.width > 0 && placement.rect.height > 0;
     const rect = ghost
-      ? stage && stage.width > 0 && stage.height > 0
-        ? ownBox
-          ? { x: stage.x, y: stage.y, width: placement.rect.width, height: placement.rect.height }
-          : { x: stage.x, y: stage.y, width: stage.width, height: stage.height }
-        : {
-            x: 0,
-            y: 0,
-            width: ownBox ? placement.rect.width : Math.max(1, window.innerWidth),
-            height: ownBox ? placement.rect.height : Math.max(1, window.innerHeight),
-          }
+      ? ghostPresentationRect({
+          stage,
+          own: ownBox ? placement.rect : null,
+          window: { width: window.innerWidth, height: window.innerHeight },
+        })
       : placement.rect;
     const onStage = placement.onStage;
     const style = mounted.node.style;
@@ -206,6 +224,24 @@ function layout(): void {
     // Above the other nodes while presenting: a page that is being read must not
     // be painted underneath a sibling that is parked at the same spot.
     style.zIndex = presenting ? "3" : "1";
+    /*
+     * 摆进窗口只是让合成器「肯为这个节点 raster」；唤醒后的 guest 还有一层
+     * rAF 调度的残留节流（冻结→唤醒，或从窗外摆回窗口之后，页内 rAF 仍停在
+     * 约 1fps），要一次真实的渲染输出变化才肯恢复。实测 45.2.1：z-index 或
+     * present 这类不改变输出的刺激无效，透明度 0 → 0.01 → 0 有效，且解锁后
+     * 静置十几秒也不回落。抖完停在 0，与 ghost 的不可见语义一致，人眼无痕迹。
+     * 状态离开再进入（宽限过期后又一次 AI 活动）会重新抖一次。
+     */
+    const framesGhost = ghost && placement.needsFrames;
+    if (framesGhost && !mounted.framesGhosted) {
+      mounted.framesGhosted = true;
+      style.opacity = "0.01";
+      setTimeout(() => {
+        // 期间 layout 若改了透明度（页面上了台、宽限结束），不要覆盖。
+        if (style.opacity === "0.01") style.opacity = "0";
+      }, 300);
+    }
+    if (!framesGhost) mounted.framesGhosted = false;
     // A node that has never had a real box reports a 0×0 viewport, and every
     // visibility check inside the page then answers false. Main has to know the
     // difference between "mounted" and "ready to be read".
@@ -299,7 +335,13 @@ function mountNode(payload: {
   node.addEventListener("did-navigate-in-page", pushState);
   node.addEventListener("did-stop-loading", layout);
 
-  nodes.set(payload.tabId, { node, partition: payload.partition, presenting: 0, laidOut: false });
+  nodes.set(payload.tabId, {
+    node,
+    partition: payload.partition,
+    presenting: 0,
+    laidOut: false,
+    framesGhosted: false,
+  });
   container.value?.appendChild(node);
   layout();
 }
@@ -352,7 +394,8 @@ const stopWatching = watch(
       embedded.tabs.map((tab) => {
         const bounds = tab.bounds;
         const rect = bounds ? `${bounds.x},${bounds.y},${bounds.width},${bounds.height}` : "-";
-        return `${tab.id}:${rect}:${tab.active ? 1 : 0}:${tab.viewId ?? ""}`;
+        // sleepExempt 决定 AI 活跃页是否走 ghost 摆位，是布局输入的一部分。
+        return `${tab.id}:${rect}:${tab.active ? 1 : 0}:${tab.viewId ?? ""}:${tab.sleepExempt ?? ""}`;
       }),
     ] as const,
   () => layout(),

@@ -498,6 +498,48 @@ export function guestNodeRect(input: {
 }
 
 /**
+ * 是否该页因 AI 正在操作而必须继续出帧。
+ *
+ * 合成器不为完全在窗口外的节点出帧（rAF 被压到约 1fps），而停放页的节点恰好
+ * 就在窗外。AI 命令在飞或宽限期内（`sleepExempt === "ai-active"`）的页面必须
+ * 满帧运行——滚轮投递、动画后截图、时序断言都依赖合成帧——所以渲染层用这个
+ * 判定决定是否把节点摆回窗口内。豁免期结束（宽限过期、sweep 冻结）后判定
+ * 自动变回 false，节点回到窗外，省资源行为不受影响。
+ */
+export function needsCompositorFrames(tab: Pick<EmbeddedTab, "sleepExempt"> | undefined): boolean {
+  return tab?.sleepExempt === "ai-active";
+}
+
+/**
+ * 一个「只要帧、不要可见性」的页面节点该摆在哪里。
+ *
+ * 从 GuestPool 的 ghost 摆位原样提取：舞台有效时摆在舞台原点（自身有盒子就
+ * 保留自身尺寸，否则用舞台尺寸）；舞台未上报时退到窗口原点。两种落点都在
+ * 窗口视口内，合成器因此持续为该节点 raster——这正是 ghost 的目的，也是
+ * AI 活跃页借用的同一条路。摆放几何必须两态出自同一个函数，避免「读页
+ * 摆位」与「AI 摆位」各自演化后互相对不上。
+ */
+export function ghostPresentationRect(input: {
+  stage: StageRect | null;
+  /** 页面自身的盒子；没有（尚未摆放过）传 null，退到舞台或窗口尺寸。 */
+  own: StageRect | null;
+  window: { width: number; height: number };
+}): StageRect {
+  const { stage, own, window: win } = input;
+  if (stage && stage.width > 0 && stage.height > 0) {
+    return own
+      ? { x: stage.x, y: stage.y, width: own.width, height: own.height }
+      : { x: stage.x, y: stage.y, width: stage.width, height: stage.height };
+  }
+  return {
+    x: 0,
+    y: 0,
+    width: own ? own.width : Math.max(1, win.width),
+    height: own ? own.height : Math.max(1, win.height),
+  };
+}
+
+/**
  * Whether a page is painting on screen, i.e. whether the compositor has frames
  * for it.
  *

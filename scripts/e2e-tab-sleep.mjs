@@ -77,10 +77,13 @@ writeFileSync(
   { mode: 0o600 },
 );
 
+// `ENSEMBLE_ELECTRON_BIN` lets a machine whose electron dist was not installed
+// point the suite at another copy of the same version.
 const electron =
-  process.platform === "win32"
+  process.env.ENSEMBLE_ELECTRON_BIN ??
+  (process.platform === "win32"
     ? resolve("node_modules/electron/dist/electron.exe")
-    : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
+    : resolve("node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"));
 const app = spawn(electron, [".", `--user-data-dir=${userData}`, "--remote-debugging-port=0"], {
   env: {
     ...process.env,

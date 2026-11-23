@@ -118,13 +118,15 @@ describe("automation scripts", () => {
     }
   });
 
-  it("exempts only the suites that need a minimisable window", () => {
+  it("exempts only the suites that need a real window", () => {
     // `e2e-minimize` and `e2e-popout` start the app *with* a window on purpose:
     // a headless run parks it at opacity 0, where `minimize()` is a no-op, and
     // those suites are exactly about what a really minimised window does
-    // (popout checks screenshots of a minimised popout). They are the only
-    // exemptions, and they are pinned here so a new script cannot excuse itself
-    // by copying their pattern.
+    // (popout checks screenshots of a minimised popout). `e2e-ai-frames` needs
+    // a visible window too: rAF throttling is compositor behaviour, and a
+    // window that was never shown cannot reproduce the off-stage cull it
+    // asserts on. They are the only exemptions, and they are pinned here so a
+    // new script cannot excuse itself by copying their pattern.
     for (const name of ["e2e-minimize.mjs", "e2e-popout.mjs"]) {
       const text = readFileSync(join(process.cwd(), "scripts", name), "utf8");
       expect(text).not.toContain("ENSEMBLE_HEADLESS");
@@ -136,6 +138,6 @@ describe("automation scripts", () => {
         const source = readFileSync(join(process.cwd(), "scripts", name), "utf8");
         return source.includes("spawn(") && !source.includes("ENSEMBLE_HEADLESS");
       });
-    expect(exempt).toEqual(["e2e-minimize.mjs", "e2e-popout.mjs"]);
+    expect(exempt).toEqual(["e2e-ai-frames.mjs", "e2e-minimize.mjs", "e2e-popout.mjs"]);
   });
 });

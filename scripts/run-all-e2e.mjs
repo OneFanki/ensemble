@@ -16,7 +16,11 @@ import { readdirSync } from "node:fs";
  * renaming the files) keeps the "every e2e-* runs" rule intact while making the
  * exception one readable line.
  */
-const VISIBLE_WINDOW_SUITES = new Set(["e2e-external-launch.mjs"]);
+const VISIBLE_WINDOW_SUITES = new Set([
+  "e2e-external-launch.mjs",
+  // rAF 帧率是合成器行为，隐藏窗口测不出窗外 cull 的差异，必须有真实可见窗口。
+  "e2e-ai-frames.mjs",
+]);
 
 const files = readdirSync("scripts")
   .filter((name) => /^e2e-[a-z0-9-]+\.mjs$/.test(name))

@@ -177,13 +177,13 @@ Workspace data stays backward compatible: old files open as-is, and import and e
 #### 修复
 
 - **AI 开页默认复用已录入的账号**。`open_browser_tab` 不带 `identityId` 时，会按地址找到同源站点的第一个账号，找不到再按 `siteId`；都不匹配才是一次性干净会话。返回值里的 `identityName` 和 `resolvedBy` 说明用了哪个账号、凭什么归的类。2.3.0 里不带 `identityId` 一律是干净会话，AI 得自己查出账号 id 再传进来，查不到就回去手填登录表单。
-- **`launch_view`、`launch_identity`、`launch_clean_session` 默认开在内置浏览器**。传 `external: true` 才开系统浏览器窗口。2.3.0 里这三个工具默认开外部窗口，AI 很容易把本该在内置页面里做的操作开到系统浏览器上。依赖旧行为的调用需要补上 `external: true`。
-- **AI 正在操作的页面保持正常出帧**。不在舞台上的页面平时停在窗口外来省资源，页面里的动画和 `requestAnimationFrame` 会降到约 1fps。AI 对它发命令期间和之后的一小段宽限里，这个页面会被摆回窗口内，滚动、动画结束后读取这类依赖画面的操作能拿到正常结果。宽限一过就回到原来的省资源状态。
+- **`launch_view`、`launch_identity`、`launch_clean_session` 默认开在内置浏览器**。传 `external: true` 才开系统浏览器窗口。2.3.0 里这三个工具默认开外部窗口，AI 很容易把本该在内置页面里做的操作开到系统浏览器上。依赖旧行为的调用需要补上 `external: true`；`external` 只接受布尔值，传 `"true"` 或 `1` 会报错。
+- **AI 正在操作的页面和加载中的页面保持正常出帧**。不在舞台上的页面平时停在窗口外来省资源，页面里的动画和 `requestAnimationFrame` 会降到约 1fps。AI 对它发命令期间、之后的一小段宽限里，以及页面正在加载时，这个页面的节点会贴回窗口边缘，滚动、动画结束后读取这类依赖画面的操作能拿到正常结果。宽限或加载结束后，页面随下一次状态刷新回到原来的省资源状态。
 - **macOS 上窗口按钮不再压住账号条最左的入口**。窗口左上角三颗按钮下面的留白挪到了首行的账号条上，地址栏与它左缘对齐。
 
 #### 新增
 
-- **`resolve_browser_target`**（只读）。传一个地址，返回它属于哪个已录入的站点、这个站点下有哪些账号、建议用哪个 `identityId`。传了 `identityId` 但它不属于匹配到的站点时，返回里带一句提醒。
+- **`resolve_browser_target`**（只读）。传一个地址，返回它属于哪个已录入的站点、这个站点下有哪些账号、建议用哪个 `identityId`。地址匹配到了站点、而传入的 `identityId` 属于别的站点时，返回里带一句提醒；地址没匹配到任何站点时，沿用传入的账号。
 - **`get_workspace_summary` 带上每个站点的账号列表**。只有 id、名称和用户名，不含密码；单个站点超过 20 个账号时只带前 20 个，并标 `identitiesTruncated`。
 
 ### English
@@ -193,13 +193,13 @@ Workspace data stays backward compatible: old files open as-is, and import and e
 #### Fixed
 
 - **`open_browser_tab` reuses a stored account by default.** Without `identityId` it picks the first account of the site whose origin matches the URL, then falls back to `siteId`; only when nothing matches does it open a throw-away clean session. The return value carries `identityName` and `resolvedBy`, so the caller knows which account it got and why. In 2.3.0 a call without `identityId` was always a clean session, so an AI had to look up the account id itself and fell back to hand-filling the login form when it couldn't.
-- **`launch_view`, `launch_identity` and `launch_clean_session` open in the embedded browser by default.** They open a system browser window only with `external: true`. In 2.3.0 they opened external windows, and an AI would carry work meant for the embedded page into the system browser. Calls that relied on that need `external: true` now.
-- **A page an AI is driving keeps rendering at full rate.** Pages that are off stage normally sit outside the window to save resources, which drops their animations and `requestAnimationFrame` to about 1fps. While an AI is sending commands to such a page, and for a short grace period after, the page moves back inside the window, so scrolling and reads taken after an animation return real results. Once the grace period ends the page returns to the low-power state.
+- **`launch_view`, `launch_identity` and `launch_clean_session` open in the embedded browser by default.** They open a system browser window only with `external: true`. In 2.3.0 they opened external windows, and an AI would carry work meant for the embedded page into the system browser. Calls that relied on that need `external: true` now. `external` takes a boolean only; `"true"` or `1` is an error.
+- **A page an AI is driving, and a page that is still loading, keep rendering at full rate.** Pages that are off stage normally sit outside the window to save resources, which drops their animations and `requestAnimationFrame` to about 1fps. While an AI is sending commands to such a page, for a short grace period after, and for as long as the page is loading, the page's node is brought back to the window's edge, so scrolling and reads taken after an animation return real results. Once the grace period or the load ends, the page goes back to the low-power state on the next state refresh.
 - **On macOS the window buttons no longer cover the leftmost entry of the account bar.** The space reserved under the three buttons in the top-left corner now belongs to the account bar on the first row, and the address row lines up with it.
 
 #### Added
 
-- **`resolve_browser_target`** (read-only). Given a URL, it returns which stored site the URL belongs to, the accounts under that site, and the `identityId` it recommends. When the passed `identityId` does not belong to the matched site, the result carries a warning.
+- **`resolve_browser_target`** (read-only). Given a URL, it returns which stored site the URL belongs to, the accounts under that site, and the `identityId` it recommends. When the URL matches a site and the passed `identityId` belongs to a different one, the result carries a warning; when the URL matches no site, the passed account is kept.
 - **`get_workspace_summary` lists the accounts of each site.** Only id, name and username, never the password; a site with more than 20 accounts gets the first 20 and an `identitiesTruncated` flag.
 
 ## [2.2.1] - 2026-11-16

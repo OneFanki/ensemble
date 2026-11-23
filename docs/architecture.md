@@ -536,8 +536,10 @@ Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不
   （登录态、区域、Cookie 都跟着走），只有主进程做得到。`inlineFavicon` 把类型与大小规则抽成
   纯函数，避免为了测它而启动 Electron。
 - **停放页空闲后睡眠（`aiIdleFreeze`，headless 关闭，`ENSEMBLE_SLEEP_TEST` 可开）。**
-  页面挪出窗口只是看不见，Chromium 仍视其为「可见」，原生后台节流永不触发——应用窗口在屏上
-  时，每个停放页（包括 3D 首页）都会满速渲染。真正生效的是 CDP
+  页面挪出窗口后 Chromium 仍视其为「可见」，原生后台节流永不触发，定时器与网络照常跑。
+  被压掉的只有合成帧：`<webview>` 载体下窗外节点不参与合成，页内 `requestAnimationFrame`
+  降到约 1fps（WebContentsView 时代停窗外仍满帧，载体迁移后不再成立）。定时器、布局与
+  脚本不受影响，所以要收回 CPU 仍得靠冻结。真正生效的是 CDP
   `Page.setWebLifecycleState: "frozen"`：页面 JavaScript 整体挂起（冻结页上 evaluate 永不
   返回），3D 场景随之停。停放页闲置 60 秒（窗口期内无任何 CDP 流量）后由 10 秒一轮的扫描
   冻结，**扫描在浏览器构造时无条件启动**。AI 的每条命令在 `GuestCdp` 的 `send` /
@@ -551,6 +553,13 @@ Chrome 性能监视器一致。形状是**汇总而不是曲线**：模型读不
   「用户可见」不是占格：它是台上实例的当前页 × 宿主窗口可见——窗口最小化、隐藏到托盘时
   台上页照常入冻（minimize/hide 即扫一轮，restore/show 唤醒台上页），批量启动的后台成员与
   AI 经 `open_browser_tab` 开的页（落自己的实例、不占格）同样按闲置入冻。
+  两种豁免下的页面需要合成帧：`ai-active`（AI 命令在飞或宽限期内）与 `loading`。渲染层
+  （`GuestPool.vue`）据 `needsCompositorFrames` 把这类页面的节点贴回窗口左缘、只露出 2px
+  （`aiFramesRect`）：合成器只要求节点与窗口相交就肯出帧，所以不必像 present 读页那样
+  整页摆到舞台上，也就不会压在台上页上面。节点贴回来之后页内 rAF 仍停在约 1fps，要一次
+  真实的渲染输出变化才恢复——渲染层在页面进入这个状态时做一次透明度抖动
+  （`0 → 0.01 → 0`，两帧 rAF 后归零），只给贴边的页面抖，呈现页不抖。豁免结束后节点随
+  下一次状态广播回到窗外。
   命令在途由 `CdpExecutor.busy()` 报告，guest 只数 **AI 命令**（`GuestCdp.aiInFlight`）：
   观察通道（性能采样的 5 Hz 心跳等）不算忙碌，否则扫描的宽限刷新会被采样命令连续续命，
   被观察的页永远睡不着。扫描遇到忙碌页就刷新 AI 窗口并跳过——一个跑了几分钟的 `evaluate`

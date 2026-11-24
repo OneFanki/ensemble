@@ -81,7 +81,7 @@ click_browser_element({ tabId, text: "创建租户" })
   内部：算坐标 → 点击 → 读回
 ```
 
-问题：两步之间页面重渲染，第二次可能定位到不同元素；观察（`check_element_visible`）
+问题：两步之间页面重渲染，第二次可能定位到不同元素；观察（`check_browser_element_visible`）
 与动作（`click_browser_element`）各写一套定位，无法共享。
 
 **要变成的形状**：先解析成可复用的句柄，再对句柄操作

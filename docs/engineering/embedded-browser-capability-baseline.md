@@ -50,8 +50,8 @@ ADR 0010 是把迁移**暂缓**（2026-10-28 裁决），并列了三条重启�
 | `navigate` | `navigate_browser_tab` | 有 |
 | `back` / `forward` / `reload` | 无独立工具（走 `evaluate_browser_page` 绕） | **缺** |
 | `get_state`（url/title/canGoBack/canGoForward/scroll） | `read_browser_page` 部分覆盖 | 部分 |
-| `wait_for_load_state`（`load`/`domcontentloaded`/`networkidle`） | `wait_browser` 只有 visible/hidden/text/url/value | **缺** |
-| `wait_for`（selector / text / textGone，带超时） | `wait_browser` 覆盖 text/url/visible | 部分 |
+| `wait_for_load_state`（`load`/`domcontentloaded`/`networkidle`） | `wait_browser_condition` 只有 visible/hidden/text/url/value | **缺** |
+| `wait_for`（selector / text / textGone，带超时） | `wait_browser_condition` 覆盖 text/url/visible | 部分 |
 | `wait_for_url` | **缺** | **缺** |
 | `wait`（固定毫秒） | **缺** | **缺** |
 
@@ -88,7 +88,7 @@ ADR 0010 是把迁移**暂缓**（2026-10-28 裁决），并列了三条重启�
 
 | 工具 | 现有对应 | 状态 |
 | --- | --- | --- |
-| `tabs`（list/create/close/activate/claim） | `list_browser_tabs` / `open_browser_tab` / `close_browser_tab` / `set_tab_page` | 有，但语义不同 |
+| `tabs`（list/create/close/activate/claim） | `list_browser_tabs` / `open_browser_tab` / `close_browser_tab` / `activate_browser_tab` | 有，但语义不同 |
 | `scope`（子任务临时控制域，with barrier） | 无 | **缺**（可用 `launch_clean_session` 覆盖部分场景） |
 | `set_visible` | 内部有（离台页面停到窗口外），无工具 | 部分 |
 | `resize` / `viewport_reset` | `set_browser_viewport` / `reset_browser_viewport` | 有 |

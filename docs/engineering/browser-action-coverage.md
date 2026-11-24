@@ -232,9 +232,9 @@ Electron 45.2.1 上用真实页面测过：
 | `waitForHidden` | 等元素消失 | 轮询求值 | 已有 |
 | `waitForText` | 等页面出现文本 | 轮询求值 | 已有 |
 | `waitForUrl` | 等地址匹配 | 轮询求值 | **待做**（当前 `wait` 有 url 条件，无独立工具） |
-| `waitForLoadState` | 等 `load` / `domcontentloaded` / `networkidle` | `Page.loadEventFired` 等事件 | 已有（`load` 形态：`wait_browser` 的 `load` 条件，页内轮询 readyState） |
-| `waitForNetworkIdle` | 等网络静默 | `Network.requestWillBeSent`/`loadingFinished` | 部分（有 `wait_browser` 条件） |
-| `waitForResponse` | 等某个请求返回（含状态码） | 页面收集器（`fetch`/XHR 包装） | 已有（`wait_browser` 的 `response` 条件，配 `status` 精确匹配） |
+| `waitForLoadState` | 等 `load` / `domcontentloaded` / `networkidle` | `Page.loadEventFired` 等事件 | 已有（`load` 形态：`wait_browser_condition` 的 `load` 条件，页内轮询 readyState） |
+| `waitForNetworkIdle` | 等网络静默 | `Network.requestWillBeSent`/`loadingFinished` | 部分（有 `wait_browser_condition` 条件） |
+| `waitForResponse` | 等某个请求返回（含状态码） | 页面收集器（`fetch`/XHR 包装） | 已有（`wait_browser_condition` 的 `response` 条件，配 `status` 精确匹配） |
 | `wait` | 固定等待 | 定时器 | 已有 |
 
 ### 3.5 读取与观察
@@ -365,6 +365,6 @@ MCP 工具（click_browser_element …）  ─┐
 - [x] 第一批动作（`hover` / `scroll` / `keypress` / `back`·`forward`·`reload` / `dialog`）
 - [x] 第二批动作（`setFiles` / `drag` / `check`）
 - [x] 第三批动作（`elementInfo` / `getAttribute` / `getValue` / 元素裁剪截图）
-- [x] 第四批动作（网络与环境模拟：`read_browser_requests` / `wait_browser` 的 `load`·`response` 条件 / `set_browser_emulation` 的时区·媒体·离线·地理）
+- [x] 第四批动作（网络与环境模拟：`read_browser_requests` / `wait_browser_condition` 的 `load`·`response` 条件 / `set_browser_emulation` 的时区·媒体·离线·地理）
 - [x] 流程的 `cdp` 步骤类型 + 三档白名单（`core/cdp/flow-whitelist.ts`，`tests/flow-whitelist.test.ts` + `scripts/e2e-flow-cdp.mjs`）
 - [x] 流程的 `script` 步骤（编排层，方案 B；`main/embedded/flow-script.ts`，`tests/flow-script.test.ts` + `scripts/e2e-flow-script.mjs`）

@@ -427,16 +427,32 @@ MCP 暴露的浏览器工具覆盖：列标签、开视图、开标签（按身�
 `focusPage()`：不抬窗口、不把界面切到浏览器页。UI 入口（工具栏「+」、账号卡、视图启动）
 仍然抬窗口——那是用户刚刚点了一下，想看到结果；AI 是把页面当工作区在用，往往在用户读
 文档或改设置时开页，每开一个页就把窗口顶到最前面会让这个端点没法用。`open_browser_tab`
-的页面也不进任何容器：它落自己的实例（干净身份或自建身份的分区），台上的格位与用户的选中都
+的页面也不进任何容器：它落自己的实例（一次性干净身份，或某个账号的分区），台上的格位与用户的选中都
 不动，闲置后照常入冻；要上台由用户点实例条，或 AI 用 `open_browser_view` /
-`pin_browser_tab` / `activate` 显式摆位。
+`pin_browser_tab` / `activate_browser_tab` 显式摆位。
 
 - 不上台也照样能工作：台外节点保有完整尺寸的停靠框，所以截图与 DOM 读取在后台照常可用。
 - 输入类工具开启 `Emulation.setFocusEmulationEnabled`，窗口不在前台也能派发事件。
 - `openEmbeddedView(viewId, { reveal })` 用同一个函数服务两边，差别只有这一个参数。
+- **省略 `tabId` 表示 AI 最近打开的页面。** AI 开的页不认领激活页（「激活页」指的是用户正在看
+  的那一页），拿激活页当默认值，开完页不带 id 继续操作就会落到用户正在看的页面上。规则在
+  `resolveDefaultTabId`：AI 自己的页面优先，没有时才轮到激活页。
+- **带账号开页后，登录流程不抢走调用方点名的地址。** 未登录时页面会先被带到登录页；登录
+  完成后回到 `open_browser_tab` 被要求打开的地址，而不是账号起始页
+  （`scheduleEmbeddedLogin(tabId, identityId, { returnUrl })`）。调度函数把「要不要登录」
+  的判断等出来再返回（有上限），登录本身仍在后台跑；判断结果作为 `login` 随开页返回——
+  页面在调用方拿到返回值之后才被带走，不说的话它下一步读到的就是一个自己没要求打开的页面。
 
-**定位元素用语义目标，不是位置选择器。** 每个交互工具都接受 `label`（表单项旁的标签）、
-`text`（按钮上的文字）、`role`，`selector` 仍然保留。原因是实测出来的：组件库的表单里
+**定位元素用语义目标，不是位置选择器。** 定位元素的工具都接受 `label`（表单项旁的标签）、
+`text`（按钮上的文字）、`role`，`selector` 仍然保留。两个例外各有原因：`wait_browser_condition` 的
+`text` 条件是「页面出现这段文字」，所以它的元素文字字段叫 `elementText`，`text` 作为简写
+按条件落到 `elementText` 或 `expect` 上；拖拽的两端各自用 `fromSelector` / `fromText`、
+`toSelector` / `toText`。**快照里的名字要能原样回传**：`read_browser_page` 的每个节点带
+`name` 与 `selector`，调用方最省事的做法是把 `name` 当 `text` 回传，这一步曾经有两处断链——
+按钮型 `<input>` 的名字取成了它的 type（「submit」），只有图标的按钮名字为空（名字在
+`title` 里）；「`<label>` 记住我 `<input>`」这种标签包着控件的形态里，两者同名同分，文档序
+在前的标签胜出，往它里面输入就输不进去。解析器的 `nameOf` 取 `value` 与 `title` 补上前两处，
+同分时让可交互元素排在纯展示元素前面补上第三处（`core/cdp/inspect.ts`）。用语义目标的原因是实测出来的：组件库的表单里
 label 与 input 分属不同子树，快照只能表达成长串 `:nth-of-type`，多一个条件字段整条链就断；
 而人从来不读这种路径，人读的是「用户名」。解析器按三种形状找控件：`<label for>`、
 包住控件的 `<label>`、以及「wrapper 里同时有 label 与控件」（Naive UI / Ant Design /
@@ -447,7 +463,7 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
 - 输入类操作前会开启 `Emulation.setFocusEmulationEnabled`：窗口在后台时渲染进程报告
   `document.hasFocus() === false`，Chromium 会直接丢弃输入事件，而 `Runtime.evaluate`
   仍然工作——不开启时表现为"选择器明明对，点击却没反应"。
-- **`wait_browser` 在页面内轮询。** 菜单、抽屉、toast 都是异步渲染的，没有等待语义时
+- **`wait_browser_condition` 在页面内轮询。** 菜单、抽屉、toast 都是异步渲染的，没有等待语义时
   AI 只能 `sleep → read → sleep → read`，每一轮都是一次 MCP 往返，而两次调用之间页面
   还会自己变（菜单失焦自关、选项晚一帧出现）。条件有 `visible` / `hidden` / `text` /
   `url` / `value` / `network-idle`，一次调用等到条件成立或超时。导航会销毁执行上下文，
@@ -466,11 +482,18 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
 - **输入到密码框的值会被审计日志打码**：`type()` 从页面读回输入框自身的 `type`，是密码就回
   `secret: true`，MCP 层据此把参数 `text` 换成 `[redacted]`。靠参数名匹配不够——创建租户时
   密码也是走 `type_browser_text`，那个参数叫 `text`。
-- 布局与格位工具作用于「台上的视图」：AI 不需要先知道视图 id，全是扁平标签时切布局会
-  先把它们组成视图——这是 AI 侧的一次调用便利，界面上没有对应的自动建组行为。
-- 开标签会自动把主窗口切到浏览器页，否则标签建在窗口外，用户看不到 AI 在做什么。
+- 布局与格位工具作用于「台上的视图」：AI 不需要先知道视图 id，没有台上视图而它自己又有
+  不在任何视图里的页面时，`set_browser_layout` 会先把**这些页面**组成视图——这是 AI 侧的一次
+  调用便利，界面上没有对应的自动建组行为。只收 AI 自己打开的页面
+  （`layoutTargetView` 只取 `origin === "ai"`）：曾经连用户自己开的页面一起收进来摆上台，
+  AI 整理自己的工作区不该动别人的页面；它自己的页面一个都没有时要求点名 `viewId`。
+  要 `viewId` 的工具同时接受已打开视图的容器 id 与保存的视图定义 id
+  （`findViewContainer`）。`close_browser_view` 关视图时默认只关 AI 侧打开的页面，
+  用户自己开的页面留下变成独立页面；它逐个走 `closeTab`，拆出的窗口与格位的固定都被收干净。
+- `handle_browser_dialog` 的 `accept` 是必填的：省略「确定」是对一个 confirm 最危险的方向。
+- UI 入口开标签会把主窗口切到浏览器页；AI 开标签不会，见上文「AI 开页面不抢前台，也不占台」。
 - `move_browser_tab` 与界面拖拽是同一套落点：相对某页之前 / 之后、加入某个视图、或移出视图。
-  `set_tab_page` 切换的是「一个实例当前显示哪一页」——一个格位是一个实例，实例里的弹出页
+  `activate_browser_tab` 切换的是「一个实例当前显示哪一页」——一个格位是一个实例，实例里的弹出页
   不占新格位。
 - 内置表面是懒创建的可选依赖：测试里可以注入假实现，未打开过内置浏览器时工具会给出
   明确错误而不是崩溃。
@@ -483,7 +506,7 @@ Element Plus）。从 label 向上找作用域时，只有当该作用域里**�
 | --- | --- | --- | --- |
 | 页面结构 | `read_browser_page` | 注入脚本的可访问性快照 | 隐藏元素不报；跨域 iframe 不可达 |
 | 控制台 | `read_browser_console` | 主进程 `console-message` 事件 | 只覆盖该页所在的渲染进程 |
-| 网络 | 同上 + `wait_browser` 的 `network-idle` | 注入脚本包 `fetch` / XHR | 只覆盖页面 JS 发起的请求 |
+| 网络 | 同上 + `wait_browser_condition` 的 `network-idle` | 注入脚本包 `fetch` / XHR | 只覆盖页面 JS 发起的请求 |
 | 画面 | `screenshot_browser_tab` | CDP 或 `capturePage` | 完全隐藏的窗口拿不到 |
 | 性能 | `measure_browser_performance` / `read_browser_performance` | CDP `Performance.getMetrics` | 只有主线程指标；没有 tracing 的调用树 |
 
@@ -1036,8 +1059,10 @@ AI 记录暂时挂在这里，设置页仍是应用菜单打开的整页。
   而拆窗要的正是「主窗口收起来，这一页还在」。两者生命周期因此完全解耦，「不留孤儿」
   改由显式登记承担：主窗口销毁时与退出时各调一次 `popouts.dockAll()`。用户点 X 关窗后
   页面自动回主舞台；拆出的窗口是本进程的 Chromium 窗口，退出顺序的「回收浏览器」覆盖它们。
-- **AI 入口**：`pop_out_browser_tab`（run 档），已拆出时再次调用即收回；标签页投影带
-  `popout` 字段，拆窗状态是决策信息，随 `list_browser_tabs` 一并发布。
+- **AI 入口**：`pop_out_browser_tab` 拆出、`dock_browser_tab` 收回（都是 run 档）。这是两个
+  动作而不是一个开关：对已拆出的页面再「拆出」只返回 `alreadyPoppedOut: true`，不会悄悄把
+  窗口收回去——开关语义下，脚本里的第二次调用会撤销第一次。标签页投影带 `popout` 字段，
+  拆窗状态是决策信息，随 `list_browser_tabs` 一并发布。
 
 三项实测（焦点归属、关闭回收、最小化截图，Electron 45.2.1）由
 `scripts/e2e-popout.mjs` 守着，结论亦记录于 `src/main/embedded/popout.ts` 的头注。
@@ -1503,17 +1528,37 @@ AI 客户端 ──HTTP POST /mcp──▶ McpServer ──▶ WorkspaceService 
   同源链接、或工作区里已有的站点 / 书签地址。这条防的是提示注入——页面正文里的文字不能被
   AI 当成下一步要去的地方。导航本身不受档位限制：移动页面不等于往用户账号里打字，
   「到了之后能不能操作」才是 `aiWriteDenial` 的问题。
-- **AI 开页先复用已录入账号，归不了类才是干净会话**：`open_browser_tab` 不带
+- **AI 开页先复用已录入账号，归不了类才是干净身份**：`open_browser_tab` 不带
   `identityId` 时按地址归属解析——地址与已录入站点同源就用该站点的第一个账号（解析在
   `core/util/identity-resolution.ts`，同源判断共用 `sameOrigin`），其次按显式 `siteId`；
   返回值带 `identityName` / `resolvedBy` 说明归类结果。都匹配不到的打开落一次性干净
-  会话（桥接层显式传 `clean: true`）：让 AI 自己造一个落在默认档案里的标签，等于绕过
-  上面那道闸门。
-- **`launch_*` 与 `open_browser_*` 默认都开在内置浏览器**：外部系统浏览器只在调用方显式
-  传 `external: true` 时才开，用途是给人看或做保真校验。两套工具名字不同但默认表面相同，
-  指令文本（`SERVER_INSTRUCTIONS`）与每个工具的描述都必须把「默认内置 / `external` 例外」
-  两半说全——只说一半，模型就会把 `launch_*` 当成另一条驱动路径，把本该在内置表面里完成
-  的校验开进系统浏览器。由 `tests/contracts/ai-guidance.test.ts` 守护。
+  身份（桥接层显式传 `clean: true`）：让 AI 自己造一个落在默认身份里的标签，等于绕过
+  上面那道闸。要在已录入站点的地址上看未登录的样子，显式传 `clean: true`，它跳过归属
+  解析——否则这类地址永远会被套上站点的账号。
+- **内置与外部是两族工具**：页面工作全在内置浏览器（`open_browser_*` 与 `*_browser_*`），
+  外部系统浏览器只由 `launch_external_browser` 一族负责（开窗口、关窗口），它的窗口 AI
+  驱动不了。此前的 `launch_view` / `launch_identity` / `launch_clean_session` 一个工具靠
+  `external` 开关在两种表面之间切换，一次真实事故里 AI 把本该在内置页面里完成的校验开进了
+  系统浏览器。三个旧名字降为隐藏的兼容别名（见下条）；指令文本与工具描述都必须说清
+  「外部窗口驱动不了、页面工作在内置」。由 `tests/contracts/ai-guidance.test.ts` 守护。
+  这一节的取舍与被否方案见 [ADR 0013](./architecture/adr/0013-mcp-tool-surface.md)。
+- **改过名的工具保留旧名字作为兼容别名**：`LEGACY_TOOL_NAMES` 列出旧名与规范名，别名
+  继承规范工具的档位、闸门与结果格式，`tools/call` 时转交（`legacyAliases` / `runNamed`），
+  但不出现在 `tools/list` 里——每个会话都为工具列表里的每一项付费，一个别名重复出现只会
+  让模型在两个名字之间无所适从。入参同理：`argumentAliases` 把旧参数名（`id`、`pageId`、
+  `ownerKind + ownerId`）在入口校验之前换成规范名，别名与规范名同给且都有值时拒绝。
+- **名字猜错了给建议，而不是只说没有**：工具名对不上时用编辑距离与下划线分词的包含关系
+  找最相近的几个（`core/util/name-suggestions.ts`），参数名对不上时点名该工具真正的字段。
+  调用方凭印象写出的名字往往只差一点，一句「没有这个工具」只能让它回去把整份列表再读一遍。
+- **登录检测先看内置页面**：内置页面与外部窗口是两套互不相干的登录状态，而 AI 的页面都开在
+  内置浏览器里。`WorkspaceService` 的 `embeddedAuthProbe` 注入项让 `checkAuth` 先在该账号
+  已打开的内置页面里问检测接口（`EmbeddedBrowser.authProbeOfIdentity`），返回里用
+  `surface: "embedded" | "external"` 说明查的是哪一套。内置页面开着但问不到（不在站点源上）
+  时如实回 `unknown`，不换另一套登录状态去给一个看似有效的答案。
+- **工具面的命名与形状约定由契约守着**（`tests/contracts/tool-surface.test.ts`）：对外广播
+  的工具里 `launch_*` 只有 `launch_external_browser`；操作单个页面的工具名字里都带
+  `browser`；入参没有裸 `id`、页面不叫 `pageId`；`delete_*` 只用于 `danger` 档且必须
+  `confirm`；观察类工具（含截图）都在 `read` 档；描述里点到的名字必须是真实存在的工具。
 - 生命周期：与主进程同生共死。`stop()` 先 `closeAllConnections()` 再 `close()`，
   保证客户端保持长连接时也能立即释放端口。
 

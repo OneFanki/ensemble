@@ -4,6 +4,114 @@
 按版本号从这个文件抽取，所以发版时只需要改 `package.json` 和这里。
 
 - 准备发版时，把 `package.json` 的 `version` 改掉，并在本文件顶部加一节 `## [x.y.z] - YYYY-MM-DD`；`scripts/release-notes.mjs` 会按版本号抽出这一节当作 Release 正文。
+## [未发布]
+
+2.3.0 让 AI 能完整操作浏览器，但 AI 接入的这套工具（MCP）有不少地方会让它走错路：开完页面不带 id 继续操作，打到的是用户正在看的页面；同一件事有三个工具；描述里点名的参数其实不存在；名字猜错只会得到一句「没有」。这个版本把整套工具面逐个过了一遍并理顺，其中若干处改变了已发布的行为，所以按次版本号发布。
+
+### 中文
+
+#### 不兼容变更
+
+旧名字与旧写法都保留为兼容：工具的旧名字不再出现在工具列表里，但直接调用照常可用；参数的旧名字作为别名仍然接受。真正需要改调用方的只有下面标出的几处。
+
+- **外部浏览器与内置页面分成两族工具。** `launch_view`、`launch_identity`、`launch_clean_session` 并成一个 `launch_external_browser`，只在用户的系统浏览器里开窗口，供人查看或做保真校验；`stop_instance` / `stop_all` 相应改名 `stop_external_browser` / `stop_all_external_browsers`。页面工作全部在内置浏览器里，由 `open_browser_*` 与 `*_browser_*` 承担。三个旧名字不传 `external` 时行为不变；传 `external: true` 时转交给新工具，返回形状随它。
+- **`handle_browser_dialog` 的 `accept` 改为必填。** 省略它原来等同「确定」，而对象是一个 confirm：少写一个参数就等于点了确定。现在不写会被拒绝。
+- **`pop_out_browser_tab` 不再是开关。** 对已拆出的页面再调用不会把它收回去，只返回 `alreadyPoppedOut: true`；收回用新增的 `dock_browser_tab`。开关语义下，脚本里的第二次调用会撤销第一次。
+- **`set_browser_layout` 不再把用户自己开的页面收进视图。** 没有台上视图时，它只把 AI 自己打开的、不在任何视图里的页面组成新视图；一个都没有时要求点名 `viewId`。原来会把所有不在视图里的页面（包括用户自己开的）一起收进来摆上台。
+- **三个工具换了权限档位。** `screenshot_browser_tab` 从运行档改到只读档：截图是观察，不碰工作区也不动页面，原来只开读取权限的 AI 读得到文字却看不到画面。`set_browser_emulation` 从写入档改到运行档：它改的是页面所处的环境，与视口同族，不碰工作区数据。`reload_browser_tab` 现在和前进、后退一样要过来源闸门：刷新会丢掉页面上没保存的输入，也可能重发一次表单，原来默认身份里的页面读不得、退不得，却刷新得。
+- **列表类工具统一返回以集合名包装的对象。** `list_sites`、`list_identities`、`list_views` 原来返回裸数组，现在是 `{ sites }`、`{ identities }`、`{ views }`，与其余列表工具一致。
+- **动作类工具的返回统一带 `ok`。** 删除类返回 `{ ok: true, deleted }`（原 `{ deleted }`）；关闭外部窗口返回 `{ ok: true, instanceId }` / `{ ok: true, stopped }`（原 `{ stopped: true }`）；`set_password` 返回 `{ ok: true, siteId | identityId }`（原 `{ stored: true }`）；`link_identities_to_site` 也带上了 `ok`。
+- **不带 `tabId` 的调用不再落到用户正在看的页面上。** AI 打开的页面不上台，原来「省略则用激活的标签页」意味着 AI 开完页面不带 id 继续操作，读、点、输的全是用户的页面。现在省略 `tabId` 表示 AI 最近打开的那个页面，AI 没有自己的页面时才是用户正在看的页面。依赖旧行为的调用需要显式传 `tabId`。
+- **一批工具改了名，参数把对象写进了名字里。** 改名：`check_auth` → `check_identity_auth`，`set_tab_page` → `activate_browser_tab`，`wait_browser` → `wait_browser_condition`，`check_element_visible` → `check_browser_element_visible`，`export/import/preview_accounts` → `…_identities`，`detach_identity_reference` → `detach_identity_credentials`；`set_view_layout` 并入 `update_view`（两者改的本来就是同一份视图定义）。参数：`update_site` / `update_identity` / `update_view` / 各 `delete_*` / `save_flow` / `save_bookmark` / `run_flow` 的 `id` 改为 `siteId` / `identityId` / `viewId` / `flowId` / `bookmarkId`；`activate_browser_tab` 的 `pageId` 改为 `tabId`，`move_browser_tab` 的 `beforeOrAfter` 改为 `anchorTabId`（它装的本来就是参照标签页的 id）；`set_password` 用 `siteId` 或 `identityId` 代替 `ownerKind` + `ownerId`。旧参数名仍作为别名接受，别名与规范名同时给且都有值时会被拒绝。
+
+#### 修复
+
+- **带账号开页后，登录完成回到调用方点名的地址。** 账号未登录时页面会先被带到登录页，原来登录后落到账号起始页，调用方点名要的页面就这样丢了。界面与 AI 的各个入口都一样。
+- **开页返回里说明登录这一步的状态。** 页面在 `open_browser_tab` 返回之后才被登录流程带走，调用方下一步读到的可能是一个自己没要求打开的页面。现在返回里的 `login` 说明状态：已登录、正在自动登录（之后回到点名的地址）、表单会填好但不提交（站点关着自动提交）、判断不了。
+- **`check_identity_auth` 先在内置页面里检测。** 内置浏览器与外部窗口是两套互不相干的登录状态，而 AI 的页面都开在内置浏览器里；原来只去外部浏览器里问，内置页面明明已经掉线也可能回「已登录」。现在账号在内置浏览器里开着页面时就在那个页面里检测，返回里的 `surface` 说明查的是哪一套；页面开着但问不到时如实回 `unknown`，不换另一套登录状态作答。
+- **开页返回里真的有 `tabId`。** `open_browser_tab` 的描述一直说「返回 tabId」，返回里却只有 `id`。现在它与 `navigate_browser_tab` 都在顶层带上 `tabId`。
+- **关闭外部窗口不再对不存在的窗口回「已关闭」。** 窗口已经关了，或传进来的是内置标签页的 `instanceId`（这个工具只关外部浏览器窗口）时，原来一律回「已停止」，现在返回 `ok: false` 并说明原因。`launch_external_browser` 也带回每个窗口的 `instanceId`，之前拿不到能传给关闭工具的值。
+- **`resolve_browser_target` 在账号与站点不符时把两条路都列出来。** 传入的账号不属于地址匹配到的站点时，原来只建议换用该站点的账号，和同一返回里「请确认」的提醒自相矛盾；现在换用哪个、坚持用哪个都写出来。
+- **给继承站点密码的账号写密码后，密码真的会被用到。** 账号处于「继承站点密码」或「引用别的账号的密码」时，登录时读不到自己的密码，`set_password` 写了等于没写。现在写完后改为使用自己的密码，并在返回里说明。
+- **快照里的名字原样回传就能定位到元素。** 三种形态原来会断链：只有图标的按钮在快照里名字为空（名字在 `title` 里）；提交按钮型 `<input>` 的名字取成了它的 type（「submit」）；「`<label>` 记住我 `<input>`」这种标签包着控件的形态里，文字同时命中标签和控件，排在前面的是标签，往它里面输入输不进去。前两种取对了名字，第三种在同分时让控件优先。
+- **`fill_browser_login` 失败时带一句说明。** 原因码 `reason` 保留，另加 `note` 说明原因与下一步。
+- **读取类工具不回传密码框的内容。** 站点关着自动提交时，登录表单填好后停在页面上；这时 `read_browser_element` 与 `read_browser_attribute` 会把刚填进去的密码原样返回，流程的 `read` 步骤也会把它读进变量、随 `run_flow` 一起返回。现在两个读取工具对密码框只说明这里有一个密码（`inputType: "password"`、`secret: true`），流程的 `read` 步骤遇到密码框直接失败并说明原因。
+- **AI 开页默认复用已录入的账号。** `open_browser_tab` 不带 `identityId` 时，会按地址找到同源站点的第一个账号，找不到再按 `siteId`；都不匹配才是一次性干净身份。返回值里的 `identityName` 和 `resolvedBy` 说明用了哪个账号、凭什么归的类。2.3.0 里不带 `identityId` 一律是干净身份，AI 得自己查出账号 id 再传进来。
+- **AI 正在操作的页面和加载中的页面保持正常出帧。** 不在舞台上的页面平时停在窗口外来省资源，页面里的动画和 `requestAnimationFrame` 会降到约 1fps。AI 对它发命令期间、之后的一小段宽限里，以及页面正在加载时，这个页面的节点会贴回窗口边缘，滚动、动画结束后读取这类依赖画面的操作能拿到正常结果。
+- **macOS 上窗口按钮不再压住账号条最左的入口。** 窗口左上角三颗按钮下面的留白挪到了首行的账号条上。
+
+#### 新增
+
+- **`launch_external_browser` / `stop_external_browser` / `stop_all_external_browsers`**。在用户的系统浏览器里为账号、为视图的每个成员、或为一次性干净身份开窗口，返回每个窗口的 `instanceId`；关闭一个或全部。这些窗口 AI 驱动不了，返回形状在三种开法下一致。
+- **`close_browser_view`**。关闭内置浏览器里的一个视图：默认只关 AI 侧打开的页面，用户自己开的页面保留成独立页面；`mode: "all"` 连它们一起关。拆出到独立窗口的页面会先被收回。
+- **`dock_browser_tab`**。把拆出到独立窗口的页面收回主舞台，见上文的不兼容变更。
+- **`list_browser_engines`**。列出这台机器上可用的浏览器引擎，`launch_external_browser` 的 `engineId`、账号的 `engineId` 与设置项 `defaultEngineId` 都从这里取。
+- **名字猜错了有指路。** 工具名对不上时，报错里给出最相近的几个名字；参数名对不上时，点名该工具真正的字段。
+- **`get_workspace_summary` 带上内置浏览器里开着的页面与视图**，以及每个站点的账号列表。都不含密码；超过上限时截断并标注。
+- **`open_browser_tab` 支持 `clean: true`**。地址属于已录入站点时默认会套用该站点的账号，之前没有办法在这样一个地址上看未登录的样子；传 `clean: true` 跳过账号解析，落在一次性干净身份里。它不能与 `identityId` 同给。
+- **`resolve_browser_target`**（只读）。传一个地址，返回它属于哪个已录入的站点、这个站点下有哪些账号、建议用哪个 `identityId`。
+- **`wait_browser_condition` 与 `screenshot_browser_tab` 接受 `text` 简写**。其它定位工具都用 `text` 指元素上的文字，这两个工具的字段却叫 `elementText`。现在等文字、地址、值、响应时 `text` 等同 `expect`，等元素出现或消失时等同 `elementText`。截图还新增 `label` 定位。
+- **要 `viewId` 的工具同时接受保存的视图定义 id。** 拿着 `list_views` 的结果去摆布局，原来会得到「视图不存在」。
+- **`update_identity` 可以改额外登录字段 `extraFields`**，传空数组清空。
+
+#### 变更
+
+- **工具面的几条约定由测试守着**：对外广播的工具里只有 `launch_external_browser` 以 `launch_` 开头；操作单个页面的工具名字里都带 `browser`；`delete_*` 只用于删除工作区数据且必须 `confirm`；观察类工具都在只读档；描述里点到的名字必须是真实存在的工具。
+- **描述与用词对齐了实际行为。** `move_browser_tab`、`drag_browser_element`、`read_browser_attribute` 的参数说明与真实参数一致；`find_browser_element` 列全了接受句柄的七个工具；用词与界面一致（账号、默认身份、干净身份、自建身份、登录状态）；设置项里枚举类的取值（布局、默认引擎、搜索引擎、新标签页背景）写进了参数说明。
+
+### English
+
+2.3.0 let an AI drive the browser end to end, but the tool surface it connects to (MCP) had a number of places that sent it down the wrong path: carrying on without a page id after opening one landed on the page the user was looking at, one job had three tools, descriptions named parameters that did not exist, and a guessed name got nothing but "no such tool". This release goes over the whole surface tool by tool and straightens it out. Some of it changes behaviour that was already released, so it ships as a minor version.
+
+#### Breaking changes
+
+Old names and old spellings keep working as compatibility: a tool's old name no longer appears in the tool list but can still be called, and old parameter names are still accepted as aliases. Only the items spelled out below need a change on the caller's side.
+
+- **The external browser and in-app pages are two tool families.** `launch_view`, `launch_identity` and `launch_clean_session` are one tool, `launch_external_browser`, which opens windows in the user's system browser for a person to look at or for a fidelity check; `stop_instance` / `stop_all` follow as `stop_external_browser` / `stop_all_external_browsers`. All page work happens in the in-app browser with `open_browser_*` and `*_browser_*`. Without `external` the three old names behave as before; with `external: true` they hand off to the new tool and return its shape.
+- **`handle_browser_dialog` requires `accept`.** Leaving it out used to mean "OK", on a confirm: one missing argument was the same as pressing OK. It is refused now.
+- **`pop_out_browser_tab` is no longer a toggle.** Calling it on a page that is already popped out does not bring it back; it returns `alreadyPoppedOut: true`, and the new `dock_browser_tab` docks it. Under toggle semantics the second call in a script undid the first.
+- **`set_browser_layout` no longer sweeps the person's own pages into a view.** With no view on stage it groups only the pages the AI itself opened that sit in no view, and asks for a `viewId` when there are none. It used to group every page that was in no view, the person's included, and put them on stage.
+- **Three tools change permission tier.** `screenshot_browser_tab` moves from run to read: a screenshot is an observation that touches neither the workspace nor the page, and an AI allowed only to read could read the text but not see the page. `set_browser_emulation` moves from write to run: it changes the page's environment, like the viewport does, not workspace data. `reload_browser_tab` now passes the origin gate like back and forward do: a reload drops unsaved input and can resend a form, while a page in the default identity could not be read out or gone back from, yet could be reloaded.
+- **List tools return an object keyed by the collection.** `list_sites`, `list_identities` and `list_views` returned bare arrays; they return `{ sites }`, `{ identities }` and `{ views }` like the other list tools.
+- **Action tools return `ok`.** Deletes return `{ ok: true, deleted }` (was `{ deleted }`); closing external windows returns `{ ok: true, instanceId }` / `{ ok: true, stopped }` (was `{ stopped: true }`); `set_password` returns `{ ok: true, siteId | identityId }` (was `{ stored: true }`); `link_identities_to_site` carries `ok` as well.
+- **A call without `tabId` no longer lands on the page the user is looking at.** A page an AI opens stays off stage, and "omit it and the tool uses the active tab" meant an AI that opened a page and carried on without its id read, clicked and typed on the person's page. Omitting `tabId` now means the page the AI opened most recently; only an AI with no page of its own gets the person's page. Calls that relied on that need to pass `tabId`.
+- **A batch of tools are renamed, and parameters name their object.** Renamed: `check_auth` → `check_identity_auth`, `set_tab_page` → `activate_browser_tab`, `wait_browser` → `wait_browser_condition`, `check_element_visible` → `check_browser_element_visible`, `export/import/preview_accounts` → `…_identities`, `detach_identity_reference` → `detach_identity_credentials`; `set_view_layout` is folded into `update_view` (they always edited the same view definition). Parameters: the `id` of `update_site` / `update_identity` / `update_view` / the `delete_*` tools / `save_flow` / `save_bookmark` / `run_flow` becomes `siteId` / `identityId` / `viewId` / `flowId` / `bookmarkId`; `activate_browser_tab` takes `tabId` instead of `pageId`, and `move_browser_tab` takes `anchorTabId` instead of `beforeOrAfter` (it always held the anchor tab's id); `set_password` takes `siteId` or `identityId` instead of `ownerKind` + `ownerId`. Old parameter names are still accepted as aliases; giving an alias and the canonical name with both set is refused.
+
+#### Fixed
+
+- **After signing in, a page opened for an account comes back to the address that was asked for.** A signed-out account's page is first taken to the login page; it used to land on the account's start page afterwards, and the address the caller named was lost. Every entry point, in the UI and for the AI, behaves the same way.
+- **Opening a page says what the sign-in step is doing.** The login pipeline can take the page away only after `open_browser_tab` has returned, so the caller's next read could be of a page it never asked for. The result's `login` now says: signed in; signing in (and coming back to the address asked for); form filled but not submitted (the site has auto-submit off); or unknown.
+- **`check_identity_auth` looks at the in-app page first.** The in-app browser and external windows keep separate sign-in states, and an AI's pages all live in the in-app browser; the check used to ask only the external browser, so an in-app page could be signed out while the answer said signed in. When the account has a page open in the in-app browser the check runs there, and the result's `surface` says which set was looked at. A page that is open but cannot be checked answers `unknown` instead of switching to the other set to produce an answer.
+- **The page id is really in the result.** `open_browser_tab` always said it "returns tabId" while the result only carried `id`. It and `navigate_browser_tab` now carry `tabId` at the top level.
+- **Closing an external window no longer reports a window it never closed.** When the window is already gone, or the id is an in-app tab's `instanceId` (the tool closes external browser windows only), it used to answer "stopped" regardless; it now returns `ok: false` with the reason. `launch_external_browser` also returns each window's `instanceId`, which was missing and left nothing to pass to the stop tool.
+- **`resolve_browser_target` lists both options when the account and the site disagree.** When the passed account belongs to a different site than the URL matches, it used to recommend only the site's own account, contradicting the "please confirm" warning in the same result. It now spells out both.
+- **A password written for an account that inherits its site's password is actually used.** In inherit or reference mode an account's login never reads its own password, so `set_password` wrote something that was never used. It now switches the account to its own password and says so in the result.
+- **A name in the page snapshot works as `text` when handed straight back.** Three shapes used to break that chain: an icon-only button came back with an empty name (it was in `title`); a submit input's name came back as its type, "submit"; and in "`<label>` Remember me `<input>`" the text matched both the label and the control, the label won, and there was nothing to type into. The first two get the right name; on a tie the control now wins.
+- **`fill_browser_login` explains a failure.** The `reason` code stays, and a `note` says what happened and what to do next.
+- **Read tools no longer return what is in a password field.** When a site has auto-submit off, the login form stays on the page after it has been filled; `read_browser_element` and `read_browser_attribute` would hand back the password that had just been typed, and a flow's `read` step would read it into a variable and return it with `run_flow`. Both read tools now say only that there is a password (`inputType: "password"`, `secret: true`), and a flow's `read` step fails on a password field with the reason.
+- **`open_browser_tab` reuses a stored account by default.** Without `identityId` it picks the first account of the site whose origin matches the URL, then falls back to `siteId`; only when nothing matches does it open a throw-away clean identity. The result carries `identityName` and `resolvedBy`. In 2.3.0 a call without `identityId` was always clean, so an AI had to look up the account id itself.
+- **A page an AI is driving, and a page that is still loading, keep rendering at full rate.** Pages off stage normally sit outside the window to save resources, which drops their animations and `requestAnimationFrame` to about 1fps. While an AI is sending commands to such a page, and for as long as the page is loading, the page's node is brought back to the window's edge, so reads taken after an animation return real results.
+- **On macOS the window buttons no longer cover the leftmost entry of the account bar.**
+
+#### Added
+
+- **`launch_external_browser` / `stop_external_browser` / `stop_all_external_browsers`.** Open windows in the user's system browser for an account, for each member of a view, or as a throw-away clean identity, and get each window's `instanceId` back; close one or all. An AI cannot drive these windows. The result shape is the same for all three ways of opening.
+- **`close_browser_view`.** Closes a view in the in-app browser: by default only the pages the AI side opened, leaving the person's own pages as loose pages; `mode: "all"` closes those too. A page popped out into its own window is brought back first.
+- **`dock_browser_tab`.** Brings a popped-out page back to the stage; see the breaking change above.
+- **`list_browser_engines`.** Lists the browser engines on this machine; the ids are what `launch_external_browser`'s `engineId`, an account's `engineId` and the `defaultEngineId` setting take.
+- **A misspelled name gets a pointer.** An unknown tool name comes back with the closest real ones; an unknown parameter comes back naming the field the tool actually takes.
+- **`get_workspace_summary` includes the pages and views open in the in-app browser**, along with each site's accounts. No passwords; long lists are truncated and flagged.
+- **`open_browser_tab` takes `clean: true`.** An address that belongs to a recorded site adopts that site's account by default, so there was no way to see such a site signed out. `clean: true` skips the account lookup and opens in a throw-away clean identity. It cannot be combined with `identityId`.
+- **`resolve_browser_target`** (read-only). Given a URL, it returns which stored site the URL belongs to, the accounts under that site, and the `identityId` it recommends.
+- **`wait_browser_condition` and `screenshot_browser_tab` take `text` as a shorthand.** Every other locating tool uses `text` for the words on an element; on these two the field was `elementText`. `text` now stands for `expect` when waiting for text, a URL, a value or a response, and for `elementText` when waiting for an element to appear or disappear. The screenshot also takes `label`.
+- **Tools that take `viewId` also accept a saved view's definition id.** Laying out with a result from `list_views` used to answer "view not found".
+- **`update_identity` can edit the extra login fields, `extraFields`**; an empty list clears them.
+
+#### Changed
+
+- **A few rules of the tool surface are guarded by tests**: among advertised tools only `launch_external_browser` starts with `launch_`; every tool that works on a page has `browser` in its name; `delete_*` is reserved for removing workspace data and always requires `confirm`; observation tools are all in the read tier; a name a description mentions has to be a tool that exists.
+- **Descriptions and wording match what the tools do.** The parameter notes of `move_browser_tab`, `drag_browser_element` and `read_browser_attribute` match their real parameters; `find_browser_element` lists all seven tools that accept a handle; the wording follows the UI (account, default identity, clean identity, custom identity, sign-in state); and the settings whose values are enums (layout, default engine, search engine, new-tab background) state them in their parameter notes.
+
 ## [2.3.0] - 2026-11-22
 
 这次更新做了两件大事：**AI 能完整操作浏览器了**；**产品整个简化了一遍**。

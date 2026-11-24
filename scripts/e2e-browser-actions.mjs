@@ -191,13 +191,13 @@ try {
   // Let the first document settle; the menu's :hover rule and the scroll box are
   // static, but the page still has to finish loading before either exists.
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#menu-trigger" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#menu-trigger" });
     if (visible.visible) break;
     await wait(200);
   }
 
   // --- hover opens a menu that a click-only surface cannot ------------------
-  const menuBefore = await call("check_element_visible", { tabId, selector: "#menu" });
+  const menuBefore = await call("check_browser_element_visible", { tabId, selector: "#menu" });
   check(
     "the menu is closed before hovering",
     menuBefore.visible === false,
@@ -209,7 +209,7 @@ try {
   // `:hover` is applied synchronously on the next style recalc, but the reveal is
   // a separate paint; one frame is the honest wait.
   await wait(120);
-  const menuAfter = await call("check_element_visible", { tabId, selector: "#menu" });
+  const menuAfter = await call("check_browser_element_visible", { tabId, selector: "#menu" });
   check(
     "hovering the trigger opens the menu",
     menuAfter.visible === true,

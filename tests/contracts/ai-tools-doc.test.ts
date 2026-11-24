@@ -30,11 +30,16 @@ interface ToolEntry {
 }
 
 /**
- * Every tool defined in the server, in declaration order.
+ * Every tool the server advertises, in declaration order.
  *
  * Parsed from the source because that is what actually ships. The `tools()` list
  * is a literal array of object literals; a `name:` followed by a `kind:` inside
  * the same entry is the shape every one of them has.
+ *
+ * Compatibility aliases (`hidden: true`) are skipped: they are callable but
+ * never advertised, so a reader of this table could not find them in a client's
+ * tool list. They have their own contract — `LEGACY_TOOL_NAMES` must point at
+ * tools that exist — in `tests/mcp-tool-surface.test.ts`.
  */
 function parseTools(source: string): ToolEntry[] {
   const entries: ToolEntry[] = [];
@@ -45,6 +50,7 @@ function parseTools(source: string): ToolEntry[] {
     if (!name) continue;
     const kind = block.match(/\n {8}kind: "(read|write|run|danger)"/);
     if (!kind) continue;
+    if (/\n {8}hidden: true/.test(block)) continue;
     entries.push({ name: name[1]!, kind: kind[1]! });
   }
   return entries;

@@ -425,7 +425,7 @@ export class EmbeddedCdp implements CdpExecutor {
      * "no response", which is exactly what was observed. A per-command ceiling
      * turns that into an error naming the command.
      *
-     * Long-running work (`wait_browser`, a flow step) runs as repeated short
+     * Long-running work (`wait_browser_condition`, a flow step) runs as repeated short
      * commands rather than one long one, so this ceiling does not cap it.
      */
     const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;

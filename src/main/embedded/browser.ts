@@ -85,6 +85,7 @@ import {
   embeddedSlotRects,
   embeddedTabPartition,
   embeddedViewRect,
+  findViewContainer,
   inlineFavicon,
   insetSlotRects,
   isBlankTab,
@@ -98,6 +99,7 @@ import {
   normalizePerfWindow,
   planTabClick,
   pointerInsidePage,
+  resolveDefaultTabId,
   resolveSlotPages,
   resolveSlotTabs,
   settleSplitPages,
@@ -302,6 +304,12 @@ interface TabRecord {
   color?: RoleColor;
   viewId?: string;
   origin: "view" | "manual" | "ai";
+  /**
+   * AI 开的页面独有的创建序号：工具省略 tabId 时取「AI 最近打开的那个」，
+   * 靠它比较先后（见 `resolveDefaultTabId`）。页面列表会被移动操作重排，
+   * 数组下标不能当创建顺序用。
+   */
+  aiOpenSeq?: number;
   /**
    * Zoom this page was set to by hand, in percent.
    *
@@ -1063,6 +1071,8 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
    */
   private devtoolsLanguagePrimed = false;
   private viewSeq = 0;
+  /** AI 开页的创建序号发号器，见 `TabRecord.aiOpenSeq`。 */
+  private aiTabSeq = 0;
   /**
    * Rebuilds in flight, one per page at most.
    *
@@ -1523,9 +1533,21 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
     return this.views.find((view) => view.id === viewId);
   }
 
+  /**
+   * The view container a tool or the chrome means by `viewId`.
+   *
+   * Two kinds of id reach here. The chrome and the surface's own code name the
+   * on-stage container; an AI client has either kind in hand — `list_views`
+   * gives saved view definition ids, `list_browser_tabs` gives container ids —
+   * and both are "the view" to it. The rule itself lives in `findViewContainer`.
+   */
   private requireView(viewId: string): ViewRecord {
-    const view = this.findView(viewId);
-    if (!view) throw new Error(`视图不存在：${viewId}`);
+    const view = findViewContainer(this.views, viewId, this.activeViewId);
+    if (!view) {
+      throw new Error(
+        `视图不存在：${viewId}（保存的视图用 list_views 查，已打开的视图用 list_browser_tabs 的 views 查）`,
+      );
+    }
     return view;
   }
 
@@ -2149,14 +2171,34 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
   }
 
   /**
-   * Closes a view container. `"all"` closes every tab; `"opened"` closes only
-   * tabs the view launched and leaves hand-made or AI-added tabs running.
+   * Closes a view container, and with it some or all of its pages.
+   *
+   * - `"all"` closes every page.
+   * - `"opened"` closes only the pages the view itself launched (an account
+   *   launched as a view member) and leaves hand-made or AI-added tabs running.
+   * - `"ai"` closes every page the AI side opened — view members and pages
+   *   `open_browser_tab` created — and leaves the pages the person opened.
+   *   That is the default for the AI's own tool: a page it arranged into a view
+   *   is its work, and closing the view should take the work with it.
+   *
+   * Pages go through `closeTab` one by one rather than being dropped straight
+   * out of the list: that path first brings a popped-out page back, so its
+   * window does not outlive the page, and releases the cell that pinned it.
+   * Whatever stays loses its view and becomes a loose page.
+   *
+   * A view id the caller did not find closes nothing and changes nothing. The
+   * batch-launch rollback relies on that for a container that never got made.
    */
-  closeView(viewId: string, mode: "all" | "opened" = "all"): EmbeddedState {
-    const view = this.findView(viewId);
+  closeView(viewId: string, mode: "all" | "opened" | "ai" = "all"): EmbeddedState {
+    // 两种 id 都认：台上容器的 id，或保存的视图定义的 id。
+    const view = findViewContainer(this.views, viewId, this.activeViewId);
     if (!view) return this.state();
-    const doomed = this.viewTabs(view.id).filter((tab) => mode === "all" || tab.origin === "view");
-    for (const tab of doomed) this.discardTab(tab);
+    const doomed = this.viewTabs(view.id).filter((tab) => {
+      if (mode === "all") return true;
+      if (mode === "ai") return tab.origin !== "manual";
+      return tab.origin === "view";
+    });
+    for (const tab of doomed) this.closeTab(tab.id);
     for (const tab of this.viewTabs(view.id)) delete tab.viewId;
     this.views = this.views.filter((item) => item.id !== view.id);
     if (this.activeViewId === view.id) {
@@ -2451,6 +2493,8 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
       loading: true,
       crashed: false,
     };
+    // 页面（含它弹出的子页）只要是 AI 来源就排进「最近打开」的序列。
+    if (tab.origin === "ai") tab.aiOpenSeq = ++this.aiTabSeq;
     this.tabs.push(tab);
     /*
      * Claim the stage in the same broadcast that announces the tab.
@@ -2465,7 +2509,9 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
      * An AI-opened page does not claim anything: `activeTabId` doubles as the
      * flat stage's "who is on screen", and a background page must not take the
      * stage — or the user's selection — away just because a client opened it.
-     * Callers that work with the page pass its id explicitly.
+     * Callers that work with the page pass its id explicitly, and one that
+     * omits it is answered with the AI's own latest page (`defaultTabId`),
+     * never with the person's.
      */
     if (input.origin !== "ai") {
       this.activeTabId = id;
@@ -4382,16 +4428,23 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
     return this.tabs.find((tab) => tab.id === tabId);
   }
 
-  /** Tab the caller means when it omits an id: the active one, else the first. */
+  /**
+   * The page the caller means when it omits an id.
+   *
+   * The only caller is the AI surface, and the rule lives in `resolveDefaultTabId`:
+   * the page the AI opened most recently comes first; only a client that has
+   * opened nothing of its own is answered with the person's active page.
+   */
   defaultTabId(requested?: string): string {
     if (requested) return requested;
-    if (this.activeTabId && this.findTab(this.activeTabId)) return this.activeTabId;
-    const view = this.activeView();
-    const onStage = view?.slotTabs.find((id): id is string => Boolean(id));
-    if (onStage) return onStage;
-    const first = this.tabs[0];
-    if (!first) throw new Error("没有打开的标签页");
-    return first.id;
+    const onStage = this.activeView()?.slotTabs.find((id): id is string => Boolean(id));
+    const id = resolveDefaultTabId({
+      tabs: this.tabs,
+      activeTabId: this.activeTabId,
+      ...(onStage ? { onStageTabId: onStage } : {}),
+    });
+    if (!id) throw new Error("没有打开的标签页");
+    return id;
   }
 
   /** View on stage, for AI tools that omit an explicit view id. */
@@ -4402,13 +4455,15 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
   /**
    * View a layout tool should act on.
    *
-   * Asking for a grid while every tab is loose means "put these pages on one
-   * screen", so the tabs are grouped into a new view instead of failing. That is
-   * the same result as dragging the tabs together by hand.
+   * The view on stage, if any. Otherwise asking for a grid means "put my pages
+   * on one screen", so the pages the AI itself opened and that sit in no view
+   * are grouped into a new view instead of failing — the same result as
+   * dragging them together by hand. Pages the person opened are left alone: an
+   * AI tidying up its own work must not pull someone else's pages on stage.
    */
   layoutTargetView(layoutId?: string): string | undefined {
     if (this.activeViewId) return this.activeViewId;
-    const loose = this.tabs.filter((tab) => !tab.viewId);
+    const loose = this.tabs.filter((tab) => !tab.viewId && tab.origin === "ai");
     if (loose.length === 0) return undefined;
     const layout = layoutId && isEmbeddedLayout(layoutId) ? layoutId : "2x1";
     const view = this.addView({ name: "新视图", layoutId: layout });
@@ -7104,6 +7159,10 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
    * cookies (plus the site's localStorage token when configured), so the answer
    * reflects this tab's own partition, not a cached record. Callers use it to
    * decide whether a launch still needs a login.
+   *
+   * The HTTP status and the signed-out marker travel back unmerged: the launch
+   * pipeline only wants `signedIn`, while a login check that is stored on the
+   * account reports them in its detail line.
    */
   async authProbe(
     tabId: string,
@@ -7111,7 +7170,13 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
     baseUrl: string,
     signedOutMarker?: string,
     token?: AuthTokenSource,
-  ): Promise<{ ok: boolean; signedIn?: boolean; reason?: string }> {
+  ): Promise<{
+    ok: boolean;
+    signedIn?: boolean;
+    status?: number;
+    signedOut?: boolean;
+    reason?: string;
+  }> {
     const tab = this.requireTab(tabId);
     let expected = "";
     try {
@@ -7127,12 +7192,12 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
     }
     if (!origin || origin === "null") return { ok: false, reason: "not-loaded" };
     if (origin !== expected) return { ok: false, reason: "cross-origin" };
-    let result: { ok?: boolean; body?: string } | undefined;
+    let result: { ok?: boolean; body?: string; status?: number } | undefined;
     try {
       // awaitPromise is mandatory here: the expression is an async IIFE around
       // a fetch, and without it Runtime.evaluate returns the unsettled Promise,
       // which serializes to `{}` — every probe would read as signed out.
-      result = await tab.cdp.evaluate<{ ok: boolean; body?: string }>(
+      result = await tab.cdp.evaluate<{ ok: boolean; body?: string; status?: number }>(
         buildAuthCheckExpression(checkPath, token),
         { awaitPromise: true },
       );
@@ -7142,8 +7207,43 @@ export class EmbeddedBrowser {  private host: BrowserWindow | null = null;
     if (!result) return { ok: false, reason: "probe-failed" };
     // A 200 envelope that carries the site's signed-out marker is signed out,
     // no matter what the HTTP status says.
-    const signedIn = result.ok === true && !bodyMarksSignedOut(result.body, signedOutMarker);
-    return { ok: true, signedIn };
+    const signedOut = bodyMarksSignedOut(result.body, signedOutMarker);
+    const signedIn = result.ok === true && !signedOut;
+    return {
+      ok: true,
+      signedIn,
+      signedOut,
+      ...(typeof result.status === "number" ? { status: result.status } : {}),
+    };
+  }
+
+  /**
+   * 在这个账号已打开的内置页面里检测登录状态。
+   *
+   * 内置页面与外部窗口是两套互不相干的登录状态。账号的根页面开在内置浏览器
+   * 里时，「现在登没登录」说的是这一套——AI 操作的、用户看着的都是它。
+   *
+   * @returns 页面在站点自己的源上并成功问到了检测接口时给出 HTTP 状态与
+   *   「未登录标记」是否出现；页面开着但问不到（不在站点源上、还没加载完）
+   *   时是 "unavailable"；这个账号在内置浏览器里没有打开页面时是 undefined
+   */
+  async authProbeOfIdentity(
+    identityId: string,
+    site: { authCheckPath?: string; baseUrl: string; authCheckSignedOut?: string },
+    token?: AuthTokenSource,
+  ): Promise<{ httpStatus: number; signedOut: boolean } | "unavailable" | undefined> {
+    const root = this.findIdentityRoot(identityId);
+    // 没有检测地址就没有可问的接口；调用方只在站点配了检测路径时才会走到这里。
+    if (!root || !site.authCheckPath) return undefined;
+    const probe = await this.authProbe(
+      root.id,
+      site.authCheckPath,
+      site.baseUrl,
+      site.authCheckSignedOut,
+      token,
+    );
+    if (!probe.ok || probe.status === undefined) return "unavailable";
+    return { httpStatus: probe.status, signedOut: probe.signedOut === true };
   }
 
   /** Fills the saved credentials of the tab's identity, when it has any. */

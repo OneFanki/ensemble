@@ -694,6 +694,62 @@ export function isBlankTab(tab: Pick<EmbeddedTab, "url">): boolean {
   return !tab.url || tab.url === "about:blank";
 }
 
+/**
+ * 调用方没有点名页面时，它指的是哪一个。
+ *
+ * 调用方是 AI，所以「当前页面」首先是 AI 自己最近打开的那个。AI 开的页按设计
+ * 不认领舞台——后台开页不能抢走用户正在看的内容——因此「激活页」指的是用户
+ * 正在看的那一页：拿它当默认值，AI 开完页面不带 id 继续操作，点击、输入、
+ * 读取全都落在没人要求它碰的页面上。
+ *
+ * AI 手里没有自己的页面时才退回激活页：「对用户正在看的这一页动手」这个用法
+ * 只在那时成立。之后依次是台上视图第一格里的页面、页面列表的第一个。
+ *
+ * @returns 选中的页面 id；一个页面都没有时返回 undefined，由调用方决定怎么报错
+ */
+export function resolveDefaultTabId(input: {
+  tabs: Array<Pick<EmbeddedTab, "id" | "origin"> & { aiOpenSeq?: number }>;
+  /** 表面的键盘焦点所在的页面 */
+  activeTabId?: string;
+  /** 台上视图第一格里的页面；没有台上视图或格子全空时不传 */
+  onStageTabId?: string;
+}): string | undefined {
+  const { tabs, activeTabId, onStageTabId } = input;
+  // 页面列表会被移动页面的操作重排，「最近打开」只能看创建序号。
+  let latest: { id: string; aiOpenSeq: number } | undefined;
+  for (const tab of tabs) {
+    if (tab.origin !== "ai" || tab.aiOpenSeq === undefined) continue;
+    if (!latest || tab.aiOpenSeq > latest.aiOpenSeq) latest = { id: tab.id, aiOpenSeq: tab.aiOpenSeq };
+  }
+  if (latest) return latest.id;
+  // 激活页与台上格位都可能还记着一个已关闭的页面，认之前先确认它还在。
+  const open = (id: string | undefined): id is string =>
+    Boolean(id) && tabs.some((tab) => tab.id === id);
+  if (open(activeTabId)) return activeTabId;
+  if (open(onStageTabId)) return onStageTabId;
+  return tabs[0]?.id;
+}
+
+/**
+ * 按 id 找视图容器：台上容器的 id 与保存的视图定义的 id 都算。
+ *
+ * AI 手里两种 id 都会有——`list_views` 给的是定义 id，`list_browser_tabs`
+ * 给的是容器 id——对它来说都是「那个视图」。只认容器 id 的话，拿着
+ * `list_views` 的结果去摆布局，得到的是「视图不存在」。
+ *
+ * @returns 找不到时返回 undefined。同一个定义开着多个容器时，台上的那个优先
+ */
+export function findViewContainer<T extends { id: string; viewDefinitionId?: string }>(
+  views: T[],
+  viewId: string,
+  activeViewId?: string,
+): T | undefined {
+  const exact = views.find((view) => view.id === viewId);
+  if (exact) return exact;
+  const byDefinition = views.filter((view) => view.viewDefinitionId === viewId);
+  return byDefinition.find((view) => view.id === activeViewId) ?? byDefinition[0];
+}
+
 /** Largest site icon worth inlining; anything bigger is a misconfigured page. */
 export const FAVICON_MAX_BYTES = 512 * 1024;
 

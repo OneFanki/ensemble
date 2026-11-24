@@ -444,7 +444,7 @@ export const FLOW_TIMEOUT_DEFAULT_MS = 120_000;
  *
  * Ten minutes: past this a flow is a batch job, and a tool call that blocks for
  * that long is the wrong shape — the caller should chunk it or watch with
- * `wait_browser`. Bounded rather than unbounded so a typo in `timeoutMs` cannot
+ * `wait_browser_condition`. Bounded rather than unbounded so a typo in `timeoutMs` cannot
  * hold a tab for an hour.
  */
 export const FLOW_TIMEOUT_MAX_MS = 600_000;

@@ -189,6 +189,21 @@ try {
   });
   check("tab carries the identity label", adminTab.label === "管理员 · 主账号", adminTab.label);
 
+  // An omitted tabId means the page the AI opened most recently. It must not
+  // mean "the active page": that names what the person is looking at, because
+  // an AI-opened page never takes the stage — so with the starter page still
+  // active, an id-less call used to land on the person's page.
+  await call("evaluate_browser_page", {
+    tabId: adminTab.id,
+    expression: "window.__who = 'admin'",
+  });
+  await call("evaluate_browser_page", {
+    tabId: memberTab.id,
+    expression: "window.__who = 'member'",
+  });
+  const omitted = await call("evaluate_browser_page", { expression: "window.__who" });
+  check("an omitted tabId means the AI's latest page, not the person's", omitted === "member", omitted);
+
   // If the chrome window failed to mount, it never reports the stage rectangle
   // and the native views stay at zero size — the page would still be scriptable
   // but invisible. A real viewport proves the chrome rendered and laid them out.
@@ -233,11 +248,11 @@ try {
     names.slice(0, 8),
   );
 
-  const hidden = await call("check_element_visible", {
+  const hidden = await call("check_browser_element_visible", {
     tabId: memberTab.id,
     selector: "#delete-user",
   });
-  const visible = await call("check_element_visible", {
+  const visible = await call("check_browser_element_visible", {
     tabId: memberTab.id,
     selector: "#login",
   });
@@ -281,7 +296,7 @@ try {
   // just under that 4s timeout, which is the regression this guards: a parked
   // page is also allowed to have gone to sleep (observation no longer keeps it
   // awake), and waking a sleeping renderer costs a second or more on its own.
-  await call("set_tab_page", { pageId: memberTab.id });
+  await call("activate_browser_tab", { tabId: memberTab.id });
   await new Promise((r) => setTimeout(r, 900));
   const parkedStart = Date.now();
   const parkedShot = await call("screenshot_browser_tab", { tabId: adminTab.id });
@@ -291,17 +306,40 @@ try {
     (parkedShot.bytes ?? 0) > 1000 && parkedMs < 3500,
     { bytes: parkedShot.bytes, ms: parkedMs },
   );
-  await call("set_tab_page", { pageId: adminTab.id });
+  await call("activate_browser_tab", { tabId: adminTab.id });
   await new Promise((r) => setTimeout(r, 500));
 
-  // Grid layout. Asking for one while every tab is loose groups them into a
-  // view, which is the same result as dragging the tabs together by hand.
+  // Grid layout. Asking for one while the AI's pages are loose groups them into
+  // a view, which is the same result as dragging the tabs together by hand.
   const layout = await call("set_browser_layout", { layoutId: "2x1" });
   const grouped = (layout.views ?? [])[0];
   check(
-    "layout switch groups loose tabs into a 2x1 view",
+    "layout switch groups the AI's loose tabs into a 2x1 view",
     grouped?.layoutId === "2x1" && grouped.slotTabs.filter(Boolean).length === 2,
     layout.views,
+  );
+  // The person's own page is none of the AI's business: it stays out of the
+  // view the AI just made. It used to be swept in with everything else loose.
+  const starterId = starter.tabs[0]?.id;
+  const starterAfterLayout = (layout.tabs ?? []).find((tab) => tab.id === starterId);
+  check(
+    "the person's own page is left out of the view",
+    Boolean(starterId) && starterAfterLayout?.viewId === undefined,
+    starterAfterLayout,
+  );
+
+  // The workspace summary shows what is open in the in-app browser and which
+  // page is active. The screenshot check above activated the AI's admin page
+  // last, so that is the active one now; the starter page is listed too.
+  const summary = await call("get_workspace_summary");
+  const summaryTabs = summary?.browser?.tabs ?? [];
+  check(
+    "the workspace summary lists the in-app pages and says which one is active",
+    summary?.browser?.available === true &&
+      summaryTabs.some((tab) => tab.id === adminTab.id) &&
+      summaryTabs.find((tab) => tab.id === adminTab.id)?.active === true &&
+      summaryTabs.find((tab) => tab.id === starterId)?.active === false,
+    summary?.browser,
   );
 
   // Closing one tab leaves the other. Counted relative to what is open: the
@@ -314,6 +352,27 @@ try {
     "closing one tab leaves the other",
     remaining.tabs.length === beforeClose - 1 && !remaining.tabs.some((tab) => tab.id === memberTab.id),
     { before: beforeClose, after: remaining.tabs.length },
+  );
+
+  // Closing the view takes the AI's page with it and removes the view; the
+  // person's page is untouched. A view that is not open is an error, not a
+  // silent success.
+  const viewClosed = await call("close_browser_view", { viewId: grouped.id });
+  check(
+    "close_browser_view removes the view and the AI's page, and leaves the person's",
+    !(viewClosed.views ?? []).some((view) => view.id === grouped.id) &&
+      !(viewClosed.tabs ?? []).some((tab) => tab.id === adminTab.id) &&
+      (viewClosed.tabs ?? []).some((tab) => tab.id === starterId),
+    { views: viewClosed.views, tabs: (viewClosed.tabs ?? []).map((tab) => tab.id) },
+  );
+  const notOpen = await call("close_browser_view", { viewId: grouped.id }).then(
+    () => ({ refused: false }),
+    (error) => ({ refused: true, message: String(error) }),
+  );
+  check(
+    "close_browser_view on a view that is not open is refused",
+    notOpen.refused === true && notOpen.message.includes("视图不存在"),
+    notOpen,
   );
 
   // The audit log records the browser calls with arguments redacted.

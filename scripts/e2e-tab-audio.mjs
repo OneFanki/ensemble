@@ -277,7 +277,7 @@ try {
   // An AI action on that sounding page mutes it only while it runs. The wait
   // below cannot succeed (the text never appears), so the tool call spans
   // several seconds and there is time to look at the strip mid-action.
-  const pendingWait = mcp("wait_browser", {
+  const pendingWait = mcp("wait_browser_condition", {
     tabId,
     condition: "text",
     expect: "此文字不会出现在页面上",

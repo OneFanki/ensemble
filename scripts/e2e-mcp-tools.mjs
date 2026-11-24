@@ -215,12 +215,14 @@ try {
 
   // ---- workspace ----
   await tool("get_workspace_summary", {}, (v) => typeof v === "object" && v !== null);
-  await tool("list_sites", {}, (v) => Array.isArray(v?.sites) || Array.isArray(v));
-  await tool("list_identities", {}, (v) => Array.isArray(v?.identities) || Array.isArray(v));
-  await tool("list_views", {}, (v) => Array.isArray(v?.views) || Array.isArray(v));
-  await tool("list_flows", {}, (v) => Array.isArray(v?.flows) || Array.isArray(v));
-  await tool("list_bookmarks", {}, (v) => typeof v === "object" || Array.isArray(v));
-  await tool("list_layouts", {}, (v) => typeof v === "object" || Array.isArray(v));
+  // 列表类只有一种形状：以集合名包装的对象，不再是裸数组。
+  await tool("list_sites", {}, (v) => Array.isArray(v?.sites));
+  await tool("list_identities", {}, (v) => Array.isArray(v?.identities));
+  await tool("list_views", {}, (v) => Array.isArray(v?.views));
+  await tool("list_flows", {}, (v) => Array.isArray(v?.flows));
+  await tool("list_bookmarks", {}, (v) => Array.isArray(v?.bookmarks));
+  await tool("list_layouts", {}, (v) => Array.isArray(v?.builtin));
+  await tool("list_browser_engines", {}, (v) => Array.isArray(v?.engines));
 
   // ---- settings ----
   await tool("update_settings", { theme: "light" }, (v) => v !== undefined);
@@ -238,7 +240,7 @@ try {
     (snapshotAfterSite.sites ?? snapshotAfterSite).find((item) => item.name === "冒烟站点")?.id;
   record("create_site returned a usable id", Boolean(siteId), { siteId, site: site.value });
   if (!siteId) throw new Error("no site id");
-  await tool("update_site", { id: siteId, name: "冒烟站点·改" }, (v) => v !== undefined);
+  await tool("update_site", { siteId, name: "冒烟站点·改" }, (v) => v?.id === siteId);
 
   // ---- identities ----
   const identity = await tool(
@@ -263,7 +265,7 @@ try {
   );
   await tool("update_identity", { id: identityId, role: "admin" }, (v) => v !== undefined);
   await tool("set_password", { ownerKind: "site", ownerId: siteId, password: "site-secret" }, (v) => v !== undefined);
-  await tool("check_auth", { identityId }, (v) => typeof v === "object" && v !== null);
+  await tool("check_identity_auth", { identityId }, (v) => typeof v === "object" && v !== null);
 
   // ---- views ----
   const view = await tool(
@@ -276,8 +278,8 @@ try {
     view.value?.id ?? (viewsAfter.views ?? viewsAfter).find((item) => item.name === "冒烟视图")?.id;
   record("create_view returned a usable id", Boolean(viewId), viewId);
   if (!viewId) throw new Error("no view id");
-  await tool("update_view", { id: viewId, name: "冒烟视图·改" }, (v) => v !== undefined);
-  await tool("set_view_layout", { viewId, layoutId: "2x2" }, (v) => v !== undefined);
+  await tool("update_view", { viewId, name: "冒烟视图·改" }, (v) => v?.id === viewId);
+  await tool("update_view", { viewId, layoutId: "2x2" }, (v) => v !== undefined);
   // Opening the view is what makes a *runtime* container exist; the definition
   // id from create_view is not what layout calls take, and passing it is the
   // mistake this suite exists to catch.
@@ -326,7 +328,9 @@ try {
     bookmark.value?.id ??
     (bookmarks.bookmarks ?? bookmarks).find((item) => item.name === "冒烟书签")?.id;
   record("save_bookmark returned a usable id", Boolean(bookmarkId), bookmarkId);
-  if (bookmarkId) await tool("delete_bookmark", { id: bookmarkId, confirm: true }, (v) => v !== undefined);
+  if (bookmarkId) {
+    await tool("delete_bookmark", { bookmarkId, confirm: true }, (v) => v?.ok === true && v.deleted === bookmarkId);
+  }
 
   // ---- browser: pages ----
   await tool("list_browser_tabs", {}, (v) => v !== undefined);
@@ -386,7 +390,7 @@ try {
   );
   record("the slow request was started", busy.ok, busy.value);
   const idle = await tool(
-    "wait_browser",
+    "wait_browser_condition",
     { tabId, condition: "network-idle", quietMs: 300, timeoutMs: 6000 },
     (v) => v?.ok === true,
   );
@@ -454,9 +458,9 @@ try {
   });
   await tool("close_browser_tab", { tabId: busyTabId }, (v) => v !== undefined);
 
-  await tool("check_element_visible", { tabId, label: "备注" }, (v) => typeof v === "object");
+  await tool("check_browser_element_visible", { tabId, label: "备注" }, (v) => typeof v === "object");
   await tool("evaluate_browser_page", { tabId, expression: "document.title" }, (v) => typeof v === "string");
-  await tool("wait_browser", { tabId, condition: "text", expect: "应用", timeoutMs: 5000 }, (v) => v !== undefined);
+  await tool("wait_browser_condition", { tabId, condition: "text", expect: "应用", timeoutMs: 5000 }, (v) => v !== undefined);
   await tool("type_browser_text", { tabId, label: "备注", text: "冒烟" }, (v) => v?.ok === true);
   await tool(
     "fill_browser_form",
@@ -560,9 +564,9 @@ try {
   }
   await tool("reset_browser_viewport", { tabId }, (v) => v !== undefined);
 
-  await tool("set_tab_page", { pageId: secondId }, (v) => v !== undefined);
+  await tool("activate_browser_tab", { tabId: secondId }, (v) => v !== undefined);
   /*
-   * `set_tab_page` 把一个 loose 页摆上单舞台——新放置语义下那是 flat 模式，
+   * `activate_browser_tab` 把一个 loose 页摆上单舞台——新放置语义下那是 flat 模式，
    * 台上没有容器，「省略 viewId = 台上视图」此刻没有目标。pin 用例先把之前
    * 打开的容器摆回台上，再验证省略 viewId 的语义本身。
    */
@@ -606,7 +610,7 @@ try {
   await tool("move_browser_tab", { tabId: secondId, loose: true }, (v) => v !== undefined);
   const third = await call("open_browser_tab", { url: BASE + "/page-d" });
   const thirdId = third?.tabId ?? third?.id;
-  await tool("move_browser_tab", { tabId: thirdId, beforeOrAfter: tabId, edge: "after" }, (v) => v !== undefined);
+  await tool("move_browser_tab", { tabId: thirdId, anchorTabId: tabId, edge: "after" }, (v) => v !== undefined);
   await tool("close_browser_tab", { tabId: thirdId }, (v) => v !== undefined);
   if (secondId) await tool("close_browser_tab", { tabId: secondId }, (v) => v !== undefined);
 
@@ -620,25 +624,53 @@ try {
   }
 
   // ---- launch / external instances ----
-  // `launch_*` drive a real system browser; in a container the engine may be
-  // missing, so what is asserted is "the call is answered with a verdict", not
-  // "a window opened".
+  // 外部系统浏览器由 launch_external_browser 一个工具负责；它会真的拉起系统浏览器，
+  // 这个套件无头运行，所以只用一组自相矛盾的入参验证「调用有答复」，真正的启动在
+  // e2e-external-launch 里验证。
+  const refused = await call("launch_external_browser", {
+    identityId,
+    viewId,
+  }).then(() => ({ refused: false }), (error) => ({ refused: true, message: String(error) }));
+  record("launch_external_browser refuses two targets at once", refused.refused === true, refused);
+  record("the refusal names the conflict", /只能给一个/.test(refused.message ?? ""), refused);
+  // 旧的三个名字不再对外广播，但照常可调用：内置路径的行为原样保留。
+  const listed = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method: "tools/list" }),
+  })
+    .then((response) => response.json())
+    .catch(() => undefined);
+  const advertisedNames = Array.isArray(listed?.result?.tools)
+    ? listed.result.tools.map((item) => item.name)
+    : [];
+  record("tools/list answers", advertisedNames.length > 0, advertisedNames.length);
+  for (const legacy of ["launch_view", "launch_identity", "launch_clean_session"]) {
+    record(
+      `${legacy} is no longer advertised`,
+      advertisedNames.length > 0 && !advertisedNames.includes(legacy),
+      advertisedNames.filter((name) => name.startsWith("launch_")),
+    );
+  }
+  record(
+    "launch_external_browser is the one advertised launch tool",
+    advertisedNames.includes("launch_external_browser"),
+  );
   await tool("launch_view", { viewId }, (v) => typeof v === "object");
-  await tool("launch_identity", { identityId }, (v) => typeof v === "object");
-  await tool("launch_clean_session", { siteId }, (v) => typeof v === "object");
+  await tool("launch_identity", { identityId }, (v) => typeof v === "object" && v.tabId);
+  await tool("launch_clean_session", { siteId }, (v) => typeof v === "object" && v.clean === true);
   const instances = await call("get_workspace_summary");
-  const running = instances?.counts?.instances ?? instances?.instances ?? 0;
-  record("launch calls leave the app answering", typeof instances === "object", running);
-  await tool("stop_all", {}, (v) => v !== undefined);
+  record("launch calls leave the app answering", typeof instances === "object");
+  await tool("stop_all_external_browsers", {}, (v) => v?.ok === true);
 
   // ---- accounts transfer ----
-  await tool("export_accounts", { siteIds: [siteId], note: "冒烟" }, (v) => typeof v === "object");
-  const exported = await call("export_accounts", { siteIds: [siteId] });
+  await tool("export_identities", { siteIds: [siteId], note: "冒烟" }, (v) => typeof v === "object");
+  const exported = await call("export_identities", { siteIds: [siteId] });
   const path = exported?.path;
-  record("export_accounts returned a path", Boolean(path), exported);
+  record("export_identities returned a path", Boolean(path), exported);
   if (path) {
-    await tool("preview_accounts", { path }, (v) => typeof v === "object");
-    await tool("import_accounts", { path }, (v) => typeof v === "object");
+    await tool("preview_identities", { path }, (v) => typeof v === "object");
+    await tool("import_identities", { path }, (v) => typeof v === "object");
   }
 
   // ---- views and sites: destructive, so last ----
@@ -660,14 +692,14 @@ try {
     await call("delete_site", { id: otherSiteId, confirm: true });
   }
   const stillThere = (await call("list_views")).views?.some((item) => item.id === viewId) ?? false;
-  if (stillThere) await tool("delete_view", { id: viewId, confirm: true }, (v) => v !== undefined);
+  if (stillThere) await tool("delete_view", { viewId, confirm: true }, (v) => v?.ok === true);
   else record("delete_view (source view moved by the copy)", true, { viewId });
-  await tool("detach_identity_reference", { identityId }, (v) => v !== undefined);
+  await tool("detach_identity_credentials", { identityId }, (v) => v !== undefined);
   await tool("link_identities_to_site", { siteId, identityIds: [identityId] }, (v) => v !== undefined);
 
   await tool("delete_flow", { id: flowId, confirm: true }, (v) => v !== undefined);
-  await tool("delete_identity", { id: identityId, confirm: true }, (v) => v !== undefined);
-  await tool("delete_site", { id: siteId, confirm: true }, (v) => v !== undefined);
+  await tool("delete_identity", { identityId, confirm: true }, (v) => v?.ok === true);
+  await tool("delete_site", { siteId, confirm: true }, (v) => v?.ok === true);
 } catch (error) {
   record("run completed", false, String(error));
   console.log(appLog.slice(-1500));

@@ -1051,7 +1051,7 @@ async function openEmbeddedView(
     // Without this, opening a saved view left every login form empty while the
     // single-account path filled fine — the same action behaved differently
     // depending on which entry point was used.
-    scheduleEmbeddedLogin(tab.id, identityId);
+    void scheduleEmbeddedLogin(tab.id, identityId);
   }
   // The saved slot assignments are identity ids; map them onto the tabs that
   // exist so a reopened view comes back in the same arrangement.
@@ -1067,30 +1067,54 @@ async function openEmbeddedView(
 }
 
 /**
+ * 开一个带账号的页面时，登录这一步处于什么状态。
+ *
+ * `open_browser_tab` 原样带给调用方：页面在它拿到返回值之后还可能被导航走
+ * （未登录时先去登录页），不告诉它的话，它下一步读到的就是一个自己没要求
+ * 打开的页面。
+ */
+export type EmbeddedLoginState =
+  /** 已登录，页面停在它被要求打开的地址上。 */
+  | "signed-in"
+  /** 未登录：正在填表并提交，登录后会回到它被要求打开的地址。 */
+  | "signing-in"
+  /** 未登录：表单会被填好但不提交（站点关着自动提交），等用户或 AI 按下登录。 */
+  | "login-form"
+  /** 站点没有配置登录检测，或页面不在站点自己的源上：判断不了。 */
+  | "unknown";
+
+/**
  * Launch pipeline for an embedded identity tab: confirm the session, sign in
- * when needed, and land on the account's start path.
+ * when needed, and land where this launch was asked to go.
  *
  * With a check path configured on the site, an in-page fetch decides: signed in
- * → done, the tab stays on startPath; signed out → navigate to the site's login
+ * → done, the tab stays where it is; signed out → navigate to the site's login
  * page, fill, and — only when the site's `autoSubmit` is on, which is the
  * user's standing consent to press the button — submit, wait for the session to
- * appear, then navigate back to startPath. A failed sign-in leaves the filled
- * form on the login page for manual takeover.
+ * appear, then navigate to `options.returnUrl`, or to the account's start path
+ * when the caller named no address. A failed sign-in leaves the filled form on
+ * the login page for manual takeover.
  *
  * Without a check path there is no way to tell "already signed in" from "the
  * login page redirected somewhere else", so the routine keeps the old behavior:
  * poll for a password field and fill it, nothing more.
  *
- * Deliberately not awaited: a four-member view must not hold the launch result
- * for a minute while each page comes up.
+ * The sign-in itself is deliberately not awaited — a four-member view must not
+ * hold the launch result for a minute while each page comes up — but the probe
+ * that decides whether it is needed is: that one answer is what the caller is
+ * told, so it is waited for (bounded, a few attempts while the page settles).
  */
-function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
-  if (!service?.settingsSnapshot().autoFillOnLaunch) return;
+async function scheduleEmbeddedLogin(
+  tabId: string,
+  identityId: string,
+  options: { returnUrl?: string } = {},
+): Promise<EmbeddedLoginState> {
+  if (!service?.settingsSnapshot().autoFillOnLaunch) return "unknown";
   const identity = service.findIdentity(identityId);
-  if (!identity) return;
+  if (!identity) return "unknown";
   const site = identity.siteId ? service.findSite(identity.siteId) : undefined;
   const browser = ensureEmbeddedBrowser();
-  const startUrl = embeddedStartUrl(identityId);
+  const startUrl = options.returnUrl || embeddedStartUrl(identityId);
 
   const report = (extra: {
     filled: boolean;
@@ -1213,83 +1237,8 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
     return last;
   };
 
-  void (async () => {
-    if (site?.authCheckPath) {
-      // The page was loaded by createTab, but a client-side redirect may still
-      // be settling; give the probe a few attempts before concluding.
-      let state: boolean | "pending" | "unknown" = "pending";
-      for (let attempt = 0; attempt < 6 && state === "pending"; attempt += 1) {
-        state = await probe();
-        if (state === "pending") await wait(500);
-      }
-      if (state === true) {
-        // Already signed in: the launch lands on startPath untouched.
-        report({ filled: false, submitted: false, loggedIn: true });
-        return;
-      }
-      if (state === false) {
-        // --- Sign in, then return to the start path. ---
-        try {
-          await browser.navigate(tabId, new URL(site.loginPath, site.baseUrl).toString());
-        } catch {
-          // A path normalizeEmbeddedUrl rejects leaves the tab where it is;
-          // the fill below still runs, protected by its same-origin check.
-        }
-        const filled = await fillOnLoginPage(15_000);
-        if (!filled?.ok) {
-          report({
-            filled: false,
-            submitted: false,
-            navigatedToLogin: true,
-            skipped:
-              filled?.reason === "cross-origin"
-                ? "cross-origin"
-                : filled?.reason === "no-password" || filled?.reason === "no-identity"
-                  ? "no-password"
-                  : "not-login-page",
-          });
-          return;
-        }
-        if (!filled.submitted) {
-          // autoSubmit is off: the filled form waits for the user's own button.
-          report({ filled: true, submitted: false, missingFields: filled.missingFields });
-          return;
-        }
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          if ((await probe()) === true) {
-            if (startUrl) {
-              try {
-                await browser.navigate(tabId, startUrl);
-              } catch {
-                // Stay wherever the site landed after sign-in.
-              }
-            }
-            report({
-              filled: true,
-              submitted: true,
-              loggedIn: true,
-              missingFields: filled.missingFields,
-            });
-            return;
-          }
-          await wait(700);
-        }
-        // Still signed out after the deadline: the form is filled and the
-        // user takes over (captcha, wrong password, extra steps).
-        report({
-          filled: true,
-          submitted: true,
-          skipped: "login-failed",
-          missingFields: filled.missingFields,
-        });
-        return;
-      }
-      // state === "unknown": the probe cannot run on this page; fall through
-      // to the legacy fill below instead of guessing.
-    }
-
-    // --- Legacy behavior without a check path: poll for a password field. ---
+  /** 没有检测路径时的老行为：等登录表单出现就填好，不导航。 */
+  const legacyFill = async (): Promise<void> => {
     const filled = await fillOnLoginPage(15_000);
     const skipped = filled?.ok
       ? undefined
@@ -1304,7 +1253,89 @@ function scheduleEmbeddedLogin(tabId: string, identityId: string): void {
       missingFields: filled?.missingFields ?? [],
       ...(skipped ? { skipped } : {}),
     });
+  };
+
+  if (!site?.authCheckPath) {
+    void legacyFill();
+    return "unknown";
+  }
+
+  // The page was loaded by createTab, but a client-side redirect may still be
+  // settling; give the probe a few attempts before concluding. 这一步等的是
+  // 「要不要登录」，有上限；登录本身不等。
+  let state: boolean | "pending" | "unknown" = "pending";
+  for (let attempt = 0; attempt < 6 && state === "pending"; attempt += 1) {
+    state = await probe();
+    if (state === "pending") await wait(500);
+  }
+  if (state === true) {
+    // Already signed in: the page stays where this launch put it.
+    report({ filled: false, submitted: false, loggedIn: true });
+    return "signed-in";
+  }
+  if (state !== false) {
+    void legacyFill();
+    return "unknown";
+  }
+
+  // --- Sign in, then return to where this launch was asked to go. ---
+  void (async () => {
+    try {
+      await browser.navigate(tabId, new URL(site.loginPath, site.baseUrl).toString());
+    } catch {
+      // A path normalizeEmbeddedUrl rejects leaves the tab where it is;
+      // the fill below still runs, protected by its same-origin check.
+    }
+    const filled = await fillOnLoginPage(15_000);
+    if (!filled?.ok) {
+      report({
+        filled: false,
+        submitted: false,
+        navigatedToLogin: true,
+        skipped:
+          filled?.reason === "cross-origin"
+            ? "cross-origin"
+            : filled?.reason === "no-password" || filled?.reason === "no-identity"
+              ? "no-password"
+              : "not-login-page",
+      });
+      return;
+    }
+    if (!filled.submitted) {
+      // autoSubmit is off: the filled form waits for the user's own button.
+      report({ filled: true, submitted: false, missingFields: filled.missingFields });
+      return;
+    }
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline) {
+      if ((await probe()) === true) {
+        if (startUrl) {
+          try {
+            await browser.navigate(tabId, startUrl);
+          } catch {
+            // Stay wherever the site landed after sign-in.
+          }
+        }
+        report({
+          filled: true,
+          submitted: true,
+          loggedIn: true,
+          missingFields: filled.missingFields,
+        });
+        return;
+      }
+      await wait(700);
+    }
+    // Still signed out after the deadline: the form is filled and the
+    // user takes over (captcha, wrong password, extra steps).
+    report({
+      filled: true,
+      submitted: true,
+      skipped: "login-failed",
+      missingFields: filled.missingFields,
+    });
   })();
+  return service.effectiveAutoSubmit(site) ? "signing-in" : "login-form";
 }
 
 /**
@@ -1352,7 +1383,7 @@ async function openFlowTab(
     ...(options.muted ? { muted: true } : {}),
   });
   browser.activate(created.id);
-  scheduleEmbeddedLogin(created.id, identityId);
+  void scheduleEmbeddedLogin(created.id, identityId);
   // The document is still loading; a step that runs immediately would look at
   // about:blank and fail with "not-found" for a page that is a moment away.
   await new Promise((done) => setTimeout(done, 800));
@@ -4057,7 +4088,11 @@ function registerIpc(workspace: WorkspaceService): void {
       // Opening a bookmark as one of its accounts is the same intent as
       // clicking that account's card, so it fills the same way. A blank tab or
       // a clean session names no identity and is skipped inside the scheduler.
-      if (input?.identityId) scheduleEmbeddedLogin(tab.id, input.identityId);
+      if (input?.identityId) {
+        void scheduleEmbeddedLogin(tab.id, input.identityId, {
+          ...(input.url ? { returnUrl: input.url } : {}),
+        });
+      }
       // A "+" that omits `viewId` means "add a page here and show it". When the
       // grid is full, the new page has no free cell, so swap it into the
       // selected one — otherwise the stage keeps showing the old page and the
@@ -4109,7 +4144,11 @@ function registerIpc(workspace: WorkspaceService): void {
         ...(identity ? { label: identity.name, color: identity.color } : {}),
         ...(options?.clean ? { clean: true } : {}),
       });
-      if (identity) scheduleEmbeddedLogin(tab.id, identity.id);
+      if (identity) {
+        void scheduleEmbeddedLogin(tab.id, identity.id, {
+          ...(options?.url ? { returnUrl: options.url } : {}),
+        });
+      }
       browser.activate(tab.id);
       browser.focusPage();
       return browser.state();
@@ -4154,7 +4193,11 @@ function registerIpc(workspace: WorkspaceService): void {
         ...(options?.clean ? { clean: true } : {}),
       });
       const pinned = browser.pinTab(String(viewId), Number(slotIndex), tab.id);
-      if (identity) scheduleEmbeddedLogin(tab.id, identity.id);
+      if (identity) {
+        void scheduleEmbeddedLogin(tab.id, identity.id, {
+          ...(options?.url ? { returnUrl: options.url } : {}),
+        });
+      }
       browser.focusPage();
       return pinned;
     },
@@ -4219,7 +4262,7 @@ function registerIpc(workspace: WorkspaceService): void {
       ...(identity.color ? { color: identity.color } : {}),
       origin: "manual",
     });
-    scheduleEmbeddedLogin(tab.id, identity.id);
+    void scheduleEmbeddedLogin(tab.id, identity.id, { ...(url ? { returnUrl: url } : {}) });
     return browser.state();
   });
 
@@ -4413,7 +4456,7 @@ function registerIpc(workspace: WorkspaceService): void {
       viewId,
       (tab, index) => {
         const identityId = members[index]?.id;
-        if (identityId) scheduleEmbeddedLogin(tab.id, identityId);
+        if (identityId) void scheduleEmbeddedLogin(tab.id, identityId);
       },
     );
   });
@@ -4792,6 +4835,10 @@ if (!singletonLock.acquired) {
           mainWindow.webContents.send(IPC.authAutoFilled, report);
         }
       },
+      // 登录检测先看内置浏览器里已经打开的页面：AI 操作的和用户看着的都是那一套
+      // 登录状态。内置浏览器还没创建过时就没有这样的页面，交给外部那条路。
+      embeddedAuthProbe: async (identityId, site) =>
+        embedded?.authProbeOfIdentity(identityId, site, resolveAuthTokenSource(site)),
     });
 
     settingsCache = service.settingsSnapshot();
@@ -4908,8 +4955,14 @@ if (!singletonLock.acquired) {
           // endpoint unusable. The page gets a real viewport either way:
           // `createTab` gives the parked node a full-size box off-window, so
           // screenshots and DOM queries work while it is off screen.
-          if (input.identityId) scheduleEmbeddedLogin(created.id, input.identityId);
-          return created;
+          // 不等登录，但等「要不要登录」的判断：未登录时页面随后会被带到登录页，
+          // 这件事要让调用方从返回值里知道。点名了地址，登录后回到它。
+          const login = input.identityId
+            ? await scheduleEmbeddedLogin(created.id, input.identityId, {
+                ...(input.url && input.url !== "about:blank" ? { returnUrl: input.url } : {}),
+              })
+            : undefined;
+          return login ? { ...created, login } : created;
         },
         navigate: (tabId, url) => ensureEmbeddedBrowser().navigate(tabId, url),
         back: (tabId) => ensureEmbeddedBrowser().back(tabId),
@@ -4924,14 +4977,17 @@ if (!singletonLock.acquired) {
         // The log's site/profile context, which the gate must not depend on.
         actionFacts: (tabId) => ensureEmbeddedBrowser().actionFacts(tabId),
         closeTab: (tabId) => ensureEmbeddedBrowser().closeTab(tabId),
-        // 拆出与收回共用一个开关：已拆出时再次调用即收回主舞台。编排函数
-        // 在文件上方（popOutBrowserTab / dockBrowserTab）。
+        closeView: (viewId, mode) => ensureEmbeddedBrowser().closeView(viewId, mode ?? "ai"),
+        // 拆出与收回是两个动作，不是一个开关：已经拆出的页面再「拆出」不会
+        // 悄悄把它收回去。编排函数在文件上方（popOutBrowserTab / dockBrowserTab）。
         popOutTab: async (tabId) => {
-          if (popouts?.has(tabId)) {
-            await dockBrowserTab(tabId);
-            return { docked: true as const };
-          }
+          if (popouts?.has(tabId)) return { alreadyPoppedOut: true };
           return popOutBrowserTab(tabId);
+        },
+        dockTab: async (tabId) => {
+          if (!popouts?.has(tabId)) return { docked: false, reason: "not-popped-out" };
+          await dockBrowserTab(tabId);
+          return { docked: true };
         },
         activate: (tabId) => ensureEmbeddedBrowser().activate(tabId),
         snapshotDom: (tabId, options) => ensureEmbeddedBrowser().snapshotDom(tabId, options),

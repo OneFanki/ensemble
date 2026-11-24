@@ -56,6 +56,8 @@ export const messages = {
     "auth.noHeadless": "{brand} 不支持后台检测；请先启动该账号，再在窗口内检测。",
     "auth.noCdp": "该账号以外部模式运行，无法检测或自动填充。",
     "auth.crossOrigin": "当前页面不属于该站点的域名，已拒绝操作。",
+    "auth.embeddedUnavailable":
+      "该账号在应用内浏览器里的页面不在站点自己的域名上（或还没加载完），无法检测。",
     "auth.originChanged": "该站点的地址与上次使用密码时不同，已暂停填写。请在站点设置里确认地址后再试。",
     "auth.filled": "已填充账号与密码，请手动提交。",
     "auth.filledSubmitted": "已填充并提交登录表单。",
@@ -119,6 +121,8 @@ export const messages = {
     "auth.noHeadless": "{brand} cannot be checked in the background; launch the account and check its window instead.",
     "auth.noCdp": "This account runs in external mode; checking and autofill are unavailable.",
     "auth.crossOrigin": "The current page is not on this site's origin; operation refused.",
+    "auth.embeddedUnavailable":
+      "This account's page in the in-app browser is not on the site's own origin (or is still loading), so it cannot be checked.",
     "auth.originChanged": "This site's address differs from the one its password was last used with. Filling was paused; confirm the address in the site settings and try again.",
     "auth.filled": "Username and password filled. Submit manually.",
     "auth.filledSubmitted": "Login form filled and submitted.",

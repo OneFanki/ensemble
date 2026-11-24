@@ -27,6 +27,10 @@ import { GUIDE_SEEN } from "./lib/guide-version.mjs";
 import { connectToWindow, waitForWindow } from "./lib/e2e-cdp.mjs";
 
 const userData = mkdtempSync(join(tmpdir(), "ensemble-e2e-launch-"));
+// MCP endpoint, pre-seeded so the external-browser tool family can be driven
+// the way an AI drives it.
+const MCP_PORT = await freePort();
+const MCP_TOKEN = "e2e-external-launch-token-1234";
 
 mkdirSync(join(userData, "profiles"), { recursive: true });
 writeFileSync(
@@ -87,6 +91,18 @@ writeFileSync(
     defaultProfileId: "default",
   }),
 );
+writeFileSync(
+  join(userData, "mcp.json"),
+  JSON.stringify({
+    enabled: true,
+    port: MCP_PORT,
+    token: MCP_TOKEN,
+    allowWrite: true,
+    allowRun: true,
+    allowDelete: true,
+  }),
+  { mode: 0o600 },
+);
 
 const electronBinary =
   process.platform === "win32"
@@ -112,6 +128,40 @@ function check(name, ok, detail) {
 async function inApp(client, body) {
   return client.evaluate(`(async () => { ${body} })()`);
 }
+
+let mcpSeq = 0;
+/** One MCP tool call; retries until the endpoint has come up. */
+async function mcp(name, args = {}) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${MCP_PORT}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${MCP_TOKEN}` },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: ++mcpSeq,
+          method: "tools/call",
+          params: { name, arguments: args },
+        }),
+      });
+      const json = await response.json();
+      if (json.error) throw new Error(`${name}: ${json.error.message}`);
+      const result = json.result;
+      if (result.isError) {
+        throw new Error(`${name}: ${result.content?.[0]?.text ?? "failed"}`);
+      }
+      return result.content?.[0]?.text ? JSON.parse(result.content[0].text) : undefined;
+    } catch (error) {
+      if (attempt === 79) throw error;
+      await wait(250);
+    }
+  }
+  return undefined;
+}
+
+/** The ids of the external windows the workspace knows about right now. */
+const instanceIds = (client) =>
+  inApp(client, "return (await window.ensemble.getWorkspace()).instances.map((i) => i.id);");
 
 try {
   let client;
@@ -227,6 +277,41 @@ try {
     "an account opens in the browser the caller picked",
     accountWindow?.identityId === "identity-1" && accountWindow?.engineId === usable.id,
     accountWindow,
+  );
+
+  // --- 3b. Through MCP: one tool opens a window, reports its id, and closes it
+  //
+  // The external browser used to be reached through three `launch_*` tools that
+  // each meant two things. It is one tool now, and what it hands back has to be
+  // exactly what the stop tool takes.
+  const launched = await mcp("launch_external_browser", {
+    identityId: "identity-1",
+    engineId: usable.id,
+  });
+  await wait(2500);
+  const live = await instanceIds(client);
+  const launchedId = launched?.instances?.[0]?.instanceId;
+  check(
+    "launch_external_browser opens a real window and reports the id the workspace knows",
+    Array.isArray(launched?.instances) &&
+      launched.instances.length === 1 &&
+      typeof launchedId === "string" &&
+      live.includes(launchedId),
+    { launched, live },
+  );
+  const stoppedOne = await mcp("stop_external_browser", { instanceId: launchedId });
+  await wait(1500);
+  const afterStop = await instanceIds(client);
+  check(
+    "stop_external_browser closes that window and says so",
+    stoppedOne?.ok === true && !afterStop.includes(launchedId),
+    { stoppedOne, afterStop },
+  );
+  const stoppedAgain = await mcp("stop_external_browser", { instanceId: launchedId });
+  check(
+    "stopping a window that is not running says so instead of reporting success",
+    stoppedAgain?.ok === false && stoppedAgain.reason === "not-running",
+    stoppedAgain,
   );
 
   // --- 4. Everything is closed on request -----------------------------------

@@ -187,7 +187,7 @@ try {
   const listed = await call("list_views", { siteId: site.id });
   check(
     "view definition follows the open container's layout",
-    (listed ?? []).find((item) => item.id === view.id)?.layoutId === "2x1",
+    (listed?.views ?? []).find((item) => item.id === view.id)?.layoutId === "2x1",
     listed,
   );
 

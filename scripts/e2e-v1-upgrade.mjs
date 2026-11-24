@@ -146,19 +146,25 @@ try {
   check("app started on the v1 workspace", ready, ready ? undefined : log.slice(-600));
   if (ready) {
     const sites = await call("list_sites");
-    check("old environment is now a site", sites.length === 1 && sites[0].id === "site-legacy-1", sites);
+    check(
+      "old environment is now a site",
+      sites.sites.length === 1 && sites.sites[0].id === "site-legacy-1",
+      sites,
+    );
     const identities = await call("list_identities", {});
     check(
       "identity kept its id and moved to siteId",
-      identities.length === 1 &&
-        identities[0].id === "identity-legacy-1" &&
-        identities[0].siteId === "site-legacy-1",
+      identities.identities.length === 1 &&
+        identities.identities[0].id === "identity-legacy-1" &&
+        identities.identities[0].siteId === "site-legacy-1",
       identities,
     );
     const views = await call("list_views", {});
     check(
       "old scene is now a view on the same site",
-      views.length === 1 && views[0].id === "scene-legacy-1" && views[0].siteId === "site-legacy-1",
+      views.views.length === 1 &&
+        views.views[0].id === "scene-legacy-1" &&
+        views.views[0].siteId === "site-legacy-1",
       views,
     );
   }

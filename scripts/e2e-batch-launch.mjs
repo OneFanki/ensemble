@@ -579,6 +579,66 @@ try {
     envelopeInfos,
   );
 
+  // --- 点名了地址的页面：登录后回到那个地址 ---------------------------------
+  // 站点登录成功后会跳到 /community，自动登录流程过去再导航到账号起始页；调用方
+  // 点名的地址两处都不是。`open_browser_tab` 还要把登录这一步的状态带回去：
+  // 页面在它返回之后才被带走，不说的话调用方下一步读到的就是一个自己没要求
+  // 打开的页面。
+  const zeta = await call("create_identity", {
+    siteId: site.id,
+    name: "账号己",
+    username: "user-zeta",
+    role: "成员",
+    color: "blue",
+    startPath: "/zeta",
+  });
+  const target = `${PAGE_URL}deep/report?id=7`;
+  const named = await call("open_browser_tab", { url: target, identityId: zeta.id });
+  const namedTab = named?.tabId;
+  check(
+    "open_browser_tab says the sign-in is under way",
+    named?.login?.state === "signing-in",
+    named?.login,
+  );
+  const backOnTarget = await (async () => {
+    const deadline = Date.now() + 40_000;
+    let last;
+    while (Date.now() < deadline) {
+      last = await call("evaluate_browser_page", {
+        tabId: namedTab,
+        expression: "({ where: location.pathname + location.search, title: document.title })",
+      }).catch(() => undefined);
+      if (last?.where === "/deep/report?id=7" && String(last.title).includes("已登录")) {
+        return last;
+      }
+      await wait(300);
+    }
+    return last;
+  })();
+  check(
+    "the page comes back signed in on the address that was asked for",
+    backOnTarget?.where === "/deep/report?id=7" &&
+      String(backOnTarget?.title).includes("已登录"),
+    backOnTarget,
+  );
+  // 已经登录的账号再开一个地址：页面不动，返回里直接说已登录。
+  const signedInOpen = await call("open_browser_tab", {
+    url: `${PAGE_URL}deep/second`,
+    identityId: zeta.id,
+  });
+  check(
+    "an already signed-in account is reported as signed in",
+    signedInOpen?.login?.state === "signed-in",
+    signedInOpen?.login,
+  );
+  // 登录检测先看内置浏览器里开着的页面：这里没有外部窗口，只有它。
+  const verdict = await call("check_identity_auth", { identityId: zeta.id });
+  check(
+    "check_identity_auth reads the in-app page and names the surface it read",
+    verdict?.status === "signed-in" && verdict?.surface === "embedded",
+    verdict,
+  );
+
   // --- Arrival is one frame, not a page at a time ---------------------------
   // Two separate defects used to show here:
   //

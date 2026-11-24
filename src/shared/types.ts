@@ -333,6 +333,12 @@ export interface AuthCheckResult {
   status: IdentityStatus;
   checkedAt: string;
   detail?: string;
+  /**
+   * Which set of logins was looked at. The in-app browser and external windows
+   * keep separate sessions, so a verdict only means something together with
+   * this. Absent when nothing could be checked.
+   */
+  surface?: "embedded" | "external";
 }
 
 export interface AuthBatchTotals {

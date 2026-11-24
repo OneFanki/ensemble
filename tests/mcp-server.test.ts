@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
 import { embeddedSlotCount } from "@shared/embedded";
-import type { SettingsPatch } from "@shared/types";
+import type { RunningInstance, SettingsPatch } from "@shared/types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type EmbeddedSurface,
@@ -229,7 +229,7 @@ describe("MCP tools", () => {
     expect(created.failures).toHaveLength(0);
 
     const listed = await rpc(toolCall("list_identities", { siteId: site.id }));
-    const identities = JSON.parse(listed.json.result.content[0].text);
+    const identities = JSON.parse(listed.json.result.content[0].text).identities;
     expect(identities).toHaveLength(2);
     expect(identities[0].hasPassword).toBe(true);
     // Passwords are write-only: no response may echo them.
@@ -282,19 +282,22 @@ describe("MCP tools", () => {
     const site = JSON.parse(created.json.result.content[0].text);
     expect(site.defaultPasswordSet).toBe(false);
 
-    await rpc(
+    // 不传 password 的账号继承站点默认密码（创建工具不接受 passwordMode，
+    // 它是返回值里的只读字段）。
+    const heir = await rpc(
       toolCall("create_identity", {
         siteId: site.id,
         name: "继承账号",
         username: "heir",
-        passwordMode: "inherit",
       }),
     );
+    expect(JSON.parse(heir.json.result.content[0].text).passwordMode).toBe("inherit");
     const before = JSON.parse(
       (await rpc(toolCall("list_sites"))).json.result.content[0].text,
-    ).find((item: { id: string }) => item.id === site.id);
+    ).sites.find((item: { id: string }) => item.id === site.id);
     expect(before.defaultPasswordSet).toBe(false);
 
+    // 旧写法 ownerKind + ownerId 仍然接受；规范写法在下一个用例里。
     await rpc(
       toolCall("set_password", {
         ownerKind: "site",
@@ -304,10 +307,59 @@ describe("MCP tools", () => {
     );
     const after = JSON.parse(
       (await rpc(toolCall("list_sites"))).json.result.content[0].text,
-    ).find((item: { id: string }) => item.id === site.id);
+    ).sites.find((item: { id: string }) => item.id === site.id);
     expect(after.defaultPasswordSet).toBe(true);
     // Still write-only: the flag reports existence, never the value.
     expect(JSON.stringify(after)).not.toContain("later-default");
+  });
+
+  it("set_password 用 siteId / identityId 点名密码属于谁，两种写法互斥", async () => {
+    const env = await rpc(
+      toolCall("create_site", { name: "点名站点", baseUrl: "http://localhost:5100" }),
+    );
+    const site = JSON.parse(env.json.result.content[0].text);
+    const identityRaw = await rpc(
+      toolCall("create_identity", {
+        siteId: site.id,
+        name: "点名账号",
+        username: "named",
+      }),
+    );
+    expect(identityRaw.json.result?.isError, JSON.stringify(identityRaw.json)).toBeUndefined();
+    const identity = JSON.parse(identityRaw.json.result.content[0].text);
+
+    const forIdentity = await rpc(
+      toolCall("set_password", { identityId: identity.id, password: "account-secret" }),
+    );
+    // 新建的账号默认继承站点密码，登录时读不到自己的密码：写入后切到「使用
+    // 自己的密码」，否则这次写入永远不会被用到。
+    expect(JSON.parse(forIdentity.json.result.content[0].text)).toMatchObject({
+      ok: true,
+      identityId: identity.id,
+      passwordMode: "custom",
+    });
+    const stored = JSON.parse(
+      (await rpc(toolCall("list_identities", { siteId: site.id }))).json.result.content[0].text,
+    ).identities.find((item: { id: string }) => item.id === identity.id);
+    expect(stored).toMatchObject({ passwordMode: "custom", hasPassword: true });
+    const forSite = await rpc(
+      toolCall("set_password", { siteId: site.id, password: "site-secret" }),
+    );
+    expect(JSON.parse(forSite.json.result.content[0].text)).toEqual({
+      ok: true,
+      siteId: site.id,
+    });
+
+    // 不点名、或两边都点名，都拒绝而不是猜一个。
+    for (const args of [
+      { password: "x" },
+      { password: "x", siteId: site.id, identityId: identity.id },
+      { password: "x", ownerId: site.id },
+      { password: "x", ownerId: site.id, siteId: site.id },
+    ]) {
+      const refused = await rpc(toolCall("set_password", args));
+      expect(refused.json.error?.code ?? refused.json.result?.isError, JSON.stringify(args)).toBeTruthy();
+    }
   });
 
   it("advertises the same per-account fields in the batch tool as in the single one", async () => {
@@ -468,23 +520,27 @@ describe("MCP tools", () => {
     // The name alone must not fork the launch path: no extra confirmation field
     // exists, because guessing risk from a name was both unreliable and advisory.
     const tools = (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json.result.tools;
-    for (const name of ["launch_view", "launch_identity", "launch_clean_session"]) {
-      const tool = tools.find((item: { name: string }) => item.name === name);
-      expect(tool.inputSchema.properties).not.toHaveProperty("confirmProduction");
-    }
+    const advertised = tools.find((item: { name: string }) => item.name === "launch_external_browser");
+    expect(advertised.inputSchema.properties).not.toHaveProperty("confirmProduction");
 
     await server.update({ allowRun: false });
-    const refused = await rpc(toolCall("launch_identity", { identityId: identity.id }));
+    const refused = await rpc(
+      toolCall("launch_external_browser", { identityId: identity.id }),
+    );
     expect(refused.json.result.isError).toBe(true);
     expect(refused.json.result.content[0].text).toMatch(/权限/);
+    // A compatibility alias is gated like the tool it hands off to.
+    const viaAlias = await rpc(toolCall("launch_identity", { identityId: identity.id }));
+    expect(viaAlias.json.result.isError).toBe(true);
+    expect(viaAlias.json.result.content[0].text).toMatch(/权限/);
   });
 });
 
-describe("launch 工具默认走内置表面", () => {
+describe("launch：外部浏览器工具族与旧名字的兼容别名", () => {
   /**
    * 内置表面的最小替身：只记录 openView / createTab，其余成员给可编译的空实现。
    * createTab 沿用真实桥的关键约定：带 identityId 落账号分区，不带则是一次性
-   * 干净会话（clean: true）。
+   * 干净身份（clean: true）。
    */
   function launchProbeSurface() {
     const calls: Array<{ method: string; args: unknown[] }> = [];
@@ -564,6 +620,9 @@ describe("launch 工具默认走内置表面", () => {
       string,
       (...args: unknown[]) => Promise<unknown>
     >;
+    // 引擎列表同样与机器上装了什么无关：工具入口会核对点名的 engineId，
+    // 用例里写的 edge-stable 得在表里，否则在有 Edge 的机器上才过。
+    (service as unknown as { engines: Array<{ id: string }> }).engines = [{ id: "edge-stable" }];
     bag.launchView = async (...args) => {
       calls.push({ method: "launchView", args });
       return { instance: { id: "inst-view", label: "视图实例" }, identities: [] };
@@ -574,7 +633,7 @@ describe("launch 工具默认走内置表面", () => {
     };
     bag.launchCleanSession = async (...args) => {
       calls.push({ method: "launchCleanSession", args });
-      return { instance: { id: "inst-clean", label: "干净会话" } };
+      return { instance: { id: "inst-clean", label: "干净身份" } };
     };
     return calls;
   }
@@ -611,21 +670,31 @@ describe("launch 工具默认走内置表面", () => {
     return { siteId: site.id, identityId: identity.id, viewId: view.id };
   }
 
-  it("声明 external 开关但不出现在必填参数里", async () => {
+  it("对外只广播 launch_external_browser，它的入参里没有 external 开关", async () => {
     const tools = (
       await rpc({ jsonrpc: "2.0", id: 3, method: "tools/list" })
     ).json.result.tools as Array<{
       name: string;
       inputSchema: { properties: Record<string, { type: string }>; required?: string[] };
     }>;
-    for (const name of ["launch_view", "launch_identity", "launch_clean_session"]) {
-      const tool = tools.find((item) => item.name === name);
-      expect(tool?.inputSchema.properties.external?.type).toBe("boolean");
-      expect(tool?.inputSchema.required ?? []).not.toContain("external");
+    const names = tools.map((tool) => tool.name);
+    expect(names.filter((name) => name.startsWith("launch_"))).toEqual(["launch_external_browser"]);
+    // 旧的三个名字不再出现在工具列表里：它们与 open_browser_* 重复的那一半
+    // 正是让模型选错表面的原因。
+    for (const legacy of ["launch_view", "launch_identity", "launch_clean_session"]) {
+      expect(names).not.toContain(legacy);
     }
+    const tool = tools.find((item) => item.name === "launch_external_browser");
+    expect(tool, "launch_external_browser 未注册").toBeTruthy();
+    expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
+      "engineId",
+      "identityId",
+      "siteId",
+      "viewId",
+    ]);
   });
 
-  it("不传 external 时走内置表面，不触发外部浏览器启动", async () => {
+  it("旧名字的内置路径照旧：不传 external 时走内置表面，不触发外部浏览器启动", async () => {
     const ids = await seedWorkspace();
     const probe = launchProbeSurface();
     const externalCalls = stubExternalLaunches();
@@ -675,32 +744,64 @@ describe("launch 工具默认走内置表面", () => {
     expect(externalCalls).toEqual([]);
   });
 
-  it("external: true 时走外部浏览器启动，不碰内置表面", async () => {
+  it("launch_external_browser 三种开法都返回同一种窗口列表，不碰内置表面", async () => {
     const ids = await seedWorkspace();
     const probe = launchProbeSurface();
     const externalCalls = stubExternalLaunches();
+    // 视图的每个成员一个窗口：窗口 id 取自启动后的实时登记表，这里塞一条进去。
+    const live = (service as unknown as { liveInstances: Map<string, RunningInstance> })
+      .liveInstances;
+    live.set("inst-view-member", {
+      id: "inst-view-member",
+      label: "示例账号",
+      siteId: ids.siteId,
+      identityId: ids.identityId,
+      engineId: "chromium:test",
+      pid: 0,
+      profileDir: join(dir, "profiles/view-member"),
+      mode: "cdp",
+      startedAt: new Date().toISOString(),
+    });
+    (service as unknown as { launchView: (...args: unknown[]) => Promise<unknown> }).launchView =
+      async (...args) => {
+        externalCalls.push({ method: "launchView", args });
+        return {
+          instance: { id: "inst-view", label: "视图实例" },
+          identities: [{ id: ids.identityId, name: "示例账号" }],
+        };
+      };
     await restartServer({ embedded: probe.surface });
 
-    const viewPayload = toolPayload(
-      (await rpc(toolCall("launch_view", { viewId: ids.viewId, external: true }))).json,
-    ) as { instances: unknown[] };
-    expect(viewPayload.instances).toEqual([]);
-
-    const identityPayload = toolPayload(
-      (await rpc(
-        toolCall("launch_identity", {
+    const view = toolPayload(
+      (await rpc(toolCall("launch_external_browser", { viewId: ids.viewId }))).json,
+    );
+    expect(view).toEqual({
+      instances: [
+        {
+          instanceId: "inst-view-member",
           identityId: ids.identityId,
-          external: true,
+          name: "示例账号",
+          label: "示例账号",
+        },
+      ],
+    });
+
+    const identity = toolPayload(
+      (await rpc(
+        toolCall("launch_external_browser", {
+          identityId: ids.identityId,
           engineId: "edge-stable",
         }),
       )).json,
-    ) as { instanceId?: string };
-    expect(identityPayload.instanceId).toBe("inst-identity");
+    );
+    expect(identity).toEqual({
+      instances: [{ instanceId: "inst-identity", identityId: ids.identityId, name: "示例账号", label: "账号实例" }],
+    });
 
-    const cleanPayload = toolPayload(
-      (await rpc(toolCall("launch_clean_session", { siteId: ids.siteId, external: true }))).json,
-    ) as { instanceId?: string };
-    expect(cleanPayload.instanceId).toBe("inst-clean");
+    const clean = toolPayload(
+      (await rpc(toolCall("launch_external_browser", { siteId: ids.siteId }))).json,
+    );
+    expect(clean).toEqual({ instances: [{ instanceId: "inst-clean", label: "干净身份" }] });
 
     expect(externalCalls.map((call) => call.method)).toEqual([
       "launchView",
@@ -710,6 +811,91 @@ describe("launch 工具默认走内置表面", () => {
     expect(externalCalls[0]?.args).toEqual([ids.viewId, undefined]);
     expect(externalCalls[1]?.args).toEqual([ids.identityId, undefined, "edge-stable"]);
     expect(externalCalls[2]?.args).toEqual([ids.siteId, undefined]);
+    expect(probe.calls).toEqual([]);
+
+    // identityId 与 viewId 各说一种开法，同给是歧义。
+    const both = await rpc(
+      toolCall("launch_external_browser", { identityId: ids.identityId, viewId: ids.viewId }),
+    );
+    expect(both.json.result.isError).toBe(true);
+    expect(both.json.result.content[0].text).toContain("只能给一个");
+    live.delete("inst-view-member");
+  });
+
+  it("launch_external_browser 拒绝互相矛盾的入参，不静默替换调用方点名的站点与引擎", async () => {
+    const ids = await seedWorkspace();
+    // 桩打在 service 实例上，端点持有的是同一个实例，不必重建服务。
+    const externalCalls = stubExternalLaunches();
+
+    // siteId 只属于「干净窗口」这一种开法。不拦的话它被静默丢掉：窗口照常
+    // 开在账号或视图上，调用方却以为打开的是自己点名的站点登录页。
+    for (const args of [
+      { identityId: ids.identityId, siteId: ids.siteId },
+      { viewId: ids.viewId, siteId: ids.siteId },
+      { identityId: ids.identityId, viewId: ids.viewId, siteId: ids.siteId },
+    ]) {
+      const refused = await rpc(toolCall("launch_external_browser", args));
+      expect(refused.json.result.isError, JSON.stringify(args)).toBe(true);
+      expect(refused.json.result.content[0].text).toContain("只能给一个");
+    }
+
+    // 核心层对一个找不到的引擎 id 会退回默认引擎——对账号上存的偏好这是对的
+    // （引擎被卸载后仍能开窗）。对调用方刚写下的参数不是：写错一个字母，窗口就
+    // 开在它没有选的浏览器里，而返回里看不出任何异常。所以必须在入口拦下。
+    const wrongEngine = await rpc(
+      toolCall("launch_external_browser", {
+        identityId: ids.identityId,
+        engineId: "no-such-engine",
+      }),
+    );
+    expect(wrongEngine.json.result.isError).toBe(true);
+    expect(wrongEngine.json.result.content[0].text).toContain("no-such-engine");
+    expect(wrongEngine.json.result.content[0].text).toContain("list_browser_engines");
+    expect(externalCalls).toEqual([]);
+
+    // 点名一个存在的引擎照常启动，engineId 原样传下去。
+    const named = await rpc(
+      toolCall("launch_external_browser", { identityId: ids.identityId, engineId: "edge-stable" }),
+    );
+    expect(named.json.result.isError).toBeUndefined();
+    expect(externalCalls.map((call) => call.args)).toEqual([
+      [ids.identityId, undefined, "edge-stable"],
+    ]);
+  });
+
+  it("旧名字传 external: true 时转交给 launch_external_browser", async () => {
+    const ids = await seedWorkspace();
+    const probe = launchProbeSurface();
+    const externalCalls = stubExternalLaunches();
+    await restartServer({ embedded: probe.surface });
+
+    const view = toolPayload(
+      (await rpc(toolCall("launch_view", { viewId: ids.viewId, external: true }))).json,
+    ) as { instances: unknown[] };
+    expect(view.instances).toEqual([]);
+
+    const identity = toolPayload(
+      (await rpc(
+        toolCall("launch_identity", {
+          identityId: ids.identityId,
+          external: true,
+          engineId: "edge-stable",
+        }),
+      )).json,
+    ) as { instances: Array<{ instanceId?: string }> };
+    expect(identity.instances[0]?.instanceId).toBe("inst-identity");
+
+    const clean = toolPayload(
+      (await rpc(toolCall("launch_clean_session", { siteId: ids.siteId, external: true }))).json,
+    ) as { instances: Array<{ instanceId?: string }> };
+    expect(clean.instances[0]?.instanceId).toBe("inst-clean");
+
+    expect(externalCalls.map((call) => call.method)).toEqual([
+      "launchView",
+      "launchIdentity",
+      "launchCleanSession",
+    ]);
+    expect(externalCalls[1]?.args).toEqual([ids.identityId, undefined, "edge-stable"]);
     expect(probe.calls).toEqual([]);
   });
 
@@ -742,7 +928,7 @@ describe("launch 工具默认走内置表面", () => {
   /*
     回归：resolve_browser_target 只在「地址匹配到了站点，而指定的账号不属于它」
     时提醒。地址没匹配到任何站点时，指定的账号与地址之间没有矛盾可言——曾经
-    这时也提醒「账号不属于任何已录入站点」，还建议改开干净会话，等于让调用方
+    这时也提醒「账号不属于任何已录入站点」，还建议改开干净身份，等于让调用方
     放弃自己明确指定的账号。
   */
   it("resolve_browser_target：地址没匹配到站点时沿用指定的账号，不报矛盾", async () => {
@@ -783,10 +969,10 @@ describe("launch 工具默认走内置表面", () => {
     expect(unmatched.nextStep).toContain(otherIdentity.id);
     expect(unmatched.warning).toBeUndefined();
 
-    // 地址不匹配 + 没指定账号：才是干净会话的建议
+    // 地址不匹配 + 没指定账号：才是干净身份的建议
     const bare = await resolve({ url: "http://localhost:9999/path" });
     expect(bare.recommendedIdentityId).toBeUndefined();
-    expect(bare.nextStep).toContain("干净会话");
+    expect(bare.nextStep).toContain("干净身份");
 
     // 地址匹配到站点 A，指定的账号却属于站点 B：这才是矛盾
     const mismatched = await resolve({
@@ -797,6 +983,10 @@ describe("launch 工具默认走内置表面", () => {
     expect(mismatched.site?.id).toBe(ids.siteId);
     expect(mismatched.warning).toContain("不属于站点 启动站点");
     expect(mismatched.recommendedIdentityId).toBe(ids.identityId);
+    // 下一步把两条路都摆出来：换用该站点的账号，或者坚持用点名的那个。只指
+    // 向前者，等于替调用方把它点名的账号换掉了——与上面那句「请确认」自相矛盾。
+    expect(mismatched.nextStep).toContain(ids.identityId);
+    expect(mismatched.nextStep).toContain(otherIdentity.id);
 
     // 账号确属匹配站点：回显，不提醒
     const own = await resolve({
@@ -977,7 +1167,7 @@ describe("account bundle tools", async () => {
       importAccounts: () => ({}),
     });
     const { json } = await rpc(
-      toolCall("export_accounts", {
+      toolCall("export_identities", {
         siteIds: ["site-1"],
         identityIds: ["id-1", "id-2"],
         passphrase: "share-pass-123",
@@ -995,7 +1185,7 @@ describe("account bundle tools", async () => {
     // The passphrase unlocks every password in the file; the audit log is a
     // plain text file anyone can read.
     const audit = readFileSync(join(dir, "mcp-audit.log"), "utf8");
-    expect(audit).toContain("export_accounts");
+    expect(audit).toContain("export_identities");
     expect(audit).not.toContain("share-pass-123");
   });
 
@@ -1016,7 +1206,7 @@ describe("account bundle tools", async () => {
       },
     });
     const { json } = await rpc(
-      toolCall("import_accounts", {
+      toolCall("import_identities", {
         path: "C:\\temp\\accounts.json",
         passphrase: "share-pass-123",
       }),
@@ -1035,7 +1225,7 @@ describe("account bundle tools", async () => {
       },
       importAccounts: () => ({}),
     });
-    const { json } = await rpc(toolCall("preview_accounts", { path: "C:\\temp\\a.json" }));
+    const { json } = await rpc(toolCall("preview_identities", { path: "C:\\temp\\a.json" }));
     expect(toolPayload(json)).toMatchObject({ accounts: 3, withPasswords: true });
     expect(previewed).toBe("C:\\temp\\a.json");
   });
@@ -1046,7 +1236,7 @@ describe("account bundle tools", async () => {
       previewAccounts: () => ({}),
       importAccounts: () => ({}),
     });
-    const { json } = await rpc(toolCall("preview_accounts", {}));
+    const { json } = await rpc(toolCall("preview_identities", {}));
     expect(json.error.code).toBe(-32602);
   });
 });

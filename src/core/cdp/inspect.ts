@@ -306,6 +306,13 @@ const HELPERS = `
     if (label) return label;
     const tag = el.tagName.toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select") {
+      // 按钮型 input 的名字是它的 value：<input type="submit" value="登录"> 叫「登录」。
+      // 曾经先取 type，于是它叫「submit」，把快照里的名字回传成 text 就找不到它。
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      if (tag === "input" && (type === "submit" || type === "button" || type === "reset")) {
+        const caption = String(el.value == null ? "" : el.value).trim();
+        if (caption) return caption;
+      }
       return (
         el.getAttribute("placeholder") ||
         el.getAttribute("title") ||
@@ -315,7 +322,9 @@ const HELPERS = `
       ).trim();
     }
     if (tag === "img") return (el.getAttribute("alt") || "").trim();
-    return textOf(el);
+    // 只有图标的按钮没有文字，名字常放在 title 里；不取它，快照里这一行的
+    // 名字就是空的，调用方无从回传。
+    return textOf(el) || (el.getAttribute("title") || "").trim();
   };
   const roleOf = (el) => {
     const explicit = (el.getAttribute("role") || "").trim();
@@ -558,7 +567,13 @@ const HELPERS = `
         }
         if (score > 0) ranked.push({ el, score });
       }
-      ranked.sort((a, b) => b.score - a.score);
+      // 同分时控件优先。「<label>记住我 <input type=checkbox></label>」里标签和
+      // 复选框的名称都是「记住我」，文档序在前的是标签：点它不要紧，往它里面
+      // 输入就输不进去。Array#sort 是稳定的，同分同级的元素仍保持文档序。
+      const controlFirst = (el) => (el.matches(INTERACTIVE) ? 0 : 1);
+      ranked.sort(
+        (a, b) => b.score - a.score || controlFirst(a.el) - controlFirst(b.el),
+      );
       const matches = filterNarrow(ranked.map((item) => item.el), target);
       if (matches.length) return { matches, matchedBy: target.text ? "text" : "role" };
     }
@@ -1217,6 +1232,11 @@ export function buildReadExpression(target: TargetInput): string {
     if (!found.el) return { ok: false, reason: found.reason };
     const el = found.el;
     const tag = el.tagName.toLowerCase();
+    // 密码框的内容是凭据：流程的变量与每步结果都会随 run_flow 返回给调用方，
+    // 读它就等于把密码回传。与读取类工具同一条规则，这里直接让这一步失败。
+    if (tag === "input" && (el.getAttribute("type") || "").toLowerCase() === "password") {
+      return { ok: false, reason: "这是一个密码框，它的内容不会被读取" };
+    }
     const value =
       tag === "input" || tag === "textarea" || tag === "select"
         ? String(el.value ?? "")
@@ -1487,6 +1507,11 @@ export function buildElementInfoExpression(target: TargetInput): string {
       }
     }
     const isFormControl = tag === "input" || tag === "textarea" || tag === "select";
+    // 密码框的内容是凭据：主进程刚填进去的，或用户亲手输的。读取类工具把它
+    // 回传出去，等于把凭据库里的密码交给一个只开了读取权限的调用方。如实
+    // 说明「这里有一个密码」（inputType 与 secret），不说它是什么。
+    const isPassword = tag === "input" && type === "password";
+    if (isPassword) delete attributes.value;
     const state = {
       visible: isVisible(el),
       enabled: el.disabled !== true && el.getAttribute("aria-disabled") !== "true",
@@ -1512,8 +1537,10 @@ export function buildElementInfoExpression(target: TargetInput): string {
       state,
       attributes,
       // The value of a control, which is what "what is in this field" means.
-      ...(tag === "input" || tag === "textarea" || tag === "select"
-        ? { value: String(el.value ?? "").slice(0, 500) }
+      ...(isFormControl
+        ? isPassword
+          ? { secret: true }
+          : { value: String(el.value ?? "").slice(0, 500) }
         : {}),
       ...(tag === "input" || tag === "textarea" || tag === "select" ? { inputType: type || "text" } : {}),
       ...(el.parentElement ? { parentTag: el.parentElement.tagName.toLowerCase() } : {}),
@@ -1542,12 +1569,17 @@ export function buildAttributeExpression(target: TargetInput, names: string[] | 
       // No attribute named: answer the question people usually mean instead,
       // which is "what does this element say".
       const isControl = tag === "input" || tag === "textarea" || tag === "select";
+      // 与元素全貌同一条规则：密码框只说明它是密码，不回传内容。
+      const isPassword =
+        tag === "input" && (el.getAttribute("type") || "").toLowerCase() === "password";
       return {
         ok: true,
         selector: scriptPath(el),
-        ...(isControl
-          ? { value: String(el.value ?? "").slice(0, 500) }
-          : { text: textOf(el).slice(0, 2000) }),
+        ...(isPassword
+          ? { secret: true }
+          : isControl
+            ? { value: String(el.value ?? "").slice(0, 500) }
+            : { text: textOf(el).slice(0, 2000) }),
       };
     }
     const values = {};

@@ -128,7 +128,7 @@ try {
 
   // Click the target=_blank link through the AI tools, which is how a popup is
   // actually triggered in this app.
-  const point = await call("check_element_visible", {
+  const point = await call("check_browser_element_visible", {
     tabId: first.id,
     selector: "#popup",
   });

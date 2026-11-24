@@ -496,6 +496,9 @@ describe("gate at the tool boundary", () => {
       ["fill_browser_form", { fields: [{ label: "金额", value: "1000" }] }],
       ["fill_browser_login", {}],
       ["evaluate_browser_page", { expression: "document.forms[0].submit()" }],
+      // 刷新丢弃页面上的状态，也可能重发一次表单；它与前进后退是同一类输入。
+      ["reload_browser_tab", {}],
+      ["go_back_browser_tab", {}],
     ];
     for (const [name, args] of calls) {
       const result = await rpc(name, args);
@@ -531,10 +534,10 @@ describe("gate at the tool boundary", () => {
     await startServer(surface);
     // Read access in the daily profile is the point of the feature: it is how an
     // AI can still look at a page without being able to act on it.
-    for (const name of ["read_browser_page", "check_element_visible", "screenshot_browser_tab"]) {
+    for (const name of ["read_browser_page", "check_browser_element_visible", "screenshot_browser_tab"]) {
       const result = await rpc(
         name,
-        name === "check_element_visible" ? { text: "余额" } : {},
+        name === "check_browser_element_visible" ? { text: "余额" } : {},
       );
       expect(result.isError, name).toBe(false);
     }

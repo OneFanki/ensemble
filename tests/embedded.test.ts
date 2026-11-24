@@ -14,12 +14,14 @@ import {
   embeddedSlotRects,
   embeddedTabPartition,
   embeddedViewRect,
+  findViewContainer,
   ghostPresentationRect,
   inlineFavicon,
   needsCompositorFrames,
   neighborZoomStep,
   normalizeEmbeddedUrl,
   guestNodeRect,
+  resolveDefaultTabId,
   viewIsOnScreen,
   resolveSlotPages,
   resolveSlotTabs,
@@ -557,6 +559,102 @@ describe("site icons", () => {
     expect(inlineFavicon("image/png", new Uint8Array())).toBeUndefined();
     expect(inlineFavicon("image/png", new Uint8Array(FAVICON_MAX_BYTES + 1))).toBeUndefined();
     expect(inlineFavicon("image/png", new Uint8Array(FAVICON_MAX_BYTES))).toBeDefined();
+  });
+});
+
+describe("the page an omitted tab id means", () => {
+  const personPage = { id: "person", origin: "manual" as const };
+  const viewPage = { id: "view-member", origin: "view" as const };
+  const aiFirst = { id: "ai-first", origin: "ai" as const, aiOpenSeq: 1 };
+  const aiSecond = { id: "ai-second", origin: "ai" as const, aiOpenSeq: 2 };
+
+  it("is the page the AI opened most recently, never the person's active page", () => {
+    // An AI-opened page does not claim the stage, so "the active page" names
+    // what the person is looking at. An omitted id from a client that just
+    // opened a page means that page; answering with the person's page sent
+    // every id-less click, keystroke and read to a page nobody asked about.
+    expect(
+      resolveDefaultTabId({
+        tabs: [personPage, aiFirst, aiSecond],
+        activeTabId: "person",
+        onStageTabId: "person",
+      }),
+    ).toBe("ai-second");
+  });
+
+  it("does not depend on the order of the page list", () => {
+    // Moving a page reorders the list; creation order lives in the sequence.
+    expect(resolveDefaultTabId({ tabs: [aiSecond, personPage, aiFirst], activeTabId: "person" })).toBe(
+      "ai-second",
+    );
+  });
+
+  it("falls back to the previous AI page once the latest one is closed", () => {
+    expect(resolveDefaultTabId({ tabs: [personPage, aiFirst], activeTabId: "person" })).toBe("ai-first");
+  });
+
+  it("is the person's active page only while the AI has no page of its own", () => {
+    // "Do this to the page I'm looking at" has to keep working: the client has
+    // opened nothing, so the active page is the only page it can mean.
+    expect(resolveDefaultTabId({ tabs: [personPage, viewPage], activeTabId: "view-member" })).toBe(
+      "view-member",
+    );
+  });
+
+  it("skips an active id that names a page already closed", () => {
+    expect(resolveDefaultTabId({ tabs: [personPage], activeTabId: "gone", onStageTabId: "gone" })).toBe(
+      "person",
+    );
+  });
+
+  it("takes the first slot of the view on stage, then the first page in the list", () => {
+    expect(resolveDefaultTabId({ tabs: [personPage, viewPage], onStageTabId: "view-member" })).toBe(
+      "view-member",
+    );
+    expect(resolveDefaultTabId({ tabs: [viewPage, personPage] })).toBe("view-member");
+  });
+
+  it("is undefined when there is no page at all", () => {
+    expect(resolveDefaultTabId({ tabs: [] })).toBeUndefined();
+  });
+
+  it("ignores an AI page that carries no sequence number", () => {
+    // Only pages created since the sequence existed have one; a record without
+    // it has no claim to being "the latest".
+    expect(
+      resolveDefaultTabId({
+        tabs: [personPage, { id: "legacy", origin: "ai" }],
+        activeTabId: "person",
+      }),
+    ).toBe("person");
+  });
+});
+
+describe("which container a view id names", () => {
+  const loose = { id: "container-loose", name: "临时" };
+  const savedA = { id: "container-a", viewDefinitionId: "definition-a" };
+  const savedB = { id: "container-b", viewDefinitionId: "definition-b" };
+  const views = [loose, savedA, savedB];
+
+  it("is the container whose own id was given", () => {
+    expect(findViewContainer(views, "container-b")).toBe(savedB);
+  });
+
+  it("is the open container of a saved view when the definition id was given", () => {
+    // list_views hands out definition ids, list_browser_tabs hands out
+    // container ids; a client holding either one means the same view.
+    expect(findViewContainer(views, "definition-a")).toBe(savedA);
+  });
+
+  it("prefers the container on stage when a definition has more than one", () => {
+    const second = { id: "container-a2", viewDefinitionId: "definition-a" };
+    expect(findViewContainer([...views, second], "definition-a", "container-a2")).toBe(second);
+    expect(findViewContainer([...views, second], "definition-a")).toBe(savedA);
+  });
+
+  it("is undefined for an id that names neither", () => {
+    expect(findViewContainer(views, "definition-missing")).toBeUndefined();
+    expect(findViewContainer([], "definition-a")).toBeUndefined();
   });
 });
 

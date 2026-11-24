@@ -377,8 +377,8 @@ try {
   //    Clicking by text, then waiting for the next page: the AI does not need a
   //    CSS path for either step.
   await call("click_browser_element", { tabId, text: "登录" });
-  const signIn = await call("wait_browser", { tabId, condition: "url", expect: "/admin", timeoutMs: 10_000 });
-  check("wait_browser waits out the navigation in one call", signIn.ok === true, signIn);
+  const signIn = await call("wait_browser_condition", { tabId, condition: "url", expect: "/admin", timeoutMs: 10_000 });
+  check("wait_browser_condition waits out the navigation in one call", signIn.ok === true, signIn);
   const captures = await client.evaluate("(window.__captures ?? []).length");
   check("signing in as a saved account produces no save prompt", captures === 0, { captures });
 
@@ -422,7 +422,7 @@ try {
     // Wait for something that only exists after the new tenant is rendered: the
     // list already says "创建成功" from the previous round, so waiting for that
     // would match the old page and race the navigation.
-    const confirmed = await call("wait_browser", {
+    const confirmed = await call("wait_browser_condition", {
       tabId,
       condition: "text",
       expect: tenant.name,
@@ -461,8 +461,8 @@ try {
   );
 
   const listed = await call("list_identities", { siteId });
-  check("the workspace now lists super admin plus three tenants", listed.length === 4, {
-    identities: listed.length,
+  check("the workspace now lists super admin plus three tenants", listed.identities.length === 4, {
+    identities: listed.identities.length,
   });
   check(
     "no response ever contains a password",
@@ -474,14 +474,14 @@ try {
   //     account bundle — not the whole-workspace config export.
   const SHARE_PASS = "share-these-accounts-1";
   const shareIds = saved.slice(0, 2).map((identity) => identity.id);
-  const exported = await tryCall("export_accounts", {
+  const exported = await tryCall("export_identities", {
     siteIds: [siteId],
     identityIds: shareIds,
     passphrase: SHARE_PASS,
     note: "分享给测试组",
   });
   check(
-    "export_accounts writes a bundle with only the chosen accounts",
+    "export_identities writes a bundle with only the chosen accounts",
     exported.ok &&
       exported.value?.counts?.sites === 1 &&
       exported.value?.counts?.accounts === 2 &&
@@ -510,9 +510,9 @@ try {
     rawBundle ? { sites: rawBundle.sites.length, accounts: rawBundle.sites[0]?.accounts?.length } : null,
   );
 
-  const preview = await tryCall("preview_accounts", { path: bundlePath });
+  const preview = await tryCall("preview_identities", { path: bundlePath });
   check(
-    "preview_accounts reports what would arrive and that passwords are sealed",
+    "preview_identities reports what would arrive and that passwords are sealed",
     preview.ok &&
       preview.value?.accounts === 2 &&
       preview.value?.hasSecrets === true &&
@@ -522,12 +522,12 @@ try {
 
   // Importing into the same workspace is the round trip: the accounts must be
   // matched and updated, not duplicated.
-  const imported = await tryCall("import_accounts", {
+  const imported = await tryCall("import_identities", {
     path: bundlePath,
     passphrase: SHARE_PASS,
   });
   check(
-    "import_accounts updates the matching accounts instead of duplicating them",
+    "import_identities updates the matching accounts instead of duplicating them",
     imported.ok &&
       imported.value?.accountsAdded === 0 &&
       imported.value?.accountsUpdated === 2 &&
@@ -535,10 +535,10 @@ try {
     imported.ok ? imported.value : imported,
   );
   const afterImport = await call("list_identities", { siteId });
-  check("the account count is unchanged after importing", afterImport.length === 4, {
-    identities: afterImport.length,
+  check("the account count is unchanged after importing", afterImport.identities.length === 4, {
+    identities: afterImport.identities.length,
   });
-  const wrongPass = await tryCall("import_accounts", {
+  const wrongPass = await tryCall("import_identities", {
     path: bundlePath,
     passphrase: "not-the-passphrase",
   });
@@ -598,7 +598,7 @@ try {
   check("the audit log contains no password", leaked.length === 0, { leaked });
   check(
     "the audit log still records the calls",
-    audit.includes("fill_browser_form") && audit.includes("wait_browser"),
+    audit.includes("fill_browser_form") && audit.includes("wait_browser_condition"),
   );
 
   client.close();

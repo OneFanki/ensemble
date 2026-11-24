@@ -283,7 +283,7 @@ try {
   const tabId = tab.body.id ?? tab.body.tabId ?? tab.body.tabs?.at(-1)?.id;
   check("a page was opened", Boolean(tabId), { tabId });
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#confirm" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#confirm" });
     if (visible.body.visible) break;
     await wait(200);
   }
@@ -331,7 +331,7 @@ try {
    */
   const explainedAt = Date.now();
   const explained = await callExpectingTrouble(
-    "check_element_visible",
+    "check_browser_element_visible",
     { tabId, selector: "#confirm" },
     8000,
   );

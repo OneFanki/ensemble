@@ -5,6 +5,7 @@ import { MemorySecretBox } from "@core/credentials/vault";
 import { WorkspaceService } from "@core/service";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FLOW_ACTIONS, WAIT_CONDITIONS } from "../src/shared/flows";
+import { resolveDefaultTabId } from "../src/shared/embedded";
 import type { EmbeddedSurface } from "../src/main/mcp/server";
 import {
   describeToolAction,
@@ -26,8 +27,11 @@ let calls: Array<{ method: string; args: unknown[] }>;
 /**
  * Stands in for the Electron-backed surface so the MCP contract can be tested
  * in plain Node. It records calls and returns the shapes the real manager does.
+ *
+ * `personPages` seed the pages a person opened; the last of them is the active
+ * page, as after any click in the chrome.
  */
-function fakeSurface(): EmbeddedSurface {
+function fakeSurface(personPages: string[] = []): EmbeddedSurface {
   let tabs: Array<{
     id: string;
     label: string;
@@ -37,8 +41,22 @@ function fakeSurface(): EmbeddedSurface {
     clean?: boolean;
     partition?: string;
     profileId?: string;
-  }> = [];
-  let active: string | undefined;
+    origin: "view" | "manual" | "ai";
+    aiOpenSeq?: number;
+  }> = personPages.map((id) => ({
+    id,
+    label: id,
+    url: "http://example.test/",
+    title: "",
+    origin: "manual",
+  }));
+  /**
+   * The person's active page. Mirrors the real surface: an AI-opened page never
+   * claims it (a background page must not take the stage away), so only the
+   * seed and an explicit `activate` ever set it.
+   */
+  let active: string | undefined = personPages.at(-1);
+  let aiSeq = 0;
   const record =
     (method: string) =>
     (...args: unknown[]) => {
@@ -55,7 +73,7 @@ function fakeSurface(): EmbeddedSurface {
     createTab: async (input) => {
       calls.push({ method: "createTab", args: [input] });
       const tab = {
-        id: `tab-${tabs.length + 1}`,
+        id: `tab-${++aiSeq}`,
         label: input.label ?? "新标签页",
         url: input.url ?? "about:blank",
         title: "",
@@ -65,9 +83,11 @@ function fakeSurface(): EmbeddedSurface {
         // clean session, never a page in the user's daily profile.
         ...(input.identityId ? {} : { clean: true }),
         partition: input.identityId ? "persist:embedded-identity" : "embedded-clean-test",
+        // Every page this fake opens is an AI page, as in the real bridge.
+        origin: "ai" as const,
+        aiOpenSeq: aiSeq,
       };
       tabs = [...tabs, tab];
-      active = tab.id;
       return tab;
     },
     /**
@@ -315,11 +335,12 @@ function fakeSurface(): EmbeddedSurface {
       return { ok: true, submitted: false, missingFields: [] };
     },
     defaultTabId: (requested) => {
-      if (requested) return requested;
-      if (active) return active;
-      const first = tabs[0];
-      if (!first) throw new Error("没有打开的标签页");
-      return first.id;
+      // Same rule as the real surface, down to the shared function.
+      const id = requested
+        ? requested
+        : resolveDefaultTabId({ tabs, activeTabId: active });
+      if (!id) throw new Error("没有打开的标签页");
+      return id;
     },
     defaultViewId: () => "view-1",
     layoutTargetView: () => "view-1",
@@ -416,7 +437,7 @@ describe("browser tools are advertised", () => {
       "navigate_browser_tab",
       "read_browser_page",
       "read_browser_console",
-      "check_element_visible",
+      "check_browser_element_visible",
       "click_browser_element",
       "type_browser_text",
       "fill_browser_login",
@@ -425,7 +446,7 @@ describe("browser tools are advertised", () => {
       "set_browser_layout",
       "pin_browser_tab",
       "move_browser_tab",
-      "set_tab_page",
+      "activate_browser_tab",
       "close_browser_tab",
       "pop_out_browser_tab",
     ]) {
@@ -519,7 +540,7 @@ describe("browser tool calls", () => {
     });
   });
 
-  it("地址与 siteId 都匹配不到时维持一次性干净会话", async () => {
+  it("地址与 siteId 都匹配不到时维持一次性干净身份", async () => {
     await startServer(fakeSurface());
     const { json } = await rpc(
       toolCall("open_browser_tab", { url: "https://elsewhere.example.test/page" }),
@@ -538,17 +559,40 @@ describe("browser tool calls", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("routes calls with no tabId to the active tab", async () => {
-    await startServer(fakeSurface());
+  it("routes calls with no tabId to the page the AI opened most recently", async () => {
+    // The person's page is the active one throughout: an AI-opened page never
+    // takes the stage. An omitted id still has to mean the AI's own page —
+    // answering with the active page sent id-less reads and clicks to a page
+    // nobody asked the AI to touch.
+    await startServer(fakeSurface(["person-page"]));
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/a", label: "A" }));
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/b", label: "B" }));
     const { json } = await rpc(toolCall("read_browser_page", {}));
     expect(json.result.isError).toBeUndefined();
     const snapshot = toolPayload(json) as { nodes: unknown[] };
     expect(snapshot.nodes).toHaveLength(1);
-    // The second tab is active, so that is the one read.
     const read = calls.find((call) => call.method === "snapshotDom");
     expect(read?.args[0]).toBe("tab-2");
+  });
+
+  it("keeps meaning the person's active page once the AI's own pages are closed", async () => {
+    // "Do this to the page I'm looking at" is the one case where the omitted id
+    // must reach the person's page: the AI has nothing of its own to mean.
+    await startServer(fakeSurface(["person-page"]));
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/a" }));
+    await rpc(toolCall("close_browser_tab", { tabId: "tab-1" }));
+    const { json } = await rpc(toolCall("read_browser_page", {}));
+    expect(json.result.isError).toBeUndefined();
+    const read = calls.find((call) => call.method === "snapshotDom");
+    expect(read?.args[0]).toBe("person-page");
+  });
+
+  it("names an explicit tabId over every default", async () => {
+    await startServer(fakeSurface(["person-page"]));
+    await rpc(toolCall("open_browser_tab", { url: "http://example.test/a" }));
+    await rpc(toolCall("read_browser_page", { tabId: "person-page" }));
+    const read = calls.find((call) => call.method === "snapshotDom");
+    expect(read?.args[0]).toBe("person-page");
   });
 
   it("reports a clear error when the surface is unavailable", async () => {
@@ -684,15 +728,15 @@ describe("browser tool calls", () => {
     expect(calls.some((call) => call.method === "click")).toBe(false);
   });
 
-  it("passes a handle through wait_browser and check_element_visible unchanged", async () => {
+  it("passes a handle through wait_browser_condition and check_browser_element_visible unchanged", async () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
     const waited = await rpc(
-      toolCall("wait_browser", { condition: "hidden", handle: "el-1-ab12" }),
+      toolCall("wait_browser_condition", { condition: "hidden", handle: "el-1-ab12" }),
     );
     expect(waited.json.result.isError).toBeUndefined();
     const probe = await rpc(
-      toolCall("check_element_visible", { handle: "el-1-ab12", nth: 1 }),
+      toolCall("check_browser_element_visible", { handle: "el-1-ab12", nth: 1 }),
     );
     expect(probe.json.result.isError).toBeUndefined();
     // The surface receives the descriptor as-is; resolving the handle is the
@@ -711,7 +755,7 @@ describe("browser tool calls", () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
     const waitJson = await rpc(
-      toolCall("wait_browser", {
+      toolCall("wait_browser_condition", {
         condition: "hidden",
         handle: "el-1-ab12",
         selector: "#toast",
@@ -720,7 +764,7 @@ describe("browser tool calls", () => {
     expect(waitJson.json.result.isError).toBe(true);
     expect(waitJson.json.result.content[0].text).toContain("只能给一个");
     const probeJson = await rpc(
-      toolCall("check_element_visible", { handle: "el-1-ab12", label: "用户名" }),
+      toolCall("check_browser_element_visible", { handle: "el-1-ab12", label: "用户名" }),
     );
     expect(probeJson.json.result.isError).toBe(true);
     expect(probeJson.json.result.content[0].text).toContain("只能给一个");
@@ -778,7 +822,7 @@ describe("browser tool calls", () => {
   it("waits page-side instead of sleeping between round trips", async () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
-    await rpc(toolCall("wait_browser", { condition: "text", expect: "租户管理", timeoutMs: 8000 }));
+    await rpc(toolCall("wait_browser_condition", { condition: "text", expect: "租户管理", timeoutMs: 8000 }));
     const waited = calls.find((call) => call.method === "wait");
     expect(waited?.args[1]).toEqual({ condition: "text", text: "租户管理", timeoutMs: 8000 });
   });
@@ -786,7 +830,7 @@ describe("browser tool calls", () => {
   it("waits for an element named by its label", async () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
-    await rpc(toolCall("wait_browser", { condition: "visible", label: "创建租户" }));
+    await rpc(toolCall("wait_browser_condition", { condition: "visible", label: "创建租户" }));
     const waited = calls.find((call) => call.method === "wait");
     expect(waited?.args[1]).toMatchObject({
       condition: "visible",
@@ -797,7 +841,7 @@ describe("browser tool calls", () => {
 
   it("rejects a wait condition that has nothing to compare", async () => {
     await startServer(fakeSurface());
-    const { json } = await rpc(toolCall("wait_browser", { condition: "text" }));
+    const { json } = await rpc(toolCall("wait_browser_condition", { condition: "text" }));
     expect(json.result.isError).toBe(true);
     expect(calls).toHaveLength(0);
   });
@@ -899,7 +943,7 @@ describe("browser tool calls", () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
     const { json } = await rpc(
-      toolCall("wait_browser", { condition: "network-idle", quietMs: 800 }),
+      toolCall("wait_browser_condition", { condition: "network-idle", quietMs: 800 }),
     );
     expect(json.result.isError).toBeUndefined();
     const waited = calls.find((call) => call.method === "wait");
@@ -910,7 +954,7 @@ describe("browser tool calls", () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
     const { json } = await rpc(
-      toolCall("wait_browser", { condition: "response", expect: "/api/save", status: 200 }),
+      toolCall("wait_browser_condition", { condition: "response", expect: "/api/save", status: 200 }),
     );
     expect(json.result.isError).toBeUndefined();
     const waited = calls.find((call) => call.method === "wait");
@@ -924,7 +968,7 @@ describe("browser tool calls", () => {
   it("waits for document load without needing a value to compare", async () => {
     await startServer(fakeSurface());
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
-    const { json } = await rpc(toolCall("wait_browser", { condition: "load" }));
+    const { json } = await rpc(toolCall("wait_browser_condition", { condition: "load" }));
     expect(json.result.isError).toBeUndefined();
     const waited = calls.find((call) => call.method === "wait");
     expect(waited?.args[1]).toMatchObject({ condition: "load", timeoutMs: 5000 });
@@ -960,17 +1004,26 @@ describe("browser tool calls", () => {
     expect(calls.find((call) => call.method === "setEmulation")).toBeUndefined();
   });
 
-  it("refuses an emulation call while the write permission is off", async () => {
+  it("runs emulation under the run permission alone: closed writes do not block it, a closed run does", async () => {
+    // 模拟改的是页面所处的环境，与视口同族，不碰工作区数据。它曾归 write：
+    // 一个只关心「AI 能不能动我的浏览器」的用户关掉写入，却发现时区模拟
+    // 被一起关掉；而开着写入、关掉运行时，断网模拟却还能做。
     await startServer(fakeSurface());
-    // The default settings leave writes on; the closed state has to be set
-    // explicitly for the gate to matter.
-    await server.update({ allowWrite: false });
+    await server.update({ allowWrite: false, allowRun: true });
     const opened = await rpc(toolCall("open_browser_tab", { url: "http://example.test/" }));
     const tabId = (toolPayload(opened.json) as { id: string }).id;
-    const { json } = await rpc(toolCall("set_browser_emulation", { tabId, timezone: "Asia/Tokyo" }));
+    const allowed = await rpc(toolCall("set_browser_emulation", { tabId, timezone: "Asia/Tokyo" }));
+    expect(allowed.json.result.isError).toBeUndefined();
+    expect(calls.find((call) => call.method === "setEmulation")).toBeDefined();
+
+    await server.update({ allowWrite: true, allowRun: false });
+    const refused = await rpc(
+      toolCall("set_browser_emulation", { tabId, timezone: "Europe/Berlin" }),
+    );
     // The permission gate is a tool-level refusal (`isError`), not a protocol error.
-    expect(json.result.isError).toBe(true);
-    expect(calls.find((call) => call.method === "setEmulation")).toBeUndefined();
+    expect(refused.json.result.isError).toBe(true);
+    expect(refused.json.result.content[0].text).toContain("运行权限");
+    expect(calls.filter((call) => call.method === "setEmulation")).toHaveLength(1);
   });
 
   it("passes each emulation key through and distinguishes null from omission", async () => {
@@ -1002,11 +1055,20 @@ describe("browser tool calls", () => {
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/a", label: "A" }));
     await rpc(toolCall("open_browser_tab", { url: "http://example.test/b", label: "B" }));
     const { json } = await rpc(
-      toolCall("move_browser_tab", { tabId: "tab-2", beforeOrAfter: "tab-1", edge: "before" }),
+      toolCall("move_browser_tab", { tabId: "tab-2", anchorTabId: "tab-1", edge: "before" }),
     );
     expect(json.result.isError).toBeUndefined();
     const move = calls.find((call) => call.method === "moveTab");
     expect(move?.args).toEqual(["tab-2", { kind: "tab", tabId: "tab-1", edge: "before" }]);
+    // 旧名字 beforeOrAfter 装的也是参照标签页的 id，照常接受。
+    const viaAlias = await rpc(
+      toolCall("move_browser_tab", { tabId: "tab-2", beforeOrAfter: "tab-1", edge: "after" }),
+    );
+    expect(viaAlias.json.result.isError).toBeUndefined();
+    expect(calls.filter((call) => call.method === "moveTab").at(-1)?.args).toEqual([
+      "tab-2",
+      { kind: "tab", tabId: "tab-1", edge: "after" },
+    ]);
   });
 
   it("moves a tab into a view or out of every view", async () => {
@@ -1026,13 +1088,13 @@ describe("browser tool calls", () => {
     await startServer(fakeSurface());
     const { json } = await rpc(toolCall("move_browser_tab", { tabId: "tab-1" }));
     expect(json.result.isError).toBe(true);
-    expect(json.result.content[0].text).toMatch(/beforeOrAfter|viewId|loose/);
+    expect(json.result.content[0].text).toMatch(/anchorTabId|viewId|loose/);
     expect(calls).toHaveLength(0);
   });
 
   it("switches which page an instance shows", async () => {
     await startServer(fakeSurface());
-    const { json } = await rpc(toolCall("set_tab_page", { pageId: "tab-3" }));
+    const { json } = await rpc(toolCall("activate_browser_tab", { pageId: "tab-3" }));
     expect(json.result.isError).toBeUndefined();
     const activated = calls.find((call) => call.method === "activate");
     expect(activated?.args).toEqual(["tab-3"]);
@@ -1107,6 +1169,8 @@ describe("capability reporting", () => {
       restoreAfterAi: () => {},
       openViewContainer: () => "view-1",
       popOutTab: async () => ({}),
+      dockTab: async () => ({}),
+      closeView: () => ({}),
       addInitScript: async () => ({ scriptId: "s1" }),
       listInitScripts: () => [],
       removeInitScript: async () => {},
@@ -1331,5 +1395,579 @@ describe("MCP result projection", () => {
     expect(json.result.isError).toBeUndefined();
     const payload = JSON.parse(json.result.content[0].text) as { value: number };
     expect(payload.value).toBe(42);
+  });
+});
+
+/*
+ * 调用方没读文档时凭习惯写出的调用。
+ *
+ * 每一条都对应一个曾经会被拒绝、或者给出误导性结果的形状：描述承诺的字段不在
+ * 返回里、别的工具都叫 text 的字段这里叫 elementText、对不存在的窗口回「已停止」。
+ * 这里守住的是这些调用现在按调用方的直觉工作，并且歧义在入口就被拒。
+ */
+describe("calls written from habit", () => {
+  const open = async (args: Record<string, unknown> = { url: "https://example.test/" }) => {
+    await rpc(toolCall("open_browser_tab", args));
+  };
+  const callOf = (method: string) => calls.find((call) => call.method === method);
+
+  it("carries tabId at the top of a page-first result, next to id", async () => {
+    await startServer(fakeSurface());
+    const opened = toolPayload((await rpc(toolCall("open_browser_tab", { url: "https://example.test/" }))).json) as {
+      id: string;
+      tabId: string;
+    };
+    // The description says "returns tabId"; only `id` sent the client hunting.
+    expect(opened.tabId).toBe(opened.id);
+    const moved = toolPayload(
+      (await rpc(toolCall("navigate_browser_tab", { tabId: opened.tabId, url: "https://example.test/next" }))).json,
+    ) as { tabId: string; tab: { id: string } };
+    expect(moved.tabId).toBe(opened.id);
+    expect(moved.tab.id).toBe(opened.id);
+  });
+
+  it("opens a signed-out page on a recorded site's address when clean is asked", async () => {
+    // Without `clean` an address that matches a recorded site always adopts that
+    // site's account, so no tool could show the site signed out.
+    await startServer(fakeSurface());
+    const site = await service.saveSite({
+      name: "本地开发环境",
+      baseUrl: "http://127.0.0.1:9527",
+      loginPath: "/login",
+    });
+    await service.saveIdentity({
+      siteId: site.id,
+      name: "管理员 · 主账号",
+      username: "admin",
+      role: "管理员",
+      color: "amber",
+      passwordMode: "custom",
+    });
+    const { json } = await rpc(
+      toolCall("open_browser_tab", { url: "http://127.0.0.1:9527/dashboard", clean: true }),
+    );
+    expect(json.result.isError).toBeUndefined();
+    const payload = toolPayload(json) as {
+      id: string;
+      tabId: string;
+      identityId?: string;
+      identityName?: string;
+      clean?: boolean;
+    };
+    // 没有账号可归属：返回里既没有 identity，也没有「用了谁」的说明。
+    expect(payload.clean).toBe(true);
+    expect(payload.identityId).toBeUndefined();
+    expect(payload.identityName).toBeUndefined();
+    expect(payload.tabId).toBe(payload.id);
+    expect(callOf("createTab")?.args[0]).not.toHaveProperty("identityId");
+  });
+
+  it("refuses clean together with identityId, and a clean that is not a boolean", async () => {
+    await startServer(fakeSurface());
+    const site = await service.saveSite({
+      name: "本地开发环境",
+      baseUrl: "http://127.0.0.1:9527",
+      loginPath: "/login",
+    });
+    const identity = await service.saveIdentity({
+      siteId: site.id,
+      name: "管理员 · 主账号",
+      username: "admin",
+      role: "管理员",
+      color: "amber",
+      passwordMode: "custom",
+    });
+    const both = await rpc(
+      toolCall("open_browser_tab", { url: "http://127.0.0.1:9527/", clean: true, identityId: identity.id }),
+    );
+    expect(both.json.result.isError).toBe(true);
+    expect(both.json.result.content[0].text).toContain("clean 与 identityId 只能给一个");
+    const notBoolean = await rpc(toolCall("open_browser_tab", { clean: "yes" }));
+    expect(notBoolean.json.result.isError).toBe(true);
+    expect(notBoolean.json.result.content[0].text).toContain("clean 必须是布尔值");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reads wait_browser_condition's text as the value to compare, or as the element's text", async () => {
+    await startServer(fakeSurface());
+    await open();
+    await rpc(toolCall("wait_browser_condition", { condition: "text", text: "租户管理" }));
+    await rpc(toolCall("wait_browser_condition", { condition: "visible", selector: "#status", text: "已就绪" }));
+    // `value` needs both an element and a value to compare: the element is named
+    // by the locator fields, so `text` is the value.
+    await rpc(
+      toolCall("wait_browser_condition", { condition: "value", selector: "#code", text: "123456" }),
+    );
+    const waits = calls.filter((call) => call.method === "wait").map((call) => call.args[1]);
+    expect(waits[0]).toMatchObject({ condition: "text", text: "租户管理" });
+    expect(waits[1]).toMatchObject({ condition: "visible", target: { text: "已就绪" } });
+    expect(waits[2]).toMatchObject({ condition: "value", target: { selector: "#code" }, text: "123456" });
+  });
+
+  it("refuses a wait whose text shorthand argues with the full field", async () => {
+    await startServer(fakeSurface());
+    await open();
+    const asValue = await rpc(toolCall("wait_browser_condition", { condition: "text", text: "a", expect: "b" }));
+    expect(asValue.json.result.isError).toBe(true);
+    expect(asValue.json.result.content[0].text).toContain("text 与 expect 只能给一个");
+    const asLocator = await rpc(
+      toolCall("wait_browser_condition", { condition: "visible", elementText: "a", text: "b" }),
+    );
+    expect(asLocator.json.result.isError).toBe(true);
+    expect(asLocator.json.result.content[0].text).toContain("text 与 elementText 只能给一个");
+    expect(calls.filter((call) => call.method === "wait")).toHaveLength(0);
+  });
+
+  it("names the locator field wait_browser_condition actually takes when none is given", async () => {
+    // The refusal used to list `text`, which this tool does not declare: the
+    // client followed it into a second refusal, for an unknown argument.
+    await startServer(fakeSurface());
+    await open();
+    const { json } = await rpc(toolCall("wait_browser_condition", { condition: "visible" }));
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("elementText");
+    expect(json.result.content[0].text).not.toContain("label、text 或");
+  });
+
+  it("crops a screenshot to an element named by label or by the text shorthand", async () => {
+    await startServer(fakeSurface());
+    await open();
+    await rpc(toolCall("screenshot_browser_tab", { label: "账号" }));
+    await rpc(toolCall("screenshot_browser_tab", { text: "登录" }));
+    const targets = calls
+      .filter((call) => call.method === "screenshot")
+      .map((call) => (call.args[1] as { target?: unknown }).target);
+    expect(targets).toEqual([{ label: "账号" }, { text: "登录" }]);
+  });
+
+  it("says an external window is not running instead of reporting it closed", async () => {
+    // `stopped: true` for an unknown id hid the likely mistake: passing an
+    // embedded tab's instanceId, which this tool never closes.
+    await startServer();
+    const { json } = await rpc(toolCall("stop_external_browser", { instanceId: "tab-1" }));
+    expect(json.result.isError).toBeUndefined();
+    expect(toolPayload(json)).toEqual({
+      ok: false,
+      instanceId: "tab-1",
+      reason: "not-running",
+      note: expect.stringContaining("close_browser_tab"),
+    });
+    expect(toolPayload((await rpc(toolCall("stop_all_external_browsers", {}))).json)).toEqual({
+      ok: true,
+      stopped: 0,
+    });
+  });
+
+  it("explains a failed credential fill in words, keeping the reason code", async () => {
+    const failing: EmbeddedSurface = {
+      ...fakeSurface(),
+      fillLogin: async () => ({ ok: false, reason: "no-identity" }),
+    };
+    await startServer(failing);
+    // 干净身份是 AI 自己的页面，输入门放行；没开页就填会被门先拦下。
+    await open();
+    const payload = toolPayload((await rpc(toolCall("fill_browser_login", { tabId: "tab-1" }))).json);
+    expect(payload).toMatchObject({ ok: false, reason: "no-identity" });
+    expect((payload as { note: string }).note).toContain("open_browser_tab");
+  });
+});
+
+/*
+ * 工具面在调用方的位置上是什么样。
+ *
+ * `tool-surface.test.ts` 守源码层面的命名约定；这里守同一个约定落到线上之后的
+ * 行为：写错的名字有指路、旧名字照常可用、入参别名与规范名等价、返回形状一致。
+ */
+describe("the tool surface at the wire", () => {
+  const open = async () => {
+    await rpc(toolCall("open_browser_tab", { url: "https://example.test/" }));
+  };
+  const callOf = (method: string) => calls.find((call) => call.method === method);
+  const siteWithIdentity = async () => {
+    const site = await service.saveSite({
+      name: "本地开发环境",
+      baseUrl: "http://127.0.0.1:9527",
+      loginPath: "/login",
+    });
+    const identity = await service.saveIdentity({
+      siteId: site.id,
+      name: "管理员",
+      username: "admin",
+      role: "admin",
+      color: "amber",
+      passwordMode: "custom",
+    });
+    return { site, identity };
+  };
+
+  it("points a misspelled tool name at the closest real one", async () => {
+    await startServer(fakeSurface());
+    const { json } = await rpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "close_tab", arguments: { tabId: "tab-1" } },
+    });
+    expect(json.error.code).toBe(-32602);
+    expect(json.error.message).toContain("close_browser_tab");
+    expect(json.error.message).toContain("你是不是想调用");
+    // 完全对不上的名字不给建议：硬凑一个比没有更糟。
+    const stray = await rpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "frobnicate", arguments: {} },
+    });
+    expect(stray.json.error.message).not.toContain("你是不是想调用");
+  });
+
+  it("points a misspelled argument at the field the tool takes", async () => {
+    await startServer(fakeSurface());
+    await open();
+    const { json } = await rpc(
+      toolCall("read_browser_attribute", { tabId: "tab-1", selector: "#a", name: "href" }),
+    );
+    expect(json.error.code).toBe(-32602);
+    expect(json.error.message).toContain("你是不是想传 names");
+    expect(callOf("attributes")).toBeUndefined();
+  });
+
+  it("treats an argument alias exactly like the canonical name, and refuses both at once", async () => {
+    const { site } = await siteWithIdentity();
+    await startServer(fakeSurface());
+    await server.update({ allowDelete: true });
+    // `id` 是旧名字；规范名字把对象写在了参数名里。
+    const renamed = await rpc(toolCall("update_site", { id: site.id, name: "改过的站点" }));
+    expect(toolPayload(renamed.json)).toMatchObject({ id: site.id, name: "改过的站点" });
+    const canonical = await rpc(
+      toolCall("update_site", { siteId: site.id, name: "规范名字的站点" }),
+    );
+    expect(toolPayload(canonical.json)).toMatchObject({ name: "规范名字的站点" });
+
+    // 两个都给且都有值：各说各的才是歧义，在入口拒绝。
+    const both = await rpc(
+      toolCall("update_site", { siteId: site.id, id: site.id, name: "x" }),
+    );
+    expect(both.json.error?.message).toContain("id 是 siteId 的别名");
+    const deleted = await rpc(toolCall("delete_site", { id: site.id, confirm: true }));
+    expect(toolPayload(deleted.json)).toEqual({ ok: true, deleted: site.id });
+  });
+
+  it("calls a page tabId on the tool that used to call it pageId", async () => {
+    await startServer(fakeSurface());
+    await open();
+    await rpc(toolCall("activate_browser_tab", { tabId: "tab-1" }));
+    await rpc(toolCall("activate_browser_tab", { pageId: "tab-1" }));
+    expect(calls.filter((call) => call.method === "activate").map((call) => call.args[0])).toEqual([
+      "tab-1",
+      "tab-1",
+    ]);
+  });
+
+  it("answers an old tool name called with its old argument name", async () => {
+    // 改动前写法的调用是整句照抄的：旧名字配旧参数。兼容别名只带规范工具的
+    // schema 时不认识 pageId，这句调用就被它自己的兼容路径拒掉了。
+    await startServer(fakeSurface());
+    await open();
+    const viaPageId = await rpc(toolCall("set_tab_page", { pageId: "tab-1" }));
+    expect(viaPageId.json.result?.isError, JSON.stringify(viaPageId.json)).toBeUndefined();
+    // 旧参数与规范参数同给且都有值：与规范工具一样拒绝，不替调用方挑一个。
+    const both = await rpc(toolCall("set_tab_page", { pageId: "tab-1", tabId: "tab-2" }));
+    expect(both.json.error?.message).toContain("别名");
+    expect(calls.filter((call) => call.method === "activate").map((call) => call.args[0])).toEqual([
+      "tab-1",
+    ]);
+  });
+
+  it("answers a legacy tool name with the canonical tool's result", async () => {
+    await startServer(fakeSurface());
+    await open();
+    const pairs: Array<[legacy: string, canonical: string, args: Record<string, unknown>]> = [
+      ["wait_browser", "wait_browser_condition", { condition: "network-idle" }],
+      [
+        "check_element_visible",
+        "check_browser_element_visible",
+        { tabId: "tab-1", selector: "#login" },
+      ],
+      ["set_tab_page", "activate_browser_tab", { tabId: "tab-1" }],
+      ["stop_all", "stop_all_external_browsers", {}],
+      ["list_sites", "list_sites", {}],
+    ];
+    for (const [legacy, canonical, args] of pairs) {
+      if (legacy === canonical) continue;
+      const viaLegacy = toolPayload((await rpc(toolCall(legacy, args))).json);
+      const viaCanonical = toolPayload((await rpc(toolCall(canonical, args))).json);
+      expect(viaLegacy, `${legacy} 与 ${canonical} 的返回应当一致`).toEqual(viaCanonical);
+    }
+  });
+
+  it("never hands back a bare array from a list tool", async () => {
+    // 列表形状只有一种：以集合名包装的对象。裸数组没法在不破坏调用方的
+    // 前提下加字段，而同一族里有的包、有的不包，调用方只能逐个记。
+    await startServer(fakeSurface());
+    for (const name of [
+      "list_sites",
+      "list_identities",
+      "list_views",
+      "list_flows",
+      "list_bookmarks",
+      "list_layouts",
+      "list_browser_init_scripts",
+      "list_browser_engines",
+    ]) {
+      const payload = toolPayload((await rpc(toolCall(name, name === "list_browser_init_scripts" ? { tabId: "tab-1" } : {}))).json);
+      expect(Array.isArray(payload), name).toBe(false);
+      expect(Object.values(payload as Record<string, unknown>).some(Array.isArray), name).toBe(true);
+    }
+  });
+
+  it("answers an action with ok and the facts, whichever tool it was", async () => {
+    const { site, identity } = await siteWithIdentity();
+    await startServer(fakeSurface());
+    await server.update({ allowDelete: true });
+    await open();
+    expect(toolPayload((await rpc(toolCall("go_back_browser_tab", { tabId: "tab-1" }))).json)).toEqual({
+      ok: true,
+    });
+    expect(
+      toolPayload(
+        (await rpc(
+          toolCall("link_identities_to_site", { siteId: site.id, identityIds: [identity.id] }),
+        )).json,
+      ),
+    ).toEqual({ ok: true, siteId: site.id, linked: 0, requested: 1 });
+    expect(
+      toolPayload((await rpc(toolCall("delete_identity", { identityId: identity.id, confirm: true }))).json),
+    ).toEqual({ ok: true, deleted: identity.id });
+  });
+
+  it("refuses to answer a JavaScript dialog without being told which way", async () => {
+    // 省略「确定」是最危险的方向：对一个 confirm 少写一个参数就等于点了确定。
+    await startServer(fakeSurface());
+    await open();
+    const omitted = await rpc(toolCall("handle_browser_dialog", { tabId: "tab-1" }));
+    expect(omitted.json.error?.message).toContain("缺少必填参数：accept");
+    const untyped = await rpc(toolCall("handle_browser_dialog", { tabId: "tab-1", accept: "false" }));
+    expect(untyped.json.result.isError).toBe(true);
+    expect(untyped.json.result.content[0].text).toContain("accept 必须是布尔值");
+    expect(callOf("handleDialog")).toBeUndefined();
+    await rpc(toolCall("handle_browser_dialog", { tabId: "tab-1", accept: false }));
+    expect(callOf("handleDialog")?.args[1]).toEqual({ accept: false });
+  });
+
+  it("pops a page out and docks it as two actions, not as one toggle", async () => {
+    // 开关的问题是脚本里的第二次调用会撤销第一次：调用方以为在重试，
+    // 实际把窗口收了回去。
+    const popped: string[] = [];
+    const docked: string[] = [];
+    await startServer({
+      ...fakeSurface(),
+      popOutTab: async (tabId) => {
+        popped.push(tabId);
+        return { windowId: 7 };
+      },
+      dockTab: async (tabId) => {
+        docked.push(tabId);
+        return { docked: true };
+      },
+    });
+    await open();
+    await rpc(toolCall("pop_out_browser_tab", { tabId: "tab-1" }));
+    await rpc(toolCall("pop_out_browser_tab", { tabId: "tab-1" }));
+    expect(popped).toEqual(["tab-1", "tab-1"]);
+    expect(docked).toEqual([]);
+    const back = await rpc(toolCall("dock_browser_tab", { tabId: "tab-1" }));
+    expect(toolPayload(back.json)).toEqual({ docked: true });
+    expect(docked).toEqual(["tab-1"]);
+  });
+
+  it("tells a layout call with no view and no page of its own to name one", async () => {
+    // 没有台上的视图、调用方也没开过页面：这里没有东西可以编排。
+    await startServer({ ...fakeSurface(), layoutTargetView: () => undefined, defaultViewId: () => undefined });
+    const { json } = await rpc(toolCall("set_browser_layout", { layoutId: "2x1" }));
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("请传 viewId");
+    expect(callOf("setLayout")).toBeUndefined();
+  });
+
+  it("keeps screenshots in the read tier and page input behind the run permission", async () => {
+    await startServer(fakeSurface());
+    await open();
+    // 读取档没有开关：观察类工具永远可用，这正是「只读」的含义。
+    await server.update({ allowWrite: false, allowRun: false, allowDelete: false });
+    const shot = await rpc(toolCall("screenshot_browser_tab", { tabId: "tab-1" }));
+    expect(shot.json.result.isError).toBeUndefined();
+    const reloaded = await rpc(toolCall("reload_browser_tab", { tabId: "tab-1" }));
+    expect(reloaded.json.result.isError).toBe(true);
+    expect(reloaded.json.result.content[0].text).toContain("运行权限");
+  });
+
+  it("shows the embedded browser in the workspace summary", async () => {
+    await startServer(fakeSurface(["person-page"]));
+    await open();
+    const summary = toolPayload((await rpc(toolCall("get_workspace_summary", {}))).json) as {
+      browser: { available: boolean; tabs: Array<{ id: string; active: boolean; url: string }> };
+    };
+    expect(summary.browser.available).toBe(true);
+    expect(summary.browser.tabs.map((tab) => [tab.id, tab.active])).toEqual([
+      ["person-page", true],
+      ["tab-1", false],
+    ]);
+    // 没有内置浏览器的宿主如实说没有：缺一个键会被读成「什么都没开」。
+    await startServer();
+    const bare = toolPayload((await rpc(toolCall("get_workspace_summary", {}))).json) as {
+      browser: { available: boolean };
+    };
+    expect(bare.browser.available).toBe(false);
+  });
+
+  it("edits a identity's extra login fields, and clears them with an empty list", async () => {
+    const { identity } = await siteWithIdentity();
+    await startServer(fakeSurface());
+    const set = await rpc(
+      toolCall("update_identity", {
+        identityId: identity.id,
+        extraFields: [{ label: "租户名", value: "acme" }],
+      }),
+    );
+    expect(toolPayload(set.json)).toMatchObject({
+      extraFields: [{ label: "租户名", value: "acme" }],
+    });
+    // 省略表示不动。
+    const kept = await rpc(toolCall("update_identity", { identityId: identity.id, note: "只改备注" }));
+    expect(toolPayload(kept.json)).toMatchObject({
+      extraFields: [{ label: "租户名", value: "acme" }],
+      note: "只改备注",
+    });
+    const cleared = await rpc(
+      toolCall("update_identity", { identityId: identity.id, extraFields: [] }),
+    );
+    expect(toolPayload(cleared.json)).toMatchObject({ extraFields: [] });
+  });
+
+  it("routes the old set_view_layout to update_view", async () => {
+    const { site, identity } = await siteWithIdentity();
+    await startServer(fakeSurface());
+    const created = toolPayload(
+      (await rpc(
+        toolCall("create_view", {
+          siteId: site.id,
+          name: "示例视图",
+          identityIds: [identity.id],
+          layoutId: "2x2",
+        }),
+      )).json,
+    ) as { id: string };
+    const viaLegacy = toolPayload(
+      (await rpc(
+        toolCall("set_view_layout", { viewId: created.id, layoutId: "2x1" }),
+      )).json,
+    ) as { id: string; layoutId: string };
+    expect(viaLegacy).toMatchObject({ id: created.id, layoutId: "2x1" });
+  });
+
+  it("lists the browsers a window can be launched into", async () => {
+    await startServer(fakeSurface());
+    const payload = toolPayload((await rpc(toolCall("list_browser_engines", {}))).json) as {
+      engines: Array<{ id: string; brand: string; status: string }>;
+    };
+    expect(Array.isArray(payload.engines)).toBe(true);
+    for (const engine of payload.engines) {
+      expect(typeof engine.id).toBe("string");
+      expect(["ready", "unverified", "blocked"]).toContain(engine.status);
+    }
+  });
+
+  it("closes a view, and by default only the pages the AI side opened", async () => {
+    const closed: unknown[][] = [];
+    const base = fakeSurface();
+    await startServer({
+      ...base,
+      // 第二个容器是由保存的视图「saved-view」打开的：用定义 id 也该找得到它。
+      state: () => ({
+        ...base.state(),
+        views: [
+          { id: "view-1", name: "视图", layoutId: "2x2" },
+          { id: "container-2", name: "示例视图", layoutId: "2x2", viewDefinitionId: "saved-view" },
+        ],
+      }),
+      closeView: (viewId, mode) => {
+        closed.push([viewId, mode]);
+        return { tabs: [] };
+      },
+    });
+    const byContainer = await rpc(toolCall("close_browser_view", { viewId: "view-1" }));
+    expect(byContainer.json.result.isError).toBeUndefined();
+    expect(toolPayload(byContainer.json)).toMatchObject({ tabs: [] });
+    await rpc(toolCall("close_browser_view", { viewId: "saved-view", mode: "all" }));
+    expect(closed).toEqual([
+      ["view-1", "ai"],
+      ["saved-view", "all"],
+    ]);
+  });
+
+  it("refuses to close a view that is not open, instead of reporting it closed", async () => {
+    let touched = 0;
+    await startServer({
+      ...fakeSurface(),
+      closeView: () => {
+        touched += 1;
+        return {};
+      },
+    });
+    const { json } = await rpc(toolCall("close_browser_view", { viewId: "no-such-view" }));
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("视图不存在");
+    expect(touched).toBe(0);
+  });
+
+  it("tells the caller what the sign-in step is doing on the page it just opened", async () => {
+    // 页面在返回之后还可能被登录流程带走；不说的话，调用方下一步读到的
+    // 就是一个自己没要求打开的页面。
+    const { identity } = await siteWithIdentity();
+    for (const [state, expected] of [
+      ["signed-in", "可以直接操作"],
+      ["signing-in", "wait_browser_condition"],
+      ["login-form", "click_browser_element"],
+      ["unknown", "判断不了登录状态"],
+    ] as const) {
+      await startServer({
+        ...fakeSurface(),
+        createTab: async (input) => ({
+          id: "tab-1",
+          label: "页面",
+          url: input.url ?? "about:blank",
+          title: "",
+          ...(input.identityId ? { identityId: input.identityId } : {}),
+          login: state,
+        }),
+      });
+      const payload = toolPayload(
+        (await rpc(
+          toolCall("open_browser_tab", {
+            url: "https://example.test/",
+            identityId: identity.id,
+          }),
+        )).json,
+      ) as { tabId: string; login: { state: string; note: string } };
+      expect(payload.tabId, state).toBe("tab-1");
+      expect(payload.login.state, state).toBe(state);
+      expect(payload.login.note, state).toContain(expected);
+    }
+    // 不带账号打开的页面没有登录这一步：不编一个状态出来。
+    await startServer({
+      ...fakeSurface(),
+      createTab: async () => ({ id: "tab-1", label: "页面", url: "about:blank", title: "" }),
+    });
+    const bare = toolPayload((await rpc(toolCall("open_browser_tab", { url: "about:blank" }))).json);
+    expect(bare).not.toHaveProperty("login");
+  });
+
+  it("shows the open views in the workspace summary", async () => {
+    await startServer(fakeSurface(["person-page"]));
+    const summary = toolPayload((await rpc(toolCall("get_workspace_summary", {}))).json) as {
+      browser: { views: Array<{ id: string }> };
+    };
+    expect(summary.browser.views.map((view) => view.id)).toEqual(["view-1"]);
   });
 });

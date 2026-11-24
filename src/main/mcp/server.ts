@@ -11,6 +11,7 @@ import {
   resolveIdentityForUrl,
   type ResolveIdentityForUrlResult,
 } from "@core/util/identity-resolution";
+import { suggestNames } from "@core/util/name-suggestions";
 import {
   AI_DAILY_MODES,
   aiNavigationAllowed,
@@ -23,6 +24,8 @@ import {
 import { isDeadlineError } from "@shared/async";
 import {
   embeddedSlotCount,
+  EMBEDDED_LAYOUTS,
+  findViewContainer,
   isEmbeddedLayout,
   normalizeViewportSize,
   VIEWPORT_MAX_HEIGHT,
@@ -38,6 +41,8 @@ import {
   resolveParams,
 } from "@shared/flows";
 import { LOCALE_SETTINGS } from "@shared/locale";
+import { NEW_TAB_BACKDROPS } from "@shared/newtab";
+import { SEARCH_ENGINES } from "@shared/search";
 import {
   flowDraftSchema,
   identityDraftSchema,
@@ -101,32 +106,35 @@ const BIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_400, 4_800];
  */
 const SERVER_INSTRUCTIONS = [
   "Ensemble (同台) is a local multi-identity browser workbench for testing permission systems.",
-  "It stores sites, identities (accounts; each keeps its own session, so accounts never share cookies),",
-  "views (a set of identities laid out in a grid), reusable flows, and an embedded browser that",
-  "an AI can drive. Nothing leaves this machine.",
+  "It stores sites and accounts (tool names say \"identity\"; each keeps its own sign-in state), views",
+  "(accounts in a grid), flows, and an embedded browser an AI can drive. Nothing leaves this machine.",
   "",
   "Typical order: create_site → create_identity (or create_identities) → open_browser_tab or",
-  "open_browser_view. All page driving (read, click, fill, screenshot, measure) happens in the",
-  "embedded browser with the open_browser_* tools. The launch_* tools also open the embedded",
-  "browser by default; pass external: true only to confirm the same page in the user's real",
-  "browser for a person to look at.",
+  "open_browser_view, then drive those pages with the browser tools (read_browser_page,",
+  "click_browser_element, type_browser_text, …).",
+  "Browser tools take tabId; pass the one you were handed. Omitted, it means the page you opened",
+  "most recently — never one the user is looking at.",
+  "To show a page to a person, or check it in a real browser, call launch_external_browser;",
+  "whose windows cannot be driven (close them with stop_external_browser) — all page work happens",
+  "in the embedded browser.",
   "",
-  "Signing in: never hand-fill a login form when the account may already be stored here.",
-  "open_browser_tab resolves the account by itself: identityId if given, otherwise the first",
-  "stored account of the site matching the URL's origin (then siteId), and only a throw-away",
-  "clean session when nothing matches; its return value names the account it used. To see which",
-  "accounts a URL maps to before opening it, call resolve_browser_target.",
+  "Signing in: do not hand-fill a login form; the account may already be stored.",
+  "open_browser_tab resolves the account by itself: identityId if given, else the first stored",
+  "account of the site matching the URL's origin (then siteId), and only a throw-away",
+  "clean session when nothing matches; its return value names the account used.",
+  "resolve_browser_target shows which accounts a URL maps to before opening it.",
   "",
   "Browser rules worth knowing up front:",
-  "- Pages opened in the daily profile are read-only for AI input until the user allows that",
-  "  origin (toolbar shield, or the settings page). Reads, screenshots and tab switching always work.",
+  "- Pages the user opened in the default identity (the in-app browser's own, account-less pages)",
+  "  reject AI input until the user allows that origin. Reads, screenshots and tab switching",
+  "  always work.",
   "- Locate elements by label (the text beside a field) or text (the words on a button) before",
-  "  reaching for a CSS selector; call read_browser_page first to see what the page offers.",
-  "- Use wait_browser instead of sleeping: it polls inside the page for visibility, text or URL.",
+  "  reaching for a CSS selector; call read_browser_page first to see what is there.",
+  "- Use wait_browser_condition instead of sleeping: it polls in the page for visibility, text or URL.",
   "- Credentials are write-only over MCP. Never ask for one back; there is no tool that returns it.",
   "",
-  "When unsure which tool fits, call get_workspace_summary for the current state, or list_* tools",
-  "for the collection you need. Each tool description states its purpose and its arguments.",
+  "When unsure which tool fits, call get_workspace_summary, or the list_* tools for the collection",
+  "you need.",
 ].join("\n");
 
 type ToolKind = "read" | "write" | "run" | "danger";
@@ -183,6 +191,23 @@ interface ToolDefinition {
    * usefully prefer either name.
    */
   hidden?: boolean;
+  /**
+   * 参数别名：调用方可能写出的其它名字 → 规范名。
+   *
+   * 在「缺必填 / 未声明参数」校验之前套用，所以别名和规范名一样是合法入参。
+   * 两类用法：改名后的旧名（`pageId` → `tabId`），以及按习惯很容易写出的
+   * 简写（对象专属工具里的 `id` → `identityId` / `viewId`）。别名与规范名
+   * 同时给了非空值时在入口拒绝——各说各的才是歧义。
+   */
+  argumentAliases?: Record<string, string>;
+  /**
+   * 入参归一：别名换完之后、校验之前的一次改写机会。
+   *
+   * 给「旧写法用两个字段表达新写法的一个字段」这种别名表表达不了的形状，
+   * 例如 `set_password` 的 `ownerKind + ownerId` → `siteId` / `identityId`。
+   * 返回改写后的参数；返回字符串表示这次调用被拒绝，字符串就是原因。
+   */
+  normalizeArguments?: (args: Record<string, unknown>) => Record<string, unknown> | string;
   run: (args: Record<string, unknown>) => unknown | Promise<unknown>;
   /**
    * Turns a tool's own return value into the result's content blocks.
@@ -510,13 +535,20 @@ export interface EmbeddedSurface {
       | { kind: "loose" },
   ): unknown;
   /**
-   * 把页面拆出到独立 OS 窗口；已在弹窗里的页面则收回主舞台。
+   * 把页面拆出到独立 OS 窗口。已经拆出的页面不动，返回 alreadyPoppedOut。
    *
    * Optional like the rest of the capability surface: a host without window
    * management reports the capability as absent instead of promising a move it
    * cannot make.
    */
   popOutTab?(tabId: string): Promise<unknown>;
+  /** 把已拆出的页面收回主舞台；没有拆出的页面不动，返回 docked: false。 */
+  dockTab?(tabId: string): Promise<unknown>;
+  /**
+   * 关闭一个视图容器：容器移除，`ai` 只关 AI 侧打开的页面，`all` 关里面的
+   * 全部页面，其余页面变成不属于任何视图的独立页面。视图不存在时不动。
+   */
+  closeView?(viewId: string, mode?: "ai" | "all"): unknown;
   fillLogin(tabId: string): Promise<unknown>;
   defaultTabId(requested?: string): string;
   /** Id of the view on stage, so layout tools do not need one spelled out. */
@@ -613,6 +645,8 @@ function surfaceCapabilities(surface: EmbeddedSurface): Record<OptionalSurfaceMe
     restoreAfterAi: present("restoreAfterAi"),
     openViewContainer: present("openViewContainer"),
     popOutTab: present("popOutTab"),
+    dockTab: present("dockTab"),
+    closeView: present("closeView"),
     addInitScript: present("addInitScript"),
     listInitScripts: present("listInitScripts"),
     removeInitScript: present("removeInitScript"),
@@ -648,13 +682,76 @@ const integer = (description: string) => ({ type: "integer", description });
 const boolean = (description: string) => ({ type: "boolean", description });
 
 /**
+ * The `confirm` property of every destructive tool.
+ *
+ * The refusal at call time is explicit; the schema says the same before the call
+ * is made, so a client sees the requirement while it is still writing arguments.
+ */
+const confirmProp = () => ({
+  type: "boolean",
+  description: "破坏性操作：必须显式传 true 才会执行，省略或 false 都会被拒绝",
+});
+
+/**
+ * `fill_browser_login` 失败原因码的中文说明。
+ *
+ * `reason` 保持原码不变（调用方可能在按它分支），另带一句 `note` 说清下一步。
+ * 解析器自己给出的原因（账号或站点没存密码）已经是本地化的人话，不在此列。
+ */
+const FILL_LOGIN_NOTES: Record<string, string> = {
+  "no-identity":
+    "这个标签页不属于任何账号（一次性干净身份，或用户在默认身份里打开的页面），没有可填的凭据。要带着账号的登录状态打开，用 open_browser_tab 传 identityId。",
+  "no-password": "该账号没有可用的密码。",
+  "cross-origin": "当前页面不是账号所属站点的页面：凭据只填到它自己的站点上。",
+  "bad-site": "账号所属站点的地址无法解析，请检查站点配置。",
+  "password-field-not-found":
+    "页面上没找到密码输入框：可能还不在登录页，或页面尚未加载完。先用 read_browser_page 看页面，或用 wait_browser_condition 等登录表单出现。",
+  "fill-failed": "页面没有接受这次填充。先用 read_browser_page 看表单结构。",
+};
+
+/**
+ * 带账号开页时「登录这一步」的几种状态，以及调用方在该状态下该做什么。
+ *
+ * 页面在调用方拿到返回值之后还可能被登录流程导航走（未登录时先去登录页）。
+ * 不说的话，调用方下一步读到的就是一个自己没要求打开的页面。状态由宿主
+ * 判断（见主进程的 `EmbeddedLoginState`），这里只负责把「接下来等什么」说清。
+ */
+const LOGIN_STATE_NOTES: Record<string, string> = {
+  "signed-in": "账号已登录，页面停在要求的地址上，可以直接操作。",
+  "signing-in":
+    "账号未登录：正在自动填表并提交，登录后会回到要求的地址。用 wait_browser_condition 的 url 条件等它回来再操作。",
+  "login-form":
+    "账号未登录：登录表单会被填好但不提交（站点关闭了自动提交）。用 click_browser_element 按下登录，登录后用 navigate_browser_tab 回到要求的地址。",
+  unknown:
+    "站点没有配置登录检测（或页面不在站点自己的源上），判断不了登录状态；登录表单出现时会被自动填好。",
+};
+
+/** 开页返回里的 `login`：宿主给了状态才带。 */
+function loginSummary(
+  created: unknown,
+): Record<string, never> | { login: { state: string; note?: string } } {
+  const state = (created as { login?: unknown } | null)?.login;
+  if (typeof state !== "string") return {};
+  const note = LOGIN_STATE_NOTES[state];
+  return { login: { state, ...(note ? { note } : {}) } };
+}
+
+/**
  * The `tabId` property, used by every browser tool.
  *
- * Shared so the sentence a client reads is identical everywhere ("omit it and
- * the tool uses the active tab") instead of ten near-copies that each pay for
- * themselves in the injected tool list.
+ * Shared so the sentence a client reads is identical everywhere instead of ten
+ * near-copies that each pay for themselves in the injected tool list.
+ *
+ * The sentence has to carry one distinction the caller cannot otherwise guess:
+ * a page the AI opened never becomes "the active page" (it does not take the
+ * stage away from the person), so "omit it and you get the active tab" sent
+ * every id-less call to the person's page. Omitting means the AI's own latest
+ * page; the person's page is reached only by naming it.
  */
-const tabIdProp = () => string("标签页 id；省略则用当前激活的标签页");
+const tabIdProp = () =>
+  string(
+    "标签页 id。省略＝你最近打开的页面；你没有打开页面时才是用户正在看的页面（要操作它请显式传 list_browser_tabs 里 active 为 true 的 id）",
+  );
 
 /**
  * The identity fields shared by `create_identity` and `create_identities`.
@@ -819,13 +916,26 @@ const WRITABLE_SETTINGS = [
 const writableSettingsProps = (): Record<string, unknown> => ({
   theme: { type: "string", enum: ["dark", "light", "system"], description: "界面主题" },
   locale: { type: "string", enum: [...LOCALE_SETTINGS], description: "界面语言" },
-  layout: string("单独启动账号时使用的窗口布局 id，例如 2x2 / free"),
-  defaultEngineId: string("外部启动时默认使用的浏览器引擎 id"),
+  // 取值范围写在描述里：调用方没法从别处查到一个设置项接受什么，
+  // 猜错的后果是静默落回默认值，而不是一句报错。
+  layout: string(
+    `外部启动（launch_external_browser）多个账号时的窗口布局：${EMBEDDED_LAYOUTS.join(" / ")}（free 与 1x1 等价），或 list_layouts 里自定义预设的 id。只管外部浏览器窗口，内置浏览器不受它影响`,
+  ),
+  defaultEngineId: string(
+    "外部启动时默认使用的浏览器引擎 id，可选值用 list_browser_engines 查；省略则自动选择",
+  ),
   autoFillOnLaunch: { type: "boolean", description: "启动后自动填充已保存的账号密码" },
   autoSubmitLogin: { type: "boolean", description: "填充后自动提交登录表单（站点可覆盖）" },
   browserZoom: integer("内置浏览器默认缩放百分比，50–200"),
-  searchEngineId: string("新标签页搜索与地址栏兜底使用的搜索引擎 id"),
-  newTabBackground: string("新标签页背景预设 id"),
+  searchEngineId: {
+    type: "string",
+    description: `新标签页搜索与地址栏兜底使用的搜索引擎 id：内置 ${SEARCH_ENGINES.map((engine) => engine.id).join(" / ")}，或用户自己添加的搜索引擎 id`,
+  },
+  newTabBackground: {
+    type: "string",
+    enum: NEW_TAB_BACKDROPS.map((backdrop) => backdrop.id),
+    description: "新标签页背景预设",
+  },
   newTabBookmarks: { type: "boolean", description: "新标签页是否显示书签栏" },
   restoreLastView: { type: "boolean", description: "启动时恢复上次启动的视图" },
   overlayEnabled: { type: "boolean", description: "是否显示置顶的浏览器切换浮层" },
@@ -834,7 +944,7 @@ const writableSettingsProps = (): Record<string, unknown> => ({
   headlessCheckUa: {
     type: "string",
     enum: ["desktop", "headless"],
-    description: "无头登录态检测使用的 UA",
+    description: "不显示窗口做登录状态检测时使用的 UA",
   },
   closeToTray: { type: "boolean", description: "关闭窗口时最小化到托盘而不是退出" },
   autoCheckUpdates: { type: "boolean", description: "自动检查更新" },
@@ -867,9 +977,19 @@ function prefixedTarget(
   };
 }
 
-/** Builds the element target from tool arguments, rejecting an empty one. */
+/**
+ * Builds the element target from tool arguments, rejecting an empty one.
+ *
+ * `withText` picks which argument carries the element's text: the action tools
+ * call it `text`; `wait_browser_condition` and `screenshot_browser_tab` call it
+ * `elementText`, because on those `text` is a shorthand for the value to wait
+ * for / is not declared at all. The refusal names the field this tool actually
+ * takes — pointing a wait at `text` sent the caller straight into a second
+ * refusal for an undeclared argument.
+ */
 function targetFrom(args: Record<string, unknown>, options: { withText: boolean }): ElementTarget {
-  const text = options.withText ? args["text"] : args["elementText"];
+  const textKey = options.withText ? "text" : "elementText";
+  const text = args[textKey];
   const selector = typeof args["selector"] === "string" ? args["selector"].trim() : "";
   const label = typeof args["label"] === "string" ? args["label"].trim() : "";
   const buttonText = typeof text === "string" ? text.trim() : "";
@@ -888,7 +1008,9 @@ function targetFrom(args: Record<string, unknown>, options: { withText: boolean 
     return { handle, ...(nth !== undefined ? { nth } : {}) };
   }
   if (!selector && !label && !buttonText && !role) {
-    throw new Error("需要 selector、label、text 或 role 之一来定位元素，或传 handle 复用 find_browser_element 的句柄");
+    throw new Error(
+      `需要 selector、label、${textKey} 或 role 之一来定位元素，或传 handle 复用 find_browser_element 的句柄`,
+    );
   }
   return {
     ...(selector ? { selector } : {}),
@@ -908,20 +1030,115 @@ function targetNth(args: Record<string, unknown>): number | undefined {
 }
 
 /**
+ * `text` 是 `fullKey` 的简写：把它落到完整字段上，两者同时给了非空值就拒绝。
+ *
+ * 其余每个定位工具都用 `text` 指元素上的文字，调用方凭习惯把 `text` 传给
+ * `wait_browser_condition` / `screenshot_browser_tab` 时，不该撞上「该工具没有这个参数」。
+ * 简写与完整字段各说各的才是歧义，所以并存时在入口就拒。
+ */
+function withTextShorthand(
+  args: Record<string, unknown>,
+  fullKey: "elementText" | "expect",
+): Record<string, unknown> {
+  const shorthand = typeof args["text"] === "string" ? args["text"].trim() : "";
+  if (!shorthand) return args;
+  const full = typeof args[fullKey] === "string" ? (args[fullKey] as string).trim() : "";
+  if (full) throw new Error(`text 与 ${fullKey} 只能给一个：text 是 ${fullKey} 的简写`);
+  return { ...args, [fullKey]: shorthand };
+}
+
+/**
  * 收窄字段只属于 find_browser_element：动作工具的定位不吃它们（要精确就先 find
  * 再用 handle），把 `hasText` 传给 click 这类调用是张冠李戴的典型，报错时点名
  * 去处比一句「未知参数」更能直接纠正。
  */
 const FIND_ONLY_FIELDS = new Set(["hasText", "hasNotText", "visible"]);
 
-function unknownArgumentsMessage(unknown: string[]): string {
-  const listed = unknown.map((key) =>
-    FIND_ONLY_FIELDS.has(key)
-      ? `${key}（该字段属于 find_browser_element 的收窄字段，这个工具不接受；要精确定位请先 find 再传 handle）`
-      : `${key}（该工具没有这个参数）`,
-  );
+/**
+ * 「未声明的参数」的报错：逐个点名，能猜到想传哪个时直接给出来。
+ *
+ * `suggestions` 是参数名 → 它最可能想要的几个规范名。差一个字母的名字
+ * （`name` 对 `names`）只说「没有这个参数」，调用方还得回去翻一遍 schema。
+ */
+function unknownArgumentsMessage(
+  unknown: string[],
+  suggestions: ReadonlyMap<string, readonly string[]> = new Map(),
+): string {
+  const listed = unknown.map((key) => {
+    // 专属解释优先于相似建议：`hasText` 与 `text` 只差三个字母，但它真正该去的地方是 find。
+    if (FIND_ONLY_FIELDS.has(key)) {
+      return `${key}（该字段属于 find_browser_element 的收窄字段，这个工具不接受；要精确定位请先 find 再传 handle）`;
+    }
+    const close = suggestions.get(key) ?? [];
+    return close.length > 0
+      ? `${key}（该工具没有这个参数；你是不是想传 ${close.join(" / ")}）`
+      : `${key}（该工具没有这个参数）`;
+  });
   return `未知参数：${listed.join("、")}`;
 }
+
+/** 名字没对上时的建议：最相近的在前，最多三个。 */
+function suggestionsFor(names: readonly string[], declared: readonly string[]): Map<string, string[]> {
+  const close = new Map<string, string[]>();
+  for (const name of names) {
+    const found = suggestNames(name, declared);
+    if (found.length > 0) close.set(name, found);
+  }
+  return close;
+}
+
+/**
+ * 把别名换成规范名，返回新的参数对象与「别名和规范名冲突」的错误。
+ *
+ * 不改调用方传进来的对象：审计日志要留原话时还有它可用。
+ */
+function canonicalArguments(
+  tool: ToolDefinition,
+  args: Record<string, unknown>,
+): { args: Record<string, unknown>; conflict?: string } {
+  const aliases = tool.argumentAliases;
+  if (!aliases) return { args };
+  const out: Record<string, unknown> = {};
+  let conflict: string | undefined;
+  for (const [key, value] of Object.entries(args)) {
+    const canonical = aliases[key];
+    if (!canonical) {
+      out[key] = value;
+      continue;
+    }
+    // 与规范名同给：两个都有值才算冲突，空串与 null 不算「给了」。
+    const existing = args[canonical];
+    const given = (item: unknown) =>
+      item !== undefined && item !== null && !(typeof item === "string" && item.trim() === "");
+    if (given(existing) && given(value)) {
+      conflict ??= `${key} 是 ${canonical} 的别名，两个都给且都有值：只传 ${canonical}`;
+      continue;
+    }
+    if (!given(out[canonical])) out[canonical] = value;
+  }
+  return conflict ? { args: out, conflict } : { args: out };
+}
+
+/**
+ * 改过名的工具：旧名字 → 规范名。
+ *
+ * 旧名字不再对外广播——每个会话都为工具列表里的每一项付费，一个别名重复出现
+ * 只会让模型在两个名字之间无所适从。但已经按旧名字配好的客户端、提示词和
+ * 脚本照常能用：调用旧名字等于调用规范名字，档位与闸门也跟着规范名字走。
+ */
+const LEGACY_TOOL_NAMES: ReadonlyArray<{ name: string; canonical: string }> = [
+  { name: "export_accounts", canonical: "export_identities" },
+  { name: "import_accounts", canonical: "import_identities" },
+  { name: "preview_accounts", canonical: "preview_identities" },
+  { name: "detach_identity_reference", canonical: "detach_identity_credentials" },
+  { name: "check_auth", canonical: "check_identity_auth" },
+  { name: "stop_instance", canonical: "stop_external_browser" },
+  { name: "stop_all", canonical: "stop_all_external_browsers" },
+  { name: "set_tab_page", canonical: "activate_browser_tab" },
+  { name: "wait_browser", canonical: "wait_browser_condition" },
+  { name: "check_element_visible", canonical: "check_browser_element_visible" },
+  { name: "set_view_layout", canonical: "update_view" },
+];
 
 /**
  * Builds a find locator: a base field (selector / label / text / role) plus the
@@ -1231,6 +1448,8 @@ const FLOWS_LIST_MAX = 50;
  * 账号时全量携带会把每次概览都变成一次大响应；需要全量再调 list_identities。
  */
 const WORKSPACE_SUMMARY_IDENTITY_MAX = 20;
+/** 概览里内置页面数的上限，理由同上；全量用 list_browser_tabs。 */
+const WORKSPACE_SUMMARY_TAB_MAX = 30;
 
 /** 截断一段可能很长的步骤文本，并注明省略了多少。 */
 function clipFlowText(value: string): string {
@@ -1818,10 +2037,22 @@ export class McpServer {
           };
           const tool = this.tools().find((item) => item.name === params.name);
           if (!tool) {
+            /*
+             * 名字没对上不是死路：调用方凭印象写出的名字往往只差一点。把最相近
+             * 的几个摆出来，下一次调用就对得上；只说「没有这个工具」，调用方
+             * 只能回去把整份工具列表再读一遍。只在对外广播的名字里找——隐藏的
+             * 兼容别名不会被「建议」出来。
+             */
+            const close = suggestNames(
+              String(params.name ?? ""),
+              this.toolList().map((item) => item.name),
+            );
+            const hint =
+              close.length > 0 ? `。没有这个名字的工具；你是不是想调用：${close.join(" / ")}` : "";
             send(200, {
               jsonrpc: "2.0",
               id,
-              error: { code: -32602, message: `unknown tool: ${params.name ?? ""}` },
+              error: { code: -32602, message: `unknown tool: ${params.name ?? ""}${hint}` },
             });
             return;
           }
@@ -1835,13 +2066,37 @@ export class McpServer {
             });
             return;
           }
-          const missing = this.missingArguments(tool, params.arguments ?? {});
+          // 别名先换成规范名：之后的校验、闸门与工具本身只认规范名。
+          const canonical = canonicalArguments(tool, params.arguments ?? {});
+          if (canonical.conflict) {
+            this.audit(tool.name, params.arguments, false, canonical.conflict);
+            send(200, {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: canonical.conflict },
+            });
+            return;
+          }
+          const normalized = tool.normalizeArguments
+            ? tool.normalizeArguments(canonical.args)
+            : canonical.args;
+          if (typeof normalized === "string") {
+            this.audit(tool.name, canonical.args, false, normalized);
+            send(200, {
+              jsonrpc: "2.0",
+              id,
+              error: { code: -32602, message: normalized },
+            });
+            return;
+          }
+          const args = normalized;
+          const missing = this.missingArguments(tool, args);
           if (missing.length > 0) {
             // Validated here rather than inside each tool: a tool that silently
             // ran with an empty selector would click whatever happened to be
             // first on the page, which is worse than a protocol error.
             const messageText = `缺少必填参数：${missing.join(", ")}`;
-            this.audit(tool.name, params.arguments, false, messageText);
+            this.audit(tool.name, args, false, messageText);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -1849,10 +2104,16 @@ export class McpServer {
             });
             return;
           }
-          const unknown = this.unknownArguments(tool, params.arguments ?? {});
+          const unknown = this.unknownArguments(tool, args);
           if (unknown.length > 0) {
-            const messageText = unknownArgumentsMessage(unknown);
-            this.audit(tool.name, params.arguments, false, messageText);
+            const declared = Object.keys(
+              (tool.inputSchema["properties"] ?? {}) as Record<string, unknown>,
+            );
+            const messageText = unknownArgumentsMessage(
+              unknown,
+              suggestionsFor(unknown, [...declared, ...Object.keys(tool.argumentAliases ?? {})]),
+            );
+            this.audit(tool.name, args, false, messageText);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -1862,20 +2123,11 @@ export class McpServer {
           }
           // The origin gate sits here rather than inside each tool so a new
           // input tool cannot forget it: it only has to declare `inputTarget`.
-          const origin = this.originGate(tool, params.arguments ?? {});
-          const verdict = origin
-            ? await this.resolveOriginGate(tool, origin, params.arguments ?? {})
-            : {};
+          const origin = this.originGate(tool, args);
+          const verdict = origin ? await this.resolveOriginGate(tool, origin, args) : {};
           if (verdict.refusal) {
-            const page = this.notePageAction(
-              tool,
-              params.arguments ?? {},
-              false,
-              false,
-              verdict.approval,
-              verdict.refusal,
-            );
-            this.audit(tool.name, params.arguments, false, verdict.refusal, page);
+            const page = this.notePageAction(tool, args, false, false, verdict.approval, verdict.refusal);
+            this.audit(tool.name, args, false, verdict.refusal, page);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -1894,15 +2146,13 @@ export class McpServer {
              * the `finally` below lifts exactly that mute when the action
              * ends, so the page's sound state comes out as it went in. The
              * explicit mute tool is exempt: auto-muting before an unmute
-             * would undo the call it is about to make. Applying this after
-             * the approval decision means a refused call does not silence
+             * would undo the call it is about to make. Applying this after the
+             * approval decision means a refused call does not silence
              * anything.
              */
             let aiMutedPageId: string | undefined;
             try {
-              const pageId =
-                tool.pageTarget?.(params.arguments ?? {}) ??
-                tool.inputTarget?.(params.arguments ?? {});
+              const pageId = tool.pageTarget?.(args) ?? tool.inputTarget?.(args);
               if (pageId && tool.name !== "set_browser_muted") {
                 this.options.embedded?.muteForAi?.(pageId);
                 aiMutedPageId = pageId;
@@ -1917,7 +2167,7 @@ export class McpServer {
             }
             let output: unknown;
             try {
-              output = await tool.run(params.arguments ?? {});
+              output = await tool.run(args);
             } finally {
               // Runs on failure too: a timed-out read must not leave the page
               // silent behind it. Pages the mute never touched restore as
@@ -1926,7 +2176,7 @@ export class McpServer {
             }
             const page = this.notePageAction(
               tool,
-              params.arguments ?? {},
+              args,
               true,
               true,
               verdict.approval,
@@ -1935,7 +2185,7 @@ export class McpServer {
             );
             this.audit(
               tool.name,
-              this.auditArgs(params.arguments, output),
+              this.auditArgs(args, output),
               true,
               undefined,
               page,
@@ -1955,8 +2205,8 @@ export class McpServer {
             });
           } catch (error) {
             const messageText = (error as Error).message || "tool failed";
-            const page = this.notePageAction(tool, params.arguments ?? {}, false, true);
-            this.audit(tool.name, params.arguments, false, messageText, page);
+            const page = this.notePageAction(tool, args, false, true);
+            this.audit(tool.name, args, false, messageText, page);
             send(200, {
               jsonrpc: "2.0",
               id,
@@ -2396,6 +2646,53 @@ export class McpServer {
       }));
   }
 
+  /**
+   * Executes a tool by name, the way a compatibility alias hands off.
+   *
+   * Gates and entry validation do not run again: the alias call already passed
+   * them, and the alias carries the canonical tool's kind and page targets.
+   * Argument aliases do run, so an old parameter name reaches `run` under the
+   * canonical one.
+   */
+  private runNamed(name: string, args: Record<string, unknown>): unknown | Promise<unknown> {
+    const tool = this.tools().find((item) => item.name === name);
+    if (!tool) throw new Error(`内部错误：找不到工具 ${name}`);
+    return tool.run(canonicalArguments(tool, args).args);
+  }
+
+  /**
+   * The compatibility aliases for renamed tools, derived from the canonical ones.
+   *
+   * Each alias is callable but not advertised (`hidden`), carries the canonical
+   * tool's kind, page targets and result formatter, and hands the call over.
+   */
+  private legacyAliases(current: ToolDefinition[]): ToolDefinition[] {
+    const byName = new Map(current.map((tool) => [tool.name, tool]));
+    return LEGACY_TOOL_NAMES.flatMap((legacy) => {
+      const canonical = byName.get(legacy.canonical);
+      if (!canonical) return [];
+      return [
+        {
+          name: legacy.name,
+          description: `兼容别名，等同 ${legacy.canonical}。`,
+          kind: canonical.kind,
+          inputSchema: canonical.inputSchema,
+          // 旧工具名要配得上旧参数名。按改动前的写法整句照抄的调用，用的是
+          // 旧名字加旧参数（`set_tab_page` 配 `pageId`）；别名表不带过来，
+          // 入口校验只认规范名，这句调用就被它自己的兼容路径拒掉。
+          ...(canonical.argumentAliases ? { argumentAliases: canonical.argumentAliases } : {}),
+          ...(canonical.normalizeArguments ? { normalizeArguments: canonical.normalizeArguments } : {}),
+          ...(canonical.inputTarget ? { inputTarget: canonical.inputTarget } : {}),
+          ...(canonical.pageTarget ? { pageTarget: canonical.pageTarget } : {}),
+          ...(canonical.recordsPageAction ? { recordsPageAction: true } : {}),
+          ...(canonical.content ? { content: canonical.content } : {}),
+          hidden: true,
+          run: (args: Record<string, unknown>) => this.runNamed(legacy.canonical, args),
+        },
+      ];
+    });
+  }
+
   private tools(): ToolDefinition[] {
     const service = this.options.service;
 
@@ -2528,11 +2825,12 @@ export class McpServer {
       return identityDraftSchema.parse(draft);
     };
 
-    return [
+    // 旧名字的兼容别名在数组拼完后由 `legacyAliases` 统一追加。
+    const current: ToolDefinition[] = [
       {
         name: "get_workspace_summary",
         description:
-          "查看当前 Ensemble 工作区概览：站点（含各站点已录入的账号列表）、视图、运行中浏览器的数量与名称。账号信息不含密码；单个站点超过 20 个账号时只带前 20 个并标 identitiesTruncated。",
+          "查看当前 Ensemble 工作区概览：站点（含各站点已录入的账号列表）、视图、外部浏览器窗口、内置浏览器里开着的页面与视图。账号信息不含密码；单个站点超过 20 个账号时只带前 20 个并标 identitiesTruncated，内置页面超过 30 个时只带前 30 个并标 tabsTruncated。要看某个页面的完整状态用 list_browser_tabs。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -2556,12 +2854,16 @@ export class McpServer {
                 viewCount: snapshot.views.filter((view) => view.siteId === site.id).length,
               };
             }),
+            views: snapshot.views.length,
+            // 外部系统浏览器窗口。
             running: snapshot.instances.map((instance) => ({
               id: instance.id,
               label: instance.label,
               mode: instance.mode,
               identityId: instance.identityId ?? null,
             })),
+            // 内置浏览器：AI 的页面都开在这里，概览不含它就只是工作区的一半。
+            browser: this.browserOverview(),
             layoutPresets: [
               ...snapshot.layoutPresets.map((preset) => ({ id: preset.id, name: preset.name })),
               { id: "2x2", name: "2 × 2" },
@@ -2634,13 +2936,15 @@ export class McpServer {
       },
       {
         name: "list_sites",
-        description: "列出所有站点（被测目标作用域）。",
+        description: "列出所有站点（被测目标作用域）。返回 { sites }。",
         kind: "read",
         inputSchema: object({}),
-        run: () => service.snapshot().sites.map(siteSummary),
+        // 列表类一律以集合名包装：裸数组没法在不破坏调用方的前提下加字段
+        // （总数、截断标记），而同一个接口里有的包、有的不包，调用方得逐个记。
+        run: () => ({ sites: service.snapshot().sites.map(siteSummary) }),
       },
       {
-        name: "export_accounts",
+        name: "export_identities",
         description:
           "把选定的站点和账号打包成一个账号文件，用来分享给同事（不是整机迁移用的配置导出）。按 username 在站点内匹配，导入方不需要有相同的 id。传 passphrase 才会带上密码；返回值里永远不含明文密码，只报告文件路径与数量。",
         kind: "write",
@@ -2679,7 +2983,7 @@ export class McpServer {
         },
       },
       {
-        name: "import_accounts",
+        name: "import_identities",
         description:
           "读取一个账号文件并合并进当前工作区。站点按 baseUrl 匹配、账号按 username 匹配，所以可以接收别人从另一台机器导出的账号。有密码时需传当时的口令。",
         kind: "write",
@@ -2699,7 +3003,7 @@ export class McpServer {
         },
       },
       {
-        name: "preview_accounts",
+        name: "preview_identities",
         description:
           "预览一个账号文件会导入什么：站点数、账号数、是否带密码、哪些站点本地已有。不改动任何数据。",
         kind: "read",
@@ -2711,21 +3015,23 @@ export class McpServer {
       },
       {
         name: "list_identities",
-        description: "列出账号。可按 siteId 过滤。不会返回密码。",
+        description: "列出账号。可按 siteId 过滤。不会返回密码。返回 { identities }。",
         kind: "read",
         inputSchema: object({ siteId: string("只看该站点的账号") }),
         run: (args) => {
           const siteId = args["siteId"];
-          return service
-            .snapshot()
-            .identities.filter((identity) => !siteId || identity.siteId === siteId)
-            .map(identitySummary);
+          return {
+            identities: service
+              .snapshot()
+              .identities.filter((identity) => !siteId || identity.siteId === siteId)
+              .map(identitySummary),
+          };
         },
       },
       {
         name: "resolve_browser_target",
         description:
-          "给定目标地址，回答「该用哪个身份打开」：返回匹配的站点、该站点已录入的账号与建议的 identityId。知道 URL 但不确定用谁时先调它，再把 identityId 交给 open_browser_tab；账号需要已登录时不要手填登录表单。",
+          "给定目标地址，回答「该用哪个账号打开」：返回匹配的站点、该站点已录入的账号与建议的 identityId。知道 URL 但不确定用谁时先调它，再把 identityId 交给 open_browser_tab；账号需要已登录时不要手填登录表单。",
         kind: "read",
         inputSchema: object(
           {
@@ -2768,9 +3074,15 @@ export class McpServer {
           if (!site) {
             nextStep = requested
               ? `地址没有匹配到任何已录入站点：用 open_browser_tab 打开并传 identityId: "${requested.id}"，会按这个账号打开。`
-              : "没有匹配的站点：可直接用 open_browser_tab 打开（一次性干净会话）；若该地址需要登录且要保存，先用 create_site 录入站点再建账号。";
+              : "没有匹配到站点：可直接用 open_browser_tab 打开（落在一次性干净身份里，未登录）；若该地址需要登录且要保存，先用 create_site 录入站点再建账号。";
           } else if (identities.length === 0) {
-            nextStep = `站点 ${site.name} 还没有录入账号：先用 create_identity（siteId: "${site.id}"）创建，或直接用 open_browser_tab 打开干净会话。`;
+            nextStep = `站点 ${site.name} 还没有录入账号：先用 create_identity（siteId: "${site.id}"）创建，或直接用 open_browser_tab 打开（落在一次性干净身份里，未登录）。`;
+          } else if (requested && requested.siteId !== site.id) {
+            // 指定的账号不属于匹配到的站点：两条路都成立，由调用方选。只报
+            // 推荐的那个，等于替调用方把它点名的账号换掉了。
+            nextStep =
+              `用 open_browser_tab 打开该地址，二选一：传 identityId: "${recommendedIdentityId}"，以站点 ${site.name} 的账号打开；` +
+              `或仍传 identityId: "${requested.id}"，用账号 ${requested.name} 打开（它在这个站点上没有登录状态，除非此前用它登录过）。`;
           } else {
             nextStep = `用 open_browser_tab 打开该地址并传 identityId: "${recommendedIdentityId}"。`;
           }
@@ -2792,15 +3104,17 @@ export class McpServer {
       },
       {
         name: "list_views",
-        description: "列出视图。可按 siteId 过滤。",
+        description: "列出视图。可按 siteId 过滤。返回 { views }。",
         kind: "read",
         inputSchema: object({ siteId: string("只看该站点的视图") }),
         run: (args) => {
           const siteId = args["siteId"];
-          return service
-            .snapshot()
-            .views.filter((view) => !siteId || view.siteId === siteId)
-            .map(viewSummary);
+          return {
+            views: service
+              .snapshot()
+              .views.filter((view) => !siteId || view.siteId === siteId)
+              .map(viewSummary),
+          };
         },
       },
       {
@@ -2824,9 +3138,13 @@ export class McpServer {
         description:
           "保存一个流程：一串在某个站点里可重复执行的步骤。动作步骤：navigate / fill / click / select / press / login / wait / read；script 步骤用一段 JS 做循环与条件的编排，能调用的只有动作原语（navigate / click / fill / select / press / hover / scroll / check / setFiles / drag / wait / read，不含 login 与 cdp）；另外有 cdp 步骤可以跑协议层命令，但它只允许「只作用于当前页面」的那一档，跨账号与影响整个浏览器的域一律拒绝，能用封装动作表达时不要用它。定位元素用 label（字段旁的标签）或 text（按钮上的字），selector 只作兜底。值里可以用 {{参数名}} 引用参数，read 步骤读到的内容可以给后续步骤用。保存时会校验，错误信息会指出第几步缺什么。",
         kind: "write",
+        // 工具参数统一用带对象名的 id（flowId / bookmarkId / identityId / viewId /
+        // siteId）：调用方手里同时有几种 id，裸 `id` 传错了对象只能得到一句
+        // 「不存在」。`id` 作为别名保留，旧调用照常可用。
+        argumentAliases: { id: "flowId" },
         inputSchema: object(
           {
-            id: string("流程 id；省略表示新建，传已有 id 表示修改"),
+            flowId: string("流程 id；省略表示新建，传已有 id 表示修改"),
             siteId: string("流程所属站点 id"),
             name: string("流程名称，例如「创建租户」"),
             description: string("这个流程做什么、什么时候用"),
@@ -2887,27 +3205,34 @@ export class McpServer {
           },
           ["siteId", "name", "steps"],
         ),
-        run: (args) => flowSummary(service.saveFlow(parseFlowDraft(args))),
+        run: (args) => {
+          // 流程的数据模型里这个字段叫 `id`，映射发生在工具边界上。
+          const { flowId, ...draft } = args;
+          return flowSummary(
+            service.saveFlow(parseFlowDraft(flowId ? { ...draft, id: flowId } : draft)),
+          );
+        },
       },
       {
         name: "delete_flow",
         description: "删除一个流程。只删步骤，不影响站点和账号。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("流程 id"), confirm: { type: "boolean" } }, [
-          "id",
+        argumentAliases: { id: "flowId" },
+        inputSchema: object({ flowId: string("流程 id"), confirm: confirmProp() }, [
+          "flowId",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const id = String(args["id"] ?? "");
-          service.deleteFlow(id);
-          return { deleted: id };
+          const flowId = String(args["flowId"] ?? "");
+          service.deleteFlow(flowId);
+          return { ok: true, deleted: flowId };
         },
       },
       {
         name: "list_bookmarks",
         description:
-          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录态——点开用的是默认身份里已有的登录。图标内容不回传，只有 hasFavicon 标记是否存在。",
+          "列出新标签页上的书签和书签文件夹（多层目录）。书签只有名字和地址，没有站点、没有账号，也不带登录状态——点开用的是默认身份里已有的登录。图标内容不回传，只有 hasFavicon 标记是否存在。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
@@ -2921,13 +3246,14 @@ export class McpServer {
       {
         name: "save_bookmark",
         description:
-          "收藏一个地址，或给已有书签改名。地址只接受 http(s)，省略协议时按 https 处理。书签与站点无关，不需要先建站点。folderId 从 list_bookmarks 的 folders 里取，省略则不分类。",
+          "收藏一个地址，或给已有书签改名、改地址。地址只接受 http(s)，省略协议时按 https 处理。书签与站点无关，不需要先建站点。folderId 从 list_bookmarks 的 folders 里取，省略则不分类。url 是必填：给已有书签改名时也要带上它当前的地址。",
         kind: "write",
+        argumentAliases: { id: "bookmarkId" },
         inputSchema: object(
           {
-            id: string("书签 id；省略表示新建，传已有 id 表示改名或改地址"),
+            bookmarkId: string("书签 id；省略表示新建，传已有 id 表示改名或改地址"),
             name: string("显示名称；省略时用域名"),
-            url: string("要打开的地址"),
+            url: string("要打开的地址；必填——改名时也要带上书签当前的地址"),
             folderId: string("目标文件夹 id；省略表示不分类"),
           },
           ["url"],
@@ -2935,7 +3261,9 @@ export class McpServer {
         run: (args) =>
           bookmarkSummary(
             service.saveBookmark({
-              ...(typeof args["id"] === "string" && args["id"] ? { id: args["id"] } : {}),
+              ...(typeof args["bookmarkId"] === "string" && args["bookmarkId"]
+                ? { id: args["bookmarkId"] }
+                : {}),
               name: typeof args["name"] === "string" ? args["name"] : "",
               url: String(args["url"] ?? ""),
               ...(typeof args["folderId"] === "string" && args["folderId"]
@@ -2949,15 +3277,16 @@ export class McpServer {
         description:
           "删除一个书签。只删这一条，不影响站点、账号和打开的页面。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("书签 id"), confirm: { type: "boolean" } }, [
-          "id",
+        argumentAliases: { id: "bookmarkId" },
+        inputSchema: object({ bookmarkId: string("书签 id"), confirm: confirmProp() }, [
+          "bookmarkId",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const id = String(args["id"] ?? "");
-          service.deleteBookmark(id);
-          return { deleted: id };
+          const bookmarkId = String(args["bookmarkId"] ?? "");
+          service.deleteBookmark(bookmarkId);
+          return { ok: true, deleted: bookmarkId };
         },
       },
       {
@@ -2965,9 +3294,10 @@ export class McpServer {
         description:
           "运行一个已保存的流程。给了 tabId 就在那个页面里跑；否则新开一个标签页（默认用该站点第一个账号，登录表单会自动填充），返回这个标签页 id，让你能看到它在做什么。params 填流程声明的参数。某一步失败会停在那一步并说明原因，不会带着半填的表单继续。script 步骤在沙箱里编排动作原语，整段受 timeoutMs 预算约束，超时报「脚本超时」。",
         kind: "run",
+        argumentAliases: { id: "flowId" },
         inputSchema: object(
           {
-            id: string("流程 id"),
+            flowId: string("流程 id"),
             tabId: string("在哪个标签页里跑；省略表示新开一个"),
             identityId: string("新开标签页时用哪个账号；省略表示该站点第一个账号"),
             params: {
@@ -2979,7 +3309,7 @@ export class McpServer {
               `整趟流程最多等多久（毫秒），默认 ${FLOW_TIMEOUT_DEFAULT_MS}，最大 ${FLOW_TIMEOUT_MAX_MS}。慢操作（大文件上传、批量导入）要显式给大一点：超时只是不再等待，页面上的操作可能仍在继续`,
             ),
           },
-          ["id"],
+          ["flowId"],
         ),
         // Without a tabId the run opens its own identity tab, which the gate
         // has nothing to protect; only a run aimed at an existing page can land
@@ -2987,9 +3317,9 @@ export class McpServer {
         inputTarget: (args) =>
           typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : undefined,
         run: async (args) => {
-          const id = String(args["id"] ?? "");
-          const flow = service.snapshot().flows.find((item) => item.id === id);
-          if (!flow) throw new Error(`流程不存在：${id}`);
+          const flowId = String(args["flowId"] ?? "");
+          const flow = service.snapshot().flows.find((item) => item.id === flowId);
+          if (!flow) throw new Error(`流程不存在：${flowId}`);
           const site = service.findSite(flow.siteId);
           if (!site) throw new Error("流程所属站点不存在");
           const raw = args["params"];
@@ -3045,14 +3375,15 @@ export class McpServer {
       },
       {
         name: "list_layouts",
-        description: "列出可用窗口布局：内置预设与用户自定义预设。",
+        description:
+          "列出可用窗口布局：内置预设与用户自定义预设。free 与 1x1 等价（单页铺满），两个 id 在所有要 layoutId 的工具里都被接受；返回里只列 free。",
         kind: "read",
         inputSchema: object({}),
         run: () => {
           const snapshot = service.snapshot();
           return {
             builtin: [
-              { id: "free", name: "Free / 无布局（等价于 1 × 1）" },
+              { id: "free", name: "Free / 单页铺满（等价于 1 × 1，两个 id 都接受）" },
               { id: "2x1", name: "2 × 1" },
               { id: "1x2", name: "1 × 2" },
               { id: "2x2", name: "2 × 2" },
@@ -3067,6 +3398,28 @@ export class McpServer {
         },
       },
       {
+        name: "list_browser_engines",
+        description:
+          "列出这台机器上可用的浏览器引擎。要选引擎的三处都从这里取 id：launch_external_browser 的 engineId、账号的 engineId（update_identity 可改）、以及设置项 defaultEngineId。status 为 ready 的才能用来启动，blocked 的看 blockReason。不指定引擎时自动选择。",
+        kind: "read",
+        inputSchema: object({}),
+        run: () => {
+          const snapshot = service.snapshot();
+          return {
+            engines: snapshot.engines.map((engine) => ({
+              id: engine.id,
+              brand: engine.brand,
+              channel: engine.channel,
+              ...(engine.version ? { version: engine.version } : {}),
+              status: engine.status,
+              ...(engine.blockReason ? { blockReason: engine.blockReason } : {}),
+            })),
+            // 探测尚未结束时列表还会变：说一声，免得调用方把「还没出现」当成「没有」。
+            ...(snapshot.enginesReady ? {} : { note: "引擎还在探测中，稍后再查可能会多出几项" }),
+          };
+        },
+      },
+      {
         name: "create_site",
         description:
           "创建被测站点。baseUrl 是容器或站点地址；loginPath 默认 /login。带 password 时会同时写入站点默认密码，省掉一次 set_password。额外登录字段（如租户名）属于账号，请用 create_identity 的 extraFields 传。",
@@ -3076,7 +3429,7 @@ export class McpServer {
             name: string("站点名称，例如 订单服务-测试站点"),
             baseUrl: string("站点地址，例如 http://localhost:3000"),
             loginPath: string("登录入口，默认 /login"),
-            authCheckPath: string("登录态检测地址，可省略"),
+            authCheckPath: string("登录状态检测地址，可省略"),
             authCheckSignedOut: string(
               "未登录标记：200 响应 body 里出现该子串即视为未登录（API 信封式后端用），可省略",
             ),
@@ -3119,9 +3472,10 @@ export class McpServer {
         description:
           "修改站点。只传需要改的字段。",
         kind: "write",
+        argumentAliases: { id: "siteId" },
         inputSchema: object(
           {
-            id: string("站点 id"),
+            siteId: string("站点 id"),
             name: string("新名称"),
             baseUrl: string("新站点地址"),
             loginPath: string("新登录入口"),
@@ -3131,10 +3485,10 @@ export class McpServer {
             authTokenHeader: string("新令牌请求头名；传空串清除"),
             autoSubmit: { type: "boolean", description: "填充后是否自动提交" },
           },
-          ["id"],
+          ["siteId"],
         ),
         run: async (args) => {
-          const existing = findSite(args["id"]);
+          const existing = findSite(args["siteId"]);
           const marker = args["authCheckSignedOut"];
           const tokenKey = args["authTokenKey"];
           const tokenHeader = args["authTokenHeader"];
@@ -3251,17 +3605,18 @@ export class McpServer {
           const missing = ids.filter((id) => !known.has(id));
           if (missing.length > 0) throw new Error(`账号不存在：${missing.join(", ")}`);
           const { linked } = service.linkIdentitiesToSite(ids, site.id);
-          return { siteId: site.id, linked, requested: ids.length };
+          return { ok: true, siteId: site.id, linked, requested: ids.length };
         },
       },
       {
         name: "update_identity",
         description:
-          "修改账号资料。password 只写入凭据库，不回显。siteId 可以把账号改挂到另一个站点，也用于给丢失站点归属的账号重新关联。",
+          "修改账号资料。只传需要改的字段。password 只写入凭据库，不回显。siteId 可以把账号改挂到另一个站点，也用于给丢失站点归属的账号重新关联。extraFields 是登录表单里的额外字段（如租户名），传 [] 清空。",
         kind: "write",
+        argumentAliases: { id: "identityId" },
         inputSchema: object(
           {
-            id: string("账号 id"),
+            identityId: string("账号 id"),
             siteId: string("改挂到这个站点 id，可省略"),
             name: string("显示名称"),
             username: string("账号"),
@@ -3273,12 +3628,20 @@ export class McpServer {
             },
             engineId: string("覆盖引擎"),
             startPath: string("起始路径"),
+            extraFields: {
+              type: "array",
+              description: "登录表单里的额外字段，如 [{ label: \"租户名\", value: \"acme\" }]；传 [] 清空，省略不变",
+              items: object({ label: string("字段旁的标签文字"), value: string("要填的值") }, [
+                "label",
+                "value",
+              ]),
+            },
             note: string("备注"),
           },
-          ["id"],
+          ["identityId"],
         ),
         run: async (args) => {
-          const existing = findIdentity(args["id"]);
+          const existing = findIdentity(args["identityId"]);
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"]
               ? args["siteId"]
@@ -3296,7 +3659,10 @@ export class McpServer {
             startPath:
               typeof args["startPath"] === "string" ? args["startPath"] : existing.startPath,
             passwordMode: typeof args["password"] === "string" ? "custom" : existing.passwordMode,
-            extraFields: existing.extraFields,
+            // 传了数组就以它为准（空数组即清空）；没传保持原样。
+            extraFields: Array.isArray(args["extraFields"])
+              ? (args["extraFields"] as IdentityDraft["extraFields"])
+              : existing.extraFields,
             note: typeof args["note"] === "string" ? args["note"] : existing.note,
           };
           const password = typeof args["password"] === "string" ? args["password"] : undefined;
@@ -3306,27 +3672,74 @@ export class McpServer {
       {
         name: "set_password",
         description:
-          "单独写入密码（只写不读）。ownerKind 为 site 时写站点默认密码，为 identity 时写账号密码。",
+          "单独写入密码（只写不读）。传 siteId 写该站点的默认密码，传 identityId 写该账号自己的密码，两者给且只给一个。写入加密凭据库，不会回显。账号原本「继承站点密码」或「引用别的账号的密码」时，登录时不会用到自己的密码，所以写完后会改为使用自己的密码，返回里的 passwordMode 与 note 会说明。",
         kind: "write",
+        // 旧写法是 ownerKind（site / identity）+ ownerId，两个字段表达新写法的一个。
+        normalizeArguments: (args) => {
+          if (args["ownerKind"] === undefined && args["ownerId"] === undefined) return args;
+          if (args["ownerId"] === undefined) return "ownerId 不能为空：它与 ownerKind 搭配，也可以直接传 siteId 或 identityId";
+          const kind = args["ownerKind"];
+          if (kind !== "site" && kind !== "identity") {
+            return "ownerKind 只能是 site 或 identity；也可以不传 ownerKind / ownerId，直接传 siteId 或 identityId";
+          }
+          const canonical = kind === "site" ? "siteId" : "identityId";
+          const { ownerKind: _kind, ownerId: _owner, ...rest } = args;
+          if (rest[canonical] !== undefined) {
+            return `ownerId 与 ${canonical} 只能给一个`;
+          }
+          return { ...rest, [canonical]: args["ownerId"] };
+        },
         inputSchema: object(
           {
-            ownerKind: {
-              type: "string",
-              enum: ["site", "identity"],
-              description: "归属类型",
-            },
-            ownerId: string("站点或账号 id"),
+            siteId: string("站点 id：写该站点的默认密码"),
+            identityId: string("账号 id：写该账号自己的密码"),
             password: string("密码"),
           },
-          ["ownerKind", "ownerId", "password"],
+          ["password"],
         ),
         run: (args) => {
-          const ownerKind = args["ownerKind"] === "site" ? "site" : "identity";
-          const ownerId = String(args["ownerId"] ?? "");
+          const siteId = typeof args["siteId"] === "string" ? args["siteId"] : "";
+          const identityId = typeof args["identityId"] === "string" ? args["identityId"] : "";
+          if (Boolean(siteId) === Boolean(identityId)) {
+            throw new Error("siteId 与 identityId 必须给且只给一个：siteId 写站点默认密码，identityId 写账号密码");
+          }
           const password = String(args["password"] ?? "");
-          if (!ownerId || !password) throw new Error("ownerId 与 password 都不能为空");
-          service.setPassword({ kind: ownerKind, id: ownerId }, password);
-          return { ownerKind, ownerId, stored: true };
+          if (!password) throw new Error("password 不能为空");
+          service.setPassword(
+            siteId ? { kind: "site", id: siteId } : { kind: "identity", id: identityId },
+            password,
+          );
+          if (siteId) return { ok: true, siteId };
+          // 继承站点密码、或引用别的账号密码的账号，登录时读的不是自己的密码。
+          // 给它写了密码却不切过去，这次写入就永远不会被用到；与 update_identity
+          // 传 password 时的做法一致，切换到「使用自己的密码」并在返回里说明。
+          const identity = service.snapshot().identities.find((item) => item.id === identityId);
+          if (!identity || identity.passwordMode === "custom" || !identity.siteId) {
+            return { ok: true, identityId };
+          }
+          const previous =
+            identity.passwordMode === "inherit" ? "继承站点密码" : "引用别的账号的密码";
+          service.saveIdentity(
+            identityDraftSchema.parse({
+              id: identity.id,
+              siteId: identity.siteId,
+              name: identity.name,
+              username: identity.username,
+              role: identity.role,
+              color: identity.color,
+              ...(identity.engineId ? { engineId: identity.engineId } : {}),
+              startPath: identity.startPath,
+              passwordMode: "custom",
+              extraFields: identity.extraFields,
+              note: identity.note,
+            }),
+          );
+          return {
+            ok: true,
+            identityId,
+            passwordMode: "custom",
+            note: `该账号原来是「${previous}」，登录时不会用到自己的密码；已改为使用刚写入的密码。`,
+          };
         },
       },
       {
@@ -3368,11 +3781,13 @@ export class McpServer {
       },
       {
         name: "update_view",
-        description: "修改视图名称、成员、布局或槽位分配。只传需要改的字段。",
+        description:
+          "修改视图：名称、成员、布局（layoutId）或槽位分配。只传需要改的字段。layoutId 可选 free（与 1x1 等价）/ 2x1 / 1x2 / 2x2 / 3x1 或自定义预设 id。",
         kind: "write",
+        argumentAliases: { id: "viewId" },
         inputSchema: object(
           {
-            id: string("视图 id"),
+            viewId: string("视图 id"),
             name: string("新名称"),
             identityIds: { type: "array", items: { type: "string" }, description: "新成员列表" },
             layoutId: string("新布局 id"),
@@ -3382,10 +3797,10 @@ export class McpServer {
               description: "identityId → 槽位下标",
             },
           },
-          ["id"],
+          ["viewId"],
         ),
         run: (args) => {
-          const existing = findView(args["id"]);
+          const existing = findView(args["viewId"]);
           const draft: ViewDraft = {
             id: existing.id,
             siteId: existing.siteId,
@@ -3401,20 +3816,6 @@ export class McpServer {
             paths: existing.paths,
           };
           return viewSummary(service.saveView(viewDraftSchema.parse(draft)));
-        },
-      },
-      {
-        name: "set_view_layout",
-        description: "只切换视图的窗口布局，不改成员。",
-        kind: "write",
-        inputSchema: object({ viewId: string("视图 id"), layoutId: string("布局 id") }, [
-          "viewId",
-          "layoutId",
-        ]),
-        run: (args) => {
-          const view = findView(args["viewId"]);
-          service.setViewLayout(view.id, String(args["layoutId"] ?? "2x2"));
-          return viewSummary(findView(view.id));
         },
       },
       {
@@ -3446,55 +3847,184 @@ export class McpServer {
             layoutPresetDraftSchema.parse({ name: args["name"], slots: args["slots"] }),
           ),
       },
+      /*
+       * 外部系统浏览器一族。
+       *
+       * 这里的窗口 AI 读不到也点不动——它存在是为了给人看，或确认页面在真实
+       * 浏览器里表现一致。要操作页面用内置浏览器（open_browser_tab 那一族）。
+       * 两者分成两族名字，而不是一个工具靠 external 开关在两种表面之间切换：
+       * 开关切过去之后连返回的东西都变了（标签页 id 变成窗口 id），同一个工具
+       * 两种性格，调用方只能靠记。
+       */
+      {
+        name: "launch_external_browser",
+        description:
+          "在用户的系统浏览器（Chrome / Edge 等）里打开窗口：给人查看，或确认页面在真实浏览器环境里表现一致。AI 读不到也操作不了这些窗口——要操作页面请用内置浏览器（open_browser_tab）。三选一：identityId 为这个账号开一个窗口（这个账号自己的浏览器资料，登录状态与其它账号隔离，自动填充登录）；viewId 让视图的每个成员各开一个窗口，按视图布局摆放；都不传则开一个一次性干净窗口（不登录、关闭即删除），给 siteId 时打开该站点登录页。engineId 选浏览器引擎，省略用默认，可选值用 list_browser_engines 查。启动即返回，不等登录完成；返回每个窗口的 instanceId，用 stop_external_browser 关闭。",
+        kind: "run",
+        inputSchema: object({
+          identityId: string("账号 id：为它开一个窗口"),
+          viewId: string("视图 id：每个成员各开一个窗口"),
+          siteId: string("只开干净窗口时用：打开该站点的登录页；省略则打开浏览器自己的起始页"),
+          engineId: string("浏览器引擎 id，省略用默认；可用 list_browser_engines 查"),
+        }),
+        run: async (args) => {
+          const text = (key: string): string =>
+            typeof args[key] === "string" && args[key] ? args[key] : "";
+          const identityId = text("identityId");
+          const viewId = text("viewId");
+          const siteId = text("siteId");
+          // 三选一是三选一：siteId 只在开干净窗口时有意义。不拦的话它与另外两个
+          // 同给时会被静默丢掉，窗口开了，调用方却以为打开的是自己点名的登录页。
+          if ([identityId, viewId, siteId].filter(Boolean).length > 1) {
+            throw new Error(
+              "identityId、viewId、siteId 只能给一个：分别为这个账号开一个窗口、给视图的每个成员各开一个窗口，或开一个一次性干净窗口（给 siteId 时打开该站点登录页）",
+            );
+          }
+          const engineId = text("engineId") || undefined;
+          // 显式点名的引擎必须真的存在。核心层对一个找不到的 id 会退回默认引擎
+          // ——对「账号上存的偏好」这是对的，引擎被卸载后还能开；对调用方刚写下
+          // 的参数不是：写错一个字母，窗口就开在它没有选的浏览器里，返回里还看不出来。
+          if (engineId) {
+            const snapshot = service.snapshot();
+            if (!snapshot.engines.some((item) => item.id === engineId)) {
+              throw new Error(
+                `浏览器引擎不存在：${engineId}（可用引擎用 list_browser_engines 查${
+                  snapshot.enginesReady ? "" : "；引擎列表还在探测中，可稍后重试"
+                }）`,
+              );
+            }
+          }
+          if (viewId) {
+            findView(viewId);
+            const result = await service.launchView(viewId, engineId);
+            // 每个成员是一个独立的窗口。把窗口 id 一并带回：不带的话调用方
+            // 只能全部关闭，没法只关其中一个。
+            const live = service.snapshot().instances;
+            return {
+              instances: result.identities.map((identity) => {
+                const instance = live.find((item) => item.identityId === identity.id);
+                return {
+                  instanceId: instance?.id,
+                  identityId: identity.id,
+                  name: identity.name,
+                  ...(instance ? { label: instance.label } : {}),
+                };
+              }),
+            };
+          }
+          if (identityId) {
+            const identity = findIdentity(identityId);
+            const result = await service.launchIdentity(identity.id, undefined, engineId);
+            return {
+              instances: [
+                {
+                  instanceId: result.instance.id,
+                  identityId: identity.id,
+                  name: identity.name,
+                  label: result.instance.label,
+                },
+              ],
+            };
+          }
+          const result = await service.launchCleanSession(siteId || undefined, engineId);
+          return {
+            instances: [
+              {
+                instanceId: result.instance.id,
+                label: result.instance.label,
+                ...(result.instance.siteId ? { siteId: result.instance.siteId } : {}),
+              },
+            ],
+          };
+        },
+      },
+      {
+        name: "stop_external_browser",
+        description:
+          "关闭一个外部系统浏览器窗口；instanceId 来自 launch_external_browser 的返回或 get_workspace_summary 的 running。内置浏览器的标签页不归它管：传标签页的 instanceId 不会关掉任何东西，返回 ok: false 并说明，关标签页用 close_browser_tab。窗口已经不在了同样返回 ok: false，不报错。",
+        kind: "run",
+        inputSchema: object({ instanceId: string("外部浏览器窗口 id") }, ["instanceId"]),
+        run: async (args) => {
+          const instanceId = String(args["instanceId"] ?? "");
+          if (!service.snapshot().instances.some((item) => item.id === instanceId)) {
+            // 不抛错：重复关闭不该算失败。但也不能回「已关闭」——这个 id 多半
+            // 是内置标签页的 instanceId，两种情况调用方要能分辨。
+            return {
+              ok: false,
+              instanceId,
+              reason: "not-running",
+              note: "没有这个外部浏览器窗口：它已经关了，或者这是内置浏览器标签页的 instanceId。关标签页请用 close_browser_tab。",
+            };
+          }
+          await service.stopInstance(instanceId);
+          return { ok: true, instanceId };
+        },
+      },
+      {
+        name: "stop_all_external_browsers",
+        description:
+          "关闭全部由 launch_external_browser 打开的外部系统浏览器窗口，返回关掉的数量。内置浏览器里的标签页不受影响，关它们用 close_browser_tab。",
+        kind: "run",
+        inputSchema: object({}),
+        run: async () => {
+          const stopped = service.snapshot().instances.length;
+          await service.stopAll();
+          return { ok: true, stopped };
+        },
+      },
+      /*
+       * 以下三个是兼容别名，不再对外广播。
+       *
+       * 它们曾经身兼两种表面：不传 external 开在内置浏览器，传了才开外部窗口。
+       * 与 open_browser_view / open_browser_tab 重复的那一半已经由后者承担，
+       * 外部的那一半并进了 launch_external_browser。旧调用保持可用：内置路径
+       * 的行为原样保留（其中「打开账号起始页」是 open_browser_tab 没有的），
+       * 外部路径转交给 launch_external_browser。
+       */
       {
         name: "launch_view",
         description:
-          "启动保存好的视图（一组账号 + 布局）。默认在内置浏览器打开：每个成员一个标签页，按视图布局摆好格位，登录态保留并自动填充，重复调用复用已打开的标签页；返回打开后的标签页与视图布局。external: true 时改用外部系统浏览器：每个成员一个独立窗口并自动填充，用于确认在真实浏览器环境里表现一致；此时返回实例列表。",
+          "兼容别名：不传 external 等同 open_browser_view（内置浏览器），传 external: true 等同 launch_external_browser。",
         kind: "run",
+        hidden: true,
         inputSchema: object(
           {
             viewId: string("视图 id"),
-            external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
-            engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
+            external: boolean("true 时用外部系统浏览器打开；不传则在内置浏览器打开"),
+            engineId: string("外部浏览器引擎 id；仅 external: true 时生效"),
           },
           ["viewId"],
         ),
         run: async (args) => {
-          const view = findView(args["viewId"]);
+          const viewId = String(args["viewId"] ?? "");
           if (!wantsExternal(args)) {
-            // 默认路径：与 open_browser_view 同一条内置入口，成员页创建期预静音。
-            const opened = await surface().openView(view.id, { muted: true });
-            return projectState(opened);
+            // 与 open_browser_view 同一条内置入口，成员页创建期预静音。
+            return projectState(await surface().openView(findView(viewId).id, { muted: true }));
           }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
-          const result = await service.launchView(view.id, engineId);
-          return {
-            instances: result.identities.map((identity) => ({
-              identityId: identity.id,
-              name: identity.name,
-            })),
-          };
+          return this.runNamed("launch_external_browser", { viewId, ...(engineId ? { engineId } : {}) });
         },
       },
       {
         name: "launch_identity",
         description:
-          "单独启动一个账号。默认在内置浏览器打开该账号的起始页：使用该账号独立的会话分区，登录态持久保存且与其他账号隔离，并自动填充登录；返回新标签页。external: true 时改用外部系统浏览器开独立窗口并自动填充，用于确认在真实浏览器环境里表现一致；此时返回实例信息。",
+          "兼容别名：不传 external 时在内置浏览器打开该账号的起始页（等同 open_browser_tab 传 identityId，只是地址取账号起始页）；传 external: true 等同 launch_external_browser。",
         kind: "run",
+        hidden: true,
         inputSchema: object(
           {
             identityId: string("账号 id"),
-            external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
-            engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
+            external: boolean("true 时用外部系统浏览器打开；不传则在内置浏览器打开"),
+            engineId: string("外部浏览器引擎 id；仅 external: true 时生效"),
           },
           ["identityId"],
         ),
         run: async (args) => {
           const identity = findIdentity(args["identityId"]);
           if (!wantsExternal(args)) {
-            // 默认路径：显式传 identityId 开内置标签页；宿主会落账号分区并安排
-            // 自动填充。没有可用起始地址时省略 url，页面停在空白页但分区仍正确。
+            // 显式传 identityId 开内置标签页；宿主会落账号分区并安排自动填充。
+            // 没有可用起始地址时省略 url，页面停在空白页但分区仍正确。
             const startUrl = embeddedIdentityStartUrl(identity);
             const created = await surface().createTab({
               ...(startUrl ? { url: startUrl } : {}),
@@ -3505,30 +4035,35 @@ export class McpServer {
               // AI 开的页面创建期预静音，与其他浏览器工具一致。
               muted: true,
             });
-            return projectTab(created);
+            // 与 open_browser_tab 同一返回形状：顶层 tabId 是调用方后续要传的值。
+            const tab = projectTab(created);
+            return { ...tab, tabId: tab.id };
           }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
-          const result = await service.launchIdentity(identity.id, undefined, engineId);
-          return { instanceId: result.instance.id, label: result.instance.label };
+          return this.runNamed("launch_external_browser", {
+            identityId: identity.id,
+            ...(engineId ? { engineId } : {}),
+          });
         },
       },
       {
         name: "launch_clean_session",
         description:
-          "打开一个一次性干净会话：不登录、关闭即删除，不进任何已保存账号。默认在内置浏览器打开；传 siteId 时打开该站点登录页，否则打开空白页。external: true 时改用外部系统浏览器开独立窗口。",
+          "兼容别名：不传 external 时在内置浏览器打开一次性干净窗口（等同 open_browser_tab 传 clean: true；给 siteId 则打开该站点登录页）；传 external: true 等同 launch_external_browser。",
         kind: "run",
+        hidden: true,
         inputSchema: object({
           siteId: string("站点 id；省略则打开空白页"),
-          external: boolean("true 时用外部系统浏览器打开；默认在内置浏览器打开"),
-          engineId: string("外部浏览器引擎 id；仅 external: true 时生效，省略则用默认浏览器"),
+          external: boolean("true 时用外部系统浏览器打开；不传则在内置浏览器打开"),
+          engineId: string("外部浏览器引擎 id；仅 external: true 时生效"),
         }),
         run: async (args) => {
           const siteId =
             typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
           if (!wantsExternal(args)) {
-            // 默认路径：不带 identityId 的 AI 页面在内置表面固定是一次性干净
-            // 会话（宿主实现保证），页面地址与外部路径同一推导（站点登录页）。
+            // 不带 identityId 的 AI 页面在内置表面固定是一次性干净窗口
+            // （宿主实现保证），页面地址与外部路径同一推导（站点登录页）。
             const site = siteId ? findSite(siteId) : undefined;
             const startUrl = site ? joinUrl(site.baseUrl, site.loginPath || "/") : undefined;
             const created = await surface().createTab({
@@ -3536,45 +4071,30 @@ export class McpServer {
               ...(site ? { siteId: site.id } : {}),
               muted: true,
             });
-            return projectTab(created);
+            // 与 open_browser_tab 同一返回形状：顶层 tabId 是调用方后续要传的值。
+            const tab = projectTab(created);
+            return { ...tab, tabId: tab.id };
           }
           const engineId =
             typeof args["engineId"] === "string" && args["engineId"] ? args["engineId"] : undefined;
-          const result = await service.launchCleanSession(siteId, engineId);
-          return { instanceId: result.instance.id, siteId: result.instance.siteId };
+          return this.runNamed("launch_external_browser", {
+            ...(siteId ? { siteId } : {}),
+            ...(engineId ? { engineId } : {}),
+          });
         },
       },
       {
-        name: "stop_all",
-        description: "关闭全部由 Ensemble 启动的浏览器窗口。",
-        kind: "run",
-        inputSchema: object({}),
-        run: async () => {
-          await service.stopAll();
-          return { stopped: true };
-        },
-      },
-      {
-        name: "stop_instance",
-        description: "关闭一个正在运行的浏览器。",
-        kind: "run",
-        inputSchema: object({ instanceId: string("浏览器 id") }, ["instanceId"]),
-        run: async (args) => {
-          await service.stopInstance(String(args["instanceId"] ?? ""));
-          return { stopped: true };
-        },
-      },
-      {
-        name: "check_auth",
-        description: "检测某个账号是否仍处于登录状态。",
+        name: "check_identity_auth",
+        description:
+          "检测某个账号是否仍处于登录状态。账号在内置浏览器里开着页面时，就在那个页面里检测——看的是内置浏览器那一套登录状态，也就是 AI 操作页面时用的那套；没有打开页面时才检测外部系统浏览器里的登录状态：有外部窗口就读它，否则临时起一个不显示窗口的浏览器去验。内置页面开着但不在站点自己的域名上时如实回 unknown，不换另一套登录状态作答。站点要配置登录检测路径。返回里的 surface 说明查的是哪一套：embedded（内置浏览器）或 external（外部浏览器）；status 是 signed-in / expired / unknown。",
         kind: "run",
         inputSchema: object({ identityId: string("账号 id") }, ["identityId"]),
         run: async (args) => service.checkAuth(String(args["identityId"] ?? "")),
       },
       {
-        name: "detach_identity_reference",
+        name: "detach_identity_credentials",
         description:
-          "断开该账号的凭据引用，变成本地独立副本：当前解析出的密码会写成它自己的密码，此后两边各改各的。已经是独立账号时无变化。",
+          "让该账号不再引用别的账号的密码：当前解析出的密码会写成它自己的，此后两边各改各的。已经是独立账号时无变化。",
         kind: "write",
         inputSchema: object({ identityId: string("账号 id") }, ["identityId"]),
         run: async (args) => {
@@ -3588,7 +4108,7 @@ export class McpServer {
       {
         name: "copy_view_to_site",
         description:
-          "把一个视图复制到另一个站点。成员按用户名匹配：目标站点已有同名账号就直接使用，没有就新建一个凭据引用自该账号的账号（登录态各自独立）。副本与原视图独立，不会实时同步。",
+          "把一个视图复制到另一个站点。成员按用户名匹配：目标站点已有同名账号就直接使用，没有就新建一个凭据引用自该账号的账号（登录状态各自独立）。副本与原视图独立，不会实时同步。",
         kind: "write",
         inputSchema: object(
           {
@@ -3604,49 +4124,53 @@ export class McpServer {
         name: "delete_identity",
         description: "删除账号及其凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("账号 id"), confirm: { type: "boolean" } }, [
-          "id",
+        argumentAliases: { id: "identityId" },
+        inputSchema: object({ identityId: string("账号 id"), confirm: confirmProp() }, [
+          "identityId",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const identity = findIdentity(args["id"]);
+          const identity = findIdentity(args["identityId"]);
           service.deleteIdentity(identity.id);
-          return { deleted: identity.id };
+          return { ok: true, deleted: identity.id };
         },
       },
       {
         name: "delete_view",
         description: "删除视图（不影响账号）。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("视图 id"), confirm: { type: "boolean" } }, [
-          "id",
+        argumentAliases: { id: "viewId" },
+        inputSchema: object({ viewId: string("视图 id"), confirm: confirmProp() }, [
+          "viewId",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const view = findView(args["id"]);
+          const view = findView(args["viewId"]);
           service.deleteView(view.id);
-          return { deleted: view.id };
+          return { ok: true, deleted: view.id };
         },
       },
       {
         name: "delete_site",
         description: "删除站点及其下全部账号、视图与凭据。破坏性操作，必须传 confirm: true。",
         kind: "danger",
-        inputSchema: object({ id: string("站点 id"), confirm: { type: "boolean" } }, [
-          "id",
+        argumentAliases: { id: "siteId" },
+        inputSchema: object({ siteId: string("站点 id"), confirm: confirmProp() }, [
+          "siteId",
           "confirm",
         ]),
         run: (args) => {
           requireConfirm(args);
-          const site = findSite(args["id"]);
+          const site = findSite(args["siteId"]);
           service.deleteSite(site.id);
-          return { deleted: site.id };
+          return { ok: true, deleted: site.id };
         },
       },
       ...this.browserTools(),
     ];
+    return [...current, ...this.legacyAliases(current)];
   }
 
   /**
@@ -3663,6 +4187,38 @@ export class McpServer {
       throw new Error("内置浏览器不可用：这个桌面端没有提供页面表面。");
     }
     return embedded;
+  }
+
+  /**
+   * The embedded browser's part of the workspace summary.
+   *
+   * Reports what is open, not the whole surface state: the summary is read
+   * first and often, so it carries the few fields that answer "what can I work
+   * on". A host without the surface is reported as such rather than omitted —
+   * a missing key would read as "nothing is open".
+   */
+  private browserOverview(): Record<string, unknown> {
+    if (!this.options.embedded) return { available: false };
+    try {
+      const state = this.options.embedded.state();
+      const tabs = state.tabs.slice(0, WORKSPACE_SUMMARY_TAB_MAX).map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        url: tab.url,
+        ...(tab.identityId ? { identityId: tab.identityId } : {}),
+        ...(tab.viewId ? { viewId: tab.viewId } : {}),
+        active: tab.id === state.activeTabId,
+      }));
+      return {
+        available: true,
+        activeTabId: state.activeTabId ?? null,
+        tabs,
+        ...(state.tabs.length > WORKSPACE_SUMMARY_TAB_MAX ? { tabsTruncated: true } : {}),
+        views: (state.views ?? []).map((view) => ({ id: view.id, name: view.name, layoutId: view.layoutId })),
+      };
+    } catch (error) {
+      return { available: false, note: (error as Error).message };
+    }
   }
 
   /**
@@ -3689,7 +4245,7 @@ export class McpServer {
       {
         name: "list_browser_tabs",
         description:
-          "列出内置浏览器当前打开的标签页（id、所属账号、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，多次会话之间不会关闭，登录态也保留。`clean: true` 才是一次性干净身份；其余页面属于默认身份或某个账号，由 `profileId` / `identityId` 指明。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close。",
+          "列出内置浏览器当前打开的标签页（id、所属账号、标题、地址、当前布局、是否静音/有声、休眠状态）。这些标签页是持续存在的，关掉应用之前不会消失，登录状态也保留。`clean: true` 的页面在一次性干净身份里：不属于任何账号、关闭即消失。其余页面由 `identityId` 指明属于哪个账号；没有 `identityId` 的在默认身份或自建身份里（`profileId` 省略即默认身份），登录状态是用户自己的。`active: true` 的是用户正在看的页面。`sleeping: true` 表示页面已被冻结省资源（DOM 与登录状态保留，任何操作会先自动唤醒）；醒着的页面带 `sleepExempt` 说明它为什么还没冻（如 \"on-stage-visible\" 用户正在看 / \"audible\" 正在出声 / \"ai-active\" AI 窗口未过 / \"policy\" 设了永不休眠）——两者都没有的页面下一轮扫描就会冻结。用它判断哪些闲置页在占资源，不需要时自行 close；views 里是已打开的视图（id 与 viewDefinitionId 都能传给要 viewId 的工具）。",
         kind: "read",
         inputSchema: object({}),
         run: () => projectState(surface().state()),
@@ -3697,7 +4253,7 @@ export class McpServer {
       {
         name: "read_browser_capabilities",
         description:
-          "查询这个标签页所在表面支持什么。capabilities 逐项报告表面的可选能力（键为能力名，false 表示当前宿主没有实现，对应的工具会报「不支持」），surface 是表面标识（如 embedded）；waitConditions 是 wait_browser 可用的条件，flowActions 是流程步骤的动作类型，flowCdpStep 说明流程原始 CDP 步骤的档位。省略 tabId 只返回枚举部分，不判定表面。",
+          "查询这个标签页所在表面支持什么。capabilities 逐项报告表面的可选能力（键为能力名，false 表示当前宿主没有实现，对应的工具会报「不支持」），surface 是表面标识（如 embedded）；waitConditions 是 wait_browser_condition 可用的条件，flowActions 是流程步骤的动作类型，flowCdpStep 说明流程原始 CDP 步骤的档位。省略 tabId 只返回枚举部分，不判定表面。",
         kind: "read",
         inputSchema: object({ tabId: tabIdProp() }),
         run: (args) => {
@@ -3718,7 +4274,7 @@ export class McpServer {
       {
         name: "open_browser_view",
         description:
-          "把保存好的视图（一组账号 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录态保留。不会把应用窗口提到前台——要用户立刻看到，让用户自己切过去，或用 launch_view 传 external: true 开系统窗口。",
+          "把保存好的视图（一组账号 + 布局）在内置浏览器里打开：每个成员一个标签页，按视图的布局摆好格位。重复调用会复用已经打开的标签页，登录状态保留。不会把应用窗口提到前台——要用户立刻看到，让用户自己切过去。要在系统浏览器里打开，用 launch_external_browser 传 viewId。",
         kind: "run",
         inputSchema: object({ viewId: string("视图 id") }, ["viewId"]),
         run: async (args) => {
@@ -3736,16 +4292,19 @@ export class McpServer {
       {
         name: "open_browser_tab",
         description:
-          "在内置浏览器里打开一个标签页，返回 tabId（后续操作都用它）。会话归属按顺序解析：传 identityId 用该账号独立的会话分区，登录态持久保存且与其他账号隔离；不传 identityId 时按地址归属选择已录入账号——地址与某个已录入站点同源就用该站点的第一个账号，其次传了 siteId 就用该站点下第一个账号；两者都匹配不到才是一次性干净身份：未登录、不进用户的默认身份、退出即消失。解析结果通过返回值里的 identityId / identityName / resolvedBy 给出；要复用已录入的登录态就传 identityId（账号 id 可用 list_identities 查），干净会话里没有登录态。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
+          "在内置浏览器里打开一个标签页，返回 tabId（与 id 同值；后续每个操作都传它）。你打开的页面不上台、不改变用户正在看的页面，所以省略 tabId 的意思是「你最近打开的那个页面」——同时开了几个页面时必须点名。用哪个账号按顺序决定：传 identityId 就用它（它的登录状态只属于它，与其他账号隔离）；不传时按地址归属——地址与某个已录入站点同源就用该站点的第一个账号，其次传了 siteId 就用该站点下第一个账号；都匹配不到才落在一次性干净身份里：未登录、不属于任何账号、关闭即消失。想在已录入站点的地址上看未登录的样子，传 clean: true，它跳过账号选择。最终用了谁，看返回值里的 identityId / identityName / resolvedBy。带账号打开时返回值里的 login 说明登录这一步的状态，页面在之后还可能被登录流程导航走：signed-in 已登录，页面就在要求的地址上；signing-in 未登录，正在自动填表并提交，之后回到要求的地址（用 wait_browser_condition 等 url 条件）；login-form 表单会填好但不提交（站点关着自动提交），点登录后要自己导航回去；unknown 站点没配登录检测，判断不了。页面落在自己的实例里，不占台上的格位、不打断用户正在看的内容；在台外照常可读可操作，闲置一段时间后自动休眠省资源，下次操作前会自动唤醒。不会弹系统窗口，也不会把应用提到前台。",
         kind: "run",
         inputSchema: object({
           url: string(
-            "要打开的地址；省略则打开空白页。地址与已录入站点同源时自动使用该站点的账号会话",
+            "要打开的地址；省略则打开空白页。地址与已录入站点同源时自动使用该站点的账号",
           ),
           identityId: string(
             "账号 id；省略时按地址归属、再按 siteId 选择已录入账号，都匹配不到才用一次性干净身份",
           ),
           siteId: string("站点 id；地址匹配不到站点时用它选择该站点的第一个账号，也用于界面分组显示"),
+          clean: boolean(
+            "true 表示落在一次性干净身份里：不套用任何已录入账号，即使地址属于已录入站点。想看未登录视角时用；不能与 identityId 同给",
+          ),
           label: string("标签页显示名；通常用账号名"),
         }),
         run: async (args) => {
@@ -3757,6 +4316,15 @@ export class McpServer {
               : undefined;
           const explicitSiteId =
             typeof args["siteId"] === "string" && args["siteId"] ? args["siteId"] : undefined;
+          if (args["clean"] !== undefined && typeof args["clean"] !== "boolean") {
+            throw new Error("clean 必须是布尔值");
+          }
+          const clean = args["clean"] === true;
+          if (clean && identityId) {
+            throw new Error(
+              "clean 与 identityId 只能给一个：clean 是谁也不登录的一次性干净身份，identityId 是某个账号",
+            );
+          }
           const snapshot = this.options.service.snapshot();
           const identity = identityId
             ? snapshot.identities.find((item) => item.id === identityId)
@@ -3765,9 +4333,12 @@ export class McpServer {
           // 显式 identityId 的路径不做任何代选；只在调用方没有指定账号时，
           // 才按地址归属把这次打开归到已录入的站点账号上——与手动打开账号
           // 是同一套归类，解析到账号后桥接层会照常排自动填充。
-          const resolved: ResolveIdentityForUrlResult | undefined = identityId
-            ? undefined
-            : resolveIdentityForUrl({
+          // clean 是调用方明确要未登录视角：跳过归属解析，否则一个已录入
+          // 站点的地址永远会被套上该站点的账号，没有工具能看到它未登录的样子。
+          const resolved: ResolveIdentityForUrlResult | undefined =
+            identityId || clean
+              ? undefined
+              : resolveIdentityForUrl({
                 // about:blank 没有可归属的来源，直接按未给地址解析。
                 url: rawUrl === "about:blank" ? undefined : rawUrl,
                 siteId: explicitSiteId,
@@ -3782,22 +4353,25 @@ export class McpServer {
           const siteId = explicitSiteId || identity?.siteId || resolvedIdentity?.siteId;
           const label =
             typeof args["label"] === "string" ? args["label"] : identity?.name ?? resolvedIdentity?.name;
-          const tab = projectTab(
-            await surface().createTab({
-              url: rawUrl,
-              // An AI-opened page is an AI page operation from its first frame:
-              // a site that autoplays should not surprise the user.
-              muted: true,
-              ...(effectiveIdentityId ? { identityId: effectiveIdentityId } : {}),
-              ...(siteId ? { siteId } : {}),
-              ...(label ? { label } : {}),
-              ...(colorIdentity?.color ? { color: colorIdentity.color } : {}),
-            }),
-          );
+          const created = await surface().createTab({
+            url: rawUrl,
+            // An AI-opened page is an AI page operation from its first frame:
+            // a site that autoplays should not surprise the user.
+            muted: true,
+            ...(effectiveIdentityId ? { identityId: effectiveIdentityId } : {}),
+            ...(siteId ? { siteId } : {}),
+            ...(label ? { label } : {}),
+            ...(colorIdentity?.color ? { color: colorIdentity.color } : {}),
+          });
+          const tab = projectTab(created);
           // 自动归类成功的页面把「用了谁、为什么」带回给调用方：模型据此
-          // 知道这一页的登录态来自哪个账号，不必再自己填一遍登录表单。
+          // 知道这一页的登录状态来自哪个账号，不必再自己填一遍登录表单。
           return {
             ...tab,
+            // 描述承诺的是 tabId，与 id 同值。以页面为主结果的工具统一在顶层
+            // 带 tabId（run_flow、set_browser_muted 已经如此），调用方不必记两套取法。
+            tabId: tab.id,
+            ...(loginSummary(created)),
             ...(resolvedIdentity && resolved && resolved.reason !== "none"
               ? {
                   identityName: resolvedIdentity.name,
@@ -3839,8 +4413,12 @@ export class McpServer {
           }
           return surface().navigate(id, target).then((moved) => {
             const result = (moved ?? {}) as { tab?: unknown; cancelled?: unknown; note?: unknown };
+            const tab = projectTab(result.tab);
             return {
-              tab: projectTab(result.tab),
+              // 省略了 tabId 的调用方是从返回里才知道操作的是哪一页：与开页类
+              // 工具一样放在顶层，嵌在 tab 里的完整记录照旧。
+              ...(typeof tab.id === "string" ? { tabId: tab.id } : {}),
+              tab,
               ...(typeof result.cancelled === "string" ? { cancelled: result.cancelled } : {}),
               ...(typeof result.note === "string" ? { note: result.note } : {}),
             };
@@ -3874,13 +4452,15 @@ export class McpServer {
       {
         name: "reload_browser_tab",
         description:
-          "重新加载标签页。ignoreCache: true 相当于 Ctrl+Shift+R，绕过 HTTP 缓存——前端改了却没生效、或者要确认服务端返回的是最新静态资源时用它。",
+          "重新加载标签页。ignoreCache: true 相当于 Ctrl+Shift+R，绕过 HTTP 缓存——前端改了却没生效、或者要确认服务端返回的是最新静态资源时用它。重新加载会丢掉页面上没保存的输入，也可能重发一次表单，所以它和前进、后退一样要过来源闸门。",
         kind: "run",
         inputSchema: object({
           tabId: tabIdProp(),
           ignoreCache: boolean("是否绕过 HTTP 缓存重新加载，默认否"),
         }),
-        pageTarget: (args) => tabId(args),
+        // 刷新丢弃页面上的状态，与前进后退是同一类输入；曾经只有 pageTarget，
+        // 于是默认档案里的页面读不得、退不得，却刷新得。
+        inputTarget: (args) => tabId(args),
         run: (args) => {
           const id = tabId(args);
           surface().reload(id, { ignoreCache: args["ignoreCache"] === true });
@@ -3890,7 +4470,7 @@ export class McpServer {
       {
         name: "read_browser_page",
         description:
-          "读取标签页当前渲染出来的内容：可见元素的角色、可访问名称、稳定选择器、位置，以及页面地址和标题。隐藏元素不包含在内，所以这就是「这个账号实际能看到什么」。表单控件的 field 是它旁边那行标签文字，可直接当作其他工具定位用的 label。读取前会先探测页面自己的事件循环（页内定时器是否还在跑）：循环已停摆（常见于页面脚本把主线程卡死）时调用报错并说明原因——这种页面读到的只是旧状态，无法继续驱动，建议关闭标签页重开。",
+          "读取标签页当前渲染出来的内容：可见元素的角色 role、可访问名称 name、稳定选择器 selector、位置，以及页面地址和标题。隐藏元素不包含在内，所以这就是「这个账号实际能看到什么」。拿到这份快照后这样定位元素：表单控件的 field 是它旁边那行标签文字，回传给其他工具的 label；按钮、链接等的 name 回传给 text；最稳的是把 selector 原样回传；同名元素并列时加 role 或 nth 区分。读取前会先探测页面自己的事件循环（页内定时器是否还在跑）：循环已停摆（常见于页面脚本把主线程卡死）时调用报错并说明原因——这种页面读到的只是旧状态，无法继续驱动，建议关闭标签页重开。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -3984,7 +4564,7 @@ export class McpServer {
         },
       },
       {
-        name: "check_element_visible",
+        name: "check_browser_element_visible",
         description:
           "检查一个元素是否存在、是否可见。用于权限断言：同一个 label 在不同账号的标签页里应该有不同的可见性。可以给 selector，也可以给 label / text / role。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素；句柄指向的元素已被移出 DOM 时会报找不到，此时改用 selector 检查（找不到会返回 exists: false）。",
         kind: "read",
@@ -4002,7 +4582,7 @@ export class McpServer {
       {
         name: "find_browser_element",
         description:
-          "按定位条件查找元素并返回可复用的句柄。定位给 selector / label / text / role 之一；收窄字段可选：hasText / hasNotText（元素自身文本包含或不包含某子串）、visible（true 只留可见、false 只留不可见）、nth（取第几个，0 起、负数从尾数）。text / role 匹配可交互元素与有自身文字的可见元素（纯容器不算）。返回 handleId、匹配总数 count 与全部匹配预览（标签、文本、可见性、位置）。之后 click / hover / type / set_browser_checkbox / read_browser_element 直接传 handle 就能操作，页面重渲染后仍指向同一逻辑元素；匹配多个且没有归属时会报「匹配 N 个」。timeoutMs 内一个匹配都没等到就报错，默认 5000。",
+          "按定位条件查找元素并返回可复用的句柄。定位给 selector / label / text / role 之一；收窄字段可选：hasText / hasNotText（元素自身文本包含或不包含某子串）、visible（true 只留可见、false 只留不可见）、nth（取第几个，0 起、负数从尾数）。text / role 匹配可交互元素与有自身文字的可见元素（纯容器不算）。返回 handleId、匹配总数 count 与全部匹配预览（标签、文本、可见性、位置）。之后这七个工具直接传 handle 就能操作：click_browser_element、hover_browser_element、type_browser_text、set_browser_checkbox、read_browser_element、check_browser_element_visible、wait_browser_condition；页面重渲染后句柄仍指向同一逻辑元素。其余工具（滚动、上传、截图等）不接受 handle。匹配多个且没有归属时会报「匹配 N 个」。timeoutMs 内一个匹配都没等到就报错，默认 5000 毫秒，上限 60000。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -4011,7 +4591,7 @@ export class McpServer {
           hasNotText: string("收窄：元素自身文本不包含该子串"),
           visible: { type: "boolean", description: "收窄：true 只留可见元素，false 只留不可见元素" },
           nth: integer("收窄：匹配多个时取第几个（0 起，负数从尾数，-1 是最后一个）"),
-          timeoutMs: integer("等待第一个匹配出现的毫秒数，默认 5000"),
+          timeoutMs: integer("等待第一个匹配出现的毫秒数，默认 5000，上限 60000"),
         }),
         pageTarget: (args) => tabId(args),
         run: (args) => {
@@ -4110,23 +4690,25 @@ export class McpServer {
       {
         name: "handle_browser_dialog",
         description:
-          "回答挡在页面上的 JavaScript 弹窗，把页面解开。accept: true 是「确定」（confirm 返回 true、alert 关闭），false 是「取消」（confirm 返回 false）。prompt 用 promptText 填内容，省略则保留输入框里的默认值。beforeunload 拦截也在这里答：accept: true 离开（会重新发起被拦的那次导航并等它完成），accept: false 留下。必须先用 read_browser_dialog 确认弹窗的类型与内容——对一个 confirm 点错方向可能删掉数据。没有弹窗可处理时返回 handled: false，不报错。",
+          "回答挡在页面上的 JavaScript 弹窗，把页面解开。accept 是必填的：true 是「确定」（confirm 返回 true、alert 关闭），false 是「取消」（confirm 返回 false）——不写默认值，因为对一个 confirm 来说省略就是「确定」。prompt 用 promptText 填内容，省略则保留输入框里的默认值。beforeunload 拦截也在这里答：accept: true 离开（会重新发起被拦的那次导航并等它完成），accept: false 留下。必须先用 read_browser_dialog 确认弹窗的类型与内容——对一个 confirm 点错方向可能删掉数据。没有弹窗可处理时返回 handled: false，不报错。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
           {
             tabId: tabIdProp(),
-            accept: {
-              type: "boolean",
-              description: "true 为确定，false 为取消。省略等同 true",
-            },
+            // 必填：省略「确定」是最危险的方向——对一个 confirm 少写一个参数
+            // 就等于点了确定。拿不准的调用方应该被迫停下来想一下。
+            accept: { type: "boolean", description: "必填。true 为确定，false 为取消" },
             promptText: string("prompt 弹窗要填入的内容；省略则用默认值"),
           },
-          [],
+          ["accept"],
         ),
         run: (args) => {
+          if (typeof args["accept"] !== "boolean") {
+            throw new Error("accept 必须是布尔值：true 为确定，false 为取消");
+          }
           const promptText = args["promptText"];
-          const accept = args["accept"] !== false;
+          const accept = args["accept"];
           return surface().handleDialog(tabId(args), {
             accept,
             ...(typeof promptText === "string" ? { promptText } : {}),
@@ -4162,16 +4744,16 @@ export class McpServer {
       {
         name: "drag_browser_element",
         description:
-          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。from 与 to 各自用 selector / label / text / role 定位。用于拖拽排序、看板移动、拖动滑块。任一端定位命中多个时仍取排名第一个，返回值里的 warning 会写明匹配数。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个；dropped 说明页面真的收到了 drop，dropAt 是 drop 的坐标，droppedAtTarget 为 false 或 dropped 为 false 时返回值里的 warning 会说明原因（目标不接受放置、元素不可拖拽等），此时别当成拖拽成功。reordered 为 true 表示起点元素在父容器里的位置变了——排序类页面的成功信号。",
+          "把一个元素拖到另一个元素上。发送的是真实鼠标事件：按下、六次中间移动、松开——一次跳到终点不是拖拽，页面的排序逻辑会当成点空了。起点与终点各用一对参数定位：fromSelector + fromText、toSelector + toText，每对里 CSS 选择器与元素文字二选一。用于拖拽排序、看板移动、拖动滑块。任一端定位命中多个时仍取排名第一个，返回值里的 warning 会写明匹配数。返回两端元素的标签与文字，可以据此确认拖的是不是想要的那两个；dropped 说明页面真的收到了 drop，dropAt 是 drop 的坐标，droppedAtTarget 为 false 或 dropped 为 false 时返回值里的 warning 会说明原因（目标不接受放置、元素不可拖拽等），此时别当成拖拽成功。reordered 为 true 表示起点元素在父容器里的位置变了——排序类页面的成功信号。",
         kind: "run",
         inputTarget: (args) => tabId(args),
         inputSchema: object(
           {
             tabId: tabIdProp(),
-            fromSelector: string("起点元素的 CSS 选择器"),
-            fromText: string("起点元素上的文字"),
-            toSelector: string("终点元素的 CSS 选择器"),
-            toText: string("终点元素上的文字"),
+            fromSelector: string("起点元素的 CSS 选择器；与 fromText 二选一"),
+            fromText: string("起点元素上的文字；与 fromSelector 二选一"),
+            toSelector: string("终点元素的 CSS 选择器；与 toText 二选一"),
+            toText: string("终点元素上的文字；与 toSelector 二选一"),
           },
           [],
         ),
@@ -4206,7 +4788,7 @@ export class McpServer {
       {
         name: "read_browser_element",
         description:
-          "读一个元素的全部已知信息：角色、可访问名称、文字、稳定选择器、位置、是否可见/可用/聚焦，以及 value、aria-*、data-*、type、name、href 这些能据以决策的属性。用于「这个按钮现在是不是禁用」「这个链接指向哪」「这个输入框里是什么」这类问题——比 read_browser_page 精确，比 evaluate_browser_page 稳定（不用写 DOM 代码，页面改结构后断言不会失效）。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。找不到元素会报错，并说明是选择器无效还是真的不存在。",
+          "读一个元素的全部已知信息：角色、可访问名称、文字、稳定选择器、位置、是否可见/可用/聚焦，以及 value、aria-*、data-*、type、name、href 这些能据以决策的属性（密码框的 value 不回传，只给 inputType 与 secret: true）。用于「这个按钮现在是不是禁用」「这个链接指向哪」「这个输入框里是什么」这类问题——比 read_browser_page 精确，比 evaluate_browser_page 稳定（不用写 DOM 代码，页面改结构后断言不会失效）。也可以传 handle 复用 find_browser_element 的句柄（与定位字段二选一，可配 nth）：页面重渲染后句柄仍指向同一逻辑元素。找不到元素会报错，并说明是选择器无效还是真的不存在。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -4222,7 +4804,7 @@ export class McpServer {
       {
         name: "read_browser_attribute",
         description:
-          "读元素的属性，或者（不给 name 时）读它的文字/当前值。names 传属性名数组，例如 [\"href\", \"aria-disabled\"]；属性不存在时返回 null，与「元素不存在」区分开——后者会报错。不给 names 时：输入框返回 value，其他元素返回可见文字。这是轮询某个状态变化最便宜的方式（比 read_browser_element 少传很多字段）。",
+          "读元素的属性，或者（不给 names 时）读它的文字/当前值。names 传属性名数组，例如 [\"href\", \"aria-disabled\"]，一次可以读多个；属性不存在时返回 null，与「元素不存在」区分开——后者会报错。不给 names 时：输入框返回 value，其他元素返回可见文字；密码框只返回 secret: true，不回传内容。元素用 selector / label / text / role 定位。这是轮询某个状态变化最便宜的方式（比 read_browser_element 少传很多字段）。",
         kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
@@ -4317,9 +4899,9 @@ export class McpServer {
         },
       },
       {
-        name: "wait_browser",
+        name: "wait_browser_condition",
         description:
-          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）、load（document.readyState 变为 complete，即文档与子资源加载完毕）、response（已收集的请求里出现 URL 含 expect 的响应，可配 status 精确匹配状态码；只读不清空，与 read_browser_requests 共用同一批数据）。visible / hidden / value 也可以传 handle 复用 find_browser_element 的句柄（与 selector / label / elementText / role 二选一，可配 nth）：句柄解析一次进轮询，页面重渲染后仍指向同一逻辑元素；句柄指向的元素被整个移出 DOM 时解析会报找不到，这种情况改用 selector 等（找不到即视为已隐藏）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 和 response 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
+          "在页面里等一个条件成立，最多等到 timeoutMs。条件：visible（元素出现且可见）、hidden（元素消失或被隐藏）、text（页面出现这段文字）、url（地址包含这段文字）、value（输入框的值变成这段文字）、network-idle（页面的 fetch / XHR 全部结束且安静了 quietMs）、load（document.readyState 变为 complete，即文档与子资源加载完毕）、response（已收集的请求里出现 URL 含 expect 的响应，可配 status 精确匹配状态码；只读不清空，与 read_browser_requests 共用同一批数据）。要比对的文字传 expect，或直接传 text。visible / hidden 用 selector / label / elementText / role 定位元素（text 是 elementText 的简写）；value 用它们定位输入框，要比对的值同样传 expect 或 text。visible / hidden / value 也可以传 handle 复用 find_browser_element 的句柄（与 selector / label / elementText / role 二选一，可配 nth）：句柄解析一次进轮询，页面重渲染后仍指向同一逻辑元素；句柄指向的元素被整个移出 DOM 时解析会报找不到，这种情况改用 selector 等（找不到即视为已隐藏）。轮询在页面内完成，一次调用即可，不要自己 sleep 再 read。network-idle 和 response 看不到跨域 iframe 的请求，也管不了长轮询——那种页面请改等具体元素。超时结果看 timedOutAt：page 表示条件确实没满足（reason 写明是 url-mismatch / text-absent 等），bridge 表示页面根本没按时答复（被节流或卡住），后者重试同样的条件通常还是一样。",
         kind: "read",
         inputSchema: object(
           {
@@ -4331,12 +4913,15 @@ export class McpServer {
             },
             selector: string("CSS 选择器；可用 label / elementText / role 代替"),
             label: string("元素旁的标签文字"),
-            elementText: string("元素上的文字，与 wait 的 text 区分开"),
+            elementText: string("元素上的文字，用来定位要等 visible / hidden / value 的那个元素"),
             role: { type: "string", description: "ARIA role，用于收窄候选元素" },
             exact: { type: "boolean", description: "要求文字完全相等" },
             ...handleProps(),
             expect: string("text / url / value / response 条件要比对的文字（response 时是 URL 子串）"),
-            timeoutMs: integer("最多等多久，默认 5000 毫秒"),
+            text: string(
+              "简写：等 text / url / value / response 时等同 expect；等 visible / hidden 时等同 elementText",
+            ),
+            timeoutMs: integer("最多等多久，默认 5000 毫秒，上限 60000"),
             quietMs: integer("network-idle 专用：需要连续安静多久，默认 500 毫秒"),
             status: integer("response 专用：要求响应的状态码精确等于这个值"),
           },
@@ -4356,13 +4941,22 @@ export class McpServer {
           }
           const needsTarget =
             condition === "visible" || condition === "hidden" || condition === "value";
-          const target = needsTarget ? targetFrom(args, { withText: false }) : undefined;
-          const expect = typeof args["expect"] === "string" ? args["expect"] : "";
+          /*
+           * `text` 指什么跟着条件走：等元素出现/消失时，它是定位元素用的文字；
+           * 其余条件下它是要比对的值。value 两样都要——元素由 selector / label /
+           * elementText / role 定位，所以它的 text 归到「要比对的值」。
+           */
+          const raw = withTextShorthand(
+            args,
+            needsTarget && condition !== "value" ? "elementText" : "expect",
+          );
+          const target = needsTarget ? targetFrom(raw, { withText: false }) : undefined;
+          const expect = typeof raw["expect"] === "string" ? raw["expect"] : "";
           // Only the DOM conditions and `response` need a value to compare
           // against; idle and load are states, and requiring a needle there
           // would be a trap.
           if (condition !== "network-idle" && condition !== "load" && !needsTarget && !expect) {
-            throw new Error(`${condition} 条件需要 expect`);
+            throw new Error(`${condition} 条件需要 expect（或简写 text）给出要比对的文字`);
           }
           const timeout = Number(args["timeoutMs"]);
           const quiet = Number(args["quietMs"]);
@@ -4391,24 +4985,33 @@ export class McpServer {
       {
         name: "fill_browser_login",
         description:
-          "用该标签页所属账号保存的账号密码填充登录表单。密码始终留在主进程，不会出现在返回值里。跨域页面会被拒绝。",
+          "用该标签页所属账号保存的账号密码填充登录表单。密码始终留在主进程，不会出现在返回值里。跨域页面会被拒绝。失败不报错：返回 ok: false，reason 是原因码，note 说明原因与下一步。",
         kind: "run",
         inputSchema: object({ tabId: tabIdProp() }),
         inputTarget: (args) => tabId(args),
-        run: (args) => surface().fillLogin(tabId(args)),
+        run: async (args) => {
+          // 表面接口把返回声明成 unknown；这里只认 ok 与 reason 两个字段，其余原样带回。
+          const outcome = (await surface().fillLogin(tabId(args))) as { ok: boolean; reason?: string };
+          const note = outcome.ok ? undefined : FILL_LOGIN_NOTES[outcome.reason ?? ""];
+          return note ? { ...outcome, note } : outcome;
+        },
       },
       {
         name: "screenshot_browser_tab",
         description:
-          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。给 selector / elementText / role 时只截那个元素——截图会自动裁到元素范围，元素在视口外会先报错而不是给你一张整页图。窗口最小化时也能拿到画面；完全隐藏的窗口不行。timeoutMs 是等画面的上限（默认 15000）：超时会返回 page-busy 而不是报错——页面可能正忙、被节流或完全不显示。",
-        kind: "run",
+          "给标签页截图。默认写入磁盘并返回路径（文件仍在，人可以直接打开）。inline: true 时额外把图像本身随结果返回，供无法读取本机路径的客户端直接看；图像会占用较多上下文，只在需要看画面时开。给 selector / label / elementText（简写 text）/ role 时只截那个元素——截图会自动裁到元素范围，元素在视口外会先报错而不是给你一张整页图。窗口最小化时也能拿到画面；完全隐藏的窗口不行。timeoutMs 是等画面的上限（默认 15000）：超时会返回 page-busy 而不是报错——页面可能正忙、被节流或完全不显示。",
+        // 截图不碰工作区也不动页面，是和读页面同一类的观察；归 run 会让一个
+        // 只开了读取权限的调用方读得到文字、却看不到画面。
+        kind: "read",
         inputSchema: object({
           tabId: tabIdProp(),
           format: { type: "string", enum: ["png", "jpeg"], description: "默认 png" },
           inline: boolean("是否把图像随结果返回，默认否；远程客户端需要它才能看到画面"),
           timeoutMs: integer("等画面的上限，默认 15000，最大 60000。超时返回 page-busy"),
           selector: string("只截这个元素；省略则截整个视口"),
-          elementText: string("要截的元素的文字；与 selector 二选一"),
+          label: string("元素旁的标签文字；与 selector / elementText / role 任选其一"),
+          elementText: string("要截的元素的文字；与 selector / label / role 任选其一"),
+          text: string("elementText 的简写"),
           role: { type: "string", description: "ARIA role，用于收窄要截的元素" },
         }),
         pageTarget: (args) => tabId(args),
@@ -4422,9 +5025,11 @@ export class McpServer {
           // legitimate request for the whole viewport, so the empty target that
           // `targetFrom` refuses has to be allowed through.
           const hasTarget = Boolean(
-            args["selector"] || args["elementText"] || args["role"],
+            args["selector"] || args["label"] || args["elementText"] || args["text"] || args["role"],
           );
-          const target = hasTarget ? targetFrom(args, { withText: false }) : undefined;
+          const target = hasTarget
+            ? targetFrom(withTextShorthand(args, "elementText"), { withText: false })
+            : undefined;
           try {
             return await surface().screenshot(tabId(args), {
               format: args["format"] === "jpeg" ? "jpeg" : "png",
@@ -4451,7 +5056,7 @@ export class McpServer {
               timedOut: true,
               reason: "page-busy",
               waitedMs: (error as { ms?: number }).ms ?? timeoutMs ?? 15_000,
-              hint: "页面没有在时限内产出画面：可能正在忙、被节流或窗口完全隐藏。可以稍后重试，或先用 wait_browser 等页面安静下来。",
+              hint: "页面没有在时限内产出画面：可能正在忙、被节流或窗口完全隐藏。可以稍后重试，或先用 wait_browser_condition 等页面安静下来。",
             };
           }
         },
@@ -4513,7 +5118,7 @@ export class McpServer {
       {
         name: "evaluate_browser_page",
         description:
-          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。返回值超过 64KB 会被拒绝（报错并说明），请在表达式里先聚合或分页，不要把整页数据原样带出。timeoutMs 是你给这段脚本的预算（默认 30000，最大 300000）：到点后调用会返回 timedOut 而不是报错，页里的脚本可能仍在运行——可以继续用 wait_browser 观察结果，或用 cancel_browser_script 尝试中止。",
+          "在标签页里执行一段 JavaScript 表达式并返回结果。用于读取页面数据或做快照/对比脚本；表达式必须自己返回可序列化的值。返回值超过 64KB 会被拒绝（报错并说明），请在表达式里先聚合或分页，不要把整页数据原样带出。timeoutMs 是你给这段脚本的预算（默认 30000，最大 300000）：到点后调用会返回 timedOut 而不是报错，页里的脚本可能仍在运行——可以继续用 wait_browser_condition 观察结果，或用 cancel_browser_script 尝试中止。",
         kind: "run",
         inputSchema: object(
           {
@@ -4566,7 +5171,7 @@ export class McpServer {
               timedOut: true,
               stillRunning: true,
               waitedMs: Date.now() - started,
-              hint: "已停止等待，页面里的脚本可能仍在运行。可以再用 wait_browser 等它的结果出现，或用 cancel_browser_script 尝试中止。",
+              hint: "已停止等待，页面里的脚本可能仍在运行。可以再用 wait_browser_condition 等它的结果出现，或用 cancel_browser_script 尝试中止。",
             };
           }
         },
@@ -4582,7 +5187,7 @@ export class McpServer {
         inputTarget: (args) => tabId(args),
         run: async (args) => {
           const cancel = surface().cancelScript;
-          if (!cancel) throw new Error("这个宿不支持中止页面脚本");
+          if (!cancel) throw new Error("当前表面不支持中止页面脚本");
           await cancel(tabId(args));
           return { ok: true, note: "已请求中止当前脚本；停在 Promise 上的代码不会被它打断。" };
         },
@@ -4604,7 +5209,7 @@ export class McpServer {
         inputTarget: (args) => tabId(args),
         run: async (args) => {
           const add = surface().addInitScript;
-          if (!add) throw new Error("这个宿不支持文档级脚本注入");
+          if (!add) throw new Error("当前表面不支持文档级脚本注入");
           const result = await add(tabId(args), String(args["script"] ?? ""));
           return {
             ok: true,
@@ -4622,7 +5227,7 @@ export class McpServer {
         inputSchema: object({ tabId: tabIdProp() }, []),
         run: (args) => {
           const list = surface().listInitScripts;
-          if (!list) return { scripts: [], note: "这个宿不支持文档级脚本注入" };
+          if (!list) return { scripts: [], note: "当前表面不支持文档级脚本注入" };
           return { scripts: list(tabId(args)) };
         },
       },
@@ -4635,7 +5240,7 @@ export class McpServer {
         inputTarget: (args) => tabId(args),
         run: async (args) => {
           const remove = surface().removeInitScript;
-          if (!remove) throw new Error("这个宿不支持文档级脚本注入");
+          if (!remove) throw new Error("当前表面不支持文档级脚本注入");
           await remove(tabId(args), String(args["scriptId"] ?? ""));
           return { ok: true };
         },
@@ -4643,12 +5248,12 @@ export class McpServer {
       {
         name: "set_browser_layout",
         description:
-          "设置内置浏览器某个视图的分屏布局：free（单页，等价于 1x1）/ 2x1 / 1x2 / 2x2 / 3x1。省略 viewId 表示当前在台上的视图。",
+          "设置内置浏览器一个视图的分屏布局：free（单页，等价于 1x1）/ 2x1 / 1x2 / 2x2 / 3x1。viewId 既可以是 list_browser_tabs 的 views 里已打开视图的 id，也可以是 list_views 里保存的视图 id。省略 viewId 表示当前在台上的视图；没有台上视图时，把你打开的、还不在任何视图里的页面收进一个新视图并摆上台（用户自己开的页面不会被收进来）。要摆指定的几个页面用 pin_browser_tab 或 compose_view。返回设置后的标签页与视图布局。",
         kind: "run",
         inputSchema: object(
           {
-            layoutId: string("布局 id：free / 2x1 / 1x2 / 2x2 / 3x1"),
-            viewId: string("视图 id；省略表示当前在台上的视图"),
+            layoutId: string("布局 id：free（或等价的 1x1）/ 2x1 / 1x2 / 2x2 / 3x1"),
+            viewId: string("视图 id（已打开的视图或保存的视图都行）；省略表示当前在台上的视图"),
           },
           ["layoutId"],
         ),
@@ -4658,7 +5263,11 @@ export class McpServer {
             typeof args["viewId"] === "string" && args["viewId"]
               ? args["viewId"]
               : surface().layoutTargetView(layoutId);
-          if (!viewId) throw new Error("当前没有打开的标签页");
+          if (!viewId) {
+            throw new Error(
+              "没有台上的视图，也没有你打开的页面可以编排：请传 viewId（list_browser_tabs 的 views 或 list_views 里的 id）",
+            );
+          }
           return projectState(surface().setLayout(layoutId, viewId));
         },
       },
@@ -4698,7 +5307,7 @@ export class McpServer {
       {
         name: "set_browser_muted",
         description:
-          "静音或取消静音一个标签页的输出。只影响 Ensemble 是否播放这个页面的声音，不改变页面自己的媒体状态、Web Audio 或任何音频逻辑——AI 仍然可以正常测试声音相关功能。tabId 省略时用当前标签页。",
+          "静音或取消静音一个标签页的输出。只影响 Ensemble 是否播放这个页面的声音，不改变页面自己的媒体状态、Web Audio 或任何音频逻辑——AI 仍然可以正常测试声音相关功能。",
         kind: "run",
         inputSchema: object(
           {
@@ -4716,7 +5325,7 @@ export class McpServer {
           if (typeof args["muted"] !== "boolean") throw new Error("muted 必须是布尔值");
           const id = tabId(args);
           const setMuted = surface().setMuted;
-          if (!setMuted) throw new Error("这个宿不支持静音");
+          if (!setMuted) throw new Error("当前表面不支持静音");
           setMuted.call(surface(), id, args["muted"], { byUser: false });
           return { tabId: id, muted: args["muted"] };
         },
@@ -4725,7 +5334,9 @@ export class McpServer {
         name: "set_browser_emulation",
         description:
           "设置或清除一个标签页的环境模拟，四项互相独立，按传入的键生效：timezone（IANA 时区名，如 Asia/Tokyo，null 清除）、mediaType（CSS 媒体类型，如 print / screen，null 恢复）、offline（true 断网、false 恢复）、geolocation（{latitude, longitude, accuracy?}，null 清除）。返回当前生效的全部模拟项；标签页关闭即全部丢弃。注意：geolocation 只提供坐标，不授予权限——页面没被用户授权时它的 geolocation API 仍然会被权限检查拦下。",
-        kind: "write",
+        // 模拟改的是页面所处的环境，与视口、设备模拟同族；工作区数据一个字节
+        // 都不动，所以归 run 而不是 write。
+        kind: "run",
         inputSchema: object(
           {
             tabId: tabIdProp(),
@@ -4815,13 +5426,13 @@ export class McpServer {
       {
         name: "pin_browser_tab",
         description:
-          "把某个标签页固定到视图的指定格位，或清空格位（tabId 传空）。省略 viewId 表示当前在台上的视图。",
+          "把某个标签页固定到视图的指定格位，或清空格位（tabId 传空）。省略 viewId 表示当前在台上的视图；没有台上视图时视图必须点名，viewId 可以是 list_browser_tabs 的 views 里已打开视图的 id，也可以是 list_views 里保存的视图 id。",
         kind: "run",
         inputSchema: object(
           {
             slotIndex: integer("格位序号，从 0 开始"),
             tabId: string("标签页 id；省略或空字符串表示清空该格位"),
-            viewId: string("视图 id；省略表示当前在台上的视图"),
+            viewId: string("视图 id（已打开的视图或保存的视图都行）；省略表示当前在台上的视图"),
           },
           ["slotIndex"],
         ),
@@ -4840,7 +5451,7 @@ export class McpServer {
       {
         name: "compose_view",
         description:
-          "把当前已经打开的若干标签页直接组合成一个视图（自由组合）：新建视图定义，并把这些页面按给定顺序摆进布局格位。标签页必须都已绑定账号；省略 siteId 时从标签页推断归属站点。组合后这些页面从原来所在的视图或游离栏移动到新视图。",
+          "把当前已经打开的若干标签页直接组合成一个视图（自由组合）：新建视图定义，并把这些页面按给定顺序摆进布局格位。标签页必须都已绑定账号；省略 siteId 时从标签页推断归属站点。组合后这些页面都归入新视图。",
         kind: "write",
         inputSchema: object(
           {
@@ -5097,15 +5708,47 @@ export class McpServer {
       },
       {
         name: "close_browser_tab",
-        description: "关闭内置浏览器的一个标签页。只关页面，不影响该账号的登录态。",
+        description: "关闭内置浏览器的一个标签页。只关页面，不影响该账号的登录状态。",
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
         run: (args) => projectState(surface().closeTab(String(args["tabId"] ?? ""))),
       },
       {
+        name: "close_browser_view",
+        description:
+          "关闭内置浏览器里的一个视图：视图被移除，AI 侧打开的页面一并关闭——open_browser_view 打开的成员，以及你用 open_browser_tab 开了之后摆进去的页面。用户自己打开的页面保留，变成不属于任何视图的独立页面；传 mode: \"all\" 连它们一起关。viewId 可以是 list_browser_tabs 的 views 里已打开视图的 id，也可以是 list_views 里保存的视图 id——用后者时只关它在台上的那个视图，保存的视图定义不动，删定义用 delete_view。只关页面，不影响账号的登录状态。返回关闭后的标签页与视图布局。",
+        kind: "run",
+        inputSchema: object(
+          {
+            viewId: string("视图 id（已打开的视图或保存的视图都行）"),
+            mode: {
+              type: "string",
+              enum: ["ai", "all"],
+              description: "ai（默认）只关 AI 侧打开的页面；all 关闭视图里的全部页面，包括用户自己打开的",
+            },
+          },
+          ["viewId"],
+        ),
+        run: (args) => {
+          const closeView = surface().closeView;
+          if (!closeView) throw new Error("当前表面不支持关闭视图");
+          const viewId = String(args["viewId"] ?? "");
+          const state = surface().state();
+          // 先确认再动手：视图不存在时表面什么都不做，调用方会以为已经关了。
+          const views = (state.views ?? []) as Array<{ id: string; viewDefinitionId?: string }>;
+          if (!findViewContainer(views, viewId, state.activeViewId)) {
+            throw new Error(
+              `视图不存在：${viewId}（已打开的视图用 list_browser_tabs 的 views 查，保存的视图用 list_views 查）`,
+            );
+          }
+          const mode = args["mode"] === "all" ? "all" : "ai";
+          return projectState(closeView(viewId, mode));
+        },
+      },
+      {
         name: "pop_out_browser_tab",
         description:
-          "把一个标签页拆出到独立 OS 窗口（配合系统分屏与多显示器并排观察）；已拆出的页面再次调用即收回主舞台。会话分区、登录态与 AI 可操作性在拆出前后不变。",
+          "把一个标签页拆出到独立 OS 窗口（配合系统分屏与多显示器并排观察）。这是一个动作，不是开关：已经拆出的页面再调用不会收回，只返回 alreadyPoppedOut: true；收回用 dock_browser_tab。拆出会把页面重新挂载一遍（等于刷新一次）：页面上没保存的输入会丢，所属身份与登录状态不受影响，AI 可操作性在拆出前后一样。空白页不能拆出。",
         kind: "run",
         inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
         run: (args) => {
@@ -5115,27 +5758,40 @@ export class McpServer {
         },
       },
       {
+        name: "dock_browser_tab",
+        description:
+          "把已拆出到独立窗口的标签页收回主舞台。没有拆出的页面调用无害，返回 docked: false。收回同样会把页面重新挂载一遍（等于刷新一次）：页面上没保存的输入会丢。",
+        kind: "run",
+        inputSchema: object({ tabId: string("标签页 id") }, ["tabId"]),
+        run: (args) => {
+          const dockTab = surface().dockTab;
+          if (!dockTab) throw new Error("当前表面不支持拆出窗口");
+          return dockTab(String(args["tabId"] ?? ""));
+        },
+      },
+      {
         name: "move_browser_tab",
         description:
-          "改变标签页在运行栏里的顺序，或把它移进/移出视图。target 三选一：edge=before|after|middle（放到某个标签页前/后；middle 表示加入该标签页所在的视图）、viewId（加入该视图）、loose（移出视图变成游离标签页）。",
+          "移动一个标签页的位置。目的地三选一：① viewId——放进这个视图（list_browser_tabs 的 views 里已打开视图的 id，或 list_views 里保存的视图 id）；② loose: true——移出视图，成为不属于任何视图的独立页面；③ anchorTabId + edge——相对另一个标签页排位：anchorTabId 是参照标签页的 id，edge 取 before / after 表示排到它前面 / 后面，取 middle 表示加入它所在的视图。返回移动后的标签页与视图布局。",
         kind: "run",
+        argumentAliases: { beforeOrAfter: "anchorTabId" },
         inputSchema: object(
           {
             tabId: string("要移动的标签页 id"),
-            beforeOrAfter: string("相对哪个标签页移动：它的 id"),
+            anchorTabId: string("参照标签页的 id，与 edge 搭配"),
             edge: {
               type: "string",
               enum: ["before", "after", "middle"],
-              description: "放在目标前 / 后；middle 表示加入目标所在视图",
+              description: "相对参照标签页的位置：before 排它前面 / after 排它后面 / middle 加入它所在的视图",
             },
-            viewId: string("加入这个视图"),
-            loose: { type: "boolean", description: "传 true 表示移出视图" },
+            viewId: string("放进这个视图：已打开的视图或保存的视图的 id"),
+            loose: { type: "boolean", description: "true 表示移出视图，成为独立页面" },
           },
           ["tabId"],
         ),
         run: (args) => {
           const tabIdValue = String(args["tabId"] ?? "");
-          const anchor = typeof args["beforeOrAfter"] === "string" ? args["beforeOrAfter"] : "";
+          const anchor = typeof args["anchorTabId"] === "string" ? args["anchorTabId"] : "";
           const edge = args["edge"];
           const viewId = typeof args["viewId"] === "string" ? args["viewId"] : "";
           if (anchor && (edge === "before" || edge === "after" || edge === "middle")) {
@@ -5150,20 +5806,21 @@ export class McpServer {
           if (viewId) return projectState(surface().moveTab(tabIdValue, { kind: "view", viewId }));
           if (args["loose"] === true)
             return projectState(surface().moveTab(tabIdValue, { kind: "loose" }));
-          throw new Error("需要提供 beforeOrAfter + edge、viewId，或 loose: true 之一");
+          throw new Error("目的地三选一：传 viewId（放进视图）、loose: true（移出视图），或 anchorTabId + edge（相对另一个标签页排位）");
         },
       },
       {
-        name: "set_tab_page",
+        name: "activate_browser_tab",
         description:
-          "在一个浏览器里切换显示哪一页。一个格位放的是一个浏览器，它可以有多个页面（页面里点开的链接）；这个工具决定该浏览器当前显示哪一页。",
+          "相当于在标签条上点一下某个标签页：让它成为它所在浏览器当前显示的那一页，键盘焦点也移进去。一个格位放的是一个浏览器（实例），它可以有多个页面——页面里点开的链接、弹出的窗口；点在其中一页上只切换该浏览器显示哪一页。点在一个浏览器的根页上时，那个浏览器会换到台上，成为用户正在看的——所以这不是纯后台操作。",
         kind: "run",
-        inputSchema: object({ pageId: string("要显示的那个页面 id") }, ["pageId"]),
+        argumentAliases: { pageId: "tabId" },
+        inputSchema: object({ tabId: string("要显示的那个标签页 id") }, ["tabId"]),
         // Switching a page is not page input, but the page it reveals may
         // already be playing; mute it if the user has not asked for sound.
         pageTarget: (args) =>
-          typeof args["pageId"] === "string" && args["pageId"] ? args["pageId"] : undefined,
-        run: (args) => projectState(surface().activate(String(args["pageId"] ?? ""))),
+          typeof args["tabId"] === "string" && args["tabId"] ? args["tabId"] : undefined,
+        run: (args) => projectState(surface().activate(String(args["tabId"] ?? ""))),
       },
     ];
   }

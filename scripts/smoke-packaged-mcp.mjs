@@ -101,17 +101,25 @@ try {
     "type_browser_text",
     "create_view",
     "open_browser_view",
+    "close_browser_view",
     // The tools added for "everything a human can arrange, an AI can arrange".
     "move_browser_tab",
-    "set_tab_page",
+    "activate_browser_tab",
+    "dock_browser_tab",
+    // The external browser is one tool family of its own, and engines are listable.
+    "launch_external_browser",
+    "stop_external_browser",
+    "stop_all_external_browsers",
+    "list_browser_engines",
+    "check_identity_auth",
     "save_tag",
     "delete_tag",
-    "export_accounts",
-    "preview_accounts",
-    "import_accounts",
+    "export_identities",
+    "preview_identities",
+    "import_identities",
     // Targeting elements the way a person reads them, and waiting page-side.
     "fill_browser_form",
-    "wait_browser",
+    "wait_browser_condition",
     // Worked-out sequences become a reusable asset instead of a lost session.
     "list_flows",
     "save_flow",
@@ -126,9 +134,9 @@ try {
     tools.find((tool) => tool.name === "type_browser_text")?.inputSchema?.properties ?? {},
   );
   console.log("type_browser_text accepts a label:", typeProps.includes("label"));
-  const waitSchema = tools.find((tool) => tool.name === "wait_browser")?.inputSchema?.properties;
+  const waitSchema = tools.find((tool) => tool.name === "wait_browser_condition")?.inputSchema?.properties;
   console.log(
-    "wait_browser conditions:",
+    "wait_browser_condition conditions:",
     (waitSchema?.condition?.enum ?? []).join("/") || "none",
   );
   const batch = tools.find((tool) => tool.name === "create_identities");
@@ -184,7 +192,7 @@ try {
     id: 5,
     method: "tools/call",
     params: {
-      name: "export_accounts",
+      name: "export_identities",
       arguments: {
         siteIds: [sitePayload.id],
         identityIds: [created.created[0].id],
@@ -194,7 +202,7 @@ try {
   });
   const bundle = JSON.parse(exported.result.content[0].text);
   console.log(
-    "export_accounts ok:",
+    "export_identities ok:",
     Boolean(bundle?.path) && bundle?.counts?.accounts === 1,
     "path:",
     bundle?.path,
@@ -210,23 +218,23 @@ try {
       jsonrpc: "2.0",
       id: 6,
       method: "tools/call",
-      params: { name: "preview_accounts", arguments: { path: bundle.path } },
+      params: { name: "preview_identities", arguments: { path: bundle.path } },
     });
     const previewed = JSON.parse(preview.result.content[0].text);
-    console.log("preview_accounts ok:", previewed?.accounts === 1 && previewed?.hasSecrets === true);
+    console.log("preview_identities ok:", previewed?.accounts === 1 && previewed?.hasSecrets === true);
 
     const imported = await rpc({
       jsonrpc: "2.0",
       id: 7,
       method: "tools/call",
       params: {
-        name: "import_accounts",
+        name: "import_identities",
         arguments: { path: bundle.path, passphrase: "smoke-share-passphrase" },
       },
     });
     const merged = JSON.parse(imported.result.content[0].text);
     console.log(
-      "import_accounts merges in place:",
+      "import_identities merges in place:",
       merged?.accountsAdded === 0 && merged?.accountsUpdated === 1,
     );
   }

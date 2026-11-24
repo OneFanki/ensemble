@@ -229,7 +229,7 @@ try {
   const tabId = tab.id ?? tab.tabId ?? tab.tabs?.at(-1)?.id;
   check("a page was opened", Boolean(tabId), { tabId });
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#single" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#single" });
     if (visible.visible) break;
     await wait(200);
   }

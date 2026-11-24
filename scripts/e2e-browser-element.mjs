@@ -54,6 +54,10 @@ const server = createServer((req, res) => {
 <section><a id="link" href="/detail/42" data-testid="detail-link">查看详情</a></section>
 <section><label for="name-field">名称</label><input id="name-field" type="text" value="初始值"></section>
 <section><label for="frozen-field">锁定</label><input id="frozen-field" type="text" value="锁死" readonly></section>
+<section><button id="icon-only" title="关闭面板" onclick="this.dataset.clicked='1'"><svg width="16" height="16"></svg></button></section>
+<section><input id="submit-btn" type="submit" value="提交表单" onclick="this.dataset.clicked='1'"></section>
+<section><label>记住我 <input id="remember" type="checkbox"></label></section>
+<section><label for="secret-field">口令</label><input id="secret-field" type="password" value="e2e-secret-field-value"></section>
 <section><div id="target-box"></div></section>
 <div id="spacer"></div>
 <section><div id="far-box"></div></section>
@@ -158,7 +162,7 @@ try {
   const tabId = tab.id ?? tab.tabId ?? tab.tabs?.at(-1)?.id;
   check("a page was opened", Boolean(tabId), { tabId });
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#opener" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#opener" });
     if (visible.visible) break;
     await wait(200);
   }
@@ -337,6 +341,86 @@ try {
     "an element outside the viewport is refused instead of silently returning the page",
     /不在可视区域/.test(offscreen),
     { offscreen },
+  );
+
+  /*
+   * A name in the snapshot has to work as `text` when handed straight back.
+   * Three shapes used to break that chain: an icon-only button named by its
+   * `title` (its name came back empty), a submit input (its name came back as
+   * its type, "submit"), and a label wrapped around its control (the tie went
+   * to the label, so there was nothing to type into).
+   */
+  const snapshot = await call("read_browser_page", { tabId });
+  const nameInSnapshot = (selector) =>
+    snapshot?.nodes?.find((node) => node.selector === selector)?.name;
+  const iconName = nameInSnapshot("#icon-only");
+  const submitName = nameInSnapshot("#submit-btn");
+  check("an icon-only button is named by its title", iconName === "关闭面板", { iconName });
+  check("a submit input is named by its value", submitName === "提交表单", { submitName });
+  const clicked = async (selector) =>
+    call("evaluate_browser_page", {
+      tabId,
+      expression: `document.querySelector(${JSON.stringify(selector)}).dataset.clicked`,
+    });
+  await call("click_browser_element", { tabId, text: "关闭面板" });
+  check("handing that name back as text clicks the icon-only button", (await clicked("#icon-only")) === "1");
+  await call("click_browser_element", { tabId, text: "提交表单" });
+  check("handing that name back as text clicks the submit input", (await clicked("#submit-btn")) === "1");
+  const remember = await call("click_browser_element", { tabId, text: "记住我" });
+  check(
+    "a text that names both a label and its control resolves to the control",
+    remember?.tag === "input",
+    remember,
+  );
+
+  /*
+   * A password field's content is a credential: the main process typed it in, or
+   * the person did. Both read tools are in the read tier, so echoing it handed
+   * the vault's password to a client that was only allowed to read. They say the
+   * field is a password and nothing more, and a flow's `read` step refuses it,
+   * because a flow's variables come back in `run_flow`'s result. The field's
+   * `value` attribute is set on purpose: a bound field carries it too.
+   */
+  const SECRET = "e2e-secret-field-value";
+  const secretInfo = await call("read_browser_element", { tabId, selector: "#secret-field" });
+  check(
+    "read_browser_element says a password field is one and returns nothing of it",
+    secretInfo?.secret === true &&
+      secretInfo?.inputType === "password" &&
+      secretInfo?.value === undefined &&
+      !JSON.stringify(secretInfo).includes(SECRET),
+    secretInfo,
+  );
+  const secretValue = await call("read_browser_attribute", { tabId, selector: "#secret-field" });
+  check(
+    "read_browser_attribute returns nothing of a password field",
+    secretValue?.secret === true && secretValue?.value === undefined,
+    secretValue,
+  );
+  const plainField = await call("read_browser_element", { tabId, selector: "#name-field" });
+  check(
+    "an ordinary field still reads back its value",
+    typeof plainField?.value === "string" && plainField?.secret === undefined,
+    plainField?.value,
+  );
+  const flowSite = await call("create_site", {
+    name: "元素读取站点",
+    baseUrl: PAGE_URL,
+    loginPath: "/",
+  });
+  const secretFlow = await call("save_flow", {
+    siteId: flowSite.id,
+    name: "读取密码框的流程",
+    steps: [{ action: "read", selector: "#secret-field", as: "secret" }],
+  });
+  const flowRead = await call("run_flow", { flowId: secretFlow.id, tabId }).then(
+    (value) => ({ text: JSON.stringify(value) }),
+    (error) => ({ text: String(error) }),
+  );
+  check(
+    "a flow's read step refuses a password field instead of capturing it",
+    flowRead.text.includes("密码框") && !flowRead.text.includes(SECRET),
+    flowRead.text.slice(0, 300),
   );
 } catch (error) {
   check("run completed", false, String(error));

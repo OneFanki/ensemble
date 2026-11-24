@@ -8,7 +8,7 @@
  * - `read_browser_requests` must see a real `fetch` the page made, filtered by
  *   URL, and a later `read_browser_console` must still see the same entry — the
  *   request tool peeks, it does not consume.
- * - `wait_browser` with `response` must release when a delayed request comes
+ * - `wait_browser_condition` with `response` must release when a delayed request comes
  *   back; with `load` it must release on a fresh tab reaching readyState
  *   "complete".
  * - Timezone emulation must move the page's own `getTimezoneOffset()` and move
@@ -158,7 +158,7 @@ try {
 
   // Let the document finish: the request collector is installed on load, and a
   // fetch made before that would go unwrapped.
-  await call("wait_browser", { tabId, condition: "load", timeoutMs: 10_000 });
+  await call("wait_browser_condition", { tabId, condition: "load", timeoutMs: 10_000 });
   const readyState = await call("evaluate_browser_page", {
     tabId,
     expression: "document.readyState",
@@ -224,7 +224,7 @@ try {
   // A fresh navigation makes the host re-check the page (and re-warn, in a
   // build that warns). The default read must stay clean through it too.
   await call("reload_browser_tab", { tabId });
-  await call("wait_browser", { tabId, condition: "load", timeoutMs: 10_000 });
+  await call("wait_browser_condition", { tabId, condition: "load", timeoutMs: 10_000 });
   await wait(1_000);
   await call("evaluate_browser_page", { tabId, expression: `console.log("reload 后仍在"), 'logged'` });
   await wait(400);
@@ -241,7 +241,7 @@ try {
     tabId,
     expression: `setTimeout(() => { fetch('/slow'); }, 600), 'scheduled'`,
   });
-  const waited = await call("wait_browser", {
+  const waited = await call("wait_browser_condition", {
     tabId,
     condition: "response",
     expect: "/slow",
@@ -259,7 +259,7 @@ try {
   const second = await call("open_browser_tab", { url: PAGE_URL });
   const secondId = second.id ?? second.tabId;
   check("a second page was opened for the load wait", Boolean(secondId), { secondId });
-  const loadWait = await call("wait_browser", {
+  const loadWait = await call("wait_browser_condition", {
     tabId: secondId,
     condition: "load",
     timeoutMs: 10_000,

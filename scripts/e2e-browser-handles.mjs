@@ -16,9 +16,9 @@
  *   find again.
  * - A handle registered from an ambiguous match set (no narrowing, no nth) must
  *   refuse to act with the "matched N" error instead of guessing.
- * - The observation tools share the same handle path: `wait_browser` (hidden)
+ * - The observation tools share the same handle path: `wait_browser_condition` (hidden)
  *   with the handle resolves once the page hides the element, and
- *   `check_element_visible` with the handle flips to `visible: false`. Giving
+ *   `check_browser_element_visible` with the handle flips to `visible: false`. Giving
  *   both a handle and a locator field is refused for these two as well.
  * - A find that never matches must time out into a clear error.
  *
@@ -208,7 +208,7 @@ try {
   tabId = tabId_;
   check("a page was opened for the handles", Boolean(tabId), { tabId });
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#reverse" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#reverse" });
     if (visible.visible) break;
     await wait(200);
   }
@@ -319,47 +319,47 @@ try {
     hideTarget.count === 1 && typeof hideTarget.handleId === "string",
     hideTarget,
   );
-  const visibleBefore = await call("check_element_visible", { tabId, handle: hideTarget.handleId });
+  const visibleBefore = await call("check_browser_element_visible", { tabId, handle: hideTarget.handleId });
   check(
-    "check_element_visible with the handle reports the element visible",
+    "check_browser_element_visible with the handle reports the element visible",
     visibleBefore.exists === true && visibleBefore.visible === true,
     visibleBefore,
   );
   await call("click_browser_element", { tabId, selector: "#hide" });
-  const hiddenWait = await call("wait_browser", {
+  const hiddenWait = await call("wait_browser_condition", {
     tabId,
     condition: "hidden",
     handle: hideTarget.handleId,
   });
   check(
-    "wait_browser hidden with the handle resolves once the element hides",
+    "wait_browser_condition hidden with the handle resolves once the element hides",
     hiddenWait.ok === true,
     hiddenWait,
   );
-  const visibleAfter = await call("check_element_visible", { tabId, handle: hideTarget.handleId });
+  const visibleAfter = await call("check_browser_element_visible", { tabId, handle: hideTarget.handleId });
   check(
-    "check_element_visible with the handle reports visible:false after hiding",
+    "check_browser_element_visible with the handle reports visible:false after hiding",
     visibleAfter.exists === true && visibleAfter.visible === false,
     visibleAfter,
   );
-  const waitExclusive = await callExpectError("wait_browser", {
+  const waitExclusive = await callExpectError("wait_browser_condition", {
     tabId,
     condition: "hidden",
     handle: hideTarget.handleId,
     selector: "#hide-target",
   });
   check(
-    "wait_browser refuses a call giving both a handle and a locator",
+    "wait_browser_condition refuses a call giving both a handle and a locator",
     /只能给一个/.test(waitExclusive),
     waitExclusive,
   );
-  const probeExclusive = await callExpectError("check_element_visible", {
+  const probeExclusive = await callExpectError("check_browser_element_visible", {
     tabId,
     handle: hideTarget.handleId,
     selector: "#hide-target",
   });
   check(
-    "check_element_visible refuses a call giving both a handle and a locator",
+    "check_browser_element_visible refuses a call giving both a handle and a locator",
     /只能给一个/.test(probeExclusive),
     probeExclusive,
   );
@@ -367,7 +367,7 @@ try {
   // --- navigation invalidates every handle of the tab -----------------------
   await call("navigate_browser_tab", { tabId, url: `${PAGE_URL}second` });
   for (let attempt = 0; attempt < 25; attempt += 1) {
-    const visible = await call("check_element_visible", { tabId, selector: "#second-marker" });
+    const visible = await call("check_browser_element_visible", { tabId, selector: "#second-marker" });
     if (visible.visible) break;
     await wait(200);
   }

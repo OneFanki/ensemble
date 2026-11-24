@@ -156,6 +156,19 @@ export interface WorkspaceServiceOptions {
    * eight real browsers.
    */
   headlessAuthCheck?: boolean;
+  /**
+   * 在应用内（内置）浏览器里，就这个账号已打开的页面检测登录状态。
+   *
+   * 内置页面与外部窗口是两套互不相干的登录状态。账号在内置浏览器里开着
+   * 页面时，「现在登没登录」对 AI 和用户说的都是那一套，所以检测先看它。
+   * 返回 undefined 表示这个账号在内置浏览器里没有打开页面，走外部那条路；
+   * "unavailable" 表示页面开着但问不到（不在站点源上、还在加载），这时如实
+   * 回答「检测不了」，而不是换一套登录状态去给一个看似有效的答案。
+   */
+  embeddedAuthProbe?: (
+    identityId: string,
+    site: Site,
+  ) => Promise<{ httpStatus: number; signedOut: boolean } | "unavailable" | undefined>;
 }
 
 export class WorkspaceService {
@@ -3092,6 +3105,21 @@ export class WorkspaceService {
     const checkPath = site.authCheckPath;
     if (!checkPath) return unknown(t("auth.noCheckPath"));
 
+    // 内置浏览器里开着这个账号的页面：就地检测，看的是 AI 实际在用的那套登录状态。
+    if (this.options.embeddedAuthProbe) {
+      const probed = await this.options.embeddedAuthProbe(identity.id, site);
+      if (probed === "unavailable") return unknown(t("auth.embeddedUnavailable"));
+      if (probed) {
+        return this.recordStatus(
+          identity,
+          checkedAt,
+          probed.httpStatus,
+          probed.signedOut,
+          "embedded",
+        );
+      }
+    }
+
     const instance = this.findInstance(identity.id);
     if (instance) {
       const entry = cdpRegistry.get(instance.id);
@@ -3128,6 +3156,7 @@ export class WorkspaceService {
         checkedAt,
         result.status,
         bodyMarksSignedOut(result.body, site.authCheckSignedOut),
+        "external",
       );
     } catch (error) {
       return unknown((error as Error).message);
@@ -3182,6 +3211,7 @@ export class WorkspaceService {
         checkedAt,
         result.status,
         bodyMarksSignedOut(result.body, site.authCheckSignedOut),
+        "external",
       );
     } catch (error) {
       return unknown((error as Error).message);
@@ -3196,6 +3226,7 @@ export class WorkspaceService {
     checkedAt: string,
     httpStatus: number,
     envelopeSignedOut = false,
+    surface: AuthCheckResult["surface"] = "external",
   ): { result: AuthCheckResult; changed: boolean } {
     const signedIn = httpStatus >= 200 && httpStatus < 300 && !envelopeSignedOut;
     const status = signedIn ? "signed-in" : "expired";
@@ -3207,6 +3238,7 @@ export class WorkspaceService {
         identityId: identity.id,
         status,
         checkedAt,
+        surface,
         detail: `HTTP ${httpStatus}${envelopeSignedOut ? " + signed-out marker" : ""}`,
       },
       changed: true,

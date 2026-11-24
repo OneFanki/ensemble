@@ -8,7 +8,7 @@
  * 1. `evaluate_browser_page` timed out after a hard 30 seconds that could not be
  *    changed, and reported it as `isError` — so a caller retried a script that
  *    was still running.
- * 2. `wait_browser` said `evaluate-timeout` whether the condition genuinely did
+ * 2. `wait_browser_condition` said `evaluate-timeout` whether the condition genuinely did
  *    not hold or the page never answered at all. Those need different responses.
  * 3. `screenshot_browser_tab` could hang with no diagnosis at all.
  *
@@ -308,11 +308,11 @@ try {
   // Let it finish so the next steps are not racing it.
   await wait(4_500);
 
-  // --- 2) `wait_browser` says which layer ran out ---
+  // --- 2) `wait_browser_condition` says which layer ran out ---
   //
   // Waiting for a URL that never arrives: the in-page loop reaches its own
   // deadline, so the reason is the condition itself and `timedOutAt` is "page".
-  const urlWait = await call("wait_browser", {
+  const urlWait = await call("wait_browser_condition", {
     tabId,
     condition: "url",
     expect: "never-going-to-appear",
@@ -334,7 +334,7 @@ try {
     timeoutMs: 6_500,
   });
   await wait(300);
-  const bridgeWait = await call("wait_browser", {
+  const bridgeWait = await call("wait_browser_condition", {
     tabId,
     condition: "text",
     expect: "anything at all",

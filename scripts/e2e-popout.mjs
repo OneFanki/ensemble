@@ -245,6 +245,14 @@ try {
     popped,
   );
   const windowId = popped?.windowId;
+  // 拆出是一个动作而不是开关：对已拆出的页面再调一次不会把它收回去。下面
+  // 对弹窗窗口的各项断言同时证明了它还在；收回去是 dock_browser_tab 的事。
+  const poppedAgain = await call("pop_out_browser_tab", { tabId });
+  check(
+    "pop_out_browser_tab is an action, not a toggle",
+    poppedAgain?.alreadyPoppedOut === true,
+    poppedAgain,
+  );
 
   const realWindow = await main.evaluate(`(async () => {
     const electron = require("electron");
@@ -375,6 +383,42 @@ try {
     "the surface state still lists both pages",
     (stateStill?.tabs ?? []).some((tab) => tab.id === secondId),
     stateStill,
+  );
+
+  // ---- 5b. 收回是另一个动作：dock_browser_tab ----
+  const neverPopped = await call("dock_browser_tab", { tabId: secondId });
+  check(
+    "dock_browser_tab on a page that was never popped out does nothing",
+    neverPopped?.docked === false,
+    neverPopped,
+  );
+  const secondPopped = await call("pop_out_browser_tab", { tabId: secondId });
+  check(
+    "a second page can be popped out as well",
+    Number.isInteger(secondPopped?.windowId),
+    secondPopped,
+  );
+  const secondWindowId = secondPopped?.windowId;
+  const docked = await call("dock_browser_tab", { tabId: secondId });
+  check("dock_browser_tab reports the page back on the stage", docked?.docked === true, docked);
+  const secondBack = await pollUntil(async () => {
+    const tabs = await listTabs();
+    return (tabs?.tabs ?? []).find((tab) => tab.id === secondId);
+  }, (tab) => tab && tab.popout !== true);
+  check(
+    "the broadcast no longer marks the docked page as popped out",
+    secondBack?.popout !== true,
+    secondBack,
+  );
+  const secondWindowGone = await main.evaluate(`(() => {
+    const electron = require("electron");
+    const win = electron.BrowserWindow.fromId(${secondWindowId});
+    return { destroyed: !win || win.isDestroyed() };
+  })()`);
+  check(
+    "the popout window is really gone after dock_browser_tab",
+    secondWindowGone?.destroyed === true,
+    secondWindowGone,
   );
 
   // ---- 6. 点 X 关闭弹窗 → 实例回主舞台，MCP 仍可操作 ----

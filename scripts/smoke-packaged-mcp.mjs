@@ -56,6 +56,14 @@ async function rpc(body) {
   return response.json();
 }
 
+// Every check below reports through this. Printing without failing let a
+// stale list and a real gap look the same, so neither was acted on.
+const failures = [];
+const check = (label, ok, detail) => {
+  console.log(label, detail ?? ok);
+  if (!ok) failures.push(label.trim());
+};
+
 try {
   let up = false;
   // 60s was too short: the first launch of a freshly built bundle pays a
@@ -93,6 +101,8 @@ try {
   const tools = list.result?.tools ?? [];
   console.log("tool count:", tools.length);
   const names = tools.map((tool) => tool.name);
+  // A required tool is a promise to clients, so a rename or a removal moves
+  // this list in the same change.
   const required = [
     "create_site",
     "create_identities",
@@ -112,8 +122,6 @@ try {
     "stop_all_external_browsers",
     "list_browser_engines",
     "check_identity_auth",
-    "save_tag",
-    "delete_tag",
     "export_identities",
     "preview_identities",
     "import_identities",
@@ -126,14 +134,12 @@ try {
     "run_flow",
     "delete_flow",
   ];
-  console.log(
-    "missing:",
-    required.filter((name) => !names.includes(name)),
-  );
+  const missing = required.filter((name) => !names.includes(name));
+  check("missing:", missing.length === 0, missing);
   const typeProps = Object.keys(
     tools.find((tool) => tool.name === "type_browser_text")?.inputSchema?.properties ?? {},
   );
-  console.log("type_browser_text accepts a label:", typeProps.includes("label"));
+  check("type_browser_text accepts a label:", typeProps.includes("label"));
   const waitSchema = tools.find((tool) => tool.name === "wait_browser_condition")?.inputSchema?.properties;
   console.log(
     "wait_browser_condition conditions:",
@@ -156,7 +162,8 @@ try {
     },
   });
   const sitePayload = JSON.parse(site.result.content[0].text);
-  console.log("create_site ok:", Boolean(sitePayload.id), "no echo:", !JSON.stringify(sitePayload).includes("smoke-secret"));
+  check("create_site ok:", Boolean(sitePayload.id));
+  check("create_site no echo:", !JSON.stringify(sitePayload).includes("smoke-secret"));
 
   const batchCall = await rpc({
     jsonrpc: "2.0",
@@ -178,12 +185,8 @@ try {
     },
   });
   const created = JSON.parse(batchCall.result.content[0].text);
-  console.log(
-    "batch keeps extraFields:",
-    created.created?.[0]?.extraFields?.[0]?.value === "租户 A",
-    "failures:",
-    created.failures?.length,
-  );
+  check("batch failures:", created.failures?.length === 0, created.failures?.length);
+  check("batch keeps extraFields:", created.created?.[0]?.extraFields?.[0]?.value === "租户 A");
 
   // Account bundles go through real file IO in the main process; a packaged
   // build resolves `userData` differently, so the path is worth checking here.
@@ -201,16 +204,12 @@ try {
     },
   });
   const bundle = JSON.parse(exported.result.content[0].text);
-  console.log(
-    "export_identities ok:",
-    Boolean(bundle?.path) && bundle?.counts?.accounts === 1,
-    "path:",
-    bundle?.path,
-  );
+  check("export_identities ok:", Boolean(bundle?.path) && bundle?.counts?.accounts === 1);
   if (bundle?.path) {
+    console.log("export_identities path:", bundle.path);
     const { readFileSync } = await import("node:fs");
     const text = readFileSync(bundle.path, "utf8");
-    console.log(
+    check(
       "bundle has no plaintext:",
       !text.includes("a-secret") && !text.includes("smoke-share-passphrase"),
     );
@@ -221,7 +220,7 @@ try {
       params: { name: "preview_identities", arguments: { path: bundle.path } },
     });
     const previewed = JSON.parse(preview.result.content[0].text);
-    console.log("preview_identities ok:", previewed?.accounts === 1 && previewed?.hasSecrets === true);
+    check("preview_identities ok:", previewed?.accounts === 1 && previewed?.hasSecrets === true);
 
     const imported = await rpc({
       jsonrpc: "2.0",
@@ -233,7 +232,7 @@ try {
       },
     });
     const merged = JSON.parse(imported.result.content[0].text);
-    console.log(
+    check(
       "import_identities merges in place:",
       merged?.accountsAdded === 0 && merged?.accountsUpdated === 1,
     );
@@ -243,12 +242,14 @@ try {
   const { readFileSync } = await import("node:fs");
   try {
     const audit = readFileSync(join(userData, "mcp-audit.log"), "utf8");
-    console.log(
+    check(
       "audit log has no secrets:",
       !audit.includes("a-secret") && !audit.includes("smoke-share-passphrase"),
     );
   } catch {
-    console.log("audit log missing");
+    // Calls were made above, so a missing log means the secret check did not
+    // happen, not that it passed.
+    check("audit log:", false, "missing");
   }
 } catch (error) {
   console.log("SMOKE ERROR", String(error));
@@ -268,4 +269,9 @@ try {
   } catch {
     console.log("note: temp dir left behind at", userData);
   }
+}
+
+if (failures.length > 0) {
+  console.log("SMOKE FAILED:", failures);
+  process.exitCode = 1;
 }

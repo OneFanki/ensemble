@@ -68,7 +68,7 @@ note }` 而不是报错（重复关闭、超时）；查询与读写对象类直
 
 | 旧名字 | 现在的名字 | 变化 |
 | --- | --- | --- |
-| `launch_view` / `launch_identity` / `launch_clean_session` | 内置：`open_browser_view` / `open_browser_tab`；外部：`launch_external_browser` | 旧名字不传 `external` 时行为不变；传 `external: true` 转交给 `launch_external_browser`，返回形状随它 |
+| `launch_view` / `launch_identity` / `launch_clean_session` | 内置：`open_browser_view` / `open_browser_tab`；外部：`launch_external_browser` | 旧名字不传 `external` 开在内置浏览器（2.3.0 已发布的默认是外部窗口，本版本改掉）；传 `external: true` 转交给 `launch_external_browser`，返回形状随它 |
 | `stop_instance` / `stop_all` | `stop_external_browser` / `stop_all_external_browsers` | 返回改为 `{ ok, … }` |
 | `check_auth` | `check_identity_auth` | 先看内置页面 |
 | `set_tab_page` | `activate_browser_tab` | 入参 `pageId` 改为 `tabId` |
